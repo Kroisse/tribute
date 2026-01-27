@@ -1149,8 +1149,8 @@ checksum = "4ae62f7eae5eb549c71b76658648b72cc6111f2d87d24a1e31fa907f4943e3ce"
 
 [[package]]
 name = "tree-sitter-tribute"
-version = "0.5.0"
-source = "git+https://github.com/Kroisse/tree-sitter-tribute?tag=v0.5.0#5f1cce7255b7bf9e988f539deb88426041ce18fb"
+version = "0.5.1"
+source = "git+https://github.com/Kroisse/tree-sitter-tribute?tag=v0.5.1#b5741564e0c6987d7a267a6930e03c52de0c0963"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -1191,6 +1191,7 @@ version = "0.1.0"
 dependencies = [
  "salsa",
  "target-lexicon",
+ "trunk-ir",
 ]
 
 [[package]]
@@ -1200,9 +1201,12 @@ dependencies = [
  "fluent-uri",
  "ropey",
  "salsa",
+ "salsa-test-macros",
+ "smallvec",
  "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
+ "tribute-core",
  "tribute-ir",
  "trunk-ir",
 ]
@@ -1225,6 +1229,7 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "tracing",
+ "tribute-core",
  "tribute-ir",
  "trunk-ir",
  "trunk-ir-wasm-backend",

@@ -164,9 +164,9 @@ fn test_salsa_database_isolation() {
         module2.name(db).to_string()
     });
 
-    // Both modules should have the same name "main"
-    assert_eq!(module1_name, "main");
-    assert_eq!(module2_name, "main");
+    // Module names are derived from file paths
+    assert_eq!(module1_name, "test1");
+    assert_eq!(module2_name, "test2");
 }
 
 #[salsa_test]

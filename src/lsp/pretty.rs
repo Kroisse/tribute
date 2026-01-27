@@ -3,6 +3,9 @@
 //! This module provides a thin wrapper around `trunk_ir::type_interface::Printable`
 //! for use in the LSP server.
 
+// TrunkIR-based functions are used only in tests
+#![allow(dead_code)]
+
 use lsp_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
     SignatureInformation,
@@ -135,6 +138,57 @@ fn type_var_name(id: u64) -> String {
     } else {
         // t0, t1, ...
         format!("t{}", id - 26)
+    }
+}
+
+/// Format a function signature for LSP signature help (AST-based).
+pub fn format_ast_signature(
+    sig: &super::completion_index::FunctionSignature,
+    doc_comment: Option<&str>,
+    active_param: u32,
+) -> SignatureHelp {
+    // Build parameter information
+    let mut param_infos = Vec::with_capacity(sig.params.len());
+    let mut label_parts = Vec::with_capacity(sig.params.len());
+
+    for (name, ty_str) in &sig.params {
+        let label = if let Some(ty) = ty_str {
+            format!("{}: {}", name, ty)
+        } else {
+            name.to_string()
+        };
+
+        label_parts.push(label.clone());
+
+        param_infos.push(ParameterInformation {
+            label: ParameterLabel::Simple(label),
+            documentation: None,
+        });
+    }
+
+    // Build the full signature label
+    let params_str = label_parts.join(", ");
+    let return_str = sig.return_ty.as_deref().unwrap_or("_");
+    let signature_label = format!("fn {}({}) -> {}", sig.name, params_str, return_str);
+
+    let documentation = doc_comment.map(|doc| {
+        Documentation::MarkupContent(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: doc.to_string(),
+        })
+    });
+
+    let signature = SignatureInformation {
+        label: signature_label,
+        documentation,
+        parameters: Some(param_infos),
+        active_parameter: Some(active_param),
+    };
+
+    SignatureHelp {
+        signatures: vec![signature],
+        active_signature: Some(0),
+        active_parameter: Some(active_param),
     }
 }
 

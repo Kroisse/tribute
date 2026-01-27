@@ -10,8 +10,13 @@ description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 fluent-uri.workspace = true
 salsa.workspace = true
 ropey.workspace = true
+smallvec.workspace = true
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
+tribute-core.workspace = true
 tribute-ir.workspace = true
 trunk-ir.workspace = true
+
+[dev-dependencies]
+salsa-test-macros = { workspace = true }

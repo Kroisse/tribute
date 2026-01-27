@@ -87,7 +87,7 @@ use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
-use tribute_front::{lower_cst, parse_cst};
+use tribute_front::{derive_module_name_from_path, lower_cst, parse_cst};
 use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
@@ -110,7 +110,12 @@ use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
-use trunk_ir::{Block, BlockId, IdVec, Region, Symbol};
+use trunk_ir::{Block, BlockId, IdVec, Region};
+
+// AST-based pipeline imports
+use tribute_front::ast::{Module as AstModule, TypedRef};
+use tribute_front::ast_to_ir;
+use tribute_front::query as ast_query;
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
@@ -234,7 +239,8 @@ pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     let Some(cst) = parse_cst(db, source) else {
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        return Module::build(db, location, Symbol::new("main"), |_| {});
+        let module_name = derive_module_name_from_path(db, path);
+        return Module::build(db, location, module_name, |_| {});
     };
     emit_parse_errors(db, &cst);
     let user_module = lower_cst(db, source, cst);
@@ -713,6 +719,145 @@ pub fn compile_to_wasm_binary<'db>(
     stage_lower_to_wasm(db, module)
 }
 
+// =============================================================================
+// AST-Based Pipeline (New)
+// =============================================================================
+//
+// The AST-based pipeline provides better type safety and separation of concerns.
+// It transforms: CST → AST → resolve → typecheck → tdnr → ast_to_ir → TrunkIR
+//
+// This replaces the legacy tirgen-based pipeline that worked directly with IR.
+
+/// Parse and lower source to typed AST.
+///
+/// This function runs the AST pipeline through TDNR, producing a fully typed AST.
+/// Uses Salsa-tracked query functions for incremental caching at each stage.
+fn parse_and_typecheck_ast<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<AstModule<TypedRef<'db>>> {
+    // Use tracked query functions for incremental caching
+    // Each stage is cached independently by Salsa:
+    // - parsed_module: CST → AST
+    // - resolved_module: name resolution
+    // - typed_module: type checking
+    // - tdnr_module: type-directed name resolution
+    ast_query::tdnr_module(db, source)
+}
+
+/// Parse and lower source to TrunkIR using the AST pipeline.
+///
+/// This is the AST-based alternative to `parse_and_lower`.
+/// Returns a module with resolved types, ready for further lowering passes.
+#[salsa::tracked]
+pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    // Run AST pipeline through TDNR
+    let Some(typed_ast) = parse_and_typecheck_ast(db, source) else {
+        // Return empty module on parse error
+        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
+        let module_name = derive_module_name_from_path(db, path);
+        return Module::build(db, location, module_name, |_| {});
+    };
+
+    // Get span map for source location information
+    let span_map = match ast_query::span_map(db, source) {
+        Some(map) => map,
+        None => {
+            // Missing span map - emit warning and use default
+            // This may cause LSP features to have degraded source locations
+            Diagnostic {
+                message: "span map unavailable; source locations may be inaccurate".to_string(),
+                span: Span::default(),
+                severity: DiagnosticSeverity::Warning,
+                phase: CompilationPhase::AstGeneration,
+            }
+            .accumulate(db);
+            Default::default()
+        }
+    };
+
+    // Phase 5: AST → TrunkIR
+    let source_uri = source.uri(db).as_str();
+    let user_module = ast_to_ir::lower_ast_to_ir(db, typed_ast, span_map, source_uri);
+
+    // Merge prelude definitions into the user module
+    merge_with_prelude(db, user_module)
+}
+
+/// Run the AST-based pipeline up to TDNR stage.
+///
+/// This is the AST-based alternative to `run_tdnr`.
+/// Includes: parse → AST → resolve → typecheck → tdnr → ast_to_ir
+#[salsa::tracked]
+pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    parse_and_lower_ast(db, source)
+}
+
+/// Compile using the AST-based pipeline.
+///
+/// This is the AST-based alternative to `compile`.
+/// The AST pipeline provides better type safety and separation of concerns.
+///
+/// # Two-Phase Name Resolution and Type Checking
+///
+/// This pipeline has two distinct phases that may appear similar but operate on different representations:
+///
+/// 1. **AST Phase** (in `parse_and_lower_ast`):
+///    - Operates on typed AST nodes (`Module<UnresolvedName>` → `Module<TypedRef>`)
+///    - Performs Hindley-Milner type inference with bidirectional checking
+///    - Assigns LocalIds to pattern bindings for variable tracking
+///    - Resolves UFCS method calls based on inferred receiver types
+///    - Produces resolved TrunkIR ops (e.g., `func.constant`, `func.call`)
+///
+/// 2. **TrunkIR Phase** (stages below):
+///    - Operates on TrunkIR operations like `tribute.var`, `tribute.call`
+///    - **Required for prelude**: The prelude module is generated via `lower_cst` (tirgen),
+///      NOT `ast_to_ir`, so it produces unresolved `tribute.*` ops that need processing
+///    - Handles cross-module references and builtin operations
+///    - These are NOT duplicates - AST phases work on AST nodes; IR phases work on IR ops
+#[salsa::tracked]
+pub fn compile_ast<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    // Phase 1: AST pipeline (resolve, typecheck, TDNR on AST nodes)
+    // This produces resolved IR for user code, but prelude uses tirgen (lower_cst)
+    let module = parse_and_lower_ast(db, source);
+
+    // Phase 2: TrunkIR transformation passes
+    // These are required because:
+    // - Prelude module (merged in parse_and_lower_ast) uses tirgen, producing tribute.* ops
+    // - User code from ast_to_ir is already resolved, so these passes are mostly no-ops for it
+    // - Cross-module references may need resolution
+    let module = stage_resolve(db, module);
+    let module = stage_typecheck(db, module);
+    let module = stage_tdnr(db, module);
+    let module = stage_const_inline(db, module);
+    let module = stage_inline_refs(db, module)?;
+    let module = stage_boxing(db, module);
+    let module = stage_evidence_params(db, module);
+    let module = stage_lambda_lift(db, module);
+    let module = stage_closure_lower(db, module);
+
+    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    let module = stage_evidence_calls(db, module);
+    let module = stage_tribute_to_cont(db, module);
+    let module = stage_tribute_to_scf(db, module);
+    let module = stage_handler_lower(db, module)?;
+
+    // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_cont_to_trampoline(db, module)?;
+
+    let module = stage_dce(db, module);
+    let module = stage_resolve_casts(db, module);
+
+    // Final pass: resolve any remaining unresolved references and emit diagnostics
+    let env = build_env(db, &module);
+    let mut resolver = Resolver::with_unresolved_reporting(db, env);
+    Ok(resolver.resolve_module(&module))
+}
+
 /// Run compilation and return detailed results including diagnostics.
 ///
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
@@ -784,7 +929,7 @@ mod tests {
         let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
 
         let module = test_compile(db, source);
-        assert_eq!(module.name(db), "main");
+        assert_eq!(module.name(db), "test");
     }
 
     #[salsa_test]
@@ -985,5 +1130,73 @@ mod tests {
             "TDNR should resolve user.name to User::name(user), got: {:?}",
             result.diagnostics
         );
+    }
+
+    // =========================================================================
+    // AST-based Pipeline Tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_ast_pipeline_simple_function(db: &salsa::DatabaseImpl) {
+        // Test that AST pipeline can parse and lower a simple function
+        let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+
+        let module = parse_and_lower_ast(db, source);
+        assert_eq!(module.name(db), "test");
+    }
+
+    #[salsa_test]
+    fn test_ast_pipeline_with_params(db: &salsa::DatabaseImpl) {
+        // Test that AST pipeline handles function parameters
+        let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
+
+        let module = parse_and_lower_ast(db, source);
+        assert_eq!(module.name(db), "test");
+    }
+
+    #[salsa_test]
+    fn test_ast_pipeline_let_binding(db: &salsa::DatabaseImpl) {
+        // Test that AST pipeline handles let bindings
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn main() -> Int {
+                let x = 10;
+                let y = 20;
+                x + y
+            }
+            "#,
+        );
+
+        let module = parse_and_lower_ast(db, source);
+        assert_eq!(module.name(db), "test");
+    }
+
+    #[salsa_test]
+    fn test_ast_pipeline_struct(db: &salsa::DatabaseImpl) {
+        // Test that AST pipeline handles struct definitions
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            struct Point {
+                x: Int,
+                y: Int,
+            }
+
+            fn main() -> Int { 0 }
+            "#,
+        );
+
+        let module = parse_and_lower_ast(db, source);
+        assert_eq!(module.name(db), "test");
+    }
+
+    #[salsa_test]
+    fn test_ast_pipeline_run_tdnr(db: &salsa::DatabaseImpl) {
+        // Test run_tdnr_ast produces a valid TrunkIR module
+        let source = source_from_str("test.trb", "fn identity(x: Int) -> Int { x }");
+
+        let module = run_tdnr_ast(db, source);
+        assert_eq!(module.name(db), "test");
     }
 }

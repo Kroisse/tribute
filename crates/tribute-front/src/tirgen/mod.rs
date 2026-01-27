@@ -26,6 +26,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::{Location, PathId, Span, Symbol};
 
 pub use helpers::ParsedCst;
+pub use literals::parse_rune_literal;
 
 use context::CstLoweringCtx;
 use declarations::{
@@ -33,6 +34,19 @@ use declarations::{
     lower_struct_decl, lower_use_decl,
 };
 use helpers::{is_comment, span_from_node};
+
+/// Derive a module name from a PathId.
+///
+/// Extracts the file stem (filename without extension) from the URI path.
+/// Falls back to "main" if the path cannot be parsed.
+pub fn derive_module_name_from_path(db: &dyn salsa::Database, path: PathId<'_>) -> Symbol {
+    let uri_str = path.uri(db);
+    std::path::Path::new(uri_str)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(Symbol::from_dynamic)
+        .unwrap_or_else(|| Symbol::new("main"))
+}
 
 // =============================================================================
 // Entry Points
@@ -71,7 +85,8 @@ pub fn lower_source_cst<'db>(db: &'db dyn salsa::Database, source: SourceCst) ->
     let text = source.text(db);
     let Some(cst) = parse_cst(db, source) else {
         let location = Location::new(path, Span::new(0, 0));
-        return core::Module::build(db, location, Symbol::new("main"), |_| {});
+        let module_name = derive_module_name_from_path(db, path);
+        return core::Module::build(db, location, module_name, |_| {});
     };
     let root = cst.root_node();
     let location = Location::new(path, span_from_node(&root));
@@ -87,7 +102,8 @@ fn lower_cst_impl<'db>(
     root: Node<'_>,
     location: Location<'db>,
 ) -> core::Module<'db> {
-    core::Module::build(db, location, Symbol::new("main"), |top| {
+    let module_name = derive_module_name_from_path(db, path);
+    core::Module::build(db, location, module_name, |top| {
         let mut cursor = root.walk();
         let mut ctx = CstLoweringCtx::new(db, path, text);
 
