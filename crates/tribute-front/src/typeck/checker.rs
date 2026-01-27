@@ -460,7 +460,10 @@ impl<'db> TypeChecker<'db> {
                             Some(ann) => self.annotation_to_type(ann),
                             None => self.ctx.fresh_type_var(),
                         };
-                        // Bind by name since Param doesn't have LocalId
+                        // Bind by LocalId when present for precision under shadowing
+                        if let Some(local_id) = p.local_id {
+                            self.ctx.bind_local(local_id, ty);
+                        }
                         self.ctx.bind_local_by_name(p.name, ty);
                         ty
                     })
