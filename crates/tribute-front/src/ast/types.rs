@@ -398,11 +398,6 @@ pub enum TypeAnnotationKind {
     },
     /// A tuple type: `(Int, String)`
     Tuple(Vec<TypeAnnotation>),
-    /// A type with effects: `() ->{IO} ()`
-    WithEffects {
-        inner: Box<TypeAnnotation>,
-        effects: Vec<TypeAnnotation>,
-    },
     /// Inferred type (omitted annotation): `_`
     Infer,
     /// Error in parsing
