@@ -6,8 +6,8 @@ use lsp_types::notification::Notification as _;
 use lsp_types::{LogMessageParams, MessageType};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 
 /// A [`tracing_subscriber::Layer`] that forwards tracing events
 /// to an LSP client via `window/logMessage` notifications.

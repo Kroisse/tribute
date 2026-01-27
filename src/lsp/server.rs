@@ -884,9 +884,9 @@ pub fn serve(log_filter: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
 
 fn init_lsp_tracing(log_filter: &str, sender: crossbeam_channel::Sender<Message>) {
     use super::tracing_layer::LspLayer;
+    use tracing_subscriber::EnvFilter;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
-    use tracing_subscriber::EnvFilter;
 
     let env_filter = EnvFilter::try_new(log_filter).unwrap_or_else(|e| {
         eprintln!("Invalid log filter '{}': {}", log_filter, e);
