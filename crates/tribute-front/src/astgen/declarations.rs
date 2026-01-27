@@ -237,26 +237,25 @@ fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotatio
                 .and_then(|rt| lower_type_node(ctx, rt))
                 .map(Box::new)?;
 
-            let func_ann = TypeAnnotation {
-                id,
-                kind: TypeAnnotationKind::Func { params, result },
+            // No ability row → effect polymorphic (single Infer as row variable)
+            // Empty ability row `{}` → pure (empty vec)
+            // Explicit abilities → listed in vec
+            let abilities = match node.child_by_field_name("abilities") {
+                Some(abilities_node) => lower_ability_row(ctx, abilities_node),
+                None => vec![TypeAnnotation {
+                    id: ctx.fresh_id_with_span(&node),
+                    kind: TypeAnnotationKind::Infer,
+                }],
             };
 
-            // Wrap in WithEffects if abilities are present
-            if let Some(abilities_node) = node.child_by_field_name("abilities") {
-                let effects = lower_ability_row(ctx, abilities_node);
-                if !effects.is_empty() {
-                    return Some(TypeAnnotation {
-                        id: ctx.fresh_id_with_span(&node),
-                        kind: TypeAnnotationKind::WithEffects {
-                            inner: Box::new(func_ann),
-                            effects,
-                        },
-                    });
-                }
-            }
-
-            Some(func_ann)
+            Some(TypeAnnotation {
+                id,
+                kind: TypeAnnotationKind::Func {
+                    params,
+                    result,
+                    abilities,
+                },
+            })
         }
         "tuple_type" => {
             // Tuple type: #(Int, String)

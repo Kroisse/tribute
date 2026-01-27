@@ -1322,7 +1322,7 @@ mod tests {
         // Note: Function type annotations in parameters may not be fully preserved
         // in the current implementation. This test documents the current behavior.
         match &ty.kind {
-            TypeAnnotationKind::Func { params, result } => {
+            TypeAnnotationKind::Func { params, result, .. } => {
                 assert_eq!(params.len(), 1, "Expected 1 parameter in function type");
                 assert!(
                     matches!(&params[0].kind, TypeAnnotationKind::Named(n) if *n == "Int"),
@@ -1799,7 +1799,12 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+        let TypeAnnotationKind::Func {
+            params,
+            result,
+            abilities,
+        } = &ty.kind
+        else {
             panic!("Expected Func, got {:?}", ty.kind);
         };
         assert_eq!(params.len(), 1);
@@ -1811,6 +1816,9 @@ mod tests {
             panic!("Expected Named result, got {:?}", result.kind);
         };
         assert_eq!(result_name.to_string(), "Bool");
+        // No ability row → effect polymorphic (single Infer)
+        assert_eq!(abilities.len(), 1);
+        assert!(matches!(abilities[0].kind, TypeAnnotationKind::Infer));
     }
 
     #[test]
@@ -1843,7 +1851,12 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+        let TypeAnnotationKind::Func {
+            params,
+            result,
+            abilities,
+        } = &ty.kind
+        else {
             panic!("Expected Func, got {:?}", ty.kind);
         };
         assert!(params.is_empty());
@@ -1851,6 +1864,9 @@ mod tests {
             panic!("Expected Named result");
         };
         assert_eq!(name.to_string(), "Int");
+        // No ability row → effect polymorphic (single Infer)
+        assert_eq!(abilities.len(), 1);
+        assert!(matches!(abilities[0].kind, TypeAnnotationKind::Infer));
     }
 
     #[test]
@@ -1909,12 +1925,13 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::WithEffects { inner, effects } = &ty.kind else {
-            panic!("Expected WithEffects, got {:?}", ty.kind);
-        };
-        // The inner type should be Func
-        let TypeAnnotationKind::Func { params, result } = &inner.kind else {
-            panic!("Expected Func inside WithEffects, got {:?}", inner.kind);
+        let TypeAnnotationKind::Func {
+            params,
+            result,
+            abilities,
+        } = &ty.kind
+        else {
+            panic!("Expected Func, got {:?}", ty.kind);
         };
         assert_eq!(params.len(), 1);
         let TypeAnnotationKind::Named(result_name) = &result.kind else {
@@ -1922,10 +1939,9 @@ mod tests {
         };
         assert_eq!(result_name.to_string(), "Bool");
 
-        // Effects
-        assert_eq!(effects.len(), 1);
-        let TypeAnnotationKind::Named(effect_name) = &effects[0].kind else {
-            panic!("Expected Named effect, got {:?}", effects[0].kind);
+        assert_eq!(abilities.len(), 1);
+        let TypeAnnotationKind::Named(effect_name) = &abilities[0].kind else {
+            panic!("Expected Named effect, got {:?}", abilities[0].kind);
         };
         assert_eq!(effect_name.to_string(), "State");
     }
@@ -1942,19 +1958,16 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::WithEffects { inner, effects } = &ty.kind else {
-            panic!("Expected WithEffects, got {:?}", ty.kind);
-        };
-        let TypeAnnotationKind::Func { .. } = &inner.kind else {
-            panic!("Expected Func inside WithEffects");
+        let TypeAnnotationKind::Func { abilities, .. } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
         };
 
         // Effect should be App { ctor: State, args: [Int] }
-        assert_eq!(effects.len(), 1);
-        let TypeAnnotationKind::App { ctor, args } = &effects[0].kind else {
+        assert_eq!(abilities.len(), 1);
+        let TypeAnnotationKind::App { ctor, args } = &abilities[0].kind else {
             panic!(
                 "Expected App for parameterized effect, got {:?}",
-                effects[0].kind
+                abilities[0].kind
             );
         };
         let TypeAnnotationKind::Named(name) = &ctor.kind else {
@@ -1980,10 +1993,55 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::WithEffects { effects, .. } = &ty.kind else {
-            panic!("Expected WithEffects, got {:?}", ty.kind);
+        let TypeAnnotationKind::Func { abilities, .. } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
         };
-        assert_eq!(effects.len(), 2);
+        assert_eq!(abilities.len(), 2);
+    }
+
+    #[test]
+    fn test_type_annotation_function_pure() {
+        // fn(a) ->{} b → pure function (empty abilities)
+        let source = "fn run(f: fn(Int) ->{} Bool) -> Bool { f(0) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { abilities, .. } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        assert!(
+            abilities.is_empty(),
+            "Pure function should have empty abilities"
+        );
+    }
+
+    #[test]
+    fn test_type_annotation_function_effect_polymorphic() {
+        // fn(a) -> b → effect polymorphic (single Infer in abilities)
+        let source = "fn apply(f: fn(Int) -> Bool, x: Int) -> Bool { f(x) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ty = func.params[0]
+            .ty
+            .as_ref()
+            .expect("Expected type annotation");
+        let TypeAnnotationKind::Func { abilities, .. } = &ty.kind else {
+            panic!("Expected Func, got {:?}", ty.kind);
+        };
+        assert_eq!(abilities.len(), 1);
+        assert!(
+            matches!(abilities[0].kind, TypeAnnotationKind::Infer),
+            "Effect polymorphic function should have Infer in abilities"
+        );
     }
 
     #[test]
@@ -1999,7 +2057,7 @@ mod tests {
             .ty
             .as_ref()
             .expect("Expected type annotation");
-        let TypeAnnotationKind::Func { params, result } = &ty.kind else {
+        let TypeAnnotationKind::Func { params, result, .. } = &ty.kind else {
             panic!("Expected Func, got {:?}", ty.kind);
         };
         // param should be App { ctor: List, args: [a] }

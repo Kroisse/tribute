@@ -211,10 +211,15 @@ impl<'db> TypeChecker<'db> {
                     self.ctx.error_type()
                 }
             }
-            TypeAnnotationKind::Func { params, result } => {
+            TypeAnnotationKind::Func {
+                params,
+                result,
+                abilities: _,
+            } => {
                 let param_types: Vec<Type<'db>> =
                     params.iter().map(|p| self.annotation_to_type(p)).collect();
                 let result_ty = self.annotation_to_type(result);
+                // TODO: convert ability annotations to EffectRow properly
                 let effect = EffectRow::pure(self.db());
                 self.ctx.func_type(param_types, result_ty, effect)
             }

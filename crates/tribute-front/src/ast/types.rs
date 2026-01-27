@@ -267,10 +267,17 @@ pub enum TypeAnnotationKind {
         ctor: Box<TypeAnnotation>,
         args: Vec<TypeAnnotation>,
     },
-    /// A function type: `(Int, Int) -> Int`
+    /// A function type: `fn(Int, Int) -> Int`
+    ///
+    /// The `abilities` field contains the ability row items:
+    /// - `vec![]`: pure function (`fn(a) ->{} b`)
+    /// - `vec![Infer]`: effect polymorphic (`fn(a) -> b` — no ability row written)
+    /// - `vec![Named("State")]`: explicit effects (`fn(a) ->{State} b`)
+    /// - `vec![Named("State"), Named("e")]`: mixed (`fn(a) ->{State, e} b`)
     Func {
         params: Vec<TypeAnnotation>,
         result: Box<TypeAnnotation>,
+        abilities: Vec<TypeAnnotation>,
     },
     /// A tuple type: `(Int, String)`
     Tuple(Vec<TypeAnnotation>),

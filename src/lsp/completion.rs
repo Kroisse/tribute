@@ -284,7 +284,7 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
             let args_str: Vec<_> = args.iter().map(print_type_annotation).collect();
             format!("{}({})", ctor_str, args_str.join(", "))
         }
-        TypeAnnotationKind::Func { params, result } => {
+        TypeAnnotationKind::Func { params, result, .. } => {
             let params_str: Vec<_> = params.iter().map(print_type_annotation).collect();
             let result_str = print_type_annotation(result);
             format!("({}) -> {}", params_str.join(", "), result_str)
