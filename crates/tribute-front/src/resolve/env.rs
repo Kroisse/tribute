@@ -29,8 +29,8 @@ pub enum Binding<'db> {
     TypeDef {
         /// The type name.
         name: Symbol,
-        /// The constructor ID (for struct types that are also constructors).
-        ctor_id: Option<CtorId<'db>>,
+        /// The constructor ID for value construction.
+        ctor_id: CtorId<'db>,
     },
 
     /// A module or namespace binding.
@@ -77,7 +77,7 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a type definition.
-    pub fn add_type(&mut self, name: Symbol, ctor_id: Option<CtorId<'db>>) {
+    pub fn add_type(&mut self, name: Symbol, ctor_id: CtorId<'db>) {
         self.definitions
             .insert(name, Binding::TypeDef { name, ctor_id });
     }

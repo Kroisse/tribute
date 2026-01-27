@@ -66,14 +66,14 @@ fn collect_definition<'db>(
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
             let ctor_id = CtorId::new(db, s.name);
-            env.add_type(s.name, Some(ctor_id));
+            env.add_type(s.name, ctor_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
         }
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
             let ctor_id = CtorId::new(db, e.name);
-            env.add_type(e.name, Some(ctor_id));
+            env.add_type(e.name, ctor_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {

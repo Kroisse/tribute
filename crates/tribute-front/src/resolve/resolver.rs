@@ -115,13 +115,7 @@ impl<'db> Resolver<'db> {
             Binding::Constructor { id, tag, .. } => {
                 ResolvedRef::constructor(*id, tag.unwrap_or(name))
             }
-            Binding::TypeDef {
-                ctor_id: Some(id), ..
-            } => ResolvedRef::constructor(*id, name),
-            Binding::TypeDef { .. } => {
-                // Type used as value - error
-                ResolvedRef::local(LocalId::UNRESOLVED, name)
-            }
+            Binding::TypeDef { ctor_id, .. } => ResolvedRef::constructor(*ctor_id, name),
             Binding::Module { path } => {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }

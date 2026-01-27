@@ -174,6 +174,7 @@ mod tests {
     use crate::source_file::path_to_uri;
     use ropey::Rope;
     use tree_sitter::Parser;
+    use tribute_core::diagnostic::Diagnostic;
 
     fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
         let uri = path_to_uri(std::path::Path::new("test.trb"));
@@ -305,5 +306,30 @@ mod tests {
             let func_span = sm.get(func.id);
             assert!(func_span.is_some(), "Function decl should have span in map");
         }
+    }
+
+    #[test]
+    fn test_unresolved_name_emits_diagnostic() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { undefined_var }");
+
+        // Call resolved_module to trigger name resolution
+        let _module = resolved_module(&db, source);
+
+        // Collect diagnostics
+        let diagnostics: Vec<_> = resolved_module::accumulated::<Diagnostic>(&db, source);
+
+        // Should have a diagnostic about unresolved name
+        assert!(
+            !diagnostics.is_empty(),
+            "Should emit diagnostic for unresolved name"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|d| d.message.contains("unresolved name")),
+            "Diagnostic should mention unresolved name: {:?}",
+            diagnostics
+        );
     }
 }
