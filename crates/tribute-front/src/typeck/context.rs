@@ -281,12 +281,13 @@ impl<'db> TypeContext<'db> {
                     .map(|p| self.substitute_bound_vars(*p, subst))
                     .collect();
                 let result = self.substitute_bound_vars(*result, subst);
+                let effect = self.substitute_effect_row(*effect, subst);
                 Type::new(
                     self.db,
                     TypeKind::Func {
                         params,
                         result,
-                        effect: *effect,
+                        effect,
                     },
                 )
             }
@@ -307,6 +308,36 @@ impl<'db> TypeContext<'db> {
             }
             // Primitive types and other type variables are unchanged
             _ => ty,
+        }
+    }
+
+    /// Substitute bound variables within an effect row.
+    fn substitute_effect_row(&self, row: EffectRow<'db>, subst: &[Type<'db>]) -> EffectRow<'db> {
+        let effects = row.effects(self.db);
+        let mut changed = false;
+
+        let new_effects: Vec<_> = effects
+            .iter()
+            .map(|effect| {
+                let new_args: Vec<_> = effect
+                    .args
+                    .iter()
+                    .map(|a| self.substitute_bound_vars(*a, subst))
+                    .collect();
+                if new_args != effect.args {
+                    changed = true;
+                }
+                crate::ast::Effect {
+                    name: effect.name,
+                    args: new_args,
+                }
+            })
+            .collect();
+
+        if changed {
+            EffectRow::new(self.db, new_effects, row.rest(self.db))
+        } else {
+            row
         }
     }
 
@@ -432,7 +463,7 @@ impl<'db> TypeContext<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{TypeParam, TypeScheme};
+    use crate::ast::{Effect, TypeParam, TypeScheme};
     use salsa_test_macros::salsa_test;
 
     /// Create a type parameter with just a name.
@@ -647,5 +678,107 @@ mod tests {
         assert_eq!(ctx.lookup_local(local_id), Some(ty_by_id));
         // lookup_local_by_name should return the type bound by name
         assert_eq!(ctx.lookup_local_by_name(name), Some(ty_by_name));
+    }
+
+    // =========================================================================
+    // Effect row substitution tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_substitute_effect_row_with_bound_var(db: &dyn salsa::Database) {
+        // forall a. fn() ->{State(a)} a
+        // After instantiation, the BoundVar(0) inside the effect row should be
+        // replaced with a fresh UniVar, same as the result type.
+        let mut ctx = TypeContext::new(db);
+
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+
+        // Effect row: {State(BoundVar(0))}
+        let effect = EffectRow::new(
+            db,
+            vec![Effect {
+                name: Symbol::new("State"),
+                args: vec![bound_var],
+            }],
+            None,
+        );
+
+        // fn() ->{State(a)} a
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![],
+                result: bound_var,
+                effect,
+            },
+        );
+
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        let instantiated = ctx.instantiate_scheme(scheme);
+
+        if let TypeKind::Func { result, effect, .. } = instantiated.kind(db) {
+            // result should be a UniVar
+            assert!(
+                matches!(result.kind(db), TypeKind::UniVar { .. }),
+                "Expected UniVar for result, got {:?}",
+                result.kind(db)
+            );
+
+            // The effect row's State arg should be the same UniVar as result
+            let effects = effect.effects(db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, Symbol::new("State"));
+            assert_eq!(effects[0].args.len(), 1);
+            assert_eq!(
+                effects[0].args[0], *result,
+                "Effect arg should be the same UniVar as result type"
+            );
+        } else {
+            panic!("Expected Func type, got {:?}", instantiated.kind(db));
+        }
+    }
+
+    #[salsa_test]
+    fn test_substitute_effect_row_no_bound_vars(db: &dyn salsa::Database) {
+        // forall a. fn(a) ->{IO} a
+        // The effect row has no BoundVars, so it should be unchanged after instantiation.
+        let mut ctx = TypeContext::new(db);
+
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+
+        let effect = EffectRow::new(
+            db,
+            vec![Effect {
+                name: Symbol::new("IO"),
+                args: vec![],
+            }],
+            None,
+        );
+
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: bound_var,
+                effect,
+            },
+        );
+
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        let instantiated = ctx.instantiate_scheme(scheme);
+
+        if let TypeKind::Func {
+            effect: inst_effect,
+            ..
+        } = instantiated.kind(db)
+        {
+            // Effect row should be identical (no substitution needed)
+            assert_eq!(
+                *inst_effect, effect,
+                "Effect row without BoundVars should be unchanged"
+            );
+        } else {
+            panic!("Expected Func type, got {:?}", instantiated.kind(db));
+        }
     }
 }
