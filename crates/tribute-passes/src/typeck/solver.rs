@@ -365,12 +365,18 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Unify two effect rows.
+    ///
+    /// Normalizes both rows through `row_subst` before comparison, then:
+    /// - If structurally equal after normalization, succeeds immediately
+    /// - If one is a bare row variable, binds it (with occurs check)
+    /// - Otherwise delegates to the general row unification algorithm
     pub fn unify_rows(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) -> SolveResult<'db, ()> {
+        // Normalize through substitution so we see resolved bindings
         let r1 = self.row_subst.apply(&r1);
         let r2 = self.row_subst.apply(&r2);
 
-        // Both empty
-        if r1.is_empty() && r2.is_empty() {
+        // Structural equality after normalization
+        if r1 == r2 {
             return Ok(());
         }
 
@@ -411,13 +417,6 @@ impl<'db> TypeSolver<'db> {
         r1: EffectRow<'db>,
         r2: EffectRow<'db>,
     ) -> SolveResult<'db, ()> {
-        // Find common abilities (for future use in duplicate detection)
-        let _common: Vec<_> = r1
-            .abilities()
-            .intersection(r2.abilities())
-            .cloned()
-            .collect();
-
         // Find abilities only in r1
         let only_r1: Vec<_> = r1.abilities().difference(r2.abilities()).cloned().collect();
 
@@ -439,31 +438,30 @@ impl<'db> TypeSolver<'db> {
             }
             (Some(v1), None) => {
                 // r1 has tail, r2 is closed
-                // v1 must equal {only_r2}
-                if self.row_occurs_in(v1, &EffectRow::concrete(only_r2.clone())) {
-                    return Err(SolveError::RowOccursCheck {
-                        var: v1,
-                        row: EffectRow::concrete(only_r2),
-                    });
-                }
+                // v1 must equal {only_r2} (closed, no vars → occurs check trivially passes)
                 self.row_subst.insert(v1, EffectRow::concrete(only_r2));
                 Ok(())
             }
             (None, Some(v2)) => {
                 // r2 has tail, r1 is closed
-                // v2 must equal {only_r1}
-                if self.row_occurs_in(v2, &EffectRow::concrete(only_r1.clone())) {
-                    return Err(SolveError::RowOccursCheck {
-                        var: v2,
-                        row: EffectRow::concrete(only_r1),
-                    });
-                }
+                // v2 must equal {only_r1} (closed, no vars → occurs check trivially passes)
                 self.row_subst.insert(v2, EffectRow::concrete(only_r1));
                 Ok(())
             }
+            (Some(v1), Some(v2)) if v1 == v2 => {
+                // Same tail variable: {A₁..Aₙ | e} = {B₁..Bₘ | e}
+                // The shared tail cancels out, so the concrete parts must match exactly.
+                if !only_r1.is_empty() || !only_r2.is_empty() {
+                    let missing = only_r1.first().or(only_r2.first()).unwrap().clone();
+                    return Err(SolveError::MissingAbility {
+                        ability: missing,
+                        row: if only_r1.is_empty() { r1 } else { r2 },
+                    });
+                }
+                Ok(())
+            }
             (Some(v1), Some(v2)) => {
-                // Both have tails
-                // fresh e; v1 = {only_r2 | e}; v2 = {only_r1 | e}
+                // Different tail variables: fresh e; v1 = {only_r2 | e}; v2 = {only_r1 | e}
                 let fresh = self.fresh_row_var();
 
                 let r1_tail = if only_r2.is_empty() {
@@ -477,6 +475,24 @@ impl<'db> TypeSolver<'db> {
                 } else {
                     EffectRow::with_tail(only_r1, fresh)
                 };
+
+                // Occurs checks: v1 must not appear in r1_tail, v2 must not in r2_tail.
+                // Since r1_tail/r2_tail contain only abilities from the *other* row plus
+                // a fresh var, this can only fail if v1 or v2 was somehow transitively
+                // reachable through the fresh var (impossible since it's new).
+                // We still guard for safety.
+                if self.row_occurs_in(v1, &r1_tail) {
+                    return Err(SolveError::RowOccursCheck {
+                        var: v1,
+                        row: r1_tail,
+                    });
+                }
+                if self.row_occurs_in(v2, &r2_tail) {
+                    return Err(SolveError::RowOccursCheck {
+                        var: v2,
+                        row: r2_tail,
+                    });
+                }
 
                 self.row_subst.insert(v1, r1_tail);
                 self.row_subst.insert(v2, r2_tail);
@@ -709,6 +725,149 @@ mod tests {
         assert!(
             result.is_ok(),
             "Function without effect should unify with empty effect"
+        );
+    }
+
+    // =========================================================================
+    // Row unification: normalization and conflict detection (#285)
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_row_normalization_sees_prior_binding(_db: &salsa::DatabaseImpl) {
+        // If e1 is bound to {State}, unifying {e1} with {State} should succeed
+        // because normalization resolves e1 first.
+        let mut solver = TypeSolver::new(_db);
+
+        let e1 = solver.fresh_row_var();
+        let state = AbilityRef::simple(Symbol::new("State"));
+
+        // Bind e1 → {State}
+        solver
+            .row_subst
+            .insert(e1, EffectRow::concrete([state.clone()]));
+
+        // Now unify {e1} with {State} — after normalization both are {State}
+        let r1 = EffectRow::var(e1);
+        let r2 = EffectRow::concrete([state]);
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok(), "Normalized rows should be equal");
+    }
+
+    #[salsa_test]
+    fn test_row_same_tail_same_abilities_unifies(_db: &salsa::DatabaseImpl) {
+        // {A | e} = {A | e} should succeed (same tail cancels out)
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+
+        let r1 = EffectRow::with_tail([a.clone()], e);
+        let r2 = EffectRow::with_tail([a], e);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+    }
+
+    #[salsa_test]
+    fn test_row_same_tail_different_abilities_fails(_db: &salsa::DatabaseImpl) {
+        // {A | e} = {B | e} should fail — same tail means concrete parts must match
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        let r1 = EffectRow::with_tail([a], e);
+        let r2 = EffectRow::with_tail([b], e);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            matches!(result, Err(SolveError::MissingAbility { .. })),
+            "Same tail with different abilities should fail: {:?}",
+            result
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_normalization_transitive(_db: &salsa::DatabaseImpl) {
+        // e1 → {A | e2}, e2 → {B}
+        // Unifying {e1} with {A, B} should succeed via transitive normalization.
+        let mut solver = TypeSolver::new(_db);
+
+        let e1 = solver.fresh_row_var();
+        let e2 = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        // Build substitution chain: e1 → {A | e2}, e2 → {B}
+        solver
+            .row_subst
+            .insert(e1, EffectRow::with_tail([a.clone()], e2));
+        solver
+            .row_subst
+            .insert(e2, EffectRow::concrete([b.clone()]));
+
+        // {e1} should normalize to {A, B} and match
+        let r1 = EffectRow::var(e1);
+        let r2 = EffectRow::concrete([a, b]);
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "Transitive normalization should resolve: {:?}",
+            result
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_different_tails_cross_bind(_db: &salsa::DatabaseImpl) {
+        // {A | e1} = {B | e2} should create fresh e3 and bind:
+        //   e1 → {B | e3}, e2 → {A | e3}
+        let mut solver = TypeSolver::new(_db);
+
+        let e1 = solver.fresh_row_var();
+        let e2 = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        let r1 = EffectRow::with_tail([a.clone()], e1);
+        let r2 = EffectRow::with_tail([b.clone()], e2);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+
+        // e1 should contain B
+        let resolved_e1 = solver.apply_row(&EffectRow::var(e1));
+        assert!(
+            resolved_e1.contains(&b),
+            "e1 should contain B: {:?}",
+            resolved_e1
+        );
+
+        // e2 should contain A
+        let resolved_e2 = solver.apply_row(&EffectRow::var(e2));
+        assert!(
+            resolved_e2.contains(&a),
+            "e2 should contain A: {:?}",
+            resolved_e2
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_occurs_check_prevents_cycle(_db: &salsa::DatabaseImpl) {
+        // Binding e to {A | e} should fail with occurs check
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+
+        let var_row = EffectRow::var(e);
+        let cyclic_row = EffectRow::with_tail([a], e);
+
+        let result = solver.unify_rows(var_row, cyclic_row);
+        assert!(
+            matches!(result, Err(SolveError::RowOccursCheck { .. })),
+            "Should detect cycle: {:?}",
+            result
         );
     }
 }
