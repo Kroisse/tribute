@@ -178,23 +178,8 @@ impl<'db> TdnrResolver<'db> {
 
         match &ann.kind {
             TypeAnnotationKind::Named(name) => {
-                // Map primitive type names
-                if *name == "Int" {
-                    Type::new(self.db, TypeKind::Int)
-                } else if *name == "Nat" {
-                    Type::new(self.db, TypeKind::Nat)
-                } else if *name == "Float" {
-                    Type::new(self.db, TypeKind::Float)
-                } else if *name == "Bool" {
-                    Type::new(self.db, TypeKind::Bool)
-                } else if *name == "String" {
-                    Type::new(self.db, TypeKind::String)
-                } else if *name == "Bytes" {
-                    Type::new(self.db, TypeKind::Bytes)
-                } else if *name == "Rune" {
-                    Type::new(self.db, TypeKind::Rune)
-                } else if *name == "()" || *name == "Nil" {
-                    Type::new(self.db, TypeKind::Nil)
+                if let Some(kind) = name.with_str(TypeKind::from_primitive_name) {
+                    Type::new(self.db, kind)
                 } else {
                     // User-defined type
                     Type::new(
@@ -569,17 +554,13 @@ impl<'db> TdnrResolver<'db> {
     /// type kinds.
     fn extract_type_name_from_type(&self, ty: Type<'db>) -> Option<Symbol> {
         use crate::ast::TypeKind;
-        match ty.kind(self.db) {
+        let kind = ty.kind(self.db);
+        if let Some(name) = kind.primitive_name() {
+            return Some(Symbol::new(name));
+        }
+        match kind {
             TypeKind::Named { name, .. } => Some(*name),
             TypeKind::App { ctor, .. } => self.extract_type_name_from_type(*ctor),
-            TypeKind::Int => Some(Symbol::new("Int")),
-            TypeKind::Nat => Some(Symbol::new("Nat")),
-            TypeKind::Float => Some(Symbol::new("Float")),
-            TypeKind::Bool => Some(Symbol::new("Bool")),
-            TypeKind::String => Some(Symbol::new("String")),
-            TypeKind::Bytes => Some(Symbol::new("Bytes")),
-            TypeKind::Rune => Some(Symbol::new("Rune")),
-            TypeKind::Nil => Some(Symbol::new("Nil")),
             _ => None,
         }
     }

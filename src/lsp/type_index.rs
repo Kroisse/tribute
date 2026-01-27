@@ -20,16 +20,13 @@ use tribute_front::query as ast_query;
 
 /// Pretty-print an AST type to a user-friendly string.
 pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
-    match ty.kind(db) {
-        TypeKind::Int => "Int".to_string(),
-        TypeKind::Nat => "Nat".to_string(),
-        TypeKind::Float => "Float".to_string(),
-        TypeKind::Bool => "Bool".to_string(),
-        TypeKind::String => "String".to_string(),
-        TypeKind::Bytes => "Bytes".to_string(),
-        TypeKind::Rune => "Rune".to_string(),
-        TypeKind::Nil => "()".to_string(),
+    let kind = ty.kind(db);
 
+    if let Some(name) = kind.primitive_name() {
+        return name.to_string();
+    }
+
+    match kind {
         TypeKind::BoundVar { index } => {
             // Convert de Bruijn index to a name (a, b, c, ...)
             let name = if *index < 26 {
@@ -124,6 +121,9 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
         }
 
         TypeKind::Error => "<error>".to_string(),
+
+        // Primitives are handled by early return above
+        _ => unreachable!(),
     }
 }
 
@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(print_ast_type(&db, bool_ty), "Bool");
 
         let nil_ty = Type::new(&db, TypeKind::Nil);
-        assert_eq!(print_ast_type(&db, nil_ty), "()");
+        assert_eq!(print_ast_type(&db, nil_ty), "Nil");
     }
 
     #[test]

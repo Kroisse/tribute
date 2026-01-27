@@ -112,6 +112,39 @@ pub enum TypeKind<'db> {
     Error,
 }
 
+impl TypeKind<'_> {
+    /// Returns the canonical name for primitive types, or `None` for compound/variable types.
+    pub fn primitive_name(&self) -> Option<&'static str> {
+        match self {
+            Self::Int => Some("Int"),
+            Self::Nat => Some("Nat"),
+            Self::Float => Some("Float"),
+            Self::Bool => Some("Bool"),
+            Self::String => Some("String"),
+            Self::Bytes => Some("Bytes"),
+            Self::Rune => Some("Rune"),
+            Self::Nil => Some("Nil"),
+            _ => None,
+        }
+    }
+
+    /// Returns the `TypeKind` for a primitive type name, or `None` if the name
+    /// is not a primitive.
+    pub fn from_primitive_name(name: &str) -> Option<Self> {
+        match name {
+            "Int" => Some(Self::Int),
+            "Nat" => Some(Self::Nat),
+            "Float" => Some(Self::Float),
+            "Bool" => Some(Self::Bool),
+            "String" => Some(Self::String),
+            "Bytes" => Some(Self::Bytes),
+            "Rune" => Some(Self::Rune),
+            "Nil" => Some(Self::Nil),
+            _ => None,
+        }
+    }
+}
+
 /// A polymorphic type scheme with universally quantified type parameters.
 ///
 /// TypeSchemes represent types that can be instantiated with different type arguments.
