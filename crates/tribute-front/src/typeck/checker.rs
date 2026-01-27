@@ -324,13 +324,17 @@ impl<'db> TypeChecker<'db> {
 
         let param_types_from_scheme = func_type_info.as_ref().map(|(params, _)| params.clone());
 
-        // Bind parameters: use scheme types if available, otherwise fresh vars
-        // TODO: ParamDecl currently lacks LocalId; use name-based binding as workaround
+        // Bind parameters: use scheme types if available, otherwise fresh vars.
+        // Bind by LocalId when present for precision under shadowing,
+        // and also bind by name to preserve name-based lookup.
         for (i, param) in func.params.iter().enumerate() {
             let ty = param_types_from_scheme
                 .as_ref()
                 .and_then(|types| types.get(i).copied())
                 .unwrap_or_else(|| self.ctx.fresh_type_var());
+            if let Some(local_id) = param.local_id {
+                self.ctx.bind_local(local_id, ty);
+            }
             self.ctx.bind_local_by_name(param.name, ty);
         }
 

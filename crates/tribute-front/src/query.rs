@@ -21,6 +21,18 @@ use crate::source_file::SourceCst;
 // Module-level queries
 // =============================================================================
 
+/// Parse a source file to AST.
+///
+/// This is the single tracking point for CST → AST conversion.
+/// Both `parsed_module` and `span_map` derive from this query.
+#[salsa::tracked]
+pub fn parsed_ast<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<crate::astgen::ParsedAst<'db>> {
+    crate::astgen::lower_source_to_parsed_ast(db, source)
+}
+
 /// Parse a source file to an AST module.
 ///
 /// This is the entry point for parsing. The result is cached by Salsa.
@@ -30,7 +42,7 @@ pub fn parsed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
-    crate::astgen::lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db))
+    parsed_ast(db, source).map(|parsed| parsed.module(db))
 }
 
 /// Get the span map for a parsed source file.
@@ -39,7 +51,7 @@ pub fn parsed_module<'db>(
 /// Use together with `parsed_module` - both are derived from the same parse.
 #[salsa::tracked]
 pub fn span_map<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
-    crate::astgen::lower_source_to_parsed_ast(db, source).map(|parsed| parsed.span_map(db))
+    parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
 
 /// Get the list of function names in a module.
@@ -248,5 +260,50 @@ mod tests {
 
         let func = typed_func(&db, source, Symbol::new("main"));
         assert!(func.is_some());
+    }
+
+    #[test]
+    fn test_parsed_ast_provides_both_module_and_span_map() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { 42 }");
+
+        // parsed_ast should provide both module and span_map from same parse
+        let ast = parsed_ast(&db, source);
+        assert!(ast.is_some());
+
+        let ast = ast.unwrap();
+        let module = ast.module(&db);
+        let sm = ast.span_map(&db);
+
+        // Verify module has content
+        assert_eq!(module.decls.len(), 1);
+
+        // Verify span_map has entries for the module's nodes
+        if let crate::ast::Decl::Function(func) = &module.decls[0] {
+            assert!(sm.get(func.id).is_some(), "Span map should have entries");
+        }
+    }
+
+    #[test]
+    fn test_parsed_module_and_span_map_derive_from_same_parse() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { 42 }");
+
+        // Both should succeed if parsed_ast succeeds
+        let module = parsed_module(&db, source);
+        let sm = span_map(&db, source);
+
+        assert!(module.is_some());
+        assert!(sm.is_some());
+
+        // The module's node IDs should be present in the span map
+        let module = module.unwrap();
+        let sm = sm.unwrap();
+
+        // The function decl should have a valid span in the map
+        if let crate::ast::Decl::Function(func) = &module.decls[0] {
+            let func_span = sm.get(func.id);
+            assert!(func_span.is_some(), "Function decl should have span in map");
+        }
     }
 }

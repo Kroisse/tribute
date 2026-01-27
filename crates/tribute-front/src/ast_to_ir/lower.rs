@@ -166,8 +166,27 @@ fn lower_expr<'db>(
         }
 
         ExprKind::IntLit(n) => {
-            let op = block.op(arith::Const::i64(ctx.db, location, n));
-            Some(op.result(ctx.db))
+            // i31ref range check for WASM target compatibility.
+            // i31 range: -2^30 to 2^30-1
+            const I31_MIN: i64 = -(1 << 30); // -1,073,741,824
+            const I31_MAX: i64 = (1 << 30) - 1; // 1,073,741,823
+
+            if !(I31_MIN..=I31_MAX).contains(&n) {
+                Diagnostic {
+                    message: format!(
+                        "integer literal {} exceeds i31 range ({} to {})",
+                        n, I31_MIN, I31_MAX
+                    ),
+                    span: location.span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::Lowering,
+                }
+                .accumulate(ctx.db);
+                None
+            } else {
+                let op = block.op(arith::Const::i64(ctx.db, location, n));
+                Some(op.result(ctx.db))
+            }
         }
 
         ExprKind::RuneLit(c) => {
@@ -233,6 +252,12 @@ fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
+            // TODO: Short-circuit semantics for &&/|| are unimplemented.
+            // Currently both operands are evaluated unconditionally via lower_expr,
+            // which breaks short-circuit behavior. To fix: emit conditional branches
+            // based on lhs value for And/Or, skipping rhs evaluation when appropriate.
+            // See: ExprKind::BinOp, lower_expr, lower_binop
+
             // Determine operand type for selecting int vs float operations.
             // Check both operands: mixed int+float or float+int should use float operations.
             let is_float = is_float_expr(ctx.db, &lhs) || is_float_expr(ctx.db, &rhs);
@@ -1288,6 +1313,83 @@ mod tests {
             body_ops.len(),
             2,
             "Overflow NatLit should result in unit return only"
+        );
+    }
+
+    #[salsa_test]
+    fn test_int_literal_within_i31_range(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // i31 range: -2^30 to 2^30-1
+        let i31_min: i64 = -(1 << 30); // -1,073,741,824
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            int_lit_expr(i31_min),
+        ))]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        let const_op = body_ops.iter().find(|op| op.name(db) == "const");
+        assert!(
+            const_op.is_some(),
+            "Should have a const operation for valid i31 value"
+        );
+    }
+
+    #[salsa_test]
+    fn test_int_literal_exceeds_i31_max_returns_unit(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Value exceeding i31 max: 2^30 = 1,073,741,824
+        let exceeds_i31_max: i64 = 1 << 30;
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            int_lit_expr(exceeds_i31_max),
+        ))]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // When IntLit exceeds i31 range, lower_expr returns None
+        assert_eq!(
+            body_ops.len(),
+            2,
+            "Overflow IntLit should result in unit return only"
+        );
+    }
+
+    #[salsa_test]
+    fn test_int_literal_below_i31_min_returns_unit(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Value below i31 min: -(2^30 + 1) = -1,073,741,825
+        let below_i31_min: i64 = -(1 << 30) - 1;
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            int_lit_expr(below_i31_min),
+        ))]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // When IntLit exceeds i31 range, lower_expr returns None
+        assert_eq!(
+            body_ops.len(),
+            2,
+            "Underflow IntLit should result in unit return only"
         );
     }
 }

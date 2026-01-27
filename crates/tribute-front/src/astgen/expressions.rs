@@ -61,8 +61,10 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         // Rune (character) literal: ?a, ?\n, etc.
         "rune" => {
             let text = ctx.node_text(&node);
-            let c = parse_rune_literal(&text).unwrap_or('\0');
-            ExprKind::RuneLit(c)
+            match parse_rune_literal(&text) {
+                Some(c) => ExprKind::RuneLit(c),
+                None => ExprKind::Error,
+            }
         }
 
         // Operator as function: (+), (<>), (Int::+), etc.

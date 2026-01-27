@@ -428,8 +428,14 @@ impl<'db> Resolver<'db> {
                 params,
                 continuation,
             } => {
-                // Resolve ability reference
-                let resolved_ability = self.resolve_name(&ability);
+                // Resolve ability reference, but skip "_" placeholder (unqualified ops).
+                // The "_" placeholder means the ability will be inferred later.
+                let resolved_ability = if ability.name == Symbol::new("_") {
+                    // Return unresolved marker without emitting diagnostic
+                    ResolvedRef::local(LocalId::UNRESOLVED, ability.name)
+                } else {
+                    self.resolve_name(&ability)
+                };
 
                 // Bind pattern params
                 let resolved_params = params
