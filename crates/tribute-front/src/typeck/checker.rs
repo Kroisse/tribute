@@ -45,7 +45,23 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Type check a module.
-    pub fn check_module(mut self, module: Module<ResolvedRef<'db>>) -> Module<TypedRef<'db>> {
+    pub fn check_module(self, module: Module<ResolvedRef<'db>>) -> Module<TypedRef<'db>> {
+        self.check_module_inner(module).0
+    }
+
+    /// Type check a module and also return function type schemes.
+    pub fn check_module_with_types(
+        self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
+        self.check_module_inner(module)
+    }
+
+    /// Internal implementation for module type checking.
+    fn check_module_inner(
+        mut self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
         // Phase 1: Collect type definitions and function signatures
         self.collect_declarations(&module);
 
@@ -73,6 +89,9 @@ impl<'db> TypeChecker<'db> {
             .accumulate(self.db());
         }
 
+        // Export function type schemes before applying substitution
+        let function_types = self.ctx.export_function_types();
+
         // Phase 4: Apply substitution to produce final types
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
@@ -82,11 +101,13 @@ impl<'db> TypeChecker<'db> {
             .map(|d| apply_subst_to_decl(self.db(), d, type_subst, row_subst))
             .collect();
 
-        Module {
+        let typed_module = Module {
             id: module.id,
             name: module.name,
             decls,
-        }
+        };
+
+        (typed_module, function_types)
     }
 
     // =========================================================================

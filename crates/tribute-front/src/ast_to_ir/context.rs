@@ -4,10 +4,11 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core;
-use trunk_ir::{DialectType, Location, PathId, Type, Value};
+use trunk_ir::{DialectType, Location, PathId, Symbol, Type, Value};
 
-use crate::ast::{LocalId, NodeId, SpanMap, TypeKind};
+use crate::ast::{LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
 
 /// Context for lowering AST to TrunkIR.
 pub struct IrLoweringCtx<'db> {
@@ -17,16 +18,24 @@ pub struct IrLoweringCtx<'db> {
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to SSA value.
     scopes: Vec<HashMap<LocalId, Value<'db>>>,
+    /// Function type schemes from type checking, keyed by function name.
+    function_types: HashMap<Symbol, TypeScheme<'db>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
     /// Create a new IR lowering context.
-    pub fn new(db: &'db dyn salsa::Database, path: PathId<'db>, span_map: SpanMap) -> Self {
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        span_map: SpanMap,
+        function_types: HashMap<Symbol, TypeScheme<'db>>,
+    ) -> Self {
         Self {
             db,
             path,
             span_map,
             scopes: vec![HashMap::new()],
+            function_types,
         }
     }
 
@@ -53,6 +62,11 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
+    /// Look up a function's type scheme by name.
+    pub fn lookup_function_type(&self, name: Symbol) -> Option<&TypeScheme<'db>> {
+        self.function_types.get(&name)
+    }
+
     /// Look up a local variable.
     pub fn lookup(&self, local_id: LocalId) -> Option<Value<'db>> {
         for scope in self.scopes.iter().rev() {
@@ -74,13 +88,20 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bytes => core::Bytes::new(self.db).as_type(),
             TypeKind::Rune => core::I32::new(self.db).as_type(),
             TypeKind::Nil | TypeKind::Error => core::Nil::new(self.db).as_type(),
-            TypeKind::UniVar { .. } | TypeKind::BoundVar { .. } => {
-                // Unresolved type variables - use placeholder
-                core::Nil::new(self.db).as_type()
+            TypeKind::BoundVar { .. } => {
+                // Quantified type variable in TypeScheme body → type-erased any
+                tribute_rt::any_type(self.db)
+            }
+            TypeKind::UniVar { id } => {
+                // UniVar should not survive substitution — compiler internal invariant violation
+                panic!(
+                    "ICE: UniVar({:?}) survived substitution — should have been resolved",
+                    id
+                );
             }
             TypeKind::Named { .. } => {
-                // Named type - placeholder for now
-                core::Nil::new(self.db).as_type()
+                // Type erasure: struct/enum → tribute_rt.any
+                tribute_rt::any_type(self.db)
             }
             TypeKind::Func { params, result, .. } => {
                 let params: Vec<Type<'db>> = params.iter().map(|p| self.convert_type(*p)).collect();
@@ -88,8 +109,8 @@ impl<'db> IrLoweringCtx<'db> {
                 core::Func::new(self.db, params.into(), result).as_type()
             }
             TypeKind::Tuple(_) => {
-                // Tuple type - placeholder for now
-                core::Nil::new(self.db).as_type()
+                // Type erasure: tuple → tribute_rt.any
+                tribute_rt::any_type(self.db)
             }
             TypeKind::App { ctor, .. } => self.convert_type(*ctor),
         }

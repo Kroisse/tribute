@@ -778,8 +778,15 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     };
 
     // Phase 5: AST → TrunkIR
+    // Get function type schemes from type checking for polymorphic lowering
+    let function_types: std::collections::HashMap<_, _> = ast_query::function_schemes(db, source)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
     let source_uri = source.uri(db).as_str();
-    let user_module = ast_to_ir::lower_ast_to_ir(db, typed_ast, span_map, source_uri);
+    let user_module =
+        ast_to_ir::lower_ast_to_ir(db, typed_ast, span_map, source_uri, function_types);
 
     // Merge prelude definitions into the user module
     merge_with_prelude(db, user_module)

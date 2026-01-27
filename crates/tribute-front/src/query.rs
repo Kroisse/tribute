@@ -14,8 +14,11 @@
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypedRef, UnresolvedName};
+use crate::ast::{
+    Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
+};
 use crate::source_file::SourceCst;
+use crate::typeck::TypeCheckOutput;
 
 // =============================================================================
 // Module-level queries
@@ -86,16 +89,40 @@ pub fn resolved_module<'db>(
     Some(crate::resolve::resolve_module(db, module, sm))
 }
 
+/// Base query: run type checking once (cached by Salsa).
+///
+/// Returns a `TypeCheckOutput` containing both the typed AST module
+/// and function type schemes.
+#[salsa::tracked]
+pub fn type_check_output<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<TypeCheckOutput<'db>> {
+    let module = resolved_module(db, source)?;
+    Some(crate::typeck::typecheck_module_full(db, module))
+}
+
 /// Type check a module.
 ///
-/// This delegates to function-level type checking and aggregates results.
+/// Derives the typed module from `type_check_output`.
 #[salsa::tracked]
 pub fn typed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<TypedRef<'db>>> {
-    let module = resolved_module(db, source)?;
-    Some(crate::typeck::typecheck_module(db, module))
+    type_check_output(db, source).map(|o| o.module(db))
+}
+
+/// Get function type schemes from type checking.
+///
+/// Returns the function type schemes collected during type checking,
+/// keyed by function name (Symbol).
+#[salsa::tracked]
+pub fn function_schemes<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<Vec<(Symbol, TypeScheme<'db>)>> {
+    type_check_output(db, source).map(|o| o.function_types(db).clone())
 }
 
 /// Type-directed name resolution (TDNR) on a module.

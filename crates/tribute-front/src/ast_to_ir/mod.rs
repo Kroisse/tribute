@@ -28,10 +28,12 @@
 mod context;
 mod lower;
 
-use trunk_ir::PathId;
-use trunk_ir::dialect::core;
+use std::collections::HashMap;
 
-use crate::ast::{Module, SpanMap, TypedRef};
+use trunk_ir::dialect::core;
+use trunk_ir::{PathId, Symbol};
+
+use crate::ast::{Module, SpanMap, TypeScheme, TypedRef};
 
 pub use context::IrLoweringCtx;
 pub use lower::lower_module;
@@ -45,14 +47,16 @@ pub use lower::lower_module;
 /// - `module`: Type-checked AST module
 /// - `span_map`: SpanMap for looking up source locations
 /// - `source_uri`: URI of the source file
+/// - `function_types`: Function type schemes from type checking
 pub fn lower_ast_to_ir<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
     span_map: SpanMap,
     source_uri: &str,
+    function_types: HashMap<Symbol, TypeScheme<'db>>,
 ) -> core::Module<'db> {
     let path = PathId::new(db, source_uri.to_owned());
-    lower_module(db, path, span_map, module)
+    lower_module(db, path, span_map, module, function_types)
 }
 
 #[cfg(test)]
@@ -69,7 +73,7 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = IrLoweringCtx::new(&db, path, span_map);
+        let ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new());
 
         // Verify context provides expected types
         let int_ty = ctx.int_type();
@@ -87,7 +91,7 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let mut ctx = IrLoweringCtx::new(&db, path, span_map);
+        let mut ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new());
 
         // Initially no binding
         let local_id = crate::ast::LocalId::new(0);
@@ -105,7 +109,7 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = IrLoweringCtx::new(&db, path, span_map);
+        let ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new());
 
         // Verify location creation doesn't panic
         let node_id = crate::ast::NodeId::from_raw(42);

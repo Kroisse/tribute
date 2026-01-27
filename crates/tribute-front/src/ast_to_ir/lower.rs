@@ -2,6 +2,8 @@
 //!
 //! Transforms AST declarations and expressions to TrunkIR operations.
 
+use std::collections::HashMap;
+
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::dialect::{adt, arith, core, func};
@@ -9,7 +11,7 @@ use trunk_ir::{Attribute, DialectType, Location, PathId, Symbol};
 
 use crate::ast::{
     Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypedRef,
+    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -20,6 +22,7 @@ pub fn lower_module<'db>(
     path: PathId<'db>,
     span_map: SpanMap,
     module: Module<TypedRef<'db>>,
+    function_types: HashMap<Symbol, TypeScheme<'db>>,
 ) -> core::Module<'db> {
     // Use module's NodeId to get location
     let module_location = span_map.get_or_default(module.id);
@@ -27,7 +30,7 @@ pub fn lower_module<'db>(
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
 
     core::Module::build(db, location, module_name, |top| {
-        let mut ctx = IrLoweringCtx::new(db, path, span_map.clone());
+        let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types);
 
         for decl in module.decls {
             lower_decl(&mut ctx, top, decl);
@@ -75,22 +78,27 @@ fn lower_function<'db>(
     let location = ctx.location(func.id);
     let func_name = func.name;
 
-    // Build parameter types with optional names
-    let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = func
-        .params
-        .iter()
-        .map(|p| {
-            let ty = convert_annotation_to_ir_type(ctx, p.ty.as_ref());
-            (ty, Some(p.name))
-        })
-        .collect();
+    // Use TypeScheme from type checking if available, otherwise fall back to annotations
+    let (param_ir_types, return_ty) =
+        if let Some(scheme) = ctx.lookup_function_type(func_name).cloned() {
+            let body = scheme.body(ctx.db);
+            match body.kind(ctx.db) {
+                TypeKind::Func { params, result, .. } => {
+                    let p: Vec<_> = params.iter().map(|t| ctx.convert_type(*t)).collect();
+                    let r = ctx.convert_type(*result);
+                    (p, r)
+                }
+                _ => fallback_from_annotations(ctx, &func),
+            }
+        } else {
+            fallback_from_annotations(ctx, &func)
+        };
 
-    // Build return type from annotation, defaulting to unit
-    let return_ty = func
-        .return_ty
-        .as_ref()
-        .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
-        .unwrap_or_else(|| ctx.unit_type());
+    let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = param_ir_types
+        .into_iter()
+        .zip(func.params.iter())
+        .map(|(ty, p)| (ty, Some(p.name)))
+        .collect();
 
     // Create function operation with named params
     let func_op = func::Func::build_with_named_params(
@@ -569,6 +577,24 @@ fn lower_block<'db>(
     result
 }
 
+/// Fallback: derive parameter and return types from annotations when TypeScheme is unavailable.
+fn fallback_from_annotations<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    func: &FuncDecl<TypedRef<'db>>,
+) -> (Vec<trunk_ir::Type<'db>>, trunk_ir::Type<'db>) {
+    let params = func
+        .params
+        .iter()
+        .map(|p| convert_annotation_to_ir_type(ctx, p.ty.as_ref()))
+        .collect();
+    let ret = func
+        .return_ty
+        .as_ref()
+        .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
+        .unwrap_or_else(|| ctx.unit_type());
+    (params, ret)
+}
+
 /// Convert a type annotation to a TrunkIR type.
 ///
 /// Falls back to int_type() for unannotated parameters.
@@ -640,7 +666,7 @@ mod tests {
         span_map: SpanMap,
         module: Module<TypedRef<'db>>,
     ) -> core::Module<'db> {
-        lower_module(db, path, span_map, module)
+        lower_module(db, path, span_map, module, HashMap::new())
     }
 
     /// Get operations from a module's body.
@@ -1220,7 +1246,7 @@ mod tests {
     fn test_convert_annotation_to_ir_type_named(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map);
+        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map, HashMap::new());
 
         // Test Int annotation
         let int_ann = TypeAnnotation {
@@ -1251,7 +1277,7 @@ mod tests {
     fn test_convert_annotation_to_ir_type_default(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map);
+        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map, HashMap::new());
 
         // No annotation should default to int
         let ty = convert_annotation_to_ir_type(&ctx, None);

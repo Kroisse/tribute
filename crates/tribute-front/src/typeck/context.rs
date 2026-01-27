@@ -164,6 +164,16 @@ impl<'db> TypeContext<'db> {
         self.function_types.get(&id).copied()
     }
 
+    /// Export function type schemes as a Vec keyed by Symbol (function name).
+    ///
+    /// Used to pass type information from type checking to IR lowering.
+    pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+        self.function_types
+            .iter()
+            .map(|(id, scheme)| (id.name(self.db), *scheme))
+            .collect()
+    }
+
     /// Instantiate a function's type scheme with fresh type variables.
     ///
     /// Each call generates fresh UniVars so that different call sites of the
