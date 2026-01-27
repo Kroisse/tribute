@@ -437,13 +437,29 @@ impl<'db> TypeSolver<'db> {
                 Ok(())
             }
             (Some(v1), None) => {
-                // r1 has tail, r2 is closed
+                // r1 has tail, r2 is closed.
+                // r1's extra concrete abilities (only_r1) have nowhere to go in closed r2.
+                if !only_r1.is_empty() {
+                    let missing = only_r1.first().unwrap().clone();
+                    return Err(SolveError::MissingAbility {
+                        ability: missing,
+                        row: r2,
+                    });
+                }
                 // v1 must equal {only_r2} (closed, no vars → occurs check trivially passes)
                 self.row_subst.insert(v1, EffectRow::concrete(only_r2));
                 Ok(())
             }
             (None, Some(v2)) => {
-                // r2 has tail, r1 is closed
+                // r2 has tail, r1 is closed.
+                // r2's extra concrete abilities (only_r2) have nowhere to go in closed r1.
+                if !only_r2.is_empty() {
+                    let missing = only_r2.first().unwrap().clone();
+                    return Err(SolveError::MissingAbility {
+                        ability: missing,
+                        row: r1,
+                    });
+                }
                 // v2 must equal {only_r1} (closed, no vars → occurs check trivially passes)
                 self.row_subst.insert(v2, EffectRow::concrete(only_r1));
                 Ok(())
@@ -849,6 +865,73 @@ mod tests {
             resolved_e2.contains(&a),
             "e2 should contain A: {:?}",
             resolved_e2
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_open_with_extra_abilities_vs_closed_fails(_db: &salsa::DatabaseImpl) {
+        // {A, B | e} = {A} should fail — B has nowhere to go in the closed row
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        let r1 = EffectRow::with_tail([a.clone(), b], e);
+        let r2 = EffectRow::concrete([a]);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            matches!(result, Err(SolveError::MissingAbility { .. })),
+            "Open row with extra abilities vs closed should fail: {:?}",
+            result
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_closed_vs_open_with_extra_abilities_fails(_db: &salsa::DatabaseImpl) {
+        // {A} = {A, B | e} should fail — B has nowhere to go in the closed row
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        let r1 = EffectRow::concrete([a.clone()]);
+        let r2 = EffectRow::with_tail([a, b], e);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            matches!(result, Err(SolveError::MissingAbility { .. })),
+            "Closed vs open row with extra abilities should fail: {:?}",
+            result
+        );
+    }
+
+    #[salsa_test]
+    fn test_row_open_subset_vs_closed_superset_succeeds(_db: &salsa::DatabaseImpl) {
+        // {A | e} = {A, B} should succeed — e binds to {B}
+        let mut solver = TypeSolver::new(_db);
+
+        let e = solver.fresh_row_var();
+        let a = AbilityRef::simple(Symbol::new("A"));
+        let b = AbilityRef::simple(Symbol::new("B"));
+
+        let r1 = EffectRow::with_tail([a.clone()], e);
+        let r2 = EffectRow::concrete([a, b.clone()]);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "Open subset vs closed superset should succeed: {:?}",
+            result
+        );
+
+        let resolved_e = solver.apply_row(&EffectRow::var(e));
+        assert!(
+            resolved_e.contains(&b),
+            "e should be bound to {{B}}: {:?}",
+            resolved_e
         );
     }
 
