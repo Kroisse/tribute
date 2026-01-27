@@ -34,10 +34,11 @@ impl<S: Subscriber> Layer<S> for LspLayer {
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
 
-        let message = if visitor.fields.is_empty() {
-            visitor.message
-        } else {
-            format!("{} {}", visitor.message, visitor.fields.join(", "))
+        let message = match (visitor.message.is_empty(), visitor.fields.is_empty()) {
+            (true, true) => String::new(),
+            (true, false) => visitor.fields.join(", "),
+            (false, true) => visitor.message,
+            (false, false) => format!("{} {}", visitor.message, visitor.fields.join(", ")),
         };
 
         let params = LogMessageParams { typ, message };
