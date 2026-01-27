@@ -166,12 +166,11 @@ impl<'db> TypeContext<'db> {
 
     /// Instantiate a function's type scheme with fresh type variables.
     ///
-    /// Uses deterministic UniVar IDs based on the function ID, so repeated calls
-    /// for the same function return the same instantiated type.
-    pub fn instantiate_function(&self, id: FuncDefId<'db>) -> Option<Type<'db>> {
+    /// Each call generates fresh UniVars so that different call sites of the
+    /// same polymorphic function get independent type variables for unification.
+    pub fn instantiate_function(&mut self, id: FuncDefId<'db>) -> Option<Type<'db>> {
         let scheme = self.lookup_function(id)?;
-        let ty = self.instantiate_scheme_with_source(scheme, UniVarSource::Function(id));
-        Some(ty)
+        Some(self.instantiate_scheme(scheme))
     }
 
     // =========================================================================
@@ -190,12 +189,11 @@ impl<'db> TypeContext<'db> {
 
     /// Instantiate a constructor's type scheme with fresh type variables.
     ///
-    /// Uses deterministic UniVar IDs based on the constructor ID, so repeated calls
-    /// for the same constructor return the same instantiated type.
-    pub fn instantiate_constructor(&self, id: CtorId<'db>) -> Option<Type<'db>> {
+    /// Each call generates fresh UniVars so that different call sites of the
+    /// same polymorphic constructor get independent type variables for unification.
+    pub fn instantiate_constructor(&mut self, id: CtorId<'db>) -> Option<Type<'db>> {
         let scheme = self.lookup_constructor(id)?;
-        let ty = self.instantiate_scheme_with_source(scheme, UniVarSource::Constructor(id));
-        Some(ty)
+        Some(self.instantiate_scheme(scheme))
     }
 
     // =========================================================================
@@ -219,8 +217,8 @@ impl<'db> TypeContext<'db> {
     /// Instantiate a type scheme with fresh type variables.
     ///
     /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`.
-    /// Uses anonymous UniVar source - for caching, use `instantiate_function` or
-    /// `instantiate_constructor` instead.
+    /// Each call produces independent type variables, ensuring different
+    /// call sites of polymorphic functions/constructors don't interfere.
     pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
         let params = scheme.type_params(self.db);
         if params.is_empty() {
@@ -229,32 +227,6 @@ impl<'db> TypeContext<'db> {
 
         // Generate fresh variables for each parameter
         let fresh_vars: Vec<Type<'db>> = (0..params.len()).map(|_| self.fresh_type_var()).collect();
-
-        // Substitute bound variables with fresh variables
-        self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
-    }
-
-    /// Instantiate a type scheme with deterministic type variables.
-    ///
-    /// Creates UniVars with the given source, ensuring repeated calls with the same
-    /// source produce identical types (enabling Salsa caching via interning).
-    fn instantiate_scheme_with_source(
-        &self,
-        scheme: TypeScheme<'db>,
-        source: UniVarSource<'db>,
-    ) -> Type<'db> {
-        let params = scheme.type_params(self.db);
-        if params.is_empty() {
-            return scheme.body(self.db);
-        }
-
-        // Generate deterministic UniVars based on source and index
-        let fresh_vars: Vec<Type<'db>> = (0..params.len())
-            .map(|i| {
-                let id = UniVarId::new(self.db, source, i as u32);
-                Type::new(self.db, TypeKind::UniVar { id })
-            })
-            .collect();
 
         // Substitute bound variables with fresh variables
         self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
@@ -474,16 +446,14 @@ mod tests {
         }
     }
 
-    /// Tracked helper for function caching test.
     #[salsa::tracked]
-    fn test_function_caching_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_function_fresh_per_call_inner<'db>(db: &'db dyn salsa::Database) -> bool {
         let mut ctx = TypeContext::new(db);
 
         // Create a polymorphic function type: forall a. a -> a
         let name = Symbol::new("identity");
         let func_id = FuncDefId::new(db, name);
 
-        // BoundVar(0) -> BoundVar(0)
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let effect = EffectRow::pure(db);
         let func_ty = Type::new(
@@ -497,45 +467,57 @@ mod tests {
         let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
         ctx.register_function(func_id, scheme);
 
-        // First instantiation
+        // Two instantiations of the same function should get different UniVars,
+        // so different call sites can unify independently.
         let ty1 = ctx.instantiate_function(func_id).unwrap();
-
-        // Second instantiation should return the same type (cached)
         let ty2 = ctx.instantiate_function(func_id).unwrap();
 
-        // Both should be the same type
-        if ty1 != ty2 {
-            return false;
+        if ty1 == ty2 {
+            return false; // Should be different
         }
 
-        // Verify it's a function type with UniVar
-        if let TypeKind::Func { params, result, .. } = ty1.kind(db) {
-            params.len() == 1
-                && params[0] == *result
-                && matches!(params[0].kind(db), TypeKind::UniVar { .. })
+        // Both should be function types with UniVar params
+        if let (
+            TypeKind::Func {
+                params: p1,
+                result: r1,
+                ..
+            },
+            TypeKind::Func {
+                params: p2,
+                result: r2,
+                ..
+            },
+        ) = (ty1.kind(db), ty2.kind(db))
+        {
+            p1.len() == 1
+                && p1[0] == *r1
+                && p2[0] == *r2
+                && p1[0] != p2[0] // Different UniVars
+                && matches!(p1[0].kind(db), TypeKind::UniVar { .. })
         } else {
             false
         }
     }
 
     #[salsa_test]
-    fn test_instantiate_function_caching(db: &dyn salsa::Database) {
+    fn test_instantiate_function_fresh_per_call(db: &dyn salsa::Database) {
         assert!(
-            test_function_caching_inner(db),
-            "Function instantiation should return cached type on second call"
+            test_instantiate_function_fresh_per_call_inner(db),
+            "Each instantiation should produce fresh type variables"
         );
     }
 
-    /// Tracked helper for constructor caching test.
     #[salsa::tracked]
-    fn test_constructor_caching_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+    fn test_instantiate_constructor_fresh_per_call_inner<'db>(
+        db: &'db dyn salsa::Database,
+    ) -> bool {
         let mut ctx = TypeContext::new(db);
 
-        // Create a polymorphic constructor type: forall a. a -> Option a
+        // forall a. a -> Option a
         let type_name = Symbol::new("Option");
         let ctor_id = CtorId::new(db, type_name);
 
-        // a -> Option(a)
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
             db,
@@ -556,51 +538,26 @@ mod tests {
         let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
         ctx.register_constructor(ctor_id, scheme);
 
-        // First instantiation
         let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
-
-        // Second instantiation should return the same type (cached)
         let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
 
-        // Both should be the same type
-        if ty1 != ty2 {
-            return false;
-        }
-
-        // Verify it's a function type
-        if let TypeKind::Func { params, result, .. } = ty1.kind(db) {
-            if params.len() != 1 {
-                return false;
-            }
-            // Result should be Named type with the same UniVar as param
-            if let TypeKind::Named { name, args } = result.kind(db) {
-                *name == type_name && args.len() == 1 && args[0] == params[0]
-            } else {
-                false
-            }
-        } else {
-            false
-        }
+        ty1 != ty2 // Should be different
     }
 
     #[salsa_test]
-    fn test_instantiate_constructor_caching(db: &dyn salsa::Database) {
+    fn test_instantiate_constructor_fresh_per_call(db: &dyn salsa::Database) {
         assert!(
-            test_constructor_caching_inner(db),
-            "Constructor instantiation should return cached type on second call"
+            test_instantiate_constructor_fresh_per_call_inner(db),
+            "Each constructor instantiation should produce fresh type variables"
         );
     }
 
-    /// Tracked helper for different functions test.
     #[salsa::tracked]
     fn test_different_functions_inner<'db>(db: &'db dyn salsa::Database) -> bool {
         let mut ctx = TypeContext::new(db);
 
-        // Create two different functions with the same scheme
-        let name1 = Symbol::new("f1");
-        let name2 = Symbol::new("f2");
-        let func_id1 = FuncDefId::new(db, name1);
-        let func_id2 = FuncDefId::new(db, name2);
+        let func_id1 = FuncDefId::new(db, Symbol::new("f1"));
+        let func_id2 = FuncDefId::new(db, Symbol::new("f2"));
 
         // forall a. a -> a
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
@@ -617,11 +574,10 @@ mod tests {
         ctx.register_function(func_id1, scheme);
         ctx.register_function(func_id2, scheme);
 
-        // Instantiate both
         let ty1 = ctx.instantiate_function(func_id1).unwrap();
         let ty2 = ctx.instantiate_function(func_id2).unwrap();
 
-        // They should have different UniVars
+        // Different functions should have different UniVars
         if let (
             TypeKind::Func {
                 params: params1, ..
@@ -631,7 +587,6 @@ mod tests {
             },
         ) = (ty1.kind(db), ty2.kind(db))
         {
-            // The UniVar IDs should be different
             params1[0] != params2[0]
         } else {
             false

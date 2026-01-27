@@ -10,7 +10,7 @@
 
 use trunk_ir::Symbol;
 
-use super::{CtorId, FuncDefId, NodeId};
+use super::NodeId;
 
 /// A monomorphic type.
 ///
@@ -25,30 +25,22 @@ pub struct Type<'db> {
 
 /// Source of a unification variable.
 ///
-/// This identifies where a type variable came from, enabling deterministic
-/// ID generation for Salsa memoization of polymorphic instantiation.
+/// This identifies where a type variable came from, for debugging purposes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub enum UniVarSource<'db> {
-    /// Type variable from instantiating a polymorphic function.
-    Function(FuncDefId<'db>),
-    /// Type variable from instantiating a polymorphic constructor.
-    Constructor(CtorId<'db>),
-    /// Anonymous type variable (for lambdas, local bindings, etc.).
-    ///
-    /// These don't need caching since they're only created once during type checking.
+pub enum UniVarSource {
+    /// Anonymous type variable (for lambdas, local bindings, polymorphic instantiation, etc.).
     /// The u64 is a unique counter value.
     Anonymous(u64),
 }
 
-/// A unification variable ID for polymorphic instantiation.
+/// A unification variable ID.
 ///
-/// These are created when instantiating polymorphic type schemes (functions
-/// and constructors). The combination of source and index ensures deterministic
-/// IDs, enabling Salsa to cache instantiation results.
+/// Each instantiation of a polymorphic type scheme creates fresh UniVarIds
+/// so that different call sites get independent type variables for unification.
 #[salsa::interned(debug)]
 pub struct UniVarId<'db> {
-    /// The source of this type variable (function or constructor being instantiated).
-    pub source: UniVarSource<'db>,
+    /// The source of this type variable.
+    pub source: UniVarSource,
     /// Index within the type scheme's parameters (0, 1, 2, ...).
     pub index: u32,
 }
