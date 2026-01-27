@@ -361,8 +361,17 @@ impl<'db> TypeSolver<'db> {
         match ty.kind(self.db) {
             TypeKind::UniVar { id } => *id == var,
             TypeKind::Named { args, .. } => args.iter().any(|a| self.occurs_in(var, *a)),
-            TypeKind::Func { params, result, .. } => {
-                params.iter().any(|p| self.occurs_in(var, *p)) || self.occurs_in(var, *result)
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                params.iter().any(|p| self.occurs_in(var, *p))
+                    || self.occurs_in(var, *result)
+                    || effect
+                        .effects(self.db)
+                        .iter()
+                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
             }
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
             TypeKind::App { ctor, args } => {
@@ -411,7 +420,7 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::UniVarSource;
+    use crate::ast::{Effect, EffectRow, UniVarSource};
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -477,6 +486,79 @@ mod tests {
 
         let result = solver.unify_types(var_ty, list_ty);
         assert!(matches!(result, Err(SolveError::OccursCheck { .. })));
+    }
+
+    #[test]
+    fn test_occurs_check_in_effect_row() {
+        // Unifying ?a with fn() ->{State(?a)} Int should fail the occurs check,
+        // because ?a appears inside the effect row's type arguments.
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = fresh_var(&db, 0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // Effect row: {State(?a)}
+        let effect = EffectRow::new(
+            &db,
+            vec![Effect {
+                name: trunk_ir::Symbol::new("State"),
+                args: vec![var_ty],
+            }],
+            None,
+        );
+
+        // fn() ->{State(?a)} Int
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        let result = solver.unify_types(var_ty, func_ty);
+        assert!(
+            matches!(result, Err(SolveError::OccursCheck { .. })),
+            "Expected occurs check failure for ?a = fn() ->{{State(?a)}} Int"
+        );
+    }
+
+    #[test]
+    fn test_occurs_check_not_triggered_for_different_var_in_effect() {
+        // Unifying ?a with fn() ->{State(?b)} Int should succeed,
+        // because ?a does not appear in the effect row.
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let effect = EffectRow::new(
+            &db,
+            vec![Effect {
+                name: trunk_ir::Symbol::new("State"),
+                args: vec![var_b],
+            }],
+            None,
+        );
+
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        let result = solver.unify_types(var_a, func_ty);
+        assert!(
+            result.is_ok(),
+            "Should not trigger occurs check when the var is different"
+        );
     }
 
     #[test]
