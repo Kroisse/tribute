@@ -22,7 +22,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": ".ci/githooks/pre-commit-lite"
+                        "command": ".ci/lint.sh"
                     }
                 ]
             }

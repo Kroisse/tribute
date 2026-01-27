@@ -2,8 +2,6 @@
 
 set -e
 
-echo "Running pre-commit-lite checks..."
-
 echo "Running cargo fmt..."
 if ! cargo fmt --all --check; then
     echo ""
@@ -20,4 +18,4 @@ if ! cargo clippy --workspace --all-targets --message-format=short -- -D warning
     exit 1
 fi
 
-echo "✅ All pre-commit-lite checks passed!"
+echo "✅ Lint checks passed!"
