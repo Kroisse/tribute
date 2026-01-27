@@ -502,7 +502,7 @@ pub fn type_index<'db>(
 // =============================================================================
 
 /// Kind of definition for LSP.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DefinitionKind {
     /// A function definition.
     Function,
@@ -511,7 +511,10 @@ pub enum DefinitionKind {
     /// An enum definition.
     Enum,
     /// An enum variant (constructor).
-    EnumVariant,
+    EnumVariant {
+        /// The owning enum type name.
+        owner: Symbol,
+    },
     /// An ability definition.
     Ability,
     /// A local variable binding.
@@ -904,7 +907,12 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
         // Add variant definitions
         for variant in &e.variants {
-            self.add_definition(variant.id, variant.name, DefinitionKind::EnumVariant, None);
+            self.add_definition(
+                variant.id,
+                variant.name,
+                DefinitionKind::EnumVariant { owner: e.name },
+                None,
+            );
         }
     }
 
@@ -1052,22 +1060,27 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_pattern(elem);
                 }
             }
-            PatternKind::ListRest { head, rest } => {
+            PatternKind::ListRest {
+                head,
+                rest,
+                rest_local_id,
+            } => {
                 for h in head {
                     self.collect_pattern(h);
                 }
                 if let Some(name) = rest {
-                    // Rest binding doesn't have LocalId
-                    self.add_definition(pattern.id, *name, DefinitionKind::Local, None);
+                    // Rest binding has LocalId from name resolution
+                    self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
                 }
             }
             PatternKind::As {
                 pattern: inner,
                 name,
+                local_id,
             } => {
                 self.collect_pattern(inner);
-                // As binding doesn't have LocalId
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, None);
+                // As binding has LocalId from name resolution
+                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
             }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         }
@@ -1535,7 +1548,7 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
     match kind {
         DefinitionKind::Struct
         | DefinitionKind::Enum
-        | DefinitionKind::EnumVariant
+        | DefinitionKind::EnumVariant { .. }
         | DefinitionKind::Ability => {
             if !first.is_ascii_uppercase() {
                 return Err(RenameError::InvalidTypeIdentifier);
@@ -2314,14 +2327,20 @@ fn unwrap(opt: Option) -> Int {
         assert!(opt_def.is_some());
         assert_eq!(opt_def.unwrap().kind, DefinitionKind::Parameter);
 
-        // Enum variants should be defined
+        // Enum variants should be defined with owner
         let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
-        assert_eq!(some_def.unwrap().kind, DefinitionKind::EnumVariant);
+        assert!(matches!(
+            some_def.unwrap().kind,
+            DefinitionKind::EnumVariant { .. }
+        ));
 
         let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
         assert!(none_def.is_some());
-        assert_eq!(none_def.unwrap().kind, DefinitionKind::EnumVariant);
+        assert!(matches!(
+            none_def.unwrap().kind,
+            DefinitionKind::EnumVariant { .. }
+        ));
     }
 
     #[test]
@@ -2720,18 +2739,27 @@ fn f(p: Point) -> Int {
         assert!(color_def.is_some());
         assert_eq!(color_def.unwrap().kind, DefinitionKind::Enum);
 
-        // Variants should have EnumVariant kind, not Field
+        // Variants should have EnumVariant kind with owner, not Field
         let red_def = index.definition_of(&db, trunk_ir::Symbol::new("Red"));
         assert!(red_def.is_some());
-        assert_eq!(red_def.unwrap().kind, DefinitionKind::EnumVariant);
+        assert!(matches!(
+            &red_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Color"
+        ));
 
         let green_def = index.definition_of(&db, trunk_ir::Symbol::new("Green"));
         assert!(green_def.is_some());
-        assert_eq!(green_def.unwrap().kind, DefinitionKind::EnumVariant);
+        assert!(matches!(
+            &green_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Color"
+        ));
 
         let blue_def = index.definition_of(&db, trunk_ir::Symbol::new("Blue"));
         assert!(blue_def.is_some());
-        assert_eq!(blue_def.unwrap().kind, DefinitionKind::EnumVariant);
+        assert!(matches!(
+            &blue_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Color"
+        ));
     }
 
     #[test]
@@ -2757,11 +2785,14 @@ fn f(p: Point) -> Int {
     #[test]
     fn test_validate_identifier_enum_variant_uppercase() {
         // EnumVariant should require uppercase (like Struct, Enum, Ability)
-        assert!(validate_identifier("Red", DefinitionKind::EnumVariant).is_ok());
-        assert!(validate_identifier("SomeValue", DefinitionKind::EnumVariant).is_ok());
+        let variant_kind = DefinitionKind::EnumVariant {
+            owner: trunk_ir::Symbol::new("TestEnum"),
+        };
+        assert!(validate_identifier("Red", variant_kind.clone()).is_ok());
+        assert!(validate_identifier("SomeValue", variant_kind.clone()).is_ok());
 
         // Lowercase should be rejected for EnumVariant
-        let result = validate_identifier("red", DefinitionKind::EnumVariant);
+        let result = validate_identifier("red", variant_kind);
         assert!(matches!(result, Err(RenameError::InvalidTypeIdentifier)));
     }
 
@@ -2774,5 +2805,59 @@ fn f(p: Point) -> Int {
         // Uppercase should be rejected for Field
         let result = validate_identifier("X", DefinitionKind::Field);
         assert!(matches!(result, Err(RenameError::InvalidIdentifier)));
+    }
+
+    #[test]
+    fn test_enum_variant_owner_tracking() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"
+enum Option(T) {
+    Some(T),
+    None
+}
+enum Result(T, E) {
+    Ok(T),
+    Err(E)
+}
+"#,
+        );
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // Some's owner should be Option
+        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        assert!(some_def.is_some());
+        assert!(matches!(
+            &some_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Option"
+        ));
+
+        // None's owner should be Option
+        let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
+        assert!(none_def.is_some());
+        assert!(matches!(
+            &none_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Option"
+        ));
+
+        // Ok's owner should be Result
+        let ok_def = index.definition_of(&db, trunk_ir::Symbol::new("Ok"));
+        assert!(ok_def.is_some());
+        assert!(matches!(
+            &ok_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Result"
+        ));
+
+        // Err's owner should be Result
+        let err_def = index.definition_of(&db, trunk_ir::Symbol::new("Err"));
+        assert!(err_def.is_some());
+        assert!(matches!(
+            &err_def.unwrap().kind,
+            DefinitionKind::EnumVariant { owner } if *owner == "Result"
+        ));
     }
 }

@@ -92,24 +92,24 @@ fn lower_function<'db>(
         .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
         .unwrap_or_else(|| ctx.unit_type());
 
-    // Collect parameter LocalIds for binding
-    let param_local_ids: Vec<_> = func.params.iter().filter_map(|p| p.local_id).collect();
-
     // Create function operation with named params
     let func_op = func::Func::build_with_named_params(
         ctx.db,
         location,
         func_name,
         None,
-        params,
+        params.clone(),
         return_ty,
         None,
         |body, arg_values| {
             ctx.enter_scope();
 
             // Bind parameters to their block argument values
-            for (local_id, arg_value) in param_local_ids.iter().zip(arg_values.iter()) {
-                ctx.bind(*local_id, *arg_value);
+            // Use index-based matching to handle params with None local_id correctly
+            for (i, param) in func.params.iter().enumerate() {
+                if let Some(local_id) = param.local_id {
+                    ctx.bind(local_id, arg_values[i]);
+                }
             }
 
             // Lower function body

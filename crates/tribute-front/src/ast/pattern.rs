@@ -87,12 +87,21 @@ where
         head: Vec<Pattern<V>>,
         /// Optional binding for the rest (None means `..` without binding).
         rest: Option<Symbol>,
+        /// Unique identifier assigned during name resolution for the rest binding.
+        /// None before resolution or if rest is None/"_", Some after resolution.
+        rest_local_id: Option<super::phases::LocalId>,
     },
 
     /// As pattern: `pattern as name`
     ///
     /// Matches the inner pattern and also binds the whole value.
-    As { pattern: Pattern<V>, name: Symbol },
+    As {
+        pattern: Pattern<V>,
+        name: Symbol,
+        /// Unique identifier assigned during name resolution.
+        /// None before resolution, Some after.
+        local_id: Option<super::phases::LocalId>,
+    },
 
     /// Error pattern (for error recovery).
     Error,

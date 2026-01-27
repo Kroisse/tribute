@@ -512,24 +512,34 @@ impl<'db> Resolver<'db> {
                 PatternKind::List(patterns)
             }
 
-            PatternKind::ListRest { head, rest } => {
+            PatternKind::ListRest { head, rest, .. } => {
                 let head = head
                     .into_iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 // Bind the rest variable if it's not "_"
-                if let Some(rest_name) = rest
+                let rest_local_id = if let Some(rest_name) = rest
                     && rest_name != "_"
                 {
-                    self.bind_local(rest_name);
+                    Some(self.bind_local(rest_name))
+                } else {
+                    None
+                };
+                PatternKind::ListRest {
+                    head,
+                    rest,
+                    rest_local_id,
                 }
-                PatternKind::ListRest { head, rest }
             }
 
-            PatternKind::As { pattern, name } => {
+            PatternKind::As { pattern, name, .. } => {
                 let pattern = self.resolve_pattern_with_bindings(pattern);
-                self.bind_local(name);
-                PatternKind::As { pattern, name }
+                let local_id = Some(self.bind_local(name));
+                PatternKind::As {
+                    pattern,
+                    name,
+                    local_id,
+                }
             }
 
             PatternKind::Error => PatternKind::Error,
@@ -718,5 +728,82 @@ mod tests {
             }
             _ => panic!("Expected unresolved y after pop"),
         }
+    }
+
+    #[test]
+    fn test_list_rest_pattern_local_id() {
+        use crate::ast::{Pattern, PatternKind};
+
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let mut resolver = Resolver::new(&db, env);
+        resolver.push_scope();
+
+        // Create a ListRest pattern: [head, ..rest]
+        let head_pattern = Pattern::new(
+            NodeId::from_raw(1),
+            PatternKind::Bind {
+                name: Symbol::new("head"),
+                local_id: None,
+            },
+        );
+        let rest_name = Symbol::new("rest");
+        let list_rest_pattern = Pattern::new(
+            NodeId::from_raw(2),
+            PatternKind::ListRest {
+                head: vec![head_pattern],
+                rest: Some(rest_name),
+                rest_local_id: None,
+            },
+        );
+
+        // Resolve the pattern
+        let resolved = resolver.resolve_pattern_with_bindings(list_rest_pattern);
+
+        // Check that rest has a LocalId
+        let PatternKind::ListRest {
+            rest_local_id,
+            rest,
+            ..
+        } = resolved.kind.as_ref()
+        else {
+            panic!("Expected ListRest pattern");
+        };
+
+        assert!(rest.is_some());
+        assert!(rest_local_id.is_some(), "rest should have a LocalId");
+    }
+
+    #[test]
+    fn test_as_pattern_local_id() {
+        use crate::ast::{Pattern, PatternKind};
+
+        let db = test_db();
+        let env = ModuleEnv::new();
+        let mut resolver = Resolver::new(&db, env);
+        resolver.push_scope();
+
+        // Create an As pattern: _ as all
+        let inner_pattern = Pattern::new(NodeId::from_raw(1), PatternKind::Wildcard);
+        let as_name = Symbol::new("all");
+        let as_pattern = Pattern::new(
+            NodeId::from_raw(2),
+            PatternKind::As {
+                pattern: inner_pattern,
+                name: as_name,
+                local_id: None,
+            },
+        );
+
+        // Resolve the pattern
+        let resolved = resolver.resolve_pattern_with_bindings(as_pattern);
+
+        // Check that the as-binding has a LocalId
+        let PatternKind::As { local_id, name, .. } = resolved.kind.as_ref() else {
+            panic!("Expected As pattern");
+        };
+
+        assert_eq!(*name, as_name);
+        assert!(local_id.is_some(), "as-binding should have a LocalId");
     }
 }

@@ -463,8 +463,12 @@ impl<'db> TypeChecker<'db> {
                     .collect();
 
                 let body_ty = self.infer_expr_type(body);
+                // Create fresh result type variable and unify with body type
+                // This ensures proper type propagation through the solver
+                let result_ty = self.ctx.fresh_type_var();
+                self.ctx.constrain_eq(result_ty, body_ty);
                 let effect = self.ctx.fresh_effect_row();
-                self.ctx.func_type(param_types, body_ty, effect)
+                self.ctx.func_type(param_types, result_ty, effect)
             }
             ExprKind::Handle { body, handlers } => {
                 // Handle expression
@@ -844,7 +848,7 @@ impl<'db> TypeChecker<'db> {
                     self.bind_pattern_vars(pat, fresh_ty);
                 }
             }
-            PatternKind::As { pattern, name } => {
+            PatternKind::As { pattern, name, .. } => {
                 self.ctx.bind_local_by_name(*name, ty);
                 self.bind_pattern_vars(pattern, ty);
             }
@@ -889,13 +893,23 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.convert_pattern(p))
                     .collect(),
             ),
-            PatternKind::ListRest { head, rest } => PatternKind::ListRest {
+            PatternKind::ListRest {
+                head,
+                rest,
+                rest_local_id,
+            } => PatternKind::ListRest {
                 head: head.into_iter().map(|p| self.convert_pattern(p)).collect(),
                 rest,
+                rest_local_id,
             },
-            PatternKind::As { pattern, name } => PatternKind::As {
+            PatternKind::As {
+                pattern,
+                name,
+                local_id,
+            } => PatternKind::As {
                 pattern: self.convert_pattern(pattern),
                 name,
+                local_id,
             },
             PatternKind::Error => PatternKind::Error,
         };

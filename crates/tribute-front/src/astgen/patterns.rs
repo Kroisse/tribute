@@ -270,7 +270,11 @@ fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unres
     }
 
     if has_rest {
-        PatternKind::ListRest { head, rest }
+        PatternKind::ListRest {
+            head,
+            rest,
+            rest_local_id: None,
+        }
     } else {
         PatternKind::List(head)
     }
@@ -288,7 +292,11 @@ fn lower_as_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unresol
     let pattern = lower_pattern(ctx, pattern_node);
     let name = ctx.node_symbol(&name_node);
 
-    PatternKind::As { pattern, name }
+    PatternKind::As {
+        pattern,
+        name,
+        local_id: None,
+    }
 }
 
 fn lower_pattern_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<UnresolvedName>> {
@@ -764,7 +772,7 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        let PatternKind::ListRest { head, rest } = pattern else {
+        let PatternKind::ListRest { head, rest, .. } = pattern else {
             panic!("Expected list rest pattern, got {:?}", pattern);
         };
         assert_eq!(head.len(), 1);
@@ -783,7 +791,7 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        let PatternKind::ListRest { head, rest } = pattern else {
+        let PatternKind::ListRest { head, rest, .. } = pattern else {
             panic!("Expected list rest pattern, got {:?}", pattern);
         };
         assert_eq!(head.len(), 1);
@@ -807,6 +815,7 @@ mod tests {
         let PatternKind::As {
             pattern: inner,
             name,
+            ..
         } = pattern
         else {
             panic!("Expected as pattern, got {:?}", pattern);
@@ -831,6 +840,7 @@ mod tests {
         let PatternKind::As {
             pattern: inner,
             name,
+            ..
         } = pattern
         else {
             panic!("Expected as pattern, got {:?}", pattern);

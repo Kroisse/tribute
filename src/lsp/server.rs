@@ -358,7 +358,7 @@ impl LspServer {
             let (def, _) = index.can_rename(db, offset)?;
 
             // Validate new name
-            if ast_index::validate_identifier(new_name, def.kind).is_err() {
+            if ast_index::validate_identifier(new_name, def.kind.clone()).is_err() {
                 tracing::warn!(new_name = %new_name, "Invalid identifier for rename");
                 return None;
             }
