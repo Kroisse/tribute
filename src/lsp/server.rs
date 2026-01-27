@@ -275,12 +275,12 @@ impl LspServer {
         let locations = self.db.attach(|db| {
             let index = ast_index::definition_index(db, source_cst)?;
 
-            let (symbol, refs) = index.references_at(db, offset)?;
+            let (target, refs) = index.references_at(db, offset)?;
 
             let mut locations = Vec::new();
 
-            // Optionally include the definition itself
-            if include_declaration && let Some(def) = index.definition_of(db, symbol) {
+            // Optionally include the definition itself (using target for precise matching)
+            if include_declaration && let Some(def) = index.definition_of_target(db, &target) {
                 locations.push(Location {
                     uri: uri.clone(),
                     range: span_to_range(&rope, def.span),
@@ -372,8 +372,9 @@ impl LspServer {
                 new_text: new_name.clone(),
             });
 
-            // Add all references
-            for reference in index.references_of(db, def.name) {
+            // Add all references using target-aware matching to avoid cross-scope edits
+            let target = index.target_from_definition(def);
+            for reference in index.references_of_target(db, &target) {
                 edits.push(TextEdit {
                     range: span_to_range(&rope, reference.span),
                     new_text: new_name.clone(),

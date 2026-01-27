@@ -751,35 +751,60 @@ impl<'db> AstDefinitionIndex<'db> {
 
     /// Find references from a position (works for both definitions and references).
     ///
+    /// Returns the resolved target and all references to it.
     /// Uses LocalId-based matching for precise shadowed variable disambiguation.
     pub fn references_at(
         &self,
         db: &'db dyn salsa::Database,
         offset: usize,
-    ) -> Option<(Symbol, Vec<&AstReferenceEntry>)> {
+    ) -> Option<(ResolvedTarget, Vec<&AstReferenceEntry>)> {
         // Try reference first (more specific than definitions which may span large areas)
         if let Some(reference) = self.reference_at(db, offset) {
-            let name = reference.target.name();
-            let refs = self.references_of_target(db, &reference.target);
-            return Some((name, refs));
+            let target = reference.target.clone();
+            let refs = self.references_of_target(db, &target);
+            return Some((target, refs));
         }
 
         // Fall back to definition
         if let Some(def) = self.definition_at_position(db, offset) {
-            let refs = if let Some(local_id) = def.local_id {
-                // For locals with LocalId, use precise matching
-                let target = ResolvedTarget::Local {
-                    id: local_id,
-                    name: def.name,
-                };
-                self.references_of_target(db, &target)
-            } else {
-                self.references_of(db, def.name)
-            };
-            return Some((def.name, refs));
+            let target = self.target_from_definition(def);
+            let refs = self.references_of_target(db, &target);
+            return Some((target, refs));
         }
 
         None
+    }
+
+    /// Create a ResolvedTarget from a definition entry.
+    ///
+    /// This is useful for converting a definition lookup result into a target
+    /// that can be used with `references_of_target` for precise matching.
+    pub fn target_from_definition(&self, def: &AstDefinitionEntry) -> ResolvedTarget {
+        match &def.kind {
+            DefinitionKind::Local | DefinitionKind::Parameter => {
+                if let Some(local_id) = def.local_id {
+                    ResolvedTarget::Local {
+                        id: local_id,
+                        name: def.name,
+                    }
+                } else {
+                    // Fallback for locals without LocalId
+                    ResolvedTarget::Unresolved { name: def.name }
+                }
+            }
+            DefinitionKind::Function => ResolvedTarget::Function { name: def.name },
+            DefinitionKind::Struct | DefinitionKind::Enum => {
+                ResolvedTarget::Type { name: def.name }
+            }
+            DefinitionKind::EnumVariant { owner } => ResolvedTarget::Constructor {
+                type_name: *owner,
+                variant: def.name,
+            },
+            DefinitionKind::Ability => ResolvedTarget::Ability { name: def.name },
+            DefinitionKind::Const | DefinitionKind::Field => {
+                ResolvedTarget::Other { name: def.name }
+            }
+        }
     }
 
     /// Check if renaming is possible at the given position.
@@ -2932,5 +2957,93 @@ enum Result(T, E) {
         } else {
             panic!("Expected local reference target");
         }
+    }
+
+    // =========================================================================
+    // Target-aware reference tests (shadowing)
+    // =========================================================================
+
+    #[test]
+    fn test_references_at_returns_target() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo(x: Int) -> Int { x }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        // Find references from the 'x' in body (position ~24)
+        let result = index.references_at(&db, 24);
+        assert!(result.is_some(), "Should find references at position");
+
+        let (target, refs) = result.unwrap();
+
+        // Target should be a Local with the correct name
+        assert!(
+            matches!(&target, ResolvedTarget::Local { name, .. } if *name == trunk_ir::Symbol::new("x")),
+            "Target should be Local with name 'x'"
+        );
+
+        // Should have exactly 1 reference
+        assert_eq!(refs.len(), 1, "Should have 1 reference to 'x'");
+    }
+
+    #[test]
+    fn test_target_from_definition_local() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { let x = 1; x }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        assert!(x_def.is_some());
+
+        let target = index.target_from_definition(x_def.unwrap());
+        assert!(
+            matches!(target, ResolvedTarget::Local { .. }),
+            "Local definition should produce Local target"
+        );
+    }
+
+    #[test]
+    fn test_target_from_definition_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { 1 }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        let foo_def = index.definition_of(&db, trunk_ir::Symbol::new("foo"));
+        assert!(foo_def.is_some());
+
+        let target = index.target_from_definition(foo_def.unwrap());
+        assert!(
+            matches!(target, ResolvedTarget::Function { name } if name == trunk_ir::Symbol::new("foo")),
+            "Function definition should produce Function target"
+        );
+    }
+
+    #[test]
+    fn test_target_from_definition_enum_variant() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "enum Option { Some(a), None }");
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+        let index = index.unwrap();
+
+        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        assert!(some_def.is_some());
+
+        let target = index.target_from_definition(some_def.unwrap());
+        assert!(
+            matches!(target, ResolvedTarget::Constructor { type_name, variant }
+                if type_name == trunk_ir::Symbol::new("Option")
+                && variant == trunk_ir::Symbol::new("Some")),
+            "EnumVariant definition should produce Constructor target"
+        );
     }
 }
