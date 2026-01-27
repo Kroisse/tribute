@@ -413,6 +413,10 @@ impl<'db> TdnrResolver<'db> {
             };
 
             // Build callee expression (a Var referencing the function)
+            // TODO: This reuses the MethodCall's NodeId, which makes SpanMap
+            // point to the whole `receiver.method(args)` expression instead of
+            // just the method name. A fresh/synthetic NodeId would be better
+            // once the resolver has access to a NodeId generator.
             let callee = Expr::new(id, ExprKind::Var(callee_ref));
 
             // Prepend receiver to args
@@ -443,8 +447,16 @@ impl<'db> TdnrResolver<'db> {
             // For Var expressions, we can get the type from the TypedRef
             ExprKind::Var(typed_ref) => Some(typed_ref.ty),
 
-            // Constructor expressions also have a TypedRef with type info
-            ExprKind::Cons { ctor, .. } => Some(ctor.ty),
+            // Constructor expressions: extract the constructed value type
+            // (the return type of the constructor function), not the
+            // constructor function type itself.
+            ExprKind::Cons { ctor, .. } => {
+                if let crate::ast::TypeKind::Func { result, .. } = ctor.ty.kind(self.db) {
+                    Some(*result)
+                } else {
+                    Some(ctor.ty)
+                }
+            }
 
             // For field access, the type would be the field's type (not available here)
             // We'd need a type map to look this up
@@ -623,7 +635,8 @@ impl<'db> TdnrResolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{BinOpKind, NodeId, TypeKind};
+    use crate::ast::{BinOpKind, CtorId, EffectRow, NodeId, ResolvedRef, TypeKind, TypedRef};
+    use salsa_test_macros::salsa_test;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -793,5 +806,101 @@ mod tests {
 
         assert!(ty.is_some());
         assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nil));
+    }
+
+    #[salsa::tracked]
+    fn test_cons_constructed_type_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let resolver = TdnrResolver::new(db);
+
+        let option_name = Symbol::new("Option");
+        let int_ty = Type::new(db, TypeKind::Int);
+        let option_int = Type::new(
+            db,
+            TypeKind::Named {
+                name: option_name,
+                args: vec![int_ty],
+            },
+        );
+
+        let ctor_func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: option_int,
+                effect: EffectRow::pure(db),
+            },
+        );
+
+        let ctor_id = CtorId::new(db, option_name);
+        let ctor_ref = TypedRef {
+            resolved: ResolvedRef::Constructor {
+                id: ctor_id,
+                variant: Symbol::new("Some"),
+            },
+            ty: ctor_func_ty,
+        };
+
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Cons {
+                ctor: ctor_ref,
+                args: vec![Expr::new(fresh_node_id(), ExprKind::IntLit(42))],
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        let Some(ty) = ty else { return false };
+        matches!(ty.kind(db), TypeKind::Named { name, args } if *name == option_name && args.len() == 1 && matches!(args[0].kind(db), TypeKind::Int))
+    }
+
+    #[salsa_test]
+    fn test_get_expr_type_cons_returns_constructed_type(db: &dyn salsa::Database) {
+        assert!(
+            test_cons_constructed_type_inner(db),
+            "Cons should return the constructed value type, not the constructor function type"
+        );
+    }
+
+    #[salsa::tracked]
+    fn test_cons_non_func_ctor_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let resolver = TdnrResolver::new(db);
+
+        let point_name = Symbol::new("Point");
+        let point_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: point_name,
+                args: vec![],
+            },
+        );
+
+        let ctor_id = CtorId::new(db, point_name);
+        let ctor_ref = TypedRef {
+            resolved: ResolvedRef::Constructor {
+                id: ctor_id,
+                variant: Symbol::new("Point"),
+            },
+            ty: point_ty,
+        };
+
+        let expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Cons {
+                ctor: ctor_ref,
+                args: vec![],
+            },
+        );
+
+        let ty = resolver.get_expr_type(&expr);
+        let Some(ty) = ty else { return false };
+        matches!(ty.kind(db), TypeKind::Named { name, .. } if *name == point_name)
+    }
+
+    #[salsa_test]
+    fn test_get_expr_type_cons_non_func_ctor(db: &dyn salsa::Database) {
+        assert!(
+            test_cons_non_func_ctor_inner(db),
+            "Cons with non-function ctor type should return the ctor type directly"
+        );
     }
 }

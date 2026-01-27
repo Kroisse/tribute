@@ -420,14 +420,18 @@ impl<'db> TypeChecker<'db> {
 
             ExprKind::Var(resolved) => self.infer_var(resolved),
             ExprKind::Call { callee, args } => {
-                // Infer callee type
+                // Infer callee and argument types
                 let callee_ty = self.infer_expr_type(callee);
-                self.infer_call(callee_ty, args.len())
+                let arg_types: Vec<Type<'db>> =
+                    args.iter().map(|a| self.infer_expr_type(a)).collect();
+                self.infer_call(callee_ty, &arg_types)
             }
             ExprKind::Cons { ctor, args } => {
                 // Constructor application
                 let ctor_ty = self.infer_var(ctor);
-                self.infer_call(ctor_ty, args.len())
+                let arg_types: Vec<Type<'db>> =
+                    args.iter().map(|a| self.infer_expr_type(a)).collect();
+                self.infer_call(ctor_ty, &arg_types)
             }
             ExprKind::Record {
                 type_name,
@@ -662,16 +666,26 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Infer the result type of a function call.
-    fn infer_call(&mut self, callee_ty: Type<'db>, arg_count: usize) -> Type<'db> {
+    ///
+    /// Creates fresh type variables for parameters and result, constrains the
+    /// callee to be a function type, and constrains each argument type to match
+    /// the corresponding parameter type variable.
+    fn infer_call(&mut self, callee_ty: Type<'db>, arg_types: &[Type<'db>]) -> Type<'db> {
         // Create fresh type variables for parameters and result
-        let param_types: Vec<Type<'db>> =
-            (0..arg_count).map(|_| self.ctx.fresh_type_var()).collect();
+        let param_types: Vec<Type<'db>> = (0..arg_types.len())
+            .map(|_| self.ctx.fresh_type_var())
+            .collect();
         let result_ty = self.ctx.fresh_type_var();
         let effect = self.ctx.fresh_effect_row();
 
         // Constrain callee to be a function type
-        let expected_func_ty = self.ctx.func_type(param_types, result_ty, effect);
+        let expected_func_ty = self.ctx.func_type(param_types.clone(), result_ty, effect);
         self.ctx.constrain_eq(callee_ty, expected_func_ty);
+
+        // Constrain each argument type to match the corresponding parameter
+        for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
+            self.ctx.constrain_eq(*param_ty, *arg_ty);
+        }
 
         result_ty
     }
@@ -1594,6 +1608,70 @@ mod tests {
         assert!(
             result.is_err(),
             "Expected type error from Bool vs Nat mismatch"
+        );
+    }
+
+    // =========================================================================
+    // Call argument type constraint tests
+    // =========================================================================
+
+    #[test]
+    fn test_infer_call_constrains_arg_types() {
+        // infer_call should constrain each argument type to the corresponding
+        // parameter type variable, linking args to the function signature.
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // Simulate: callee has type fn(Int) -> Bool
+        let int_ty = checker.ctx.int_type();
+        let bool_ty = checker.ctx.bool_type();
+        let callee_ty = checker
+            .ctx
+            .func_type(vec![int_ty], bool_ty, EffectRow::pure(checker.db()));
+
+        // Call with arg type = Int (matching)
+        let result_ty = checker.infer_call(callee_ty, &[int_ty]);
+
+        // Solve constraints: should succeed
+        let constraints = checker.ctx.take_constraints();
+        let mut solver = TypeSolver::new(&db);
+        assert!(
+            solver.solve(constraints).is_ok(),
+            "Expected no type error when arg matches parameter"
+        );
+
+        // The result should resolve to Bool
+        let resolved = solver.type_subst().apply(&db, result_ty);
+        assert!(
+            matches!(*resolved.kind(&db), TypeKind::Bool),
+            "Expected Bool result type, got {:?}",
+            resolved.kind(&db)
+        );
+    }
+
+    #[test]
+    fn test_infer_call_detects_arg_type_mismatch() {
+        // When the argument type doesn't match the parameter,
+        // the solver should report a type error.
+        let db = test_db();
+        let mut checker = TypeChecker::new(&db);
+
+        // callee: fn(Int) -> Bool
+        let int_ty = checker.ctx.int_type();
+        let bool_ty = checker.ctx.bool_type();
+        let callee_ty = checker
+            .ctx
+            .func_type(vec![int_ty], bool_ty, EffectRow::pure(checker.db()));
+
+        // Call with arg type = Bool (mismatched — expected Int)
+        let _result_ty = checker.infer_call(callee_ty, &[bool_ty]);
+
+        // Solve constraints: should fail
+        let constraints = checker.ctx.take_constraints();
+        let mut solver = TypeSolver::new(&db);
+        assert!(
+            solver.solve(constraints).is_err(),
+            "Expected type error when arg Bool doesn't match parameter Int"
         );
     }
 
