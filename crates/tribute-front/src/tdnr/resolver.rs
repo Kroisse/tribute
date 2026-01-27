@@ -175,6 +175,8 @@ impl<'db> TdnrResolver<'db> {
                     Type::new(self.db, TypeKind::String)
                 } else if *name == "Bytes" {
                     Type::new(self.db, TypeKind::Bytes)
+                } else if *name == "Rune" {
+                    Type::new(self.db, TypeKind::Rune)
                 } else if *name == "()" || *name == "Nil" {
                     Type::new(self.db, TypeKind::Nil)
                 } else {
@@ -543,6 +545,7 @@ impl<'db> TdnrResolver<'db> {
             TypeKind::Bool => Symbol::new("Bool"),
             TypeKind::String => Symbol::new("String"),
             TypeKind::Bytes => Symbol::new("Bytes"),
+            TypeKind::Rune => Symbol::new("Rune"),
             TypeKind::Nil => Symbol::new("Nil"),
             // For other types, we can't look up methods
             _ => return None,
@@ -806,6 +809,38 @@ mod tests {
 
         assert!(ty.is_some());
         assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nil));
+    }
+
+    #[test]
+    fn test_annotation_to_type_rune() {
+        use crate::ast::TypeAnnotationKind;
+
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let ann = Some(crate::ast::TypeAnnotation {
+            id: fresh_node_id(),
+            kind: TypeAnnotationKind::Named(Symbol::new("Rune")),
+        });
+
+        let ty = resolver.annotation_to_type(&ann);
+        assert!(
+            matches!(*ty.kind(&db), TypeKind::Rune),
+            "Expected Rune type, got {:?}",
+            ty.kind(&db)
+        );
+    }
+
+    #[test]
+    fn test_get_expr_type_rune_literal() {
+        let db = test_db();
+        let resolver = TdnrResolver::new(&db);
+
+        let expr = Expr::new(fresh_node_id(), ExprKind::RuneLit('a'));
+        let ty = resolver.get_expr_type(&expr);
+
+        assert!(ty.is_some());
+        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Rune));
     }
 
     #[salsa::tracked]
