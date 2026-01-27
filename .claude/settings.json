@@ -15,5 +15,17 @@
             "Bash(tree-sitter parse:*)"
         ],
         "deny": []
+    },
+    "hooks": {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".ci/lint.sh"
+                    }
+                ]
+            }
+        ]
     }
 }
