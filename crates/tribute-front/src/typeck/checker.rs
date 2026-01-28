@@ -3016,4 +3016,127 @@ mod tests {
         let db = test_db();
         assert!(test_subst_bool_literal_inner(&db));
     }
+
+    // =========================================================================
+    // Extern Function Tests
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn test_extern_function_signature_registered_inner(db: &dyn salsa::Database) -> bool {
+        let extern_fn = crate::ast::ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: true,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                crate::ast::ParamDecl {
+                    id: NodeId::from_raw(2),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: NodeId::from_raw(3),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: Some(LocalId::new(0)),
+                },
+                crate::ast::ParamDecl {
+                    id: NodeId::from_raw(4),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: NodeId::from_raw(5),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: Some(LocalId::new(1)),
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: NodeId::from_raw(6),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = Module {
+            id: fresh_node_id(),
+            name: None,
+            decls: vec![Decl::ExternFunction(extern_fn)],
+        };
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        // ExternFunction should pass through unchanged
+        assert_eq!(typed_module.decls.len(), 1);
+        assert!(matches!(&typed_module.decls[0], Decl::ExternFunction(_)));
+
+        if let Decl::ExternFunction(ef) = &typed_module.decls[0] {
+            assert!(ef.name == Symbol::new("__add"));
+            assert_eq!(ef.params.len(), 2);
+        } else {
+            panic!("Expected ExternFunction");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_extern_function_signature_registered() {
+        let db = test_db();
+        assert!(test_extern_function_signature_registered_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_extern_function_with_regular_function_inner(db: &dyn salsa::Database) -> bool {
+        // Module with extern fn + regular fn that calls it via variable reference
+        let extern_fn = crate::ast::ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: true,
+            name: Symbol::new("__negate"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![crate::ast::ParamDecl {
+                id: NodeId::from_raw(10),
+                name: Symbol::new("x"),
+                ty: Some(TypeAnnotation {
+                    id: NodeId::from_raw(11),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }),
+                local_id: Some(LocalId::new(0)),
+            }],
+            return_ty: TypeAnnotation {
+                id: NodeId::from_raw(12),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        // Regular function: fn main() { 42 }
+        let regular_fn = FuncDecl {
+            id: NodeId::from_raw(20),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(NodeId::from_raw(21), ExprKind::NatLit(42)),
+        };
+
+        let module = Module {
+            id: fresh_node_id(),
+            name: None,
+            decls: vec![Decl::ExternFunction(extern_fn), Decl::Function(regular_fn)],
+        };
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        assert_eq!(typed_module.decls.len(), 2);
+        assert!(matches!(&typed_module.decls[0], Decl::ExternFunction(_)));
+        assert!(matches!(&typed_module.decls[1], Decl::Function(_)));
+
+        true
+    }
+
+    #[test]
+    fn test_extern_function_with_regular_function() {
+        let db = test_db();
+        assert!(test_extern_function_with_regular_function_inner(&db));
+    }
 }

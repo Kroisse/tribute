@@ -1987,4 +1987,52 @@ struct Rect { x: Int, width: Int }"#,
             );
         }
     }
+
+    #[test]
+    fn test_definition_index_extern_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
+
+        let index = definition_index(&db, source);
+        assert!(
+            index.is_some(),
+            "Should build definition index for extern function"
+        );
+
+        let index = index.unwrap();
+
+        // Extern function should be registered as a definition
+        let add_def = index.definition_of(&db, trunk_ir::Symbol::new("__add"));
+        assert!(
+            add_def.is_some(),
+            "Extern function should have a definition entry"
+        );
+        assert_eq!(add_def.unwrap().kind, DefinitionKind::Function);
+    }
+
+    #[test]
+    fn test_definition_index_extern_function_params() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Parameters of extern functions should be registered
+        let a_def = index.definition_of(&db, trunk_ir::Symbol::new("a"));
+        assert!(
+            a_def.is_some(),
+            "Extern function param 'a' should be defined"
+        );
+        assert_eq!(a_def.unwrap().kind, DefinitionKind::Parameter);
+
+        let b_def = index.definition_of(&db, trunk_ir::Symbol::new("b"));
+        assert!(
+            b_def.is_some(),
+            "Extern function param 'b' should be defined"
+        );
+        assert_eq!(b_def.unwrap().kind, DefinitionKind::Parameter);
+    }
 }

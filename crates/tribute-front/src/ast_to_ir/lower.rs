@@ -1615,4 +1615,219 @@ mod tests {
             "Underflow IntLit should result in unit return only"
         );
     }
+
+    // ========================================================================
+    // Extern Function Lowering Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_extern_function_basic(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern "intrinsic" fn __add(a: Int, b: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        // Create TypeScheme: fn(Int, Int) -> Int
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should produce a func.func operation
+        let func_op = ops.iter().find(|op| op.name(db) == "func");
+        assert!(func_op.is_some(), "Should have a func operation");
+
+        let func_typed = func::Func::from_operation(db, *func_op.unwrap()).unwrap();
+        assert_eq!(func_typed.sym_name(db), Symbol::new("__add"));
+
+        // Body should contain only func.unreachable
+        let body_ops = get_func_body_ops(db, &func_typed);
+        assert_eq!(
+            body_ops.len(),
+            1,
+            "Extern func body should have only unreachable"
+        );
+        assert_eq!(body_ops[0].dialect(db), "func");
+        assert_eq!(body_ops[0].name(db), "unreachable");
+    }
+
+    #[salsa_test]
+    fn test_lower_extern_function_type(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern fn __negate(x: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__negate"),
+            abi: Symbol::new("C"),
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("x"),
+                ty: Some(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }),
+                local_id: None,
+            }],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        // Create TypeScheme: fn(Int) -> Int
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__negate"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+
+        // Verify the function type: fn(i64) -> i64
+        let func_ir_ty = func_typed.r#type(db);
+        let i64_ty = trunk_ir::dialect::core::I64::new(db).as_type();
+        let expected_ty =
+            trunk_ir::dialect::core::Func::new(db, vec![i64_ty].into(), i64_ty).as_type();
+        assert_eq!(func_ir_ty, expected_ty);
+    }
+
+    #[salsa_test]
+    fn test_lower_module_with_extern_and_regular_functions(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern fn __add(a: Int, b: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        // fn main() { 42 }
+        let regular_func = simple_func(Symbol::new("main"), int_lit_expr(42));
+
+        let module = simple_module(vec![
+            Decl::ExternFunction(extern_func),
+            Decl::Function(regular_func),
+        ]);
+
+        // TypeScheme for __add
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have 2 function operations
+        let func_ops: Vec<_> = ops.iter().filter(|op| op.name(db) == "func").collect();
+        assert_eq!(func_ops.len(), 2, "Should have extern + regular function");
+    }
 }

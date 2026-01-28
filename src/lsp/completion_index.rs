@@ -616,4 +616,44 @@ mod tests {
         let baz = find_signature(&signatures, trunk_ir::Symbol::new("baz"));
         assert!(baz.is_none());
     }
+
+    #[test]
+    fn test_completion_items_extern_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
+
+        let items = completion_items(&db, source);
+        let add_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("__add"));
+        assert!(
+            add_item.is_some(),
+            "Extern function should appear in completions"
+        );
+        assert_eq!(add_item.unwrap().kind, CompletionKind::Function);
+    }
+
+    #[test]
+    fn test_completion_items_extern_and_regular_functions() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int
+fn main() { 1 }"#,
+        );
+
+        let items = completion_items(&db, source);
+
+        let add_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("__add"));
+        assert!(add_item.is_some(), "Extern function should appear");
+        assert_eq!(add_item.unwrap().kind, CompletionKind::Function);
+
+        let main_item = items
+            .iter()
+            .find(|i| i.name == trunk_ir::Symbol::new("main"));
+        assert!(main_item.is_some(), "Regular function should appear");
+        assert_eq!(main_item.unwrap().kind, CompletionKind::Function);
+    }
 }
