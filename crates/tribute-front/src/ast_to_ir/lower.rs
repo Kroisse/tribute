@@ -1138,7 +1138,7 @@ fn bind_pattern_fields<'db>(
         PatternKind::Variant { ctor, fields } => {
             let (variant_name, enum_ty) = match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => (*variant, ctx.convert_type(ctor.ty)),
-                _ => return,
+                _ => unreachable!("non-constructor in variant pattern: {:?}", ctor.resolved),
             };
 
             // Cast scrutinee to the specific variant type
