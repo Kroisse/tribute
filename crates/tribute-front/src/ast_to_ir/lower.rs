@@ -16,6 +16,65 @@ use crate::ast::{
 
 use super::context::IrLoweringCtx;
 
+// =============================================================================
+// IrBuilder
+// =============================================================================
+
+/// Builder for emitting TrunkIR operations within a block.
+///
+/// Combines the lowering context and block builder to provide
+/// a unified API for expression lowering.
+struct IrBuilder<'a, 'db> {
+    ctx: &'a mut IrLoweringCtx<'db>,
+    block: &'a mut trunk_ir::BlockBuilder<'db>,
+}
+
+impl<'a, 'db> IrBuilder<'a, 'db> {
+    fn new(ctx: &'a mut IrLoweringCtx<'db>, block: &'a mut trunk_ir::BlockBuilder<'db>) -> Self {
+        Self { ctx, block }
+    }
+
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.ctx.db
+    }
+
+    fn location(&self, id: crate::ast::NodeId) -> Location<'db> {
+        self.ctx.location(id)
+    }
+
+    /// Emit a nil value (Tribute's unit type).
+    fn emit_nil(&mut self, location: Location<'db>) -> trunk_ir::Value<'db> {
+        let ty = self.ctx.nil_type();
+        self.block
+            .op(arith::r#const(self.db(), location, ty, Attribute::Unit))
+            .result(self.db())
+    }
+
+    /// Emit diagnostic for unimplemented expression and return nil placeholder.
+    fn emit_unsupported(
+        &mut self,
+        location: Location<'db>,
+        feature: &str,
+    ) -> Option<trunk_ir::Value<'db>> {
+        Diagnostic {
+            message: format!("{feature} not yet supported in IR lowering"),
+            span: location.span,
+            severity: DiagnosticSeverity::Warning,
+            phase: CompilationPhase::Lowering,
+        }
+        .accumulate(self.db());
+        Some(self.emit_nil(location))
+    }
+
+    /// Get the result type from a function type, or use the type directly.
+    fn call_result_type(&self, ty: &crate::ast::Type<'db>) -> trunk_ir::Type<'db> {
+        match ty.kind(self.db()) {
+            TypeKind::Func { result, .. } => self.ctx.convert_type(*result),
+            _ => self.ctx.convert_type(*ty),
+        }
+    }
+}
+
 /// Lower a module to TrunkIR.
 pub fn lower_module<'db>(
     db: &'db dyn salsa::Database,
@@ -122,17 +181,17 @@ fn lower_function<'db>(
             }
 
             // Lower function body
-            if let Some(result) = lower_expr(ctx, body, func.body) {
-                body.op(func::Return::value(ctx.db, location, result));
+            let mut builder = IrBuilder::new(ctx, body);
+            if let Some(result) = lower_expr(&mut builder, func.body) {
+                builder
+                    .block
+                    .op(func::Return::value(builder.db(), location, result));
             } else {
                 // Return unit
-                let unit = body.op(arith::r#const(
-                    ctx.db,
-                    location,
-                    ctx.nil_type(),
-                    Attribute::Unit,
-                ));
-                body.op(func::Return::value(ctx.db, location, unit.result(ctx.db)));
+                let nil = builder.emit_nil(location);
+                builder
+                    .block
+                    .op(func::Return::value(builder.db(), location, nil));
             }
 
             ctx.exit_scope();
@@ -199,11 +258,10 @@ fn lower_extern_function<'db>(
 
 /// Lower an expression to TrunkIR.
 fn lower_expr<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    block: &mut trunk_ir::BlockBuilder<'db>,
+    builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
-    let location = ctx.location(expr.id);
+    let location = builder.location(expr.id);
 
     match *expr.kind {
         ExprKind::NatLit(n) => {
@@ -221,11 +279,13 @@ fn lower_expr<'db>(
                     severity: DiagnosticSeverity::Error,
                     phase: CompilationPhase::Lowering,
                 }
-                .accumulate(ctx.db);
+                .accumulate(builder.db());
                 None
             } else {
-                let op = block.op(arith::Const::i64(ctx.db, location, n as i64));
-                Some(op.result(ctx.db))
+                let op = builder
+                    .block
+                    .op(arith::Const::i64(builder.db(), location, n as i64));
+                Some(op.result(builder.db()))
             }
         }
 
@@ -245,11 +305,13 @@ fn lower_expr<'db>(
                     severity: DiagnosticSeverity::Error,
                     phase: CompilationPhase::Lowering,
                 }
-                .accumulate(ctx.db);
+                .accumulate(builder.db());
                 None
             } else {
-                let op = block.op(arith::Const::i64(ctx.db, location, n));
-                Some(op.result(ctx.db))
+                let op = builder
+                    .block
+                    .op(arith::Const::i64(builder.db(), location, n));
+                Some(op.result(builder.db()))
             }
         }
 
@@ -257,60 +319,57 @@ fn lower_expr<'db>(
             // Rune is lowered as i32 (Unicode code point, matching core::I32).
             // Unicode code points max out at 0x10FFFF (1,114,111), which is within
             // i31 range (max 1,073,741,823), so no range check is needed.
-            let op = block.op(arith::Const::i32(ctx.db, location, c as i32));
-            Some(op.result(ctx.db))
+            let op = builder
+                .block
+                .op(arith::Const::i32(builder.db(), location, c as i32));
+            Some(op.result(builder.db()))
         }
 
         ExprKind::FloatLit(f) => {
-            let op = block.op(arith::Const::f64(ctx.db, location, f.value()));
-            Some(op.result(ctx.db))
+            let op = builder
+                .block
+                .op(arith::Const::f64(builder.db(), location, f.value()));
+            Some(op.result(builder.db()))
         }
 
         ExprKind::BoolLit(b) => {
-            let ty = ctx.bool_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, b.into()));
-            Some(op.result(ctx.db))
+            let ty = builder.ctx.bool_type();
+            let op = builder
+                .block
+                .op(arith::r#const(builder.db(), location, ty, b.into()));
+            Some(op.result(builder.db()))
         }
 
         ExprKind::StringLit(ref s) => {
-            let ty = core::String::new(ctx.db).as_type();
-            let op = block.op(adt::string_const(ctx.db, location, ty, s.clone()));
-            Some(op.result(ctx.db))
+            let ty = core::String::new(builder.db()).as_type();
+            let op = builder
+                .block
+                .op(adt::string_const(builder.db(), location, ty, s.clone()));
+            Some(op.result(builder.db()))
         }
 
-        ExprKind::BytesLit(ref _bytes) => {
-            // Bytes literal lowering not yet supported - emit diagnostic
-            Diagnostic {
-                message: "bytes literal not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            // Return unit as placeholder
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
+        ExprKind::BytesLit(ref _bytes) => builder.emit_unsupported(location, "bytes literal"),
 
-        ExprKind::Nil => {
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
+        ExprKind::Nil => Some(builder.emit_nil(location)),
 
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
-            ResolvedRef::Local { id, .. } => ctx.lookup(*id),
+            ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = id.name(ctx.db);
-                let func_ty = ctx.convert_type(typed_ref.ty);
-                let op = block.op(func::constant(ctx.db, location, func_ty, func_name));
-                Some(op.result(ctx.db))
+                let func_name = id.name(builder.db());
+                let func_ty = builder.ctx.convert_type(typed_ref.ty);
+                let op =
+                    builder
+                        .block
+                        .op(func::constant(builder.db(), location, func_ty, func_name));
+                Some(op.result(builder.db()))
             }
             ResolvedRef::Constructor { variant, .. } => {
-                let func_ty = ctx.convert_type(typed_ref.ty);
-                let op = block.op(func::constant(ctx.db, location, func_ty, *variant));
-                Some(op.result(ctx.db))
+                let func_ty = builder.ctx.convert_type(typed_ref.ty);
+                let op =
+                    builder
+                        .block
+                        .op(func::constant(builder.db(), location, func_ty, *variant));
+                Some(op.result(builder.db()))
             }
             ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } => None,
         },
@@ -324,152 +383,121 @@ fn lower_expr<'db>(
 
             // Determine operand type for selecting int vs float operations.
             // Check both operands: mixed int+float or float+int should use float operations.
-            let is_float = is_float_expr(ctx.db, &lhs) || is_float_expr(ctx.db, &rhs);
-            let lhs_val = lower_expr(ctx, block, lhs)?;
-            let rhs_val = lower_expr(ctx, block, rhs)?;
-            lower_binop(ctx, block, op, lhs_val, rhs_val, is_float, location)
+            let is_float = is_float_expr(builder.db(), &lhs) || is_float_expr(builder.db(), &rhs);
+            let lhs_val = lower_expr(builder, lhs)?;
+            let rhs_val = lower_expr(builder, rhs)?;
+            lower_binop(
+                builder.ctx,
+                builder.block,
+                op,
+                lhs_val,
+                rhs_val,
+                is_float,
+                location,
+            )
         }
 
-        ExprKind::Block { stmts, value } => lower_block(ctx, block, stmts, value),
+        ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
+
+        ExprKind::Call { callee, args } => {
+            // Lower arguments first
+            let arg_values: Vec<_> = args
+                .into_iter()
+                .filter_map(|a| lower_expr(builder, a))
+                .collect();
+
+            match *callee.kind {
+                ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
+                    ResolvedRef::Function { id } => {
+                        let callee_name = id.name(builder.db());
+                        let result_ty = builder.call_result_type(&typed_ref.ty);
+                        let op = builder.block.op(func::call(
+                            builder.db(),
+                            location,
+                            arg_values,
+                            result_ty,
+                            callee_name,
+                        ));
+                        Some(op.result(builder.db()))
+                    }
+                    ResolvedRef::Local { id, .. } => {
+                        let callee_val = builder.ctx.lookup(*id)?;
+                        let result_ty = builder.call_result_type(&typed_ref.ty);
+                        let op = builder.block.op(func::call_indirect(
+                            builder.db(),
+                            location,
+                            callee_val,
+                            arg_values,
+                            result_ty,
+                        ));
+                        Some(op.result(builder.db()))
+                    }
+                    ResolvedRef::Constructor { variant, .. } => {
+                        let result_ty = builder.call_result_type(&typed_ref.ty);
+                        let op = builder.block.op(adt::variant_new(
+                            builder.db(),
+                            location,
+                            arg_values,
+                            result_ty,
+                            result_ty,
+                            *variant,
+                        ));
+                        Some(op.result(builder.db()))
+                    }
+                    _ => builder.emit_unsupported(location, "builtin/module call"),
+                },
+                _ => {
+                    // General expression callee → indirect call
+                    let callee_val = lower_expr(builder, callee)?;
+                    let result_ty = tribute_ir::dialect::tribute_rt::any_type(builder.db());
+                    let op = builder.block.op(func::call_indirect(
+                        builder.db(),
+                        location,
+                        callee_val,
+                        arg_values,
+                        result_ty,
+                    ));
+                    Some(op.result(builder.db()))
+                }
+            }
+        }
+
+        ExprKind::Cons { ctor, args } => {
+            let arg_values: Vec<_> = args
+                .into_iter()
+                .filter_map(|a| lower_expr(builder, a))
+                .collect();
+
+            match &ctor.resolved {
+                ResolvedRef::Constructor { variant, .. } => {
+                    let result_ty = builder.call_result_type(&ctor.ty);
+                    let op = builder.block.op(adt::variant_new(
+                        builder.db(),
+                        location,
+                        arg_values,
+                        result_ty,
+                        result_ty,
+                        *variant,
+                    ));
+                    Some(op.result(builder.db()))
+                }
+                _ => builder.emit_unsupported(location, "non-constructor in Cons"),
+            }
+        }
 
         // === Expressions not yet implemented ===
-        // Each of these emits a diagnostic and returns a unit placeholder.
-        // This makes it clear which expressions are missing lowering support.
-        ExprKind::Call { .. } => {
-            Diagnostic {
-                message: "function call not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Cons { .. } => {
-            Diagnostic {
-                message: "constructor application not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Record { .. } => {
-            Diagnostic {
-                message: "record construction not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::FieldAccess { .. } => {
-            Diagnostic {
-                message: "field access not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::MethodCall { .. } => {
-            Diagnostic {
-                message: "method call not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Case { .. } => {
-            Diagnostic {
-                message: "case expression not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Lambda { .. } => {
-            Diagnostic {
-                message: "lambda expression not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Handle { .. } => {
-            Diagnostic {
-                message: "handle expression not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::Tuple(_) => {
-            Diagnostic {
-                message: "tuple expression not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
-
-        ExprKind::List(_) => {
-            Diagnostic {
-                message: "list expression not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(ctx.db);
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
-        }
+        ExprKind::Record { .. } => builder.emit_unsupported(location, "record construction"),
+        ExprKind::FieldAccess { .. } => builder.emit_unsupported(location, "field access"),
+        ExprKind::MethodCall { .. } => builder.emit_unsupported(location, "method call"),
+        ExprKind::Case { .. } => builder.emit_unsupported(location, "case expression"),
+        ExprKind::Lambda { .. } => builder.emit_unsupported(location, "lambda expression"),
+        ExprKind::Handle { .. } => builder.emit_unsupported(location, "handle expression"),
+        ExprKind::Tuple(_) => builder.emit_unsupported(location, "tuple expression"),
+        ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => {
             // Error expression from parsing - just return unit placeholder
-            let ty = ctx.nil_type();
-            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
-            Some(op.result(ctx.db))
+            Some(builder.emit_nil(location))
         }
     }
 }
@@ -580,12 +608,11 @@ fn lower_binop<'db>(
 
 /// Lower a block of statements.
 fn lower_block<'db>(
-    ctx: &mut IrLoweringCtx<'db>,
-    block: &mut trunk_ir::BlockBuilder<'db>,
+    builder: &mut IrBuilder<'_, 'db>,
     stmts: Vec<Stmt<TypedRef<'db>>>,
     value: Expr<TypedRef<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
-    ctx.enter_scope();
+    builder.ctx.enter_scope();
 
     for stmt in stmts {
         match stmt {
@@ -595,21 +622,21 @@ fn lower_block<'db>(
                 ty: _,
                 value,
             } => {
-                if let Some(val) = lower_expr(ctx, block, value) {
+                if let Some(val) = lower_expr(builder, value) {
                     match &*pattern.kind {
                         crate::ast::PatternKind::Bind {
                             local_id: Some(local_id),
                             ..
                         } => {
                             // Register the binding so Var expressions can find it
-                            ctx.bind(*local_id, val);
+                            builder.ctx.bind(*local_id, val);
                         }
                         crate::ast::PatternKind::Wildcard => {
                             // Wildcard binds nothing, value is computed for side effects
                         }
                         _ => {
                             // Pattern destructuring not yet supported in IR lowering
-                            let location = ctx.location(pattern.id);
+                            let location = builder.ctx.location(pattern.id);
                             Diagnostic {
                                 message: "pattern destructuring not yet supported in IR lowering"
                                     .to_string(),
@@ -617,19 +644,19 @@ fn lower_block<'db>(
                                 severity: DiagnosticSeverity::Warning,
                                 phase: CompilationPhase::Lowering,
                             }
-                            .accumulate(ctx.db);
+                            .accumulate(builder.db());
                         }
                     }
                 }
             }
             Stmt::Expr { id: _, expr } => {
-                let _ = lower_expr(ctx, block, expr);
+                let _ = lower_expr(builder, expr);
             }
         }
     }
 
-    let result = lower_expr(ctx, block, value);
-    ctx.exit_scope();
+    let result = lower_expr(builder, value);
+    builder.ctx.exit_scope();
     result
 }
 
@@ -703,8 +730,9 @@ fn convert_annotation_to_ir_type<'db>(
 mod tests {
     use super::*;
     use crate::ast::{
-        BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, LocalId, Module, NodeId, ParamDecl,
-        Pattern, PatternKind, ResolvedRef, Stmt, Type as AstType, TypeKind, TypedRef,
+        BinOpKind, CtorId, Decl, Expr, ExprKind, FloatBits, FuncDecl, FuncDefId, LocalId, Module,
+        NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type as AstType, TypeKind,
+        TypedRef,
     };
     use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
@@ -1999,6 +2027,314 @@ mod tests {
 
         let ir_module =
             test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    // ========================================================================
+    // Call Expression Lowering Tests
+    // ========================================================================
+
+    /// Create a call expression.
+    fn call_expr<'db>(
+        callee: Expr<TypedRef<'db>>,
+        args: Vec<Expr<TypedRef<'db>>>,
+    ) -> Expr<TypedRef<'db>> {
+        Expr::new(fresh_node_id(), ExprKind::Call { callee, args })
+    }
+
+    /// Create a constructor expression (Cons).
+    fn cons_expr<'db>(ctor: TypedRef<'db>, args: Vec<Expr<TypedRef<'db>>>) -> Expr<TypedRef<'db>> {
+        Expr::new(fresh_node_id(), ExprKind::Cons { ctor, args })
+    }
+
+    /// Tracked helper: build a direct call module and lower it.
+    /// Creates `fn main() { <callee_name>(arg1, arg2) }` with a TypeScheme for the callee.
+    #[salsa::tracked]
+    fn test_lower_direct_call<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        callee_name: Symbol,
+        arg1: i64,
+        arg2: i64,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let func_id = FuncDefId::new(db, callee_name);
+        let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
+        let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
+        let call = call_expr(callee, vec![int_lit_expr(arg1), int_lit_expr(arg2)]);
+        let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), call))]);
+
+        let scheme = crate::ast::TypeScheme::new(db, vec![], func_ty);
+        let function_types: HashMap<Symbol, crate::ast::TypeScheme<'db>> =
+            [(callee_name, scheme)].into();
+        lower_module(db, path, SpanMap::default(), module, function_types)
+    }
+
+    /// Tracked helper: build a constructor (Cons) module and lower it.
+    #[salsa::tracked]
+    fn test_lower_cons<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        type_name: Symbol,
+        variant_name: Symbol,
+        args: Vec<i64>,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let named_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![int_ty],
+            },
+        );
+        let ctor_id = CtorId::new(db, type_name);
+        let ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: ctor_id,
+                variant: variant_name,
+            },
+            named_ty,
+        );
+        let arg_exprs: Vec<_> = args.into_iter().map(int_lit_expr).collect();
+        let cons = cons_expr(ctor_ref, arg_exprs);
+        let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), cons))]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    /// Tracked helper: build a Call with Constructor callee and lower it.
+    #[salsa::tracked]
+    fn test_lower_call_ctor<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        type_name: Symbol,
+        variant_name: Symbol,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let named_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![int_ty],
+            },
+        );
+        let ctor_id = CtorId::new(db, type_name);
+        let callee_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: ctor_id,
+                variant: variant_name,
+            },
+            named_ty,
+        );
+        let callee = var_expr(callee_ref);
+        let call = call_expr(callee, vec![int_lit_expr(42)]);
+        let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), call))]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_lower_direct_function_call(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module = test_lower_direct_call(db, path, Symbol::new("add"), 1, 2);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have: const(1), const(2), call, return
+        let call_op = body_ops.iter().find(|op| op.name(db) == "call");
+        assert!(call_op.is_some(), "Should have a func.call operation");
+        assert_eq!(
+            call_op.unwrap().dialect(db),
+            "func",
+            "Call should be in func dialect"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lower_indirect_call(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // fn main(f) { f(42) }
+        // f is a local variable of function type
+        let f_name = Symbol::new("f");
+        let f_id = LocalId::new(0);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let f_ref = TypedRef::new(ResolvedRef::local(f_id, f_name), func_ty);
+        let callee = var_expr(f_ref);
+        let call = call_expr(callee, vec![int_lit_expr(42)]);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: f_name,
+                ty: None,
+                local_id: Some(f_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: call,
+        };
+
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have: const(42), call_indirect, return
+        let call_op = body_ops.iter().find(|op| op.name(db) == "call_indirect");
+        assert!(
+            call_op.is_some(),
+            "Should have a func.call_indirect operation"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lower_call_with_multiple_args(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module = test_lower_direct_call(db, path, Symbol::new("add"), 10, 20);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have: const(10), const(20), call, return = 4 ops
+        assert!(body_ops.len() >= 4, "Should have at least 4 ops");
+
+        let call_op = body_ops.iter().find(|op| op.name(db) == "call");
+        assert!(call_op.is_some(), "Should have a func.call operation");
+
+        // Verify call operands: should have 2 arguments
+        let call_operation = call_op.unwrap();
+        assert_eq!(
+            call_operation.operands(db).len(),
+            2,
+            "Call should have 2 arguments"
+        );
+    }
+
+    // ========================================================================
+    // Constructor (Cons) Lowering Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_nullary_constructor(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module =
+            test_lower_cons(db, path, Symbol::new("Option"), Symbol::new("None"), vec![]);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        let variant_op = body_ops.iter().find(|op| op.name(db) == "variant_new");
+        assert!(
+            variant_op.is_some(),
+            "Should have an adt.variant_new operation"
+        );
+        assert_eq!(
+            variant_op.unwrap().dialect(db),
+            "adt",
+            "variant_new should be in adt dialect"
+        );
+        assert_eq!(variant_op.unwrap().operands(db).len(), 0);
+    }
+
+    #[salsa_test]
+    fn test_lower_unary_constructor(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module = test_lower_cons(
+            db,
+            path,
+            Symbol::new("Option"),
+            Symbol::new("Some"),
+            vec![42],
+        );
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        let variant_op = body_ops.iter().find(|op| op.name(db) == "variant_new");
+        assert!(
+            variant_op.is_some(),
+            "Should have an adt.variant_new operation"
+        );
+        assert_eq!(
+            variant_op.unwrap().operands(db).len(),
+            1,
+            "Some(42) should have 1 operand"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lower_call_constructor_via_call(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module = test_lower_call_ctor(db, path, Symbol::new("Option"), Symbol::new("Some"));
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        let variant_op = body_ops.iter().find(|op| op.name(db) == "variant_new");
+        assert!(
+            variant_op.is_some(),
+            "Constructor call should emit adt.variant_new"
+        );
+    }
+
+    // ========================================================================
+    // Snapshot Tests for Call and Constructor
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_snapshot_function_call(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_direct_call(db, path, Symbol::new("add"), 10, 20);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_constructor(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_cons(
+            db,
+            path,
+            Symbol::new("Option"),
+            Symbol::new("Some"),
+            vec![42],
+        );
         assert_debug_snapshot!(ir_module);
     }
 }

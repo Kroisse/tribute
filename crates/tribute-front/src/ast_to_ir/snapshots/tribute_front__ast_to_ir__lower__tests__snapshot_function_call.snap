@@ -1,0 +1,17 @@
+---
+source: crates/tribute-front/src/ast_to_ir/lower.rs
+assertion_line: 2329
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        func @main() -> core.nil {
+            body: [
+                "arith.const",
+                "arith.const",
+                "func.call",
+                "func.return",
+            ],
+        },
+    ],
+}
