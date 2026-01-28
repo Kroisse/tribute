@@ -29,7 +29,33 @@ pub use constraint::{Constraint, ConstraintSet, TypeVar};
 pub use context::TypeContext;
 pub use solver::{SolveError, TypeSolver};
 
-use crate::ast::{Module, ResolvedRef, TypedRef};
+use trunk_ir::Symbol;
+
+use crate::ast::{Module, ResolvedRef, TypeScheme, TypedRef};
+
+/// Salsa-tracked struct holding the complete type checking output.
+///
+/// Bundles the typed AST module with function type schemes so that
+/// both can be derived from a single type checking invocation.
+#[salsa::tracked]
+pub struct TypeCheckOutput<'db> {
+    /// The type-checked AST module.
+    pub module: Module<TypedRef<'db>>,
+    /// Function type schemes collected during type checking.
+    /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
+    #[returns(ref)]
+    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+}
+
+/// Type check a module and return both the typed AST and function type schemes.
+pub fn typecheck_module_full<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<ResolvedRef<'db>>,
+) -> TypeCheckOutput<'db> {
+    let checker = TypeChecker::new(db);
+    let (typed_module, function_types) = checker.check_module_with_types(module);
+    TypeCheckOutput::new(db, typed_module, function_types)
+}
 
 /// Type check a module.
 ///

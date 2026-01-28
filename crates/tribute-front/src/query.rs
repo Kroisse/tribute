@@ -14,8 +14,11 @@
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypedRef, UnresolvedName};
+use crate::ast::{
+    Decl, FuncDecl, Module, ResolvedRef, SpanMap, TypeScheme, TypedRef, UnresolvedName,
+};
 use crate::source_file::SourceCst;
+use crate::typeck::TypeCheckOutput;
 
 // =============================================================================
 // Module-level queries
@@ -86,16 +89,40 @@ pub fn resolved_module<'db>(
     Some(crate::resolve::resolve_module(db, module, sm))
 }
 
+/// Base query: run type checking once (cached by Salsa).
+///
+/// Returns a `TypeCheckOutput` containing both the typed AST module
+/// and function type schemes.
+#[salsa::tracked]
+pub fn type_check_output<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<TypeCheckOutput<'db>> {
+    let module = resolved_module(db, source)?;
+    Some(crate::typeck::typecheck_module_full(db, module))
+}
+
 /// Type check a module.
 ///
-/// This delegates to function-level type checking and aggregates results.
+/// Derives the typed module from `type_check_output`.
 #[salsa::tracked]
 pub fn typed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<TypedRef<'db>>> {
-    let module = resolved_module(db, source)?;
-    Some(crate::typeck::typecheck_module(db, module))
+    type_check_output(db, source).map(|o| o.module(db))
+}
+
+/// Get function type schemes from type checking.
+///
+/// Returns the function type schemes collected during type checking,
+/// keyed by function name (Symbol).
+#[salsa::tracked]
+pub fn function_schemes<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<Vec<(Symbol, TypeScheme<'db>)>> {
+    type_check_output(db, source).map(|o| o.function_types(db).clone())
 }
 
 /// Type-directed name resolution (TDNR) on a module.
@@ -306,6 +333,211 @@ mod tests {
             let func_span = sm.get(func.id);
             assert!(func_span.is_some(), "Function decl should have span in map");
         }
+    }
+
+    #[test]
+    fn test_function_schemes_returns_entries() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn foo() { 42 }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        assert!(
+            schemes.iter().any(|(name, _)| *name == Symbol::new("foo")),
+            "function_schemes should contain 'foo', got: {:?}",
+            schemes
+                .iter()
+                .map(|(n, _)| n.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_type_check_output_has_both_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn main() { 42 }");
+
+        let output = type_check_output(&db, source);
+        assert!(output.is_some(), "type_check_output should return Some");
+
+        let output = output.unwrap();
+        // Module should have declarations
+        let module = output.module(&db);
+        assert!(!module.decls.is_empty(), "Module should have declarations");
+
+        // function_types should be a valid Vec (possibly empty for simple cases)
+        let _ft = output.function_types(&db);
+    }
+
+    /// Recursively check if a type contains any unresolved UniVar.
+    fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
+        match ty.kind(db) {
+            crate::ast::TypeKind::UniVar { .. } => true,
+            crate::ast::TypeKind::Func {
+                params,
+                result,
+                effect: _,
+            } => params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result),
+            crate::ast::TypeKind::Named { args, .. } => {
+                args.iter().any(|a| contains_univar(db, *a))
+            }
+            crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
+            crate::ast::TypeKind::App { ctor, args } => {
+                contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn test_function_schemes_no_univars() {
+        let db = salsa::DatabaseImpl::default();
+        // Use annotated parameters to ensure type inference resolves fully
+        let source = make_source(
+            &db,
+            r#"
+            fn add(x: Int, y: Int) -> Int { x + y }
+            fn greet() -> String { "hello" }
+        "#,
+        );
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        for (name, scheme) in &schemes {
+            let body = scheme.body(&db);
+            assert!(
+                !contains_univar(&db, body),
+                "Function '{}' scheme body should not contain UniVar, got: {:?}",
+                name,
+                body.kind(&db),
+            );
+        }
+    }
+
+    #[test]
+    fn test_function_schemes_fully_annotated_no_univars() {
+        let db = salsa::DatabaseImpl::default();
+        // Fully annotated function (params + return) should never have UniVars
+        let source = make_source(&db, "fn add(x: Int, y: Int) -> Int { x + y }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let add = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("add"))
+            .expect("should have 'add' scheme");
+
+        let body = add.1.body(&db);
+        assert!(
+            !contains_univar(&db, body),
+            "Fully annotated function 'add' scheme body should not contain UniVar, got: {:?}",
+            body.kind(&db),
+        );
+    }
+
+    #[test]
+    fn test_function_schemes_annotated_preserved() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn inc(x: Int) -> Int { x + 1 }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let inc_scheme = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("inc"))
+            .expect("should have 'inc' scheme");
+
+        let body = inc_scheme.1.body(&db);
+        // The body should be a function type Int -> Int
+        match body.kind(&db) {
+            crate::ast::TypeKind::Func { params, result, .. } => {
+                assert_eq!(params.len(), 1, "inc should have 1 parameter");
+                assert!(
+                    matches!(params[0].kind(&db), crate::ast::TypeKind::Int),
+                    "Parameter should be Int, got: {:?}",
+                    params[0].kind(&db),
+                );
+                assert!(
+                    matches!(result.kind(&db), crate::ast::TypeKind::Int),
+                    "Return type should be Int, got: {:?}",
+                    result.kind(&db),
+                );
+            }
+            other => panic!("Expected Func type, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_polymorphic_function_scheme() {
+        // fn apply(f: fn(a) -> b, x: a) -> b { f(x) }
+        //
+        // Lowercase names in type annotations are type variables.
+        // The scheme should quantify over them as type_params,
+        // and the body should reference them via BoundVar.
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn apply(f: fn(a) -> b, x: a) -> b { f(x) }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let apply = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("apply"))
+            .expect("should have 'apply' scheme");
+
+        // type_params should contain a and b (in declaration order)
+        let type_params = apply.1.type_params(&db);
+        assert_eq!(
+            type_params.len(),
+            2,
+            "Expected 2 type params (a, b), got: {:?}",
+            type_params,
+        );
+
+        let body = apply.1.body(&db);
+        let crate::ast::TypeKind::Func { params, result, .. } = body.kind(&db) else {
+            panic!(
+                "Expected Func type for apply scheme body, got: {:?}",
+                body.kind(&db)
+            );
+        };
+        assert_eq!(params.len(), 2, "apply should have 2 parameters");
+
+        // Second param `x: a` → BoundVar(0)
+        assert!(
+            matches!(
+                params[1].kind(&db),
+                crate::ast::TypeKind::BoundVar { index: 0 }
+            ),
+            "Second param should be BoundVar(0) for 'a', got: {:?}",
+            params[1].kind(&db),
+        );
+
+        // Return type `b` → BoundVar(1)
+        assert!(
+            matches!(
+                result.kind(&db),
+                crate::ast::TypeKind::BoundVar { index: 1 }
+            ),
+            "Return type should be BoundVar(1) for 'b', got: {:?}",
+            result.kind(&db),
+        );
+
+        // No UniVars should remain
+        assert!(
+            !contains_univar(&db, body),
+            "apply scheme body should not contain UniVar, got: {:?}",
+            body.kind(&db),
+        );
     }
 
     #[test]

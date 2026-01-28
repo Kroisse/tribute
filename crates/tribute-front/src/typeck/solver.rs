@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{EffectRow, EffectVar, Type, TypeKind, UniVarId};
+use crate::ast::{EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
 
 use super::constraint::{Constraint, ConstraintSet};
 
@@ -135,6 +135,198 @@ impl<'db> TypeSubst<'db> {
                     .map(|a| self.apply_with_rows(db, *a, row_subst))
                     .collect();
                 Type::new(db, TypeKind::App { ctor, args })
+            }
+            _ => ty,
+        }
+    }
+
+    /// Generalize a type by replacing unresolved UniVars with BoundVars.
+    ///
+    /// After substitution, any remaining UniVar is unresolved (polymorphic).
+    /// This method:
+    /// 1. Collects unresolved UniVars in appearance order
+    /// 2. Replaces each with `BoundVar { index }` in order
+    ///
+    /// Returns `(generalized_type, type_params)`.
+    pub fn generalize(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+    ) -> (Type<'db>, Vec<TypeParam>) {
+        // Pass 1: collect unresolved UniVars in appearance order
+        let mut univars: Vec<UniVarId<'db>> = Vec::new();
+        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+
+        if univars.is_empty() {
+            return (ty, Vec::new());
+        }
+
+        // Build UniVar → BoundVar index mapping
+        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i as u32))
+            .collect();
+
+        // Pass 2: replace UniVars with BoundVars
+        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+
+        // Build type params (anonymous — names not tracked through UniVar)
+        let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
+
+        (generalized, type_params)
+    }
+
+    /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
+    fn collect_unresolved_univars(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        out: &mut Vec<UniVarId<'db>>,
+    ) {
+        match ty.kind(db) {
+            TypeKind::UniVar { id } => {
+                // Follow substitution chain
+                if let Some(subst_ty) = self.get(*id) {
+                    self.collect_unresolved_univars(db, subst_ty, row_subst, out);
+                } else if !out.contains(id) {
+                    out.push(*id);
+                }
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                for p in params {
+                    self.collect_unresolved_univars(db, *p, row_subst, out);
+                }
+                self.collect_unresolved_univars(db, *result, row_subst, out);
+                // Also collect from effect row type arguments
+                let applied = row_subst.apply(db, *effect);
+                for e in applied.effects(db) {
+                    for a in &e.args {
+                        self.collect_unresolved_univars(db, *a, row_subst, out);
+                    }
+                }
+            }
+            TypeKind::Named { args, .. } => {
+                for a in args {
+                    self.collect_unresolved_univars(db, *a, row_subst, out);
+                }
+            }
+            TypeKind::Tuple(elems) => {
+                for e in elems {
+                    self.collect_unresolved_univars(db, *e, row_subst, out);
+                }
+            }
+            TypeKind::App { ctor, args } => {
+                self.collect_unresolved_univars(db, *ctor, row_subst, out);
+                for a in args {
+                    self.collect_unresolved_univars(db, *a, row_subst, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Replace unresolved UniVars with BoundVars according to the given mapping.
+    fn replace_univars_with_bound(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        var_to_index: &HashMap<UniVarId<'db>, u32>,
+    ) -> Type<'db> {
+        match ty.kind(db) {
+            TypeKind::UniVar { id } => {
+                if let Some(subst_ty) = self.get(*id) {
+                    self.replace_univars_with_bound(db, subst_ty, row_subst, var_to_index)
+                } else if let Some(&index) = var_to_index.get(id) {
+                    Type::new(db, TypeKind::BoundVar { index })
+                } else {
+                    ty
+                }
+            }
+            TypeKind::Named { name, args } => {
+                let new_args: Vec<_> = args
+                    .iter()
+                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
+                    .collect();
+                Type::new(
+                    db,
+                    TypeKind::Named {
+                        name: *name,
+                        args: new_args,
+                    },
+                )
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let new_params: Vec<_> = params
+                    .iter()
+                    .map(|p| self.replace_univars_with_bound(db, *p, row_subst, var_to_index))
+                    .collect();
+                let new_result =
+                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
+                // Apply row substitution and generalize effect type args
+                let applied_row = row_subst.apply(db, *effect);
+                let new_effects: Vec<_> = applied_row
+                    .effects(db)
+                    .iter()
+                    .map(|e| {
+                        let new_args: Vec<_> = e
+                            .args
+                            .iter()
+                            .map(|a| {
+                                self.replace_univars_with_bound(db, *a, row_subst, var_to_index)
+                            })
+                            .collect();
+                        crate::ast::Effect {
+                            name: e.name,
+                            args: new_args,
+                        }
+                    })
+                    .collect();
+                let new_effect = if new_effects != *applied_row.effects(db) {
+                    EffectRow::new(db, new_effects, applied_row.rest(db))
+                } else {
+                    applied_row
+                };
+                Type::new(
+                    db,
+                    TypeKind::Func {
+                        params: new_params,
+                        result: new_result,
+                        effect: new_effect,
+                    },
+                )
+            }
+            TypeKind::Tuple(elems) => {
+                let new_elems: Vec<_> = elems
+                    .iter()
+                    .map(|e| self.replace_univars_with_bound(db, *e, row_subst, var_to_index))
+                    .collect();
+                Type::new(db, TypeKind::Tuple(new_elems))
+            }
+            TypeKind::App { ctor, args } => {
+                let new_ctor = self.replace_univars_with_bound(db, *ctor, row_subst, var_to_index);
+                let new_args: Vec<_> = args
+                    .iter()
+                    .map(|a| self.replace_univars_with_bound(db, *a, row_subst, var_to_index))
+                    .collect();
+                Type::new(
+                    db,
+                    TypeKind::App {
+                        ctor: new_ctor,
+                        args: new_args,
+                    },
+                )
             }
             _ => ty,
         }
@@ -1016,5 +1208,140 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
 
         let _ = solver.unify_types(bound_var, int_ty);
+    }
+
+    // =========================================================================
+    // Generalization tests
+    // =========================================================================
+
+    #[test]
+    fn test_generalize_no_univars() {
+        // Concrete type (Int) → no type params, type unchanged
+        let db = test_db();
+        let subst = TypeSubst::new();
+        let row_subst = RowSubst::new();
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let (generalized, params) = subst.generalize(&db, int_ty, &row_subst);
+        assert_eq!(generalized, int_ty);
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn test_generalize_single_univar() {
+        // fn(?a) -> ?a  →  fn(BoundVar(0)) -> BoundVar(0), 1 type param
+        let db = test_db();
+        let subst = TypeSubst::new();
+        let row_subst = RowSubst::new();
+
+        let var_ty = fresh_var(&db, 0);
+        let effect = EffectRow::new(&db, vec![], None);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_ty],
+                result: var_ty,
+                effect,
+            },
+        );
+
+        let (generalized, params) = subst.generalize(&db, func_ty, &row_subst);
+        assert_eq!(params.len(), 1);
+
+        if let TypeKind::Func {
+            params: gen_params,
+            result,
+            ..
+        } = generalized.kind(&db)
+        {
+            assert!(matches!(
+                gen_params[0].kind(&db),
+                TypeKind::BoundVar { index: 0 }
+            ));
+            assert!(matches!(result.kind(&db), TypeKind::BoundVar { index: 0 }));
+        } else {
+            panic!("Expected Func type");
+        }
+    }
+
+    #[test]
+    fn test_generalize_two_univars() {
+        // fn(?a) -> ?b  →  fn(BoundVar(0)) -> BoundVar(1), 2 type params
+        let db = test_db();
+        let subst = TypeSubst::new();
+        let row_subst = RowSubst::new();
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+        let effect = EffectRow::new(&db, vec![], None);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_a],
+                result: var_b,
+                effect,
+            },
+        );
+
+        let (generalized, params) = subst.generalize(&db, func_ty, &row_subst);
+        assert_eq!(params.len(), 2);
+
+        if let TypeKind::Func {
+            params: gen_params,
+            result,
+            ..
+        } = generalized.kind(&db)
+        {
+            assert!(matches!(
+                gen_params[0].kind(&db),
+                TypeKind::BoundVar { index: 0 }
+            ));
+            assert!(matches!(result.kind(&db), TypeKind::BoundVar { index: 1 }));
+        } else {
+            panic!("Expected Func type");
+        }
+    }
+
+    #[test]
+    fn test_generalize_resolved_univar_not_generalized() {
+        // ?a resolved to Int → after apply + generalize: no type params, no BoundVars
+        let db = test_db();
+        let mut subst = TypeSubst::new();
+        let row_subst = RowSubst::new();
+
+        let var_ty = fresh_var(&db, 0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let var_id = match var_ty.kind(&db) {
+            TypeKind::UniVar { id } => *id,
+            _ => unreachable!(),
+        };
+        subst.insert(var_id, int_ty);
+
+        let effect = EffectRow::new(&db, vec![], None);
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_ty],
+                result: var_ty,
+                effect,
+            },
+        );
+
+        // Apply substitution first (as done in Phase 4)
+        let applied = subst.apply_with_rows(&db, func_ty, &row_subst);
+        let (generalized, params) = subst.generalize(&db, applied, &row_subst);
+        assert!(params.is_empty());
+
+        if let TypeKind::Func {
+            params: gen_params,
+            result,
+            ..
+        } = generalized.kind(&db)
+        {
+            assert_eq!(gen_params[0], int_ty);
+            assert_eq!(*result, int_ty);
+        } else {
+            panic!("Expected Func type");
+        }
     }
 }
