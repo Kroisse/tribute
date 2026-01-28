@@ -777,7 +777,7 @@ mod tests {
                 assert_eq!(method.to_string(), "x");
             }
             _ => {
-                // Field access is now desugared to method call
+                panic!("Expected MethodCall for field access, got {:?}", value.kind);
             }
         }
     }

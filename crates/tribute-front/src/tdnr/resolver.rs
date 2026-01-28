@@ -114,6 +114,8 @@ impl<'db> TdnrResolver<'db> {
                         let func_id = FuncDefId::new(self.db, field_name);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
+                        // Note: Reusing struct's NodeId for synthetic type annotation.
+                        // This is safe for type construction but won't be used for span lookups.
                         let self_ty = self.annotation_to_type(&Some(TypeAnnotation {
                             id: s.id,
                             kind: TypeAnnotationKind::Named(struct_name),
