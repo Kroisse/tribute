@@ -706,6 +706,7 @@ mod tests {
         BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, LocalId, Module, NodeId, ParamDecl,
         Pattern, PatternKind, ResolvedRef, Stmt, Type as AstType, TypeKind, TypedRef,
     };
+    use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::func;
@@ -1829,5 +1830,175 @@ mod tests {
         // Should have 2 function operations
         let func_ops: Vec<_> = ops.iter().filter(|op| op.name(db) == "func").collect();
         assert_eq!(func_ops.len(), 2, "Should have extern + regular function");
+    }
+
+    // ========================================================================
+    // Snapshot Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_snapshot_nat_literal(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            nat_lit_expr(42),
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_binop_add(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let add_expr = binop_expr(BinOpKind::Add, int_lit_expr(10), int_lit_expr(20));
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            add_expr,
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_let_binding(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let x_name = Symbol::new("x");
+        let local_id = LocalId::new(0);
+        let let_x = let_stmt(local_id, x_name, int_lit_expr(10));
+        let x_ref = local_ref(db, local_id, x_name);
+        let x_plus_5 = binop_expr(BinOpKind::Add, var_expr(x_ref), int_lit_expr(5));
+        let block = block_expr(vec![let_x], x_plus_5);
+
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            block,
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_extern_function(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module =
+            test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_mixed_module(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let regular_func = simple_func(Symbol::new("main"), nat_lit_expr(42));
+
+        let module = simple_module(vec![
+            Decl::ExternFunction(extern_func),
+            Decl::Function(regular_func),
+        ]);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module =
+            test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
+        assert_debug_snapshot!(ir_module);
     }
 }

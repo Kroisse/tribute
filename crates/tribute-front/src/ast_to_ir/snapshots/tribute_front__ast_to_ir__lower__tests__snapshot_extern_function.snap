@@ -1,0 +1,14 @@
+---
+source: crates/tribute-front/src/ast_to_ir/lower.rs
+assertion_line: 1936
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        func @__add(core.i64, core.i64) -> core.i64 {
+            body: [
+                "func.unreachable",
+            ],
+        },
+    ],
+}
