@@ -89,12 +89,23 @@ impl<'db> TypeChecker<'db> {
             .accumulate(self.db());
         }
 
-        // Export function type schemes before applying substitution
-        let function_types = self.ctx.export_function_types();
-
         // Phase 4: Apply substitution to produce final types
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
+
+        // Export function type schemes with substitution applied
+        let function_types: Vec<_> = self
+            .ctx
+            .export_function_types()
+            .into_iter()
+            .map(|(name, scheme)| {
+                let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
+                (
+                    name,
+                    TypeScheme::new(self.db(), scheme.type_params(self.db()).clone(), body),
+                )
+            })
+            .collect();
 
         let decls = decls
             .into_iter()

@@ -371,6 +371,176 @@ mod tests {
         let _ft = output.function_types(&db);
     }
 
+    /// Recursively check if a type contains any unresolved UniVar.
+    fn contains_univar(db: &dyn salsa::Database, ty: crate::ast::Type) -> bool {
+        match ty.kind(db) {
+            crate::ast::TypeKind::UniVar { .. } => true,
+            crate::ast::TypeKind::Func {
+                params,
+                result,
+                effect: _,
+            } => params.iter().any(|p| contains_univar(db, *p)) || contains_univar(db, *result),
+            crate::ast::TypeKind::Named { args, .. } => {
+                args.iter().any(|a| contains_univar(db, *a))
+            }
+            crate::ast::TypeKind::Tuple(elems) => elems.iter().any(|e| contains_univar(db, *e)),
+            crate::ast::TypeKind::App { ctor, args } => {
+                contains_univar(db, *ctor) || args.iter().any(|a| contains_univar(db, *a))
+            }
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn test_function_schemes_no_univars() {
+        let db = salsa::DatabaseImpl::default();
+        // Use annotated parameters to ensure type inference resolves fully
+        let source = make_source(
+            &db,
+            r#"
+            fn add(x: Int, y: Int) -> Int { x + y }
+            fn greet() -> String { "hello" }
+        "#,
+        );
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        for (name, scheme) in &schemes {
+            let body = scheme.body(&db);
+            assert!(
+                !contains_univar(&db, body),
+                "Function '{}' scheme body should not contain UniVar, got: {:?}",
+                name,
+                body.kind(&db),
+            );
+        }
+    }
+
+    #[test]
+    fn test_function_schemes_fully_annotated_no_univars() {
+        let db = salsa::DatabaseImpl::default();
+        // Fully annotated function (params + return) should never have UniVars
+        let source = make_source(&db, "fn add(x: Int, y: Int) -> Int { x + y }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let add = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("add"))
+            .expect("should have 'add' scheme");
+
+        let body = add.1.body(&db);
+        assert!(
+            !contains_univar(&db, body),
+            "Fully annotated function 'add' scheme body should not contain UniVar, got: {:?}",
+            body.kind(&db),
+        );
+    }
+
+    #[test]
+    fn test_function_schemes_annotated_preserved() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn inc(x: Int) -> Int { x + 1 }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let inc_scheme = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("inc"))
+            .expect("should have 'inc' scheme");
+
+        let body = inc_scheme.1.body(&db);
+        // The body should be a function type Int -> Int
+        match body.kind(&db) {
+            crate::ast::TypeKind::Func { params, result, .. } => {
+                assert_eq!(params.len(), 1, "inc should have 1 parameter");
+                assert!(
+                    matches!(params[0].kind(&db), crate::ast::TypeKind::Int),
+                    "Parameter should be Int, got: {:?}",
+                    params[0].kind(&db),
+                );
+                assert!(
+                    matches!(result.kind(&db), crate::ast::TypeKind::Int),
+                    "Return type should be Int, got: {:?}",
+                    result.kind(&db),
+                );
+            }
+            other => panic!("Expected Func type, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    #[ignore = "requires implicit type param collection (not yet implemented)"]
+    fn test_polymorphic_function_scheme() {
+        // fn apply(f: fn(a) -> b, x: a) -> b { f(x) }
+        //
+        // Lowercase names in type annotations are type variables.
+        // The scheme should quantify over them as type_params,
+        // and the body should reference them via BoundVar.
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn apply(f: fn(a) -> b, x: a) -> b { f(x) }");
+
+        let schemes = function_schemes(&db, source);
+        assert!(schemes.is_some(), "function_schemes should return Some");
+
+        let schemes = schemes.unwrap();
+        let apply = schemes
+            .iter()
+            .find(|(name, _)| *name == Symbol::new("apply"))
+            .expect("should have 'apply' scheme");
+
+        // type_params should contain a and b (in declaration order)
+        let type_params = apply.1.type_params(&db);
+        assert_eq!(
+            type_params.len(),
+            2,
+            "Expected 2 type params (a, b), got: {:?}",
+            type_params,
+        );
+
+        let body = apply.1.body(&db);
+        let crate::ast::TypeKind::Func { params, result, .. } = body.kind(&db) else {
+            panic!(
+                "Expected Func type for apply scheme body, got: {:?}",
+                body.kind(&db)
+            );
+        };
+        assert_eq!(params.len(), 2, "apply should have 2 parameters");
+
+        // Second param `x: a` → BoundVar(0)
+        assert!(
+            matches!(
+                params[1].kind(&db),
+                crate::ast::TypeKind::BoundVar { index: 0 }
+            ),
+            "Second param should be BoundVar(0) for 'a', got: {:?}",
+            params[1].kind(&db),
+        );
+
+        // Return type `b` → BoundVar(1)
+        assert!(
+            matches!(
+                result.kind(&db),
+                crate::ast::TypeKind::BoundVar { index: 1 }
+            ),
+            "Return type should be BoundVar(1) for 'b', got: {:?}",
+            result.kind(&db),
+        );
+
+        // No UniVars should remain
+        assert!(
+            !contains_univar(&db, body),
+            "apply scheme body should not contain UniVar, got: {:?}",
+            body.kind(&db),
+        );
+    }
+
     #[test]
     fn test_unresolved_name_emits_diagnostic() {
         let db = salsa::DatabaseImpl::default();
