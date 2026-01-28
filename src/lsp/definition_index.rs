@@ -9,9 +9,9 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, LocalId,
-    Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl,
-    TypedRef,
+    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm,
+    HandlerKind, LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap,
+    Stmt, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -461,9 +461,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
         match decl {
             Decl::Function(func) => self.collect_func(func),
-            Decl::ExternFunction(_) => {
-                // Extern functions don't have bodies to index
-            }
+            Decl::ExternFunction(func) => self.collect_extern_func(func),
             Decl::Struct(s) => self.collect_struct(s),
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),
@@ -490,6 +488,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
         // Collect references in body
         self.collect_expr(&func.body);
+    }
+
+    fn collect_extern_func(&mut self, func: &ExternFuncDecl) {
+        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+
+        for param in &func.params {
+            self.collect_param(param);
+        }
     }
 
     fn collect_param(&mut self, param: &ParamDecl) {
