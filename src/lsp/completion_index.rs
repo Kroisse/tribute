@@ -328,9 +328,13 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
 
             let return_ty = func.return_ty.as_ref().map(print_type_annotation);
 
-            let effects = func.effects.as_ref().map(|effs| {
-                let effect_strs: Vec<_> = effs.iter().map(print_type_annotation).collect();
-                effect_strs.join(", ")
+            let effects = func.effects.as_ref().and_then(|effs| {
+                if effs.is_empty() {
+                    None
+                } else {
+                    let effect_strs: Vec<_> = effs.iter().map(print_type_annotation).collect();
+                    Some(effect_strs.join(", "))
+                }
             });
 
             signatures.push(FunctionSignature {
