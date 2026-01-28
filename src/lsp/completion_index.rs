@@ -266,6 +266,12 @@ pub struct FunctionSignature {
     pub params: Vec<(Symbol, Option<String>)>,
     /// Return type string (if specified).
     pub return_ty: Option<String>,
+    /// Comma-separated list of effect names, without surrounding braces.
+    /// For example, a function declared `fn foo() ->{IO, State} Int` stores
+    /// `Some("IO, State")` here. `None` means no effect annotation was present.
+    /// Callers formatting this value should split on `,` and trim whitespace;
+    /// the `{}` delimiters are *not* included in the stored string.
+    pub effects: Option<String>,
     /// Span of the function definition.
     pub span: Span,
 }
@@ -322,10 +328,20 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
 
             let return_ty = func.return_ty.as_ref().map(print_type_annotation);
 
+            let effects = func.effects.as_ref().and_then(|effs| {
+                if effs.is_empty() {
+                    None
+                } else {
+                    let effect_strs: Vec<_> = effs.iter().map(print_type_annotation).collect();
+                    Some(effect_strs.join(", "))
+                }
+            });
+
             signatures.push(FunctionSignature {
                 name: func.name,
                 params,
                 return_ty,
+                effects,
                 span: span_map.get_or_default(func.id),
             });
         }
@@ -559,6 +575,16 @@ mod tests {
         let sig = &signatures[0];
         assert!(sig.params[0].1.is_none());
         assert!(sig.return_ty.is_none());
+    }
+
+    #[test]
+    fn test_function_signatures_no_effects() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn add(a: Int, b: Int) -> Int { a + b }");
+
+        let signatures = function_signatures(&db, source);
+        assert_eq!(signatures.len(), 1);
+        assert!(signatures[0].effects.is_none());
     }
 
     #[test]
