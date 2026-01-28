@@ -1,0 +1,36 @@
+comment:
+  layout: "header, diff, flags, components"
+
+component_management:
+  default_rules:
+    statuses:
+      - type: project
+        target: auto
+
+  individual_components:
+    # IR framework and Wasm backend
+    - component_id: trunk-ir
+      name: "TrunkIR"
+      paths:
+        - "crates/trunk-ir/**"
+        - "crates/trunk-ir-wasm-backend/**"
+
+    # Front-end (parsing, CST lowering, AST-to-IR)
+    - component_id: frontend
+      name: "Frontend"
+      paths:
+        - "crates/tribute-front/**"
+
+    # Middle-end
+    - component_id: middle-end
+      name: "Middle End"
+      paths:
+        - "crates/tribute-ir/**"
+        - "crates/tribute-passes/**"
+
+    # CLI, LSP, pipeline orchestration, shared utilities
+    - component_id: driver
+      name: "Driver"
+      paths:
+        - "src/**"
+        - "crates/tribute-core/**"
