@@ -95,12 +95,18 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedNa
         .and_then(|n| lower_type_annotation(ctx, n));
 
     if is_extern {
-        // Extract ABI string from the extern function node
-        let abi = func_node.child_by_field_name("abi").map(|n| {
-            let text = ctx.node_text(&n);
-            // Strip surrounding quotes: "intrinsic" -> intrinsic
-            text.trim_matches('"').to_string()
-        });
+        // ABI is a field of the `extern_marker` child, not `extern_function` directly.
+        // Grammar: extern_marker -> seq(keyword_extern, optional(field("abi", $.string)))
+        let abi = func_node
+            .children(&mut func_node.walk())
+            .find(|c| c.kind() == "extern_marker")
+            .and_then(|marker| marker.child_by_field_name("abi"))
+            .map(|n| {
+                let text = ctx.node_text(&n);
+                // Strip surrounding quotes: "intrinsic" -> intrinsic
+                Symbol::from_dynamic(text.trim_matches('"'))
+            })
+            .unwrap_or_else(|| Symbol::new("C"));
 
         return vec![Decl::ExternFunction(crate::ast::ExternFuncDecl {
             id,

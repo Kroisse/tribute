@@ -2100,4 +2100,72 @@ mod tests {
         };
         assert_eq!(elements.len(), 2);
     }
+
+    // =============================================================================
+    // Extern Function Tests
+    // =============================================================================
+
+    #[test]
+    fn test_extern_function_with_abi() {
+        let source = r#"extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int"#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "__bytes_len");
+        assert_eq!(func.abi.to_string(), "intrinsic");
+        assert_eq!(func.params.len(), 1);
+        assert_eq!(func.params[0].name.to_string(), "bytes");
+        assert!(func.return_ty.is_some());
+    }
+
+    #[test]
+    fn test_extern_function_default_abi() {
+        let source = "extern fn foreign(x: Int) -> Int";
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "foreign");
+        assert_eq!(func.abi.to_string(), "C");
+    }
+
+    #[test]
+    fn test_extern_function_no_return_type() {
+        let source = r#"extern "intrinsic" fn __print_line(message: String)"#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "__print_line");
+        assert!(func.return_ty.is_none());
+    }
+
+    #[test]
+    fn test_extern_and_regular_functions_coexist() {
+        let source = r#"
+            extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int
+            fn len(bytes: Bytes) -> Int { __bytes_len(bytes) }
+        "#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 2);
+        assert!(matches!(&module.decls[0], Decl::ExternFunction(_)));
+        assert!(matches!(&module.decls[1], Decl::Function(_)));
+    }
 }

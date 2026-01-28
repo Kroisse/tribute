@@ -73,8 +73,8 @@ pub struct ExternFuncDecl {
     pub is_pub: bool,
     /// Function name.
     pub name: Symbol,
-    /// ABI string (e.g., "intrinsic").
-    pub abi: Option<String>,
+    /// ABI identifier (e.g., `intrinsic`). Defaults to `C`.
+    pub abi: Symbol,
     /// Function parameters.
     pub params: Vec<ParamDecl>,
     /// Return type annotation (optional).

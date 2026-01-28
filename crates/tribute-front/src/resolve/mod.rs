@@ -169,8 +169,8 @@ fn collect_definition<'db>(
 mod tests {
     use super::*;
     use crate::ast::{
-        EnumDecl, Expr, ExprKind, FieldDecl, FuncDecl, Module, ModuleDecl, NodeId, StructDecl,
-        TypeAnnotation, TypeAnnotationKind, VariantDecl,
+        EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldDecl, FuncDecl, Module, ModuleDecl, NodeId,
+        ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, VariantDecl,
     };
     use salsa_test_macros::salsa_test;
 
@@ -542,5 +542,51 @@ mod tests {
 
         let input = TestModuleInput::new(db, module);
         verify_module_no_override_parent(db, input);
+    }
+
+    // =========================================================================
+    // Extern function tests
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn verify_extern_function_registered(db: &dyn salsa::Database, input: TestModuleInput) {
+        let env = build_env(db, input.module(db));
+
+        let binding = env.lookup(Symbol::new("__bytes_len"));
+        assert!(binding.is_some(), "__bytes_len should be registered");
+        assert!(
+            matches!(binding, Some(Binding::Function { .. })),
+            "__bytes_len should be a function binding"
+        );
+    }
+
+    #[salsa_test]
+    fn test_extern_function_registered_as_binding(db: &dyn salsa::Database) {
+        let module = Module::new(
+            fresh_node_id(),
+            Some(Symbol::new("test")),
+            vec![Decl::ExternFunction(ExternFuncDecl {
+                id: fresh_node_id(),
+                is_pub: false,
+                name: Symbol::new("__bytes_len"),
+                abi: Symbol::new("intrinsic"),
+                params: vec![ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("bytes"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Bytes")),
+                    }),
+                    local_id: None,
+                }],
+                return_ty: Some(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }),
+            })],
+        );
+
+        let input = TestModuleInput::new(db, module);
+        verify_extern_function_registered(db, input);
     }
 }
