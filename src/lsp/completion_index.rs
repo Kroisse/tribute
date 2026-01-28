@@ -266,7 +266,11 @@ pub struct FunctionSignature {
     pub params: Vec<(Symbol, Option<String>)>,
     /// Return type string (if specified).
     pub return_ty: Option<String>,
-    /// Effect annotations (e.g., `{IO, State}`).
+    /// Comma-separated list of effect names, without surrounding braces.
+    /// For example, a function declared `fn foo() ->{IO, State} Int` stores
+    /// `Some("IO, State")` here. `None` means no effect annotation was present.
+    /// Callers formatting this value should split on `,` and trim whitespace;
+    /// the `{}` delimiters are *not* included in the stored string.
     pub effects: Option<String>,
     /// Span of the function definition.
     pub span: Span,
