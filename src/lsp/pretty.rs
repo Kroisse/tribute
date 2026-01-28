@@ -170,14 +170,10 @@ pub fn format_ast_signature(
     let params_str = label_parts.join(", ");
     let return_str = sig.return_ty.as_deref().unwrap_or("_");
     let signature_label = if let Some(effects) = &sig.effects {
-        if effects.is_empty() {
-            format!("fn {}({}) -> {}", sig.name, params_str, return_str)
-        } else {
-            format!(
-                "fn {}({}) ->{{{}}} {}",
-                sig.name, params_str, effects, return_str
-            )
-        }
+        format!(
+            "fn {}({}) ->{{{}}} {}",
+            sig.name, params_str, effects, return_str
+        )
     } else {
         format!("fn {}({}) -> {}", sig.name, params_str, return_str)
     };
