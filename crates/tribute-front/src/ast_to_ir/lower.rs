@@ -15,8 +15,8 @@ use tribute_ir::dialect::{tribute, tribute_rt};
 
 use crate::ast::{
     Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, Module, Pattern,
-    PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeScheme, TypedRef,
+    PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation, TypeAnnotationKind,
+    TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -111,9 +111,7 @@ fn lower_decl<'db>(
     match decl {
         Decl::Function(func) => lower_function(ctx, top, func),
         Decl::ExternFunction(func) => lower_extern_function(ctx, top, func),
-        Decl::Struct(_) => {
-            // TODO: Lower struct declarations
-        }
+        Decl::Struct(s) => lower_struct_decl(ctx, top, s),
         Decl::Enum(e) => lower_enum_decl(ctx, top, e),
         Decl::Ability(_) => {
             // TODO: Lower ability declarations
@@ -488,8 +486,64 @@ fn lower_expr<'db>(
             }
         }
 
+        ExprKind::Tuple(elements) => {
+            let mut values = Vec::new();
+            for elem in elements.iter() {
+                if let Some(val) = lower_expr(builder, elem.clone()) {
+                    values.push(val);
+                }
+            }
+            let result_ty = tribute_rt::any_type(builder.db());
+            let op = builder
+                .block
+                .op(tribute::tuple(builder.db(), location, values, result_ty));
+            Some(op.result(builder.db()))
+        }
+
+        ExprKind::Record {
+            type_name,
+            fields,
+            spread,
+        } => {
+            let db = builder.db();
+            let result_ty = tribute_rt::any_type(db);
+
+            // Lower field values
+            let mut field_values: Vec<(Symbol, trunk_ir::Value<'db>)> = Vec::new();
+            for (name, expr) in fields.iter() {
+                if let Some(val) = lower_expr(builder, expr.clone()) {
+                    field_values.push((*name, val));
+                }
+            }
+
+            // Build fields region with tribute.field_arg ops
+            let mut fields_block = BlockBuilder::new(db, location);
+            for (name, val) in &field_values {
+                fields_block.op(tribute::field_arg(db, location, *val, *name));
+            }
+            let fields_region = Region::new(db, location, idvec![fields_block.build()]);
+
+            // Spread base (optional)
+            let base: Vec<trunk_ir::Value<'db>> = spread
+                .as_ref()
+                .and_then(|s| lower_expr(builder, s.clone()))
+                .into_iter()
+                .collect();
+
+            // Extract type name from TypedRef
+            let type_name_sym = extract_type_name(db, &type_name.resolved);
+            let op = builder.block.op(tribute::record(
+                db,
+                location,
+                base,
+                result_ty,
+                type_name_sym,
+                fields_region,
+            ));
+            Some(op.result(db))
+        }
+
         // === Expressions not yet implemented ===
-        ExprKind::Record { .. } => builder.emit_unsupported(location, "record construction"),
         ExprKind::MethodCall { .. } => {
             unreachable!("MethodCall should be desugared before IR lowering")
         }
@@ -508,7 +562,6 @@ fn lower_expr<'db>(
         }
         ExprKind::Lambda { .. } => builder.emit_unsupported(location, "lambda expression"),
         ExprKind::Handle { .. } => builder.emit_unsupported(location, "handle expression"),
-        ExprKind::Tuple(_) => builder.emit_unsupported(location, "tuple expression"),
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => {
@@ -677,6 +730,83 @@ fn lower_block<'db>(
 }
 
 // =============================================================================
+// Struct Declaration Lowering
+// =============================================================================
+
+/// Lower a struct declaration to TrunkIR.
+///
+/// Generates:
+/// 1. A `tribute.struct_def` operation with field definitions
+/// 2. An accessor module containing getter functions for each field
+fn lower_struct_decl<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    top: &mut BlockBuilder<'db>,
+    decl: StructDecl,
+) {
+    let db = ctx.db;
+    let location = ctx.location(decl.id);
+    let name = decl.name;
+    let struct_ty = adt::typeref(db, name);
+
+    // 1. Build fields region for struct_def
+    let mut fields_block = BlockBuilder::new(db, location);
+    for field in &decl.fields {
+        let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
+        let field_ty = convert_annotation_to_ir_type(ctx, Some(&field.ty));
+        fields_block.op(tribute::field_def(db, location, field_name, field_ty));
+    }
+    let fields_region = Region::new(db, location, idvec![fields_block.build()]);
+
+    // 2. Emit struct_def
+    top.op(tribute::struct_def(
+        db,
+        location,
+        struct_ty,
+        name,
+        fields_region,
+    ));
+
+    // 3. Generate accessor module with getter functions
+    let fields: Vec<(Symbol, trunk_ir::Type<'db>)> = decl
+        .fields
+        .iter()
+        .map(|f| {
+            let field_name = f.name.unwrap_or_else(|| Symbol::new("_"));
+            let field_ty = convert_annotation_to_ir_type(ctx, Some(&f.ty));
+            (field_name, field_ty)
+        })
+        .collect();
+
+    let accessors_module = core::Module::build(db, location, name, |module_builder| {
+        for (idx, (field_name, field_type)) in fields.iter().enumerate() {
+            // Generate getter: fn field_name(self: StructType) -> FieldType
+            let getter = func::Func::build(
+                db,
+                location,
+                *field_name,
+                idvec![struct_ty],
+                *field_type,
+                |entry| {
+                    let self_value = entry.block_arg(db, 0);
+                    let field_value = entry.op(adt::struct_get(
+                        db,
+                        location,
+                        self_value,
+                        *field_type,
+                        struct_ty,
+                        idx as u64,
+                    ));
+                    entry.op(func::Return::value(db, location, field_value.result(db)));
+                },
+            );
+            module_builder.op(getter);
+        }
+    });
+
+    top.op(accessors_module);
+}
+
+// =============================================================================
 // Enum Declaration Lowering
 // =============================================================================
 
@@ -730,6 +860,20 @@ fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db
         name,
         variants_region,
     ));
+}
+
+// =============================================================================
+// Helper Functions
+// =============================================================================
+
+/// Extract the type name from a ResolvedRef.
+///
+/// Used for record construction to get the struct/enum name.
+fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'db>) -> Symbol {
+    match resolved {
+        ResolvedRef::Constructor { id, .. } => id.type_name(db),
+        _ => Symbol::new("_"), // Fallback
+    }
 }
 
 // =============================================================================
@@ -3108,5 +3252,121 @@ mod tests {
         let module = simple_module(vec![Decl::Enum(enum_decl)]);
         let ir_module = test_lower(db, path, SpanMap::default(), module);
         assert_debug_snapshot!(ir_module);
+    }
+
+    // ========================================================================
+    // Struct Declaration Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_struct_decl(db: &dyn salsa::Database) {
+        use crate::ast::{FieldDecl, StructDecl};
+
+        let path = PathId::new(db, "test");
+        let struct_decl = StructDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Point"),
+            type_params: vec![],
+            fields: vec![
+                FieldDecl {
+                    id: fresh_node_id(),
+                    is_pub: false,
+                    name: Some(Symbol::new("x")),
+                    ty: TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    },
+                },
+                FieldDecl {
+                    id: fresh_node_id(),
+                    is_pub: false,
+                    name: Some(Symbol::new("y")),
+                    ty: TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    },
+                },
+            ],
+        };
+        let module = simple_module(vec![Decl::Struct(struct_decl)]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have two operations: tribute.struct_def and core.module (accessors)
+        assert_eq!(ops.len(), 2, "Expected struct_def and accessor module");
+
+        // First operation should be tribute.struct_def
+        let struct_def_op = ops[0];
+        assert_eq!(struct_def_op.dialect(db), tribute::DIALECT_NAME());
+        assert_eq!(struct_def_op.name(db), tribute::STRUCT_DEF());
+
+        // Second operation should be core.module (accessor module)
+        let accessor_module_op = ops[1];
+        assert_eq!(accessor_module_op.dialect(db), core::DIALECT_NAME());
+        assert_eq!(accessor_module_op.name(db), core::MODULE());
+
+        // Accessor module should contain 2 functions (getters for x and y)
+        let accessor_module =
+            core::Module::from_operation(db, accessor_module_op).expect("Expected core.module");
+        let accessor_ops = get_module_ops(db, &accessor_module);
+        assert_eq!(
+            accessor_ops.len(),
+            2,
+            "Expected 2 accessor functions (x and y)"
+        );
+
+        // Both should be func.func operations
+        for op in &accessor_ops {
+            assert_eq!(op.dialect(db), func::DIALECT_NAME());
+            assert_eq!(op.name(db), func::FUNC());
+        }
+    }
+
+    // ========================================================================
+    // Tuple Expression Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_tuple(db: &dyn salsa::Database) {
+        let path = PathId::new(db, "test");
+        let module = simple_module(vec![Decl::Function(FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("make_tuple"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(
+                fresh_node_id(),
+                ExprKind::Tuple(vec![int_lit_expr(1), int_lit_expr(2), int_lit_expr(3)]),
+            ),
+        })]);
+
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have a function
+        assert_eq!(ops.len(), 1);
+        let func_op = func::Func::from_operation(db, ops[0]).expect("Expected func.func");
+        let body_ops = get_func_body_ops(db, &func_op);
+
+        // Body should contain tribute.tuple operation
+        let tuple_ops: Vec<_> = body_ops
+            .iter()
+            .filter(|op| {
+                op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::TUPLE()
+            })
+            .collect();
+        assert_eq!(tuple_ops.len(), 1, "Expected one tribute.tuple operation");
+
+        // Tuple should have 3 operands
+        let tuple_op = tuple_ops[0];
+        assert_eq!(
+            tuple_op.operands(db).len(),
+            3,
+            "Tuple should have 3 elements"
+        );
     }
 }
