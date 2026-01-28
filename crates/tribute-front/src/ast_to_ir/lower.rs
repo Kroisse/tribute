@@ -6,12 +6,17 @@ use std::collections::HashMap;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::dialect::{adt, arith, core, func};
-use trunk_ir::{Attribute, DialectType, Location, PathId, Symbol};
+use trunk_ir::dialect::{adt, arith, core, func, scf};
+use trunk_ir::{
+    Attribute, BlockBuilder, DialectOp, DialectType, Location, PathId, Region, Symbol, idvec,
+};
+
+use tribute_ir::dialect::{tribute, tribute_rt};
 
 use crate::ast::{
-    Decl, Expr, ExprKind, ExternFuncDecl, FuncDecl, Module, ResolvedRef, SpanMap, Stmt,
-    TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
+    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, Module, Pattern,
+    PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
+    TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -109,9 +114,7 @@ fn lower_decl<'db>(
         Decl::Struct(_) => {
             // TODO: Lower struct declarations
         }
-        Decl::Enum(_) => {
-            // TODO: Lower enum declarations
-        }
+        Decl::Enum(e) => lower_enum_decl(ctx, top, e),
         Decl::Ability(_) => {
             // TODO: Lower ability declarations
         }
@@ -488,8 +491,22 @@ fn lower_expr<'db>(
         // === Expressions not yet implemented ===
         ExprKind::Record { .. } => builder.emit_unsupported(location, "record construction"),
         ExprKind::FieldAccess { .. } => builder.emit_unsupported(location, "field access"),
-        ExprKind::MethodCall { .. } => builder.emit_unsupported(location, "method call"),
-        ExprKind::Case { .. } => builder.emit_unsupported(location, "case expression"),
+        ExprKind::MethodCall { .. } => {
+            unreachable!("MethodCall should be desugared before IR lowering")
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            let scrutinee_val = lower_expr(builder, scrutinee)?;
+            let result_ty = tribute_rt::any_type(builder.db());
+            let location = builder.location(expr.id);
+            lower_case_chain(
+                builder.ctx,
+                builder.block,
+                location,
+                scrutinee_val,
+                result_ty,
+                &arms,
+            )
+        }
         ExprKind::Lambda { .. } => builder.emit_unsupported(location, "lambda expression"),
         ExprKind::Handle { .. } => builder.emit_unsupported(location, "handle expression"),
         ExprKind::Tuple(_) => builder.emit_unsupported(location, "tuple expression"),
@@ -658,6 +675,348 @@ fn lower_block<'db>(
     let result = lower_expr(builder, value);
     builder.ctx.exit_scope();
     result
+}
+
+// =============================================================================
+// Enum Declaration Lowering
+// =============================================================================
+
+/// Lower an enum declaration to TrunkIR.
+fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db>, decl: EnumDecl) {
+    let location = ctx.location(decl.id);
+    let name = decl.name;
+
+    // Build adt.enum type with variant information
+    let enum_variants: Vec<(Symbol, Vec<trunk_ir::Type<'db>>)> = decl
+        .variants
+        .iter()
+        .map(|v| {
+            let field_types: Vec<_> = v
+                .fields
+                .iter()
+                .map(|f| convert_annotation_to_ir_type(ctx, Some(&f.ty)))
+                .collect();
+            (v.name, field_types)
+        })
+        .collect();
+
+    let result_ty = adt::enum_type(ctx.db, name, enum_variants);
+
+    // Build variants region containing tribute.variant_def operations
+    let mut variants_block = BlockBuilder::new(ctx.db, location);
+    for variant in &decl.variants {
+        // Build fields region for this variant
+        let mut variant_fields_block = BlockBuilder::new(ctx.db, location);
+        for field in &variant.fields {
+            let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
+            let field_type = convert_annotation_to_ir_type(ctx, Some(&field.ty));
+            variant_fields_block.op(tribute::field_def(ctx.db, location, field_name, field_type));
+        }
+        let variant_fields_region =
+            Region::new(ctx.db, location, idvec![variant_fields_block.build()]);
+
+        variants_block.op(tribute::variant_def(
+            ctx.db,
+            location,
+            variant.name,
+            variant_fields_region,
+        ));
+    }
+    let variants_region = Region::new(ctx.db, location, idvec![variants_block.build()]);
+
+    top.op(tribute::enum_def(
+        ctx.db,
+        location,
+        result_ty,
+        name,
+        variants_region,
+    ));
+}
+
+// =============================================================================
+// Case Expression Lowering
+// =============================================================================
+
+/// Lower a case expression as a chain of scf.if operations.
+///
+/// Pattern: `case scrutinee { p1 => e1, p2 => e2, ... }` becomes a nested
+/// if-else chain testing each pattern in order.
+fn lower_case_chain<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    block: &mut BlockBuilder<'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    result_ty: trunk_ir::Type<'db>,
+    arms: &[Arm<TypedRef<'db>>],
+) -> Option<trunk_ir::Value<'db>> {
+    match arms {
+        [] => {
+            // No arms — exhaustiveness failure fallback, emit nil
+            let ty = core::Nil::new(ctx.db).as_type();
+            let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
+            Some(op.result(ctx.db))
+        }
+        [last] => {
+            // Single arm — bind pattern and lower body directly (no scf.if needed)
+            ctx.enter_scope();
+            bind_pattern_fields(ctx, block, location, scrutinee, &last.pattern);
+            let result = {
+                let mut builder = IrBuilder::new(ctx, block);
+                lower_expr(&mut builder, last.body.clone())
+            };
+            ctx.exit_scope();
+            result
+        }
+        [first, rest @ ..] => {
+            // Multi-arm: emit pattern check → build then/else regions → scf.if
+
+            // 1. Emit condition check (temporary IrBuilder, dropped before region building)
+            let cond = {
+                let mut builder = IrBuilder::new(ctx, block);
+                emit_pattern_check(&mut builder, location, scrutinee, &first.pattern)
+            };
+            let cond = cond?;
+
+            // 2. Build then region
+            let then_region = build_arm_region(ctx, location, scrutinee, first, result_ty);
+
+            // 3. Build else region (recursive)
+            let else_region = build_else_chain_region(ctx, location, scrutinee, result_ty, rest);
+
+            // 4. Emit scf.if in current block
+            let if_op = block.op(scf::r#if(
+                ctx.db,
+                location,
+                cond,
+                result_ty,
+                then_region,
+                else_region,
+            ));
+            Some(if_op.as_operation().result(ctx.db, 0))
+        }
+    }
+}
+
+/// Emit a condition check for a pattern match.
+///
+/// Returns a boolean value indicating whether the pattern matches the scrutinee.
+fn emit_pattern_check<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    pattern: &Pattern<TypedRef<'db>>,
+) -> Option<trunk_ir::Value<'db>> {
+    let bool_ty = builder.ctx.bool_type();
+
+    match &*pattern.kind {
+        PatternKind::Wildcard | PatternKind::Bind { .. } => {
+            // Always matches
+            Some(
+                builder
+                    .block
+                    .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
+                    .result(builder.db()),
+            )
+        }
+        PatternKind::Variant { ctor, .. } => {
+            // Test if scrutinee is of the specific variant
+            let (variant_name, enum_ty) = match &ctor.resolved {
+                ResolvedRef::Constructor { variant, .. } => {
+                    (*variant, builder.ctx.convert_type(ctor.ty))
+                }
+                _ => {
+                    // Fallback: always true
+                    return Some(
+                        builder
+                            .block
+                            .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
+                            .result(builder.db()),
+                    );
+                }
+            };
+            let op = builder.block.op(adt::variant_is(
+                builder.db(),
+                location,
+                scrutinee,
+                bool_ty,
+                enum_ty,
+                variant_name,
+            ));
+            Some(op.as_operation().result(builder.db(), 0))
+        }
+        PatternKind::Literal(lit) => emit_literal_check(builder, location, scrutinee, lit),
+        _ => {
+            // Fallback for unsupported patterns: always true
+            Some(
+                builder
+                    .block
+                    .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
+                    .result(builder.db()),
+            )
+        }
+    }
+}
+
+/// Emit a literal equality check.
+fn emit_literal_check<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    lit: &LiteralPattern,
+) -> Option<trunk_ir::Value<'db>> {
+    let bool_ty = builder.ctx.bool_type();
+    match lit {
+        LiteralPattern::Int(n) => {
+            let const_val = builder
+                .block
+                .op(arith::Const::i64(builder.db(), location, *n))
+                .result(builder.db());
+            Some(
+                builder
+                    .block
+                    .op(arith::cmp_eq(
+                        builder.db(),
+                        location,
+                        scrutinee,
+                        const_val,
+                        bool_ty,
+                    ))
+                    .result(builder.db()),
+            )
+        }
+        LiteralPattern::Bool(b) => {
+            let const_val = builder
+                .block
+                .op(arith::r#const(builder.db(), location, bool_ty, (*b).into()))
+                .result(builder.db());
+            Some(
+                builder
+                    .block
+                    .op(arith::cmp_eq(
+                        builder.db(),
+                        location,
+                        scrutinee,
+                        const_val,
+                        bool_ty,
+                    ))
+                    .result(builder.db()),
+            )
+        }
+        _ => {
+            // Float/String/Unit: fallback to always-true
+            Some(
+                builder
+                    .block
+                    .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
+                    .result(builder.db()),
+            )
+        }
+    }
+}
+
+/// Build a region for a single case arm body.
+fn build_arm_region<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    arm: &Arm<TypedRef<'db>>,
+    _result_ty: trunk_ir::Type<'db>,
+) -> Region<'db> {
+    let mut block = BlockBuilder::new(ctx.db, location);
+
+    ctx.enter_scope();
+    bind_pattern_fields(ctx, &mut block, location, scrutinee, &arm.pattern);
+
+    let result = {
+        let mut builder = IrBuilder::new(ctx, &mut block);
+        lower_expr(&mut builder, arm.body.clone())
+    };
+
+    ctx.exit_scope();
+
+    let yield_val = result.unwrap_or_else(|| {
+        let ty = core::Nil::new(ctx.db).as_type();
+        block
+            .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
+            .result(ctx.db)
+    });
+    block.op(scf::r#yield(ctx.db, location, vec![yield_val]));
+    Region::new(ctx.db, location, idvec![block.build()])
+}
+
+/// Build an else region containing a recursive case chain.
+fn build_else_chain_region<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    result_ty: trunk_ir::Type<'db>,
+    arms: &[Arm<TypedRef<'db>>],
+) -> Region<'db> {
+    let mut block = BlockBuilder::new(ctx.db, location);
+    let result = lower_case_chain(ctx, &mut block, location, scrutinee, result_ty, arms);
+
+    let yield_val = result.unwrap_or_else(|| {
+        let ty = core::Nil::new(ctx.db).as_type();
+        block
+            .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
+            .result(ctx.db)
+    });
+    block.op(scf::r#yield(ctx.db, location, vec![yield_val]));
+    Region::new(ctx.db, location, idvec![block.build()])
+}
+
+/// Bind pattern fields to SSA values in the current scope.
+fn bind_pattern_fields<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    block: &mut BlockBuilder<'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    pattern: &Pattern<TypedRef<'db>>,
+) {
+    match &*pattern.kind {
+        PatternKind::Bind {
+            local_id: Some(id), ..
+        } => {
+            ctx.bind(*id, scrutinee);
+        }
+        PatternKind::Variant { ctor, fields } => {
+            let (variant_name, enum_ty) = match &ctor.resolved {
+                ResolvedRef::Constructor { variant, .. } => (*variant, ctx.convert_type(ctor.ty)),
+                _ => return,
+            };
+
+            // Cast scrutinee to the specific variant type
+            let cast_val = block
+                .op(adt::variant_cast(
+                    ctx.db,
+                    location,
+                    scrutinee,
+                    enum_ty,
+                    enum_ty,
+                    variant_name,
+                ))
+                .as_operation()
+                .result(ctx.db, 0);
+
+            // Extract each field and recursively bind
+            let any_ty = tribute_rt::any_type(ctx.db);
+            for (i, field_pat) in fields.iter().enumerate() {
+                let field_val = block
+                    .op(adt::variant_get(
+                        ctx.db, location, cast_val, any_ty, i as u64,
+                    ))
+                    .as_operation()
+                    .result(ctx.db, 0);
+                bind_pattern_fields(ctx, block, location, field_val, field_pat);
+            }
+        }
+        PatternKind::Wildcard | PatternKind::Literal(_) => {
+            // No bindings needed
+        }
+        _ => {
+            // Other patterns (Record, Tuple, etc.) — no-op for now
+        }
+    }
 }
 
 /// Fallback: derive parameter and return types from annotations when TypeScheme is unavailable.
@@ -2335,6 +2694,420 @@ mod tests {
             Symbol::new("Some"),
             vec![42],
         );
+        assert_debug_snapshot!(ir_module);
+    }
+
+    // ========================================================================
+    // Case Expression Lowering Tests
+    // ========================================================================
+
+    /// Create a case expression.
+    fn case_expr<'db>(
+        scrutinee: Expr<TypedRef<'db>>,
+        arms: Vec<Arm<TypedRef<'db>>>,
+    ) -> Expr<TypedRef<'db>> {
+        Expr::new(fresh_node_id(), ExprKind::Case { scrutinee, arms })
+    }
+
+    /// Create a case arm.
+    fn arm<'db>(pattern: Pattern<TypedRef<'db>>, body: Expr<TypedRef<'db>>) -> Arm<TypedRef<'db>> {
+        Arm {
+            id: fresh_node_id(),
+            pattern,
+            guard: None,
+            body,
+        }
+    }
+
+    /// Create a wildcard pattern.
+    fn wildcard_pattern<'db>() -> Pattern<TypedRef<'db>> {
+        Pattern::new(fresh_node_id(), PatternKind::Wildcard)
+    }
+
+    /// Create a bind pattern.
+    fn bind_pattern<'db>(name: Symbol, local_id: LocalId) -> Pattern<TypedRef<'db>> {
+        Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name,
+                local_id: Some(local_id),
+            },
+        )
+    }
+
+    /// Create a variant pattern.
+    fn variant_pattern<'db>(
+        ctor_ref: TypedRef<'db>,
+        fields: Vec<Pattern<TypedRef<'db>>>,
+    ) -> Pattern<TypedRef<'db>> {
+        Pattern::new(
+            fresh_node_id(),
+            PatternKind::Variant {
+                ctor: ctor_ref,
+                fields,
+            },
+        )
+    }
+
+    /// Create a literal int pattern.
+    fn literal_pattern_int<'db>(n: i64) -> Pattern<TypedRef<'db>> {
+        Pattern::new(
+            fresh_node_id(),
+            PatternKind::Literal(LiteralPattern::Int(n)),
+        )
+    }
+
+    #[salsa_test]
+    fn test_lower_case_wildcard(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // case x { _ => 42 }
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(0);
+        let x_ref = local_ref(db, x_id, x_name);
+        let scrutinee = var_expr(x_ref);
+
+        let arms = vec![arm(wildcard_pattern(), int_lit_expr(42))];
+        let case = case_expr(scrutinee, arms);
+
+        // Wrap in a function with param x
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: x_name,
+                ty: None,
+                local_id: Some(x_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Single wildcard arm should NOT produce scf.if — just const + return
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(
+            if_op.is_none(),
+            "Wildcard-only case should not produce scf.if"
+        );
+
+        let const_op = body_ops.iter().find(|op| op.name(db) == "const");
+        assert!(const_op.is_some(), "Should have a const operation for 42");
+    }
+
+    #[salsa_test]
+    fn test_lower_case_literal(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // case n { 1 => 10, _ => 20 }
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+        let n_ref = local_ref(db, n_id, n_name);
+        let scrutinee = var_expr(n_ref);
+
+        let arms = vec![
+            arm(literal_pattern_int(1), int_lit_expr(10)),
+            arm(wildcard_pattern(), int_lit_expr(20)),
+        ];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have cmp_eq for literal check and scf.if
+        let cmp_op = body_ops.iter().find(|op| op.name(db) == "cmp_eq");
+        assert!(cmp_op.is_some(), "Should have cmp_eq for literal pattern");
+
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(if_op.is_some(), "Should have scf.if for case branch");
+    }
+
+    /// Tracked helper for building a case-with-variant module.
+    #[salsa::tracked]
+    fn test_lower_case_variant_module<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let option_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int_ty],
+            },
+        );
+
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(0);
+        let x_ref = TypedRef::new(ResolvedRef::local(x_id, x_name), option_ty);
+        let scrutinee = var_expr(x_ref);
+
+        let v_name = Symbol::new("v");
+        let v_id = LocalId::new(1);
+
+        // Some(v) pattern
+        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: some_ctor_id,
+                variant: Symbol::new("Some"),
+            },
+            option_ty,
+        );
+        let some_pattern = variant_pattern(some_ctor_ref, vec![bind_pattern(v_name, v_id)]);
+        let v_ref = TypedRef::new(ResolvedRef::local(v_id, v_name), int_ty);
+
+        // None pattern
+        let none_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let none_ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: none_ctor_id,
+                variant: Symbol::new("None"),
+            },
+            option_ty,
+        );
+        let none_pattern = variant_pattern(none_ctor_ref, vec![]);
+
+        let arms = vec![
+            arm(some_pattern, var_expr(v_ref)),
+            arm(none_pattern, int_lit_expr(0)),
+        ];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: x_name,
+                ty: None,
+                local_id: Some(x_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_lower_case_variant(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let ir_module = test_lower_case_variant_module(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have variant_is for pattern check and scf.if for branching
+        let variant_is_op = body_ops.iter().find(|op| op.name(db) == "variant_is");
+        assert!(
+            variant_is_op.is_some(),
+            "Should have adt.variant_is for variant pattern"
+        );
+
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(
+            if_op.is_some(),
+            "Should have scf.if for case variant branch"
+        );
+    }
+
+    // ========================================================================
+    // Enum Declaration Lowering Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_enum_decl(db: &salsa::DatabaseImpl) {
+        use crate::ast::{EnumDecl, VariantDecl};
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // enum Color { Red, Green, Blue }
+        let enum_decl = EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Color"),
+            type_params: vec![],
+            variants: vec![
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Red"),
+                    fields: vec![],
+                },
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Green"),
+                    fields: vec![],
+                },
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Blue"),
+                    fields: vec![],
+                },
+            ],
+        };
+
+        let module = simple_module(vec![Decl::Enum(enum_decl)]);
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have tribute.enum_def operation
+        let enum_op = ops.iter().find(|op| op.name(db) == "enum_def");
+        assert!(
+            enum_op.is_some(),
+            "Should have a tribute.enum_def operation"
+        );
+        assert_eq!(
+            enum_op.unwrap().dialect(db),
+            "tribute",
+            "enum_def should be in tribute dialect"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lower_enum_decl_with_fields(db: &salsa::DatabaseImpl) {
+        use crate::ast::{EnumDecl, FieldDecl, TypeAnnotation, TypeAnnotationKind, VariantDecl};
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // enum Shape { Circle(Float), Rect(Float, Float) }
+        let enum_decl = EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Shape"),
+            type_params: vec![],
+            variants: vec![
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Circle"),
+                    fields: vec![FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Float")),
+                        },
+                    }],
+                },
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Rect"),
+                    fields: vec![
+                        FieldDecl {
+                            id: fresh_node_id(),
+                            is_pub: false,
+                            name: None,
+                            ty: TypeAnnotation {
+                                id: fresh_node_id(),
+                                kind: TypeAnnotationKind::Named(Symbol::new("Float")),
+                            },
+                        },
+                        FieldDecl {
+                            id: fresh_node_id(),
+                            is_pub: false,
+                            name: None,
+                            ty: TypeAnnotation {
+                                id: fresh_node_id(),
+                                kind: TypeAnnotationKind::Named(Symbol::new("Float")),
+                            },
+                        },
+                    ],
+                },
+            ],
+        };
+
+        let module = simple_module(vec![Decl::Enum(enum_decl)]);
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+
+        let enum_op = ops.iter().find(|op| op.name(db) == "enum_def");
+        assert!(
+            enum_op.is_some(),
+            "Should have a tribute.enum_def operation"
+        );
+    }
+
+    // ========================================================================
+    // Snapshot Tests for Case and Enum
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_snapshot_case_variant(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_case_variant_module(db, path);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_enum_decl(db: &salsa::DatabaseImpl) {
+        use crate::ast::{EnumDecl, VariantDecl};
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let enum_decl = EnumDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("Color"),
+            type_params: vec![],
+            variants: vec![
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Red"),
+                    fields: vec![],
+                },
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Green"),
+                    fields: vec![],
+                },
+                VariantDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("Blue"),
+                    fields: vec![],
+                },
+            ],
+        };
+        let module = simple_module(vec![Decl::Enum(enum_decl)]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
         assert_debug_snapshot!(ir_module);
     }
 }
