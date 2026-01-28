@@ -273,8 +273,8 @@ pub struct EffectVar {
 // =========================================================================
 
 /// Check whether a symbol name looks like a type variable (starts with lowercase).
-fn is_type_variable(name: &Symbol) -> bool {
-    name.with_str(|s| s.starts_with(|c: char| c.is_lowercase()))
+pub fn is_type_variable(name: &Symbol) -> bool {
+    name.with_str(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
 }
 
 /// Convert a single type annotation to an `Effect`.

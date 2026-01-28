@@ -476,7 +476,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires implicit type param collection (not yet implemented)"]
     fn test_polymorphic_function_scheme() {
         // fn apply(f: fn(a) -> b, x: a) -> b { f(x) }
         //

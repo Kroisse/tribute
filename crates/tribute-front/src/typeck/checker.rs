@@ -93,17 +93,17 @@ impl<'db> TypeChecker<'db> {
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
 
-        // Export function type schemes with substitution applied
+        // Export function type schemes with substitution applied + generalization
         let function_types: Vec<_> = self
             .ctx
             .export_function_types()
             .into_iter()
             .map(|(name, scheme)| {
+                // 1. Apply substitution
                 let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
-                (
-                    name,
-                    TypeScheme::new(self.db(), scheme.type_params(self.db()).clone(), body),
-                )
+                // 2. Generalize remaining UniVars → BoundVars + type_params
+                let (generalized, type_params) = type_subst.generalize(self.db(), body, row_subst);
+                (name, TypeScheme::new(self.db(), type_params, generalized))
             })
             .collect();
 
@@ -159,19 +159,15 @@ impl<'db> TypeChecker<'db> {
 
     /// Collect a function's type signature.
     fn collect_function_signature(&mut self, func: &FuncDecl<ResolvedRef<'db>>) {
-        // Build type parameters
-        let type_params: Vec<TypeParam> = func
-            .type_params
-            .iter()
-            .map(|tp| TypeParam::named(tp.name))
-            .collect();
+        // Per-function map: same lowercase name → same UniVar within this signature
+        let mut type_var_map = std::collections::HashMap::new();
 
         // Build parameter types from annotations when available
         let param_types: Vec<Type<'db>> = func
             .params
             .iter()
             .map(|p| match &p.ty {
-                Some(ann) => self.annotation_to_type(ann),
+                Some(ann) => self.annotation_to_type_with_type_vars(ann, &mut type_var_map),
                 None => self.ctx.fresh_type_var(),
             })
             .collect();
@@ -180,7 +176,7 @@ impl<'db> TypeChecker<'db> {
         let return_ty = func
             .return_ty
             .as_ref()
-            .map(|ann| self.annotation_to_type(ann))
+            .map(|ann| self.annotation_to_type_with_type_vars(ann, &mut type_var_map))
             .unwrap_or_else(|| self.ctx.fresh_type_var());
 
         // Build effect row from annotations
@@ -190,7 +186,7 @@ impl<'db> TypeChecker<'db> {
                 crate::ast::abilities_to_effect_row(
                     self.db(),
                     anns,
-                    &mut |ann| self.annotation_to_type(ann),
+                    &mut |ann| self.annotation_to_type_with_type_vars(ann, &mut type_var_map),
                     || row_var,
                 )
             }
@@ -200,8 +196,8 @@ impl<'db> TypeChecker<'db> {
         // Create function type
         let func_ty = self.ctx.func_type(param_types, return_ty, effect);
 
-        // Create type scheme
-        let scheme = TypeScheme::new(self.db(), type_params, func_ty);
+        // type_params left empty — generalization fills them in Phase 4
+        let scheme = TypeScheme::new(self.db(), vec![], func_ty);
 
         // Register the function with its FuncDefId
         let func_id = FuncDefId::new(self.db(), func.name);
@@ -275,6 +271,102 @@ impl<'db> TypeChecker<'db> {
             TypeAnnotationKind::Tuple(elems) => {
                 let elem_types: Vec<Type<'db>> =
                     elems.iter().map(|e| self.annotation_to_type(e)).collect();
+                self.ctx.tuple_type(elem_types)
+            }
+            TypeAnnotationKind::Infer => self.ctx.fresh_type_var(),
+            TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => self.ctx.error_type(),
+        }
+    }
+
+    /// Convert a type annotation to a Type, mapping lowercase type names to
+    /// shared `UniVar`s via `type_var_map`.
+    ///
+    /// Within the same function signature, the same lowercase name (e.g., `a`)
+    /// maps to the same UniVar, so the solver will unify them. Different
+    /// functions get separate maps, so they receive independent UniVars.
+    fn annotation_to_type_with_type_vars(
+        &mut self,
+        ann: &crate::ast::TypeAnnotation,
+        type_var_map: &mut std::collections::HashMap<Symbol, Type<'db>>,
+    ) -> Type<'db> {
+        use crate::ast::{TypeAnnotationKind, is_type_variable};
+
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) if is_type_variable(name) => {
+                // Lowercase name → shared UniVar from the map
+                if let Some(&ty) = type_var_map.get(name) {
+                    ty
+                } else {
+                    let ty = self.ctx.fresh_type_var();
+                    type_var_map.insert(*name, ty);
+                    ty
+                }
+            }
+            TypeAnnotationKind::Named(name) => {
+                // Uppercase / primitive names — delegate to normal logic
+                if *name == "Int" {
+                    self.ctx.int_type()
+                } else if *name == "Nat" {
+                    self.ctx.nat_type()
+                } else if *name == "Float" {
+                    self.ctx.float_type()
+                } else if *name == "Bool" {
+                    self.ctx.bool_type()
+                } else if *name == "String" {
+                    self.ctx.string_type()
+                } else if *name == "Bytes" {
+                    self.ctx.bytes_type()
+                } else if *name == "Rune" {
+                    self.ctx.rune_type()
+                } else if *name == "()" {
+                    self.ctx.nil_type()
+                } else {
+                    self.ctx.named_type(*name, vec![])
+                }
+            }
+            TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
+                if let Some(&name) = parts.last() {
+                    self.ctx.named_type(name, vec![])
+                } else {
+                    self.ctx.error_type()
+                }
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                let ctor_ty = self.annotation_to_type_with_type_vars(ctor, type_var_map);
+                if let TypeKind::Named { name, .. } = ctor_ty.kind(self.db()) {
+                    let arg_types: Vec<Type<'db>> = args
+                        .iter()
+                        .map(|a| self.annotation_to_type_with_type_vars(a, type_var_map))
+                        .collect();
+                    self.ctx.named_type(*name, arg_types)
+                } else {
+                    self.ctx.error_type()
+                }
+            }
+            TypeAnnotationKind::Func {
+                params,
+                result,
+                abilities,
+            } => {
+                let param_types: Vec<Type<'db>> = params
+                    .iter()
+                    .map(|p| self.annotation_to_type_with_type_vars(p, type_var_map))
+                    .collect();
+                let result_ty = self.annotation_to_type_with_type_vars(result, type_var_map);
+                let row_var = self.ctx.fresh_row_var();
+                let effect = crate::ast::abilities_to_effect_row(
+                    self.db(),
+                    abilities,
+                    &mut |a| self.annotation_to_type_with_type_vars(a, type_var_map),
+                    || row_var,
+                );
+                self.ctx.func_type(param_types, result_ty, effect)
+            }
+            TypeAnnotationKind::Tuple(elems) => {
+                let elem_types: Vec<Type<'db>> = elems
+                    .iter()
+                    .map(|e| self.annotation_to_type_with_type_vars(e, type_var_map))
+                    .collect();
                 self.ctx.tuple_type(elem_types)
             }
             TypeAnnotationKind::Infer => self.ctx.fresh_type_var(),
