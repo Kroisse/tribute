@@ -78,6 +78,17 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             _ => self.ctx.convert_type(*ty),
         }
     }
+
+    /// Lower arguments and propagate errors properly.
+    ///
+    /// Unlike filter_map which silently drops failed arguments (changing arity),
+    /// this returns None if any argument fails to lower.
+    fn collect_args(
+        &mut self,
+        args: impl IntoIterator<Item = Expr<TypedRef<'db>>>,
+    ) -> Option<Vec<trunk_ir::Value<'db>>> {
+        args.into_iter().map(|a| lower_expr(self, a)).collect()
+    }
 }
 
 /// Lower a module to TrunkIR.
@@ -401,11 +412,8 @@ fn lower_expr<'db>(
         ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
 
         ExprKind::Call { callee, args } => {
-            // Lower arguments first
-            let arg_values: Vec<_> = args
-                .into_iter()
-                .filter_map(|a| lower_expr(builder, a))
-                .collect();
+            // Lower arguments first, propagating errors properly
+            let arg_values = builder.collect_args(args)?;
 
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
@@ -464,10 +472,8 @@ fn lower_expr<'db>(
         }
 
         ExprKind::Cons { ctor, args } => {
-            let arg_values: Vec<_> = args
-                .into_iter()
-                .filter_map(|a| lower_expr(builder, a))
-                .collect();
+            // Lower arguments, propagating errors properly
+            let arg_values = builder.collect_args(args)?;
 
             match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
@@ -487,12 +493,11 @@ fn lower_expr<'db>(
         }
 
         ExprKind::Tuple(elements) => {
-            let mut values = Vec::new();
-            for elem in elements.iter() {
-                if let Some(val) = lower_expr(builder, elem.clone()) {
-                    values.push(val);
-                }
-            }
+            // Lower elements, propagating errors properly
+            let values: Vec<_> = elements
+                .iter()
+                .map(|elem| lower_expr(builder, elem.clone()))
+                .collect::<Option<Vec<_>>>()?;
             let result_ty = tribute_rt::any_type(builder.db());
             let op = builder
                 .block
@@ -508,13 +513,11 @@ fn lower_expr<'db>(
             let db = builder.db();
             let result_ty = tribute_rt::any_type(db);
 
-            // Lower field values
-            let mut field_values: Vec<(Symbol, trunk_ir::Value<'db>)> = Vec::new();
-            for (name, expr) in fields.iter() {
-                if let Some(val) = lower_expr(builder, expr.clone()) {
-                    field_values.push((*name, val));
-                }
-            }
+            // Lower field values, propagating errors properly
+            let field_values: Vec<(Symbol, trunk_ir::Value<'db>)> = fields
+                .iter()
+                .map(|(name, expr)| lower_expr(builder, expr.clone()).map(|val| (*name, val)))
+                .collect::<Option<Vec<_>>>()?;
 
             // Build fields region with tribute.field_arg ops
             let mut fields_block = BlockBuilder::new(db, location);
@@ -869,10 +872,11 @@ fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db
 /// Extract the type name from a ResolvedRef.
 ///
 /// Used for record construction to get the struct/enum name.
+/// Record type_name must always resolve to a Constructor.
 fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'db>) -> Symbol {
     match resolved {
         ResolvedRef::Constructor { id, .. } => id.type_name(db),
-        _ => Symbol::new("_"), // Fallback
+        _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }
 
@@ -913,14 +917,41 @@ fn lower_case_chain<'db>(
         [first, rest @ ..] => {
             // Multi-arm: emit pattern check → build then/else regions → scf.if
 
-            // 1. Emit condition check (temporary IrBuilder, dropped before region building)
-            let cond = {
+            // 1. Emit pattern condition check
+            let pattern_cond = {
                 let mut builder = IrBuilder::new(ctx, block);
                 emit_pattern_check(&mut builder, location, scrutinee, &first.pattern)
-            };
-            let cond = cond?;
+            }?;
 
-            // 2. Build then region
+            // 2. Handle guard condition (if present)
+            let cond = if let Some(guard_expr) = &first.guard {
+                // Guard evaluation needs pattern bindings in scope
+                ctx.enter_scope();
+                bind_pattern_fields(ctx, block, location, scrutinee, &first.pattern);
+                let guard_cond = {
+                    let mut builder = IrBuilder::new(ctx, block);
+                    lower_expr(&mut builder, guard_expr.clone())
+                };
+                ctx.exit_scope();
+
+                let guard_cond = guard_cond?;
+
+                // Combine: pattern_cond && guard_cond
+                let bool_ty = ctx.bool_type();
+                block
+                    .op(arith::and(
+                        ctx.db,
+                        location,
+                        pattern_cond,
+                        guard_cond,
+                        bool_ty,
+                    ))
+                    .result(ctx.db)
+            } else {
+                pattern_cond
+            };
+
+            // 3. Build then region
             let then_region = build_arm_region(ctx, location, scrutinee, first, result_ty);
 
             // 3. Build else region (recursive)
@@ -968,13 +999,7 @@ fn emit_pattern_check<'db>(
                     (*variant, builder.ctx.convert_type(ctor.ty))
                 }
                 _ => {
-                    // Fallback: always true
-                    return Some(
-                        builder
-                            .block
-                            .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
-                            .result(builder.db()),
-                    );
+                    unreachable!("non-constructor in variant pattern: {:?}", ctor.resolved)
                 }
             };
             let op = builder.block.op(adt::variant_is(
@@ -989,13 +1014,7 @@ fn emit_pattern_check<'db>(
         }
         PatternKind::Literal(lit) => emit_literal_check(builder, location, scrutinee, lit),
         _ => {
-            // Fallback for unsupported patterns: always true
-            Some(
-                builder
-                    .block
-                    .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
-                    .result(builder.db()),
-            )
+            unreachable!("unsupported pattern in IR lowering: {:?}", pattern.kind)
         }
     }
 }
@@ -1046,13 +1065,7 @@ fn emit_literal_check<'db>(
             )
         }
         _ => {
-            // Float/String/Unit: fallback to always-true
-            Some(
-                builder
-                    .block
-                    .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
-                    .result(builder.db()),
-            )
+            unreachable!("unsupported literal pattern in IR lowering: {:?}", lit)
         }
     }
 }
@@ -3367,6 +3380,322 @@ mod tests {
             tuple_op.operands(db).len(),
             3,
             "Tuple should have 3 elements"
+        );
+    }
+
+    // ========================================================================
+    // Error Propagation Tests (Bug Fix Verification)
+    // ========================================================================
+
+    /// Tracked helper: build a call with one failing argument.
+    #[salsa::tracked]
+    fn test_lower_call_with_overflow_arg<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let func_id = FuncDefId::new(db, Symbol::new("add"));
+        let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
+        let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
+
+        // Second argument exceeds i31 range → should fail
+        let exceeds_i31: u64 = 1 << 30;
+        let call = call_expr(callee, vec![int_lit_expr(1), nat_lit_expr(exceeds_i31)]);
+
+        let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), call))]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_call_propagates_arg_error(db: &salsa::DatabaseImpl) {
+        // When one argument fails to lower (e.g., overflow), the entire call should fail
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_call_with_overflow_arg(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // With proper error propagation, the call should NOT be emitted
+        // Instead, we get a fallback unit return (2 ops: const unit + return)
+        let call_op = body_ops.iter().find(|op| op.name(db) == "call");
+        assert!(
+            call_op.is_none(),
+            "Call with failing arg should not emit func.call"
+        );
+    }
+
+    /// Tracked helper: build a Cons with one failing argument.
+    #[salsa::tracked]
+    fn test_lower_cons_with_overflow_arg<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let named_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Pair"),
+                args: vec![int_ty],
+            },
+        );
+        let ctor_id = CtorId::new(db, Symbol::new("Pair"));
+        let ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: ctor_id,
+                variant: Symbol::new("Pair"),
+            },
+            named_ty,
+        );
+
+        // Second argument exceeds i31 range → should fail
+        let exceeds_i31: u64 = 1 << 30;
+        let cons = cons_expr(ctor_ref, vec![int_lit_expr(1), nat_lit_expr(exceeds_i31)]);
+
+        let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), cons))]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_cons_propagates_arg_error(db: &salsa::DatabaseImpl) {
+        // When one constructor argument fails, the entire Cons should fail
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_cons_with_overflow_arg(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // With proper error propagation, variant_new should NOT be emitted
+        let variant_op = body_ops.iter().find(|op| op.name(db) == "variant_new");
+        assert!(
+            variant_op.is_none(),
+            "Cons with failing arg should not emit adt.variant_new"
+        );
+    }
+
+    #[salsa_test]
+    fn test_tuple_propagates_element_error(db: &salsa::DatabaseImpl) {
+        // When one tuple element fails, the entire Tuple should fail
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Third element exceeds i31 range → should fail
+        let exceeds_i31: u64 = 1 << 30;
+        let tuple = Expr::new(
+            fresh_node_id(),
+            ExprKind::Tuple(vec![
+                int_lit_expr(1),
+                int_lit_expr(2),
+                nat_lit_expr(exceeds_i31),
+            ]),
+        );
+
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            tuple,
+        ))]);
+        let ir_module = test_lower(db, path, span_map, module);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // With proper error propagation, tuple should NOT be emitted
+        let tuple_op = body_ops
+            .iter()
+            .find(|op| op.dialect(db) == "tribute" && op.name(db) == "tuple");
+        assert!(
+            tuple_op.is_none(),
+            "Tuple with failing element should not emit tribute.tuple"
+        );
+    }
+
+    // ========================================================================
+    // Pattern Guard Tests
+    // ========================================================================
+
+    /// Create a case arm with a guard.
+    fn arm_with_guard<'db>(
+        pattern: Pattern<TypedRef<'db>>,
+        guard: Expr<TypedRef<'db>>,
+        body: Expr<TypedRef<'db>>,
+    ) -> Arm<TypedRef<'db>> {
+        Arm {
+            id: fresh_node_id(),
+            pattern,
+            guard: Some(guard),
+            body,
+        }
+    }
+
+    /// Tracked helper: build case with simple guard (bind pattern).
+    #[salsa::tracked]
+    fn test_lower_case_with_simple_guard<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        // case n { x if x > 0 => 1, _ => 0 }
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(1);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), int_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Guard: x > 0
+        let x_ref = TypedRef::new(ResolvedRef::local(x_id, x_name), int_ty);
+        let guard = binop_expr(BinOpKind::Gt, var_expr(x_ref), int_lit_expr(0));
+
+        let arms = vec![
+            arm_with_guard(bind_pattern(x_name, x_id), guard, int_lit_expr(1)),
+            arm(wildcard_pattern(), int_lit_expr(0)),
+        ];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_lower_case_with_guard(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_case_with_simple_guard(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have: cmp_gt for guard, "and" to combine pattern + guard, and scf.if
+        let cmp_op = body_ops.iter().find(|op| op.name(db) == "cmp_gt");
+        assert!(
+            cmp_op.is_some(),
+            "Should have cmp_gt for guard condition (x > 0)"
+        );
+
+        let and_op = body_ops.iter().find(|op| op.name(db) == "and");
+        assert!(
+            and_op.is_some(),
+            "Should have arith.and combining pattern check and guard"
+        );
+
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(if_op.is_some(), "Should have scf.if for case branch");
+    }
+
+    /// Tracked helper: build case with variant pattern and guard.
+    #[salsa::tracked]
+    fn test_lower_case_variant_with_guard<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        // case opt { Some(x) if x > 0 => x, _ => 0 }
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let option_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int_ty],
+            },
+        );
+
+        let opt_name = Symbol::new("opt");
+        let opt_id = LocalId::new(0);
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(1);
+
+        let opt_ref = TypedRef::new(ResolvedRef::local(opt_id, opt_name), option_ty);
+        let scrutinee = var_expr(opt_ref);
+
+        // Some(x) pattern
+        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: some_ctor_id,
+                variant: Symbol::new("Some"),
+            },
+            option_ty,
+        );
+        let some_pattern = variant_pattern(some_ctor_ref, vec![bind_pattern(x_name, x_id)]);
+
+        // Guard: x > 0
+        let x_ref = TypedRef::new(ResolvedRef::local(x_id, x_name), int_ty);
+        let guard = binop_expr(BinOpKind::Gt, var_expr(x_ref.clone()), int_lit_expr(0));
+
+        let arms = vec![
+            arm_with_guard(some_pattern, guard, var_expr(x_ref)),
+            arm(wildcard_pattern(), int_lit_expr(0)),
+        ];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: opt_name,
+                ty: None,
+                local_id: Some(opt_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_lower_case_guard_with_variant(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_case_variant_with_guard(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have variant_is for pattern, cmp_gt for guard, and "and" to combine them
+        let variant_is_op = body_ops.iter().find(|op| op.name(db) == "variant_is");
+        assert!(
+            variant_is_op.is_some(),
+            "Should have adt.variant_is for Some pattern"
+        );
+
+        let cmp_op = body_ops.iter().find(|op| op.name(db) == "cmp_gt");
+        assert!(cmp_op.is_some(), "Should have cmp_gt for guard (x > 0)");
+
+        let and_op = body_ops.iter().find(|op| op.name(db) == "and");
+        assert!(
+            and_op.is_some(),
+            "Should have arith.and combining variant_is and guard"
         );
     }
 }
