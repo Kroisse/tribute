@@ -138,6 +138,9 @@ impl<'db> TypeChecker<'db> {
                 Decl::Enum(e) => {
                     self.collect_enum_def(e);
                 }
+                Decl::ExternFunction(func) => {
+                    self.collect_extern_function_signature(func);
+                }
                 Decl::Ability(_) | Decl::Use(_) => {
                     // Abilities and imports don't define types directly
                 }
@@ -200,6 +203,35 @@ impl<'db> TypeChecker<'db> {
         let scheme = TypeScheme::new(self.db(), vec![], func_ty);
 
         // Register the function with its FuncDefId
+        let func_id = FuncDefId::new(self.db(), func.name);
+        self.ctx.register_function(func_id, scheme);
+    }
+
+    /// Collect an extern function's type signature.
+    ///
+    /// Extern functions have no body, so we only need to register the type.
+    fn collect_extern_function_signature(&mut self, func: &crate::ast::ExternFuncDecl) {
+        let mut type_var_map = std::collections::HashMap::new();
+
+        let param_types: Vec<Type<'db>> = func
+            .params
+            .iter()
+            .map(|p| match &p.ty {
+                Some(ann) => self.annotation_to_type_with_type_vars(ann, &mut type_var_map),
+                None => self.ctx.fresh_type_var(),
+            })
+            .collect();
+
+        let return_ty = func
+            .return_ty
+            .as_ref()
+            .map(|ann| self.annotation_to_type_with_type_vars(ann, &mut type_var_map))
+            .unwrap_or_else(|| self.ctx.nil_type());
+
+        let effect = EffectRow::pure(self.db());
+        let func_ty = self.ctx.func_type(param_types, return_ty, effect);
+        let scheme = TypeScheme::new(self.db(), vec![], func_ty);
+
         let func_id = FuncDefId::new(self.db(), func.name);
         self.ctx.register_function(func_id, scheme);
     }
@@ -514,6 +546,7 @@ impl<'db> TypeChecker<'db> {
     fn check_decl(&mut self, decl: Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
             Decl::Function(func) => Decl::Function(self.check_func_decl(func)),
+            Decl::ExternFunction(e) => Decl::ExternFunction(e),
             Decl::Struct(s) => Decl::Struct(self.check_struct_decl(s)),
             Decl::Enum(e) => Decl::Enum(self.check_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.check_ability_decl(a)),
@@ -1291,7 +1324,7 @@ fn apply_subst_to_decl<'db>(
                 body,
             })
         }
-        // Struct, Enum, Ability, Use don't contain TypedRefs
+        // ExternFunction, Struct, Enum, Ability, Use don't contain TypedRefs
         other => other,
     }
 }

@@ -48,6 +48,8 @@ where
 {
     /// Function declaration.
     Function(FuncDecl<V>),
+    /// Extern function declaration (no body).
+    ExternFunction(ExternFuncDecl),
     /// Struct declaration.
     Struct(StructDecl),
     /// Enum declaration.
@@ -58,6 +60,25 @@ where
     Use(UseDecl),
     /// Inline module declaration.
     Module(ModuleDecl<V>),
+}
+
+/// Extern function declaration: `extern "abi" fn name(params) -> ReturnType`
+///
+/// Unlike `FuncDecl`, this has no body — the implementation is provided externally.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ExternFuncDecl {
+    /// Node ID for span lookup.
+    pub id: NodeId,
+    /// Whether this function is public.
+    pub is_pub: bool,
+    /// Function name.
+    pub name: Symbol,
+    /// ABI string (e.g., "intrinsic").
+    pub abi: Option<String>,
+    /// Function parameters.
+    pub params: Vec<ParamDecl>,
+    /// Return type annotation (optional).
+    pub return_ty: Option<TypeAnnotation>,
 }
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`

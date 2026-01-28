@@ -41,10 +41,7 @@ pub fn lower_module(
 /// Returns a Vec because use declarations can expand to multiple items.
 fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>> {
     match node.kind() {
-        "function_definition" => lower_function(ctx, node)
-            .map(Decl::Function)
-            .into_iter()
-            .collect(),
+        "function_definition" => lower_function(ctx, node),
         "struct_declaration" => lower_struct(ctx, node)
             .map(Decl::Struct)
             .into_iter()
@@ -61,22 +58,30 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>>
 }
 
 /// Lower a function definition.
-fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<UnresolvedName>> {
+///
+/// Returns either `Decl::Function` or `Decl::ExternFunction` depending on whether
+/// the function is `regular_function` or `extern_function`.
+fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>> {
     // function_definition contains either regular_function or extern_function
-    let func_node = node
+    let Some(func_node) = node
         .named_child(0)
-        .filter(|c| c.kind() == "regular_function" || c.kind() == "extern_function")?;
+        .filter(|c| c.kind() == "regular_function" || c.kind() == "extern_function")
+    else {
+        return Vec::new();
+    };
 
     let id = ctx.fresh_id_with_span(&func_node);
 
     let is_extern = func_node.kind() == "extern_function";
 
-    let name_node = func_node.child_by_field_name("name")?;
+    let Some(name_node) = func_node.child_by_field_name("name") else {
+        return Vec::new();
+    };
     let body_node = func_node.child_by_field_name("body");
 
-    // Extern functions don't have bodies
+    // Regular functions must have bodies
     if !is_extern && body_node.is_none() {
-        return None;
+        return Vec::new();
     }
 
     let name = extract_function_name(ctx, name_node);
@@ -89,15 +94,27 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<Unres
         .child_by_field_name("return_type")
         .and_then(|n| lower_type_annotation(ctx, n));
 
-    // For extern functions, create a nil expression as placeholder
-    let body = if is_extern {
-        let nil_id = ctx.fresh_id_with_span(&func_node);
-        crate::ast::Expr::new(nil_id, crate::ast::ExprKind::Nil)
-    } else {
-        lower_expr(ctx, body_node?)
-    };
+    if is_extern {
+        // Extract ABI string from the extern function node
+        let abi = func_node.child_by_field_name("abi").map(|n| {
+            let text = ctx.node_text(&n);
+            // Strip surrounding quotes: "intrinsic" -> intrinsic
+            text.trim_matches('"').to_string()
+        });
 
-    Some(FuncDecl {
+        return vec![Decl::ExternFunction(crate::ast::ExternFuncDecl {
+            id,
+            is_pub: false, // TODO: parse visibility
+            name,
+            abi,
+            params,
+            return_ty,
+        })];
+    }
+
+    let body = lower_expr(ctx, body_node.unwrap());
+
+    vec![Decl::Function(FuncDecl {
         id,
         is_pub: false, // TODO: parse visibility
         name,
@@ -106,7 +123,7 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<FuncDecl<Unres
         return_ty,
         effects: None, // TODO: parse effects
         body,
-    })
+    })]
 }
 
 /// Extract function name, handling operator names like `(<>)`.

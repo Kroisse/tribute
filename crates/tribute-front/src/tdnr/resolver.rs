@@ -254,6 +254,7 @@ impl<'db> TdnrResolver<'db> {
         match decl {
             Decl::Function(func) => Decl::Function(self.resolve_func_decl(func)),
             // Other declarations don't contain expressions
+            Decl::ExternFunction(e) => Decl::ExternFunction(e),
             Decl::Struct(s) => Decl::Struct(s),
             Decl::Enum(e) => Decl::Enum(e),
             Decl::Ability(a) => Decl::Ability(a),

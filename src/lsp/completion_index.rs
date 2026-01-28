@@ -111,6 +111,13 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
                     });
                 }
             }
+            Decl::ExternFunction(func) => {
+                items.push(AstCompletionItem {
+                    name: func.name,
+                    kind: CompletionKind::Function,
+                    detail: None,
+                });
+            }
             Decl::Ability(a) => {
                 items.push(AstCompletionItem {
                     name: a.name,
@@ -244,6 +251,14 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     kind: SymbolKind::Ability,
                     span: span_map.get_or_default(a.id),
                     children,
+                });
+            }
+            Decl::ExternFunction(func) => {
+                symbols.push(DocumentSymbolInfo {
+                    name: func.name,
+                    kind: SymbolKind::Function,
+                    span: span_map.get_or_default(func.id),
+                    children: vec![],
                 });
             }
             Decl::Use(_) | Decl::Module(_) => {}

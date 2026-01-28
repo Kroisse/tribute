@@ -63,6 +63,11 @@ fn collect_definition<'db>(
             env.add_function(func.name, id);
         }
 
+        Decl::ExternFunction(func) => {
+            let id = FuncDefId::new(db, func.name);
+            env.add_function(func.name, id);
+        }
+
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
             let ctor_id = CtorId::new(db, s.name);

@@ -10,8 +10,8 @@ use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::{Attribute, DialectType, Location, PathId, Symbol};
 
 use crate::ast::{
-    Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
+    Decl, Expr, ExprKind, ExternFuncDecl, FuncDecl, Module, ResolvedRef, SpanMap, Stmt,
+    TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -46,6 +46,7 @@ fn lower_decl<'db>(
 ) {
     match decl {
         Decl::Function(func) => lower_function(ctx, top, func),
+        Decl::ExternFunction(func) => lower_extern_function(ctx, top, func),
         Decl::Struct(_) => {
             // TODO: Lower struct declarations
         }
@@ -135,6 +136,63 @@ fn lower_function<'db>(
             }
 
             ctx.exit_scope();
+        },
+    );
+
+    top.op(func_op);
+}
+
+/// Lower an extern function declaration.
+///
+/// Extern functions have no body; we emit `func.func` with an empty body
+/// containing `func.unreachable`.
+fn lower_extern_function<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    top: &mut trunk_ir::BlockBuilder<'db>,
+    func: ExternFuncDecl,
+) {
+    let location = ctx.location(func.id);
+    let func_name = func.name;
+
+    // Derive types from the TypeScheme registered during type checking.
+    // Extern functions always have a TypeScheme from collect_extern_function_signature.
+    let (param_ir_types, return_ty) = {
+        let scheme = ctx
+            .lookup_function_type(func_name)
+            .cloned()
+            .expect("extern function should have TypeScheme from type checking");
+        let body = scheme.body(ctx.db);
+        match body.kind(ctx.db) {
+            TypeKind::Func { params, result, .. } => {
+                let p: Vec<_> = params.iter().map(|t| ctx.convert_type(*t)).collect();
+                let r = ctx.convert_type(*result);
+                (p, r)
+            }
+            _ => {
+                // Should not happen for a well-typed extern function
+                let p: Vec<_> = func.params.iter().map(|_| ctx.unit_type()).collect();
+                (p, ctx.unit_type())
+            }
+        }
+    };
+
+    let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = param_ir_types
+        .into_iter()
+        .zip(func.params.iter())
+        .map(|(ty, p)| (ty, Some(p.name)))
+        .collect();
+
+    let func_op = func::Func::build_with_named_params(
+        ctx.db,
+        location,
+        func_name,
+        None,
+        params,
+        return_ty,
+        None,
+        |body, _arg_values| {
+            // Extern functions have no body — emit unreachable
+            body.op(func::unreachable(ctx.db, location));
         },
     );
 

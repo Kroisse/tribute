@@ -461,6 +461,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
         match decl {
             Decl::Function(func) => self.collect_func(func),
+            Decl::ExternFunction(_) => {
+                // Extern functions don't have bodies to index
+            }
             Decl::Struct(s) => self.collect_struct(s),
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),

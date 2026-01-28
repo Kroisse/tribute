@@ -233,8 +233,12 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
     fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
         match decl {
             Decl::Function(func) => self.collect_func(func),
-            // Struct, Enum, Ability, Use don't have expression types
-            Decl::Struct(_) | Decl::Enum(_) | Decl::Ability(_) | Decl::Use(_) => {}
+            // ExternFunction, Struct, Enum, Ability, Use don't have expression types
+            Decl::ExternFunction(_)
+            | Decl::Struct(_)
+            | Decl::Enum(_)
+            | Decl::Ability(_)
+            | Decl::Use(_) => {}
             Decl::Module(m) => {
                 // Recursively collect from nested declarations
                 if let Some(body) = &m.body {
