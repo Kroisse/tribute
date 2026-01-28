@@ -129,7 +129,7 @@ fn lower_function<'db>(
                 let unit = body.op(arith::r#const(
                     ctx.db,
                     location,
-                    ctx.unit_type(),
+                    ctx.nil_type(),
                     Attribute::Unit,
                 ));
                 body.op(func::Return::value(ctx.db, location, unit.result(ctx.db)));
@@ -168,10 +168,8 @@ fn lower_extern_function<'db>(
                 let r = ctx.convert_type(*result);
                 (p, r)
             }
-            _ => {
-                // Should not happen for a well-typed extern function
-                let p: Vec<_> = func.params.iter().map(|_| ctx.unit_type()).collect();
-                (p, ctx.unit_type())
+            other => {
+                unreachable!("extern function `{func_name}` has non-function TypeScheme: {other:?}")
             }
         }
     };
@@ -290,13 +288,13 @@ fn lower_expr<'db>(
             }
             .accumulate(ctx.db);
             // Return unit as placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
 
         ExprKind::Nil => {
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -345,7 +343,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -358,7 +356,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -371,7 +369,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -384,7 +382,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -397,7 +395,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -410,7 +408,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -423,7 +421,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -436,7 +434,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -449,7 +447,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -462,14 +460,14 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
 
         ExprKind::Error => {
             // Error expression from parsing - just return unit placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -571,7 +569,7 @@ fn lower_binop<'db>(
             }
             .accumulate(ctx.db);
             // Return unit as placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             block
                 .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
                 .result(ctx.db)
@@ -649,7 +647,7 @@ fn fallback_from_annotations<'db>(
         .return_ty
         .as_ref()
         .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
-        .unwrap_or_else(|| ctx.unit_type());
+        .unwrap_or_else(|| ctx.nil_type());
     (params, ret)
 }
 
@@ -683,21 +681,21 @@ fn convert_annotation_to_ir_type<'db>(
                 // Rune is a Unicode code point, represented as i32
                 core::I32::new(ctx.db).as_type()
             } else if *name == "()" {
-                ctx.unit_type()
+                ctx.nil_type()
             } else {
                 // Unknown named type - use placeholder
-                ctx.unit_type()
+                ctx.nil_type()
             }
         }
         TypeAnnotationKind::Path(_) => {
             // Qualified path - use placeholder for now
-            ctx.unit_type()
+            ctx.nil_type()
         }
         TypeAnnotationKind::App { ctor, .. } => {
             // Parameterized type - convert the constructor
             convert_annotation_to_ir_type(ctx, Some(ctor))
         }
-        _ => ctx.unit_type(),
+        _ => ctx.nil_type(),
     }
 }
 

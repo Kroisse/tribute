@@ -78,7 +78,7 @@ mod tests {
         // Verify context provides expected types
         let int_ty = ctx.int_type();
         let bool_ty = ctx.bool_type();
-        let unit_ty = ctx.unit_type();
+        let unit_ty = ctx.nil_type();
 
         // Types should be different
         assert_ne!(int_ty, bool_ty);

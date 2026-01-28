@@ -579,10 +579,10 @@ mod tests {
                     }),
                     local_id: None,
                 }],
-                return_ty: Some(TypeAnnotation {
+                return_ty: TypeAnnotation {
                     id: fresh_node_id(),
                     kind: TypeAnnotationKind::Named(Symbol::new("Int")),
-                }),
+                },
             })],
         );
 

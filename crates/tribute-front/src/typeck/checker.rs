@@ -222,11 +222,7 @@ impl<'db> TypeChecker<'db> {
             })
             .collect();
 
-        let return_ty = func
-            .return_ty
-            .as_ref()
-            .map(|ann| self.annotation_to_type_with_type_vars(ann, &mut type_var_map))
-            .unwrap_or_else(|| self.ctx.nil_type());
+        let return_ty = self.annotation_to_type_with_type_vars(&func.return_ty, &mut type_var_map);
 
         let effect = EffectRow::pure(self.db());
         let func_ty = self.ctx.func_type(param_types, return_ty, effect);

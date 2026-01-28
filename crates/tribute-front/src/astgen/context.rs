@@ -7,12 +7,15 @@ use tree_sitter::Node;
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::{NodeId, SpanMapBuilder};
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx {
     pub source: Rope,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
+    /// Diagnostics collected during lowering.
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl AstLoweringCtx {
@@ -21,6 +24,7 @@ impl AstLoweringCtx {
         Self {
             source,
             span_builder: SpanMapBuilder::new(),
+            diagnostics: Vec::new(),
         }
     }
 
@@ -36,9 +40,19 @@ impl AstLoweringCtx {
         id
     }
 
-    /// Consume the context and return the span builder.
-    pub fn into_span_builder(self) -> SpanMapBuilder {
-        self.span_builder
+    /// Emit a diagnostic error.
+    pub fn error(&mut self, span: Span, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            message: message.into(),
+            span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::AstGeneration,
+        });
+    }
+
+    /// Consume the context and return the span builder and diagnostics.
+    pub fn finish(self) -> (SpanMapBuilder, Vec<Diagnostic>) {
+        (self.span_builder, self.diagnostics)
     }
 
     /// Get the text content of a node.

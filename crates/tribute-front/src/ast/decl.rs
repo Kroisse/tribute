@@ -77,8 +77,8 @@ pub struct ExternFuncDecl {
     pub abi: Symbol,
     /// Function parameters.
     pub params: Vec<ParamDecl>,
-    /// Return type annotation (optional).
-    pub return_ty: Option<TypeAnnotation>,
+    /// Return type annotation. Defaults to `Nil` when omitted.
+    pub return_ty: TypeAnnotation,
 }
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`

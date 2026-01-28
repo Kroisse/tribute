@@ -116,8 +116,8 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
-    /// Get the unit type.
-    pub fn unit_type(&self) -> Type<'db> {
+    /// Get the nil type.
+    pub fn nil_type(&self) -> Type<'db> {
         core::Nil::new(self.db).as_type()
     }
 
