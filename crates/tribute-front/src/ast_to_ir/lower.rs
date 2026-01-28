@@ -1169,8 +1169,14 @@ fn bind_pattern_fields<'db>(
         PatternKind::Wildcard | PatternKind::Literal(_) => {
             // No bindings needed
         }
+        PatternKind::Bind { local_id: None, .. } => {
+            // Bind pattern without local_id (e.g., from unresolved names) — no binding needed
+        }
         _ => {
-            // Other patterns (Record, Tuple, etc.) — no-op for now
+            unreachable!(
+                "unsupported pattern in bind_pattern_fields: {:?}",
+                pattern.kind
+            )
         }
     }
 }
