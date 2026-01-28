@@ -138,6 +138,9 @@ impl<'db> TypeChecker<'db> {
                 Decl::Enum(e) => {
                     self.collect_enum_def(e);
                 }
+                Decl::ExternFunction(func) => {
+                    self.collect_extern_function_signature(func);
+                }
                 Decl::Ability(_) | Decl::Use(_) => {
                     // Abilities and imports don't define types directly
                 }
@@ -200,6 +203,31 @@ impl<'db> TypeChecker<'db> {
         let scheme = TypeScheme::new(self.db(), vec![], func_ty);
 
         // Register the function with its FuncDefId
+        let func_id = FuncDefId::new(self.db(), func.name);
+        self.ctx.register_function(func_id, scheme);
+    }
+
+    /// Collect an extern function's type signature.
+    ///
+    /// Extern functions have no body, so we only need to register the type.
+    fn collect_extern_function_signature(&mut self, func: &crate::ast::ExternFuncDecl) {
+        let mut type_var_map = std::collections::HashMap::new();
+
+        let param_types: Vec<Type<'db>> = func
+            .params
+            .iter()
+            .map(|p| match &p.ty {
+                Some(ann) => self.annotation_to_type_with_type_vars(ann, &mut type_var_map),
+                None => self.ctx.fresh_type_var(),
+            })
+            .collect();
+
+        let return_ty = self.annotation_to_type_with_type_vars(&func.return_ty, &mut type_var_map);
+
+        let effect = EffectRow::pure(self.db());
+        let func_ty = self.ctx.func_type(param_types, return_ty, effect);
+        let scheme = TypeScheme::new(self.db(), vec![], func_ty);
+
         let func_id = FuncDefId::new(self.db(), func.name);
         self.ctx.register_function(func_id, scheme);
     }
@@ -514,6 +542,7 @@ impl<'db> TypeChecker<'db> {
     fn check_decl(&mut self, decl: Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
             Decl::Function(func) => Decl::Function(self.check_func_decl(func)),
+            Decl::ExternFunction(e) => Decl::ExternFunction(e),
             Decl::Struct(s) => Decl::Struct(self.check_struct_decl(s)),
             Decl::Enum(e) => Decl::Enum(self.check_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.check_ability_decl(a)),
@@ -1291,7 +1320,7 @@ fn apply_subst_to_decl<'db>(
                 body,
             })
         }
-        // Struct, Enum, Ability, Use don't contain TypedRefs
+        // ExternFunction, Struct, Enum, Ability, Use don't contain TypedRefs
         other => other,
     }
 }
@@ -2986,5 +3015,128 @@ mod tests {
     fn test_subst_bool_literal() {
         let db = test_db();
         assert!(test_subst_bool_literal_inner(&db));
+    }
+
+    // =========================================================================
+    // Extern Function Tests
+    // =========================================================================
+
+    #[salsa::tracked]
+    fn test_extern_function_signature_registered_inner(db: &dyn salsa::Database) -> bool {
+        let extern_fn = crate::ast::ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: true,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                crate::ast::ParamDecl {
+                    id: NodeId::from_raw(2),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: NodeId::from_raw(3),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: Some(LocalId::new(0)),
+                },
+                crate::ast::ParamDecl {
+                    id: NodeId::from_raw(4),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: NodeId::from_raw(5),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: Some(LocalId::new(1)),
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: NodeId::from_raw(6),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = Module {
+            id: fresh_node_id(),
+            name: None,
+            decls: vec![Decl::ExternFunction(extern_fn)],
+        };
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        // ExternFunction should pass through unchanged
+        assert_eq!(typed_module.decls.len(), 1);
+        assert!(matches!(&typed_module.decls[0], Decl::ExternFunction(_)));
+
+        if let Decl::ExternFunction(ef) = &typed_module.decls[0] {
+            assert!(ef.name == Symbol::new("__add"));
+            assert_eq!(ef.params.len(), 2);
+        } else {
+            panic!("Expected ExternFunction");
+        }
+
+        true
+    }
+
+    #[test]
+    fn test_extern_function_signature_registered() {
+        let db = test_db();
+        assert!(test_extern_function_signature_registered_inner(&db));
+    }
+
+    #[salsa::tracked]
+    fn test_extern_function_with_regular_function_inner(db: &dyn salsa::Database) -> bool {
+        // Module with extern fn + regular fn that calls it via variable reference
+        let extern_fn = crate::ast::ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: true,
+            name: Symbol::new("__negate"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![crate::ast::ParamDecl {
+                id: NodeId::from_raw(10),
+                name: Symbol::new("x"),
+                ty: Some(TypeAnnotation {
+                    id: NodeId::from_raw(11),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }),
+                local_id: Some(LocalId::new(0)),
+            }],
+            return_ty: TypeAnnotation {
+                id: NodeId::from_raw(12),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        // Regular function: fn main() { 42 }
+        let regular_fn = FuncDecl {
+            id: NodeId::from_raw(20),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![],
+            return_ty: None,
+            effects: None,
+            body: Expr::new(NodeId::from_raw(21), ExprKind::NatLit(42)),
+        };
+
+        let module = Module {
+            id: fresh_node_id(),
+            name: None,
+            decls: vec![Decl::ExternFunction(extern_fn), Decl::Function(regular_fn)],
+        };
+
+        let checker = TypeChecker::new(db);
+        let typed_module = checker.check_module(module);
+
+        assert_eq!(typed_module.decls.len(), 2);
+        assert!(matches!(&typed_module.decls[0], Decl::ExternFunction(_)));
+        assert!(matches!(&typed_module.decls[1], Decl::Function(_)));
+
+        true
+    }
+
+    #[test]
+    fn test_extern_function_with_regular_function() {
+        let db = test_db();
+        assert!(test_extern_function_with_regular_function_inner(&db));
     }
 }

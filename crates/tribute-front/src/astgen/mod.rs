@@ -35,6 +35,7 @@ pub use patterns::lower_pattern;
 struct LoweringResult {
     module: Module<UnresolvedName>,
     span_builder: SpanMapBuilder,
+    diagnostics: Vec<tribute_core::diagnostic::Diagnostic>,
 }
 
 /// Lower a parsed CST to an AST Module (internal, non-Salsa).
@@ -49,10 +50,11 @@ fn lower_cst_to_ast_internal(
     let mut ctx = AstLoweringCtx::new(source.clone());
     let root = cst.root_node();
     let module = lower_module(&mut ctx, root, module_name);
-    let span_builder = ctx.into_span_builder();
+    let (span_builder, diagnostics) = ctx.finish();
     LoweringResult {
         module,
         span_builder,
+        diagnostics,
     }
 }
 
@@ -88,10 +90,15 @@ pub fn lower_source_to_parsed_ast<'db>(
 ) -> Option<ParsedAst<'db>> {
     use crate::tirgen::parse_cst;
 
+    use salsa::Accumulator;
+
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let module_name = derive_module_name_from_uri(source.uri(db));
     let result = lower_cst_to_ast_internal(text, &cst, module_name);
+    for diag in result.diagnostics {
+        diag.accumulate(db);
+    }
     let span_map = result.span_builder.finish();
     Some(ParsedAst::new(db, result.module, span_map))
 }
@@ -2099,5 +2106,74 @@ mod tests {
             panic!("Expected Tuple, got {:?}", field_ty.kind);
         };
         assert_eq!(elements.len(), 2);
+    }
+
+    // =============================================================================
+    // Extern Function Tests
+    // =============================================================================
+
+    #[test]
+    fn test_extern_function_with_abi() {
+        let source = r#"extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int"#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "__bytes_len");
+        assert_eq!(func.abi.to_string(), "intrinsic");
+        assert_eq!(func.params.len(), 1);
+        assert_eq!(func.params[0].name.to_string(), "bytes");
+        assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Int"));
+    }
+
+    #[test]
+    fn test_extern_function_default_abi() {
+        let source = "extern fn foreign(x: Int) -> Int";
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "foreign");
+        assert_eq!(func.abi.to_string(), "C");
+    }
+
+    #[test]
+    fn test_extern_function_no_return_type() {
+        let source = r#"extern "intrinsic" fn __print_line(message: String)"#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 1);
+        let Decl::ExternFunction(func) = &module.decls[0] else {
+            panic!(
+                "Expected extern function declaration, got {:?}",
+                module.decls[0]
+            );
+        };
+        assert_eq!(func.name.to_string(), "__print_line");
+        // Omitted return type defaults to Nil
+        assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Nil"));
+    }
+
+    #[test]
+    fn test_extern_and_regular_functions_coexist() {
+        let source = r#"
+            extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int
+            fn len(bytes: Bytes) -> Int { __bytes_len(bytes) }
+        "#;
+        let module = parse_and_lower(source);
+
+        assert_eq!(module.decls.len(), 2);
+        assert!(matches!(&module.decls[0], Decl::ExternFunction(_)));
+        assert!(matches!(&module.decls[1], Decl::Function(_)));
     }
 }

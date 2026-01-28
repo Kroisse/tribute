@@ -154,6 +154,7 @@ impl<'db> Resolver<'db> {
     fn resolve_decl(&mut self, decl: Decl<UnresolvedName>) -> Decl<ResolvedRef<'db>> {
         match decl {
             Decl::Function(f) => Decl::Function(self.resolve_func_decl(f)),
+            Decl::ExternFunction(e) => Decl::ExternFunction(e),
             Decl::Struct(s) => Decl::Struct(self.resolve_struct_decl(s)),
             Decl::Enum(e) => Decl::Enum(self.resolve_enum_decl(e)),
             Decl::Ability(a) => Decl::Ability(self.resolve_ability_decl(a)),

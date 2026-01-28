@@ -19,4 +19,5 @@ tribute-ir.workspace = true
 trunk-ir.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 salsa-test-macros = { workspace = true }

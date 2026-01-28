@@ -9,9 +9,9 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
-    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, LocalId,
-    Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl,
-    TypedRef,
+    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm,
+    HandlerKind, LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap,
+    Stmt, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -461,6 +461,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
         match decl {
             Decl::Function(func) => self.collect_func(func),
+            Decl::ExternFunction(func) => self.collect_extern_func(func),
             Decl::Struct(s) => self.collect_struct(s),
             Decl::Enum(e) => self.collect_enum(e),
             Decl::Ability(a) => self.collect_ability(a),
@@ -487,6 +488,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
         // Collect references in body
         self.collect_expr(&func.body);
+    }
+
+    fn collect_extern_func(&mut self, func: &ExternFuncDecl) {
+        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+
+        for param in &func.params {
+            self.collect_param(param);
+        }
     }
 
     fn collect_param(&mut self, param: &ParamDecl) {
@@ -1977,5 +1986,53 @@ struct Rect { x: Int, width: Int }"#,
                 r.target
             );
         }
+    }
+
+    #[test]
+    fn test_definition_index_extern_function() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
+
+        let index = definition_index(&db, source);
+        assert!(
+            index.is_some(),
+            "Should build definition index for extern function"
+        );
+
+        let index = index.unwrap();
+
+        // Extern function should be registered as a definition
+        let add_def = index.definition_of(&db, trunk_ir::Symbol::new("__add"));
+        assert!(
+            add_def.is_some(),
+            "Extern function should have a definition entry"
+        );
+        assert_eq!(add_def.unwrap().kind, DefinitionKind::Function);
+    }
+
+    #[test]
+    fn test_definition_index_extern_function_params() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int"#);
+
+        let index = definition_index(&db, source);
+        assert!(index.is_some());
+
+        let index = index.unwrap();
+
+        // Parameters of extern functions should be registered
+        let a_def = index.definition_of(&db, trunk_ir::Symbol::new("a"));
+        assert!(
+            a_def.is_some(),
+            "Extern function param 'a' should be defined"
+        );
+        assert_eq!(a_def.unwrap().kind, DefinitionKind::Parameter);
+
+        let b_def = index.definition_of(&db, trunk_ir::Symbol::new("b"));
+        assert!(
+            b_def.is_some(),
+            "Extern function param 'b' should be defined"
+        );
+        assert_eq!(b_def.unwrap().kind, DefinitionKind::Parameter);
     }
 }

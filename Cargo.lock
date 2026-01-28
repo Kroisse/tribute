@@ -1199,6 +1199,7 @@ name = "tribute-front"
 version = "0.1.0"
 dependencies = [
  "fluent-uri",
+ "insta",
  "ropey",
  "salsa",
  "salsa-test-macros",

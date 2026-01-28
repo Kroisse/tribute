@@ -10,8 +10,8 @@ use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::{Attribute, DialectType, Location, PathId, Symbol};
 
 use crate::ast::{
-    Decl, Expr, ExprKind, FuncDecl, Module, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
+    Decl, Expr, ExprKind, ExternFuncDecl, FuncDecl, Module, ResolvedRef, SpanMap, Stmt,
+    TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -46,6 +46,7 @@ fn lower_decl<'db>(
 ) {
     match decl {
         Decl::Function(func) => lower_function(ctx, top, func),
+        Decl::ExternFunction(func) => lower_extern_function(ctx, top, func),
         Decl::Struct(_) => {
             // TODO: Lower struct declarations
         }
@@ -128,13 +129,68 @@ fn lower_function<'db>(
                 let unit = body.op(arith::r#const(
                     ctx.db,
                     location,
-                    ctx.unit_type(),
+                    ctx.nil_type(),
                     Attribute::Unit,
                 ));
                 body.op(func::Return::value(ctx.db, location, unit.result(ctx.db)));
             }
 
             ctx.exit_scope();
+        },
+    );
+
+    top.op(func_op);
+}
+
+/// Lower an extern function declaration.
+///
+/// Extern functions have no body; we emit `func.func` with an empty body
+/// containing `func.unreachable`.
+fn lower_extern_function<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    top: &mut trunk_ir::BlockBuilder<'db>,
+    func: ExternFuncDecl,
+) {
+    let location = ctx.location(func.id);
+    let func_name = func.name;
+
+    // Derive types from the TypeScheme registered during type checking.
+    // Extern functions always have a TypeScheme from collect_extern_function_signature.
+    let (param_ir_types, return_ty) = {
+        let scheme = ctx
+            .lookup_function_type(func_name)
+            .cloned()
+            .expect("extern function should have TypeScheme from type checking");
+        let body = scheme.body(ctx.db);
+        match body.kind(ctx.db) {
+            TypeKind::Func { params, result, .. } => {
+                let p: Vec<_> = params.iter().map(|t| ctx.convert_type(*t)).collect();
+                let r = ctx.convert_type(*result);
+                (p, r)
+            }
+            other => {
+                unreachable!("extern function `{func_name}` has non-function TypeScheme: {other:?}")
+            }
+        }
+    };
+
+    let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = param_ir_types
+        .into_iter()
+        .zip(func.params.iter())
+        .map(|(ty, p)| (ty, Some(p.name)))
+        .collect();
+
+    let func_op = func::Func::build_with_named_params(
+        ctx.db,
+        location,
+        func_name,
+        None,
+        params,
+        return_ty,
+        None,
+        |body, _arg_values| {
+            // Extern functions have no body — emit unreachable
+            body.op(func::unreachable(ctx.db, location));
         },
     );
 
@@ -232,13 +288,13 @@ fn lower_expr<'db>(
             }
             .accumulate(ctx.db);
             // Return unit as placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
 
         ExprKind::Nil => {
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -287,7 +343,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -300,7 +356,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -313,7 +369,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -326,7 +382,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -339,7 +395,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -352,7 +408,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -365,7 +421,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -378,7 +434,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -391,7 +447,7 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -404,14 +460,14 @@ fn lower_expr<'db>(
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(ctx.db);
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
 
         ExprKind::Error => {
             // Error expression from parsing - just return unit placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
@@ -513,7 +569,7 @@ fn lower_binop<'db>(
             }
             .accumulate(ctx.db);
             // Return unit as placeholder
-            let ty = ctx.unit_type();
+            let ty = ctx.nil_type();
             block
                 .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
                 .result(ctx.db)
@@ -591,7 +647,7 @@ fn fallback_from_annotations<'db>(
         .return_ty
         .as_ref()
         .map(|ann| convert_annotation_to_ir_type(ctx, Some(ann)))
-        .unwrap_or_else(|| ctx.unit_type());
+        .unwrap_or_else(|| ctx.nil_type());
     (params, ret)
 }
 
@@ -625,21 +681,21 @@ fn convert_annotation_to_ir_type<'db>(
                 // Rune is a Unicode code point, represented as i32
                 core::I32::new(ctx.db).as_type()
             } else if *name == "()" {
-                ctx.unit_type()
+                ctx.nil_type()
             } else {
                 // Unknown named type - use placeholder
-                ctx.unit_type()
+                ctx.nil_type()
             }
         }
         TypeAnnotationKind::Path(_) => {
             // Qualified path - use placeholder for now
-            ctx.unit_type()
+            ctx.nil_type()
         }
         TypeAnnotationKind::App { ctor, .. } => {
             // Parameterized type - convert the constructor
             convert_annotation_to_ir_type(ctx, Some(ctor))
         }
-        _ => ctx.unit_type(),
+        _ => ctx.nil_type(),
     }
 }
 
@@ -650,6 +706,7 @@ mod tests {
         BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, LocalId, Module, NodeId, ParamDecl,
         Pattern, PatternKind, ResolvedRef, Stmt, Type as AstType, TypeKind, TypedRef,
     };
+    use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::func;
@@ -1558,5 +1615,390 @@ mod tests {
             2,
             "Underflow IntLit should result in unit return only"
         );
+    }
+
+    // ========================================================================
+    // Extern Function Lowering Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_lower_extern_function_basic(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern "intrinsic" fn __add(a: Int, b: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        // Create TypeScheme: fn(Int, Int) -> Int
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should produce a func.func operation
+        let func_op = ops.iter().find(|op| op.name(db) == "func");
+        assert!(func_op.is_some(), "Should have a func operation");
+
+        let func_typed = func::Func::from_operation(db, *func_op.unwrap()).unwrap();
+        assert_eq!(func_typed.sym_name(db), Symbol::new("__add"));
+
+        // Body should contain only func.unreachable
+        let body_ops = get_func_body_ops(db, &func_typed);
+        assert_eq!(
+            body_ops.len(),
+            1,
+            "Extern func body should have only unreachable"
+        );
+        assert_eq!(body_ops[0].dialect(db), "func");
+        assert_eq!(body_ops[0].name(db), "unreachable");
+    }
+
+    #[salsa_test]
+    fn test_lower_extern_function_type(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern fn __negate(x: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__negate"),
+            abi: Symbol::new("C"),
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("x"),
+                ty: Some(TypeAnnotation {
+                    id: fresh_node_id(),
+                    kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                }),
+                local_id: None,
+            }],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        // Create TypeScheme: fn(Int) -> Int
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__negate"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+
+        // Verify the function type: fn(i64) -> i64
+        let func_ir_ty = func_typed.r#type(db);
+        let i64_ty = trunk_ir::dialect::core::I64::new(db).as_type();
+        let expected_ty =
+            trunk_ir::dialect::core::Func::new(db, vec![i64_ty].into(), i64_ty).as_type();
+        assert_eq!(func_ir_ty, expected_ty);
+    }
+
+    #[salsa_test]
+    fn test_lower_module_with_extern_and_regular_functions(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // extern fn __add(a: Int, b: Int) -> Int
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        // fn main() { 42 }
+        let regular_func = simple_func(Symbol::new("main"), int_lit_expr(42));
+
+        let module = simple_module(vec![
+            Decl::ExternFunction(extern_func),
+            Decl::Function(regular_func),
+        ]);
+
+        // TypeScheme for __add
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module = test_lower_with_scheme(db, path, span_map, module, scheme_entries);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have 2 function operations
+        let func_ops: Vec<_> = ops.iter().filter(|op| op.name(db) == "func").collect();
+        assert_eq!(func_ops.len(), 2, "Should have extern + regular function");
+    }
+
+    // ========================================================================
+    // Snapshot Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_snapshot_nat_literal(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            nat_lit_expr(42),
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_binop_add(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let add_expr = binop_expr(BinOpKind::Add, int_lit_expr(10), int_lit_expr(20));
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            add_expr,
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_let_binding(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let x_name = Symbol::new("x");
+        let local_id = LocalId::new(0);
+        let let_x = let_stmt(local_id, x_name, int_lit_expr(10));
+        let x_ref = local_ref(db, local_id, x_name);
+        let x_plus_5 = binop_expr(BinOpKind::Add, var_expr(x_ref), int_lit_expr(5));
+        let block = block_expr(vec![let_x], x_plus_5);
+
+        let module = simple_module(vec![Decl::Function(simple_func(
+            Symbol::new("main"),
+            block,
+        ))]);
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_extern_function(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let module = simple_module(vec![Decl::ExternFunction(extern_func)]);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module =
+            test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
+        assert_debug_snapshot!(ir_module);
+    }
+
+    #[salsa_test]
+    fn test_snapshot_mixed_module(db: &salsa::DatabaseImpl) {
+        use crate::ast::{
+            EffectRow, ExternFuncDecl, Type as AstType, TypeAnnotation, TypeAnnotationKind,
+            TypeKind, TypeScheme,
+        };
+
+        let path = PathId::new(db, "test.trb".to_owned());
+
+        let extern_func = ExternFuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("__add"),
+            abi: Symbol::new("intrinsic"),
+            params: vec![
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("a"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+                ParamDecl {
+                    id: fresh_node_id(),
+                    name: Symbol::new("b"),
+                    ty: Some(TypeAnnotation {
+                        id: fresh_node_id(),
+                        kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                    }),
+                    local_id: None,
+                },
+            ],
+            return_ty: TypeAnnotation {
+                id: fresh_node_id(),
+                kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+            },
+        };
+
+        let regular_func = simple_func(Symbol::new("main"), nat_lit_expr(42));
+
+        let module = simple_module(vec![
+            Decl::ExternFunction(extern_func),
+            Decl::Function(regular_func),
+        ]);
+
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+        let func_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![], func_ty);
+        let scheme_entries = vec![(Symbol::new("__add"), scheme)];
+
+        let ir_module =
+            test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
+        assert_debug_snapshot!(ir_module);
     }
 }

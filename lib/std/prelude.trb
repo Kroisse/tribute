@@ -160,10 +160,9 @@ pub mod Bytes {
     /// Get the byte at the given index.
     /// Returns None if index is out of bounds.
     pub fn get(bytes: Bytes, index: Int) -> Option(Int) {
-        if index >= 0 && index < bytes.len() {
-            Some(bytes.get_or_panic(index))
-        } else {
-            None
+        case index >= 0 && index < bytes.len() {
+            True -> Some(bytes.get_or_panic(index))
+            False -> None
         }
     }
 
@@ -171,8 +170,16 @@ pub mod Bytes {
     /// Clamps start and end to valid bounds.
     pub fn slice(bytes: Bytes, start: Int, end: Int) -> Bytes {
         let len = bytes.len()
-        let s = if start < 0 { 0 } else if start > len { len } else { start }
-        let e = if end < s { s } else if end > len { len } else { end }
+        let s = case #(start < 0, start > len) {
+            #(True, _) -> 0
+            #(False, True) -> len
+            _ -> start
+        }
+        let e = case #(end < s, end > len) {
+            #(True, _) -> s
+            #(False, True) -> len
+            _ -> end
+        }
         bytes.slice_or_panic(s, e)
     }
 }
