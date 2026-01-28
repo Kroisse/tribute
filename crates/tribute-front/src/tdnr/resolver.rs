@@ -12,6 +12,27 @@ use crate::ast::{
     ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
 
+/// Build a qualified name for a struct field accessor.
+///
+/// This ensures that FuncDefIds are unique across modules.
+/// For example, `foo::Point::x` instead of just `x` or `Point::x`.
+fn build_qualified_field_name(
+    module_path: &[Symbol],
+    type_name: Symbol,
+    field_name: Symbol,
+) -> Symbol {
+    if module_path.is_empty() {
+        Symbol::from_dynamic(&format!("{}::{}", type_name, field_name))
+    } else {
+        let path_str = module_path
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        Symbol::from_dynamic(&format!("{}::{}::{}", path_str, type_name, field_name))
+    }
+}
+
 /// TDNR resolver for AST expressions.
 ///
 /// Resolves method calls by finding functions where the first parameter
@@ -61,11 +82,13 @@ impl<'db> TdnrResolver<'db> {
     /// This indexes functions by their first parameter's type name,
     /// enabling efficient UFCS resolution.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
-        self.index_decls(&module.decls);
+        // Build module path from the module name (if any)
+        let module_path: Vec<Symbol> = module.name.into_iter().collect();
+        self.index_decls(&module.decls, &module_path);
     }
 
     /// Recursively index declarations, including nested modules.
-    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>]) {
+    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>], module_path: &[Symbol]) {
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
@@ -111,7 +134,10 @@ impl<'db> TdnrResolver<'db> {
                         };
 
                         // Create synthetic FuncDefId for the accessor
-                        let func_id = FuncDefId::new(self.db, field_name);
+                        // Use qualified name to avoid collisions across modules
+                        let qualified_name =
+                            build_qualified_field_name(module_path, struct_name, field_name);
+                        let func_id = FuncDefId::new(self.db, qualified_name);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
                         // Note: Reusing struct's NodeId for synthetic type annotation.
@@ -141,7 +167,10 @@ impl<'db> TdnrResolver<'db> {
                 }
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
-                        self.index_decls(body);
+                        // Build nested module path by appending current module name
+                        let mut nested_path = module_path.to_vec();
+                        nested_path.push(m.name);
+                        self.index_decls(body, &nested_path);
                     }
                 }
                 _ => {}

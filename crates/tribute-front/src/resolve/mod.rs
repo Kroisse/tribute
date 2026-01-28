@@ -24,6 +24,27 @@ use trunk_ir::Symbol;
 
 use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
 
+/// Build a qualified name for a struct field or ability operation.
+///
+/// This ensures that FuncDefIds are unique across modules.
+/// For example, `foo::Point::x` instead of just `x` or `Point::x`.
+fn build_qualified_field_name(
+    module_path: &[Symbol],
+    type_name: Symbol,
+    field_name: Symbol,
+) -> Symbol {
+    if module_path.is_empty() {
+        Symbol::from_dynamic(&format!("{}::{}", type_name, field_name))
+    } else {
+        let path_str = module_path
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        Symbol::from_dynamic(&format!("{}::{}::{}", path_str, type_name, field_name))
+    }
+}
+
 /// Resolve names in a module.
 ///
 /// This is the main entry point for name resolution.
@@ -44,8 +65,11 @@ pub fn resolve_module<'db>(
 fn build_env<'db>(db: &'db dyn salsa::Database, module: &Module<UnresolvedName>) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
+    // Build module path from the module name (if any)
+    let module_path: Vec<Symbol> = module.name.into_iter().collect();
+
     for decl in &module.decls {
-        collect_definition(db, &mut env, decl);
+        collect_definition(db, &mut env, decl, &module_path);
     }
 
     env
@@ -56,6 +80,7 @@ fn collect_definition<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
     decl: &Decl<UnresolvedName>,
+    module_path: &[Symbol],
 ) {
     match decl {
         Decl::Function(func) => {
@@ -78,7 +103,11 @@ fn collect_definition<'db>(
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
             for field in &s.fields {
                 if let Some(field_name) = field.name {
-                    let func_id = FuncDefId::new(db, field_name);
+                    // Build qualified name to avoid FuncDefId collisions across modules
+                    // e.g., "foo::Point::x" instead of just "x"
+                    let qualified_name =
+                        build_qualified_field_name(module_path, s.name, field_name);
+                    let func_id = FuncDefId::new(db, qualified_name);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
                     env.add_to_namespace(s.name, field_name, binding);
@@ -114,10 +143,10 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
-                let func_id = FuncDefId::new(
-                    db,
-                    Symbol::from_dynamic(&format!("{}::{}", a.name, op.name)),
-                );
+                // Build qualified name to avoid FuncDefId collisions across modules
+                // e.g., "foo::MyAbility::op" instead of just "MyAbility::op"
+                let qualified_name = build_qualified_field_name(module_path, a.name, op.name);
+                let func_id = FuncDefId::new(db, qualified_name);
                 let binding = Binding::Function { id: func_id };
                 env.add_to_namespace(a.name, op.name, binding);
             }
@@ -138,10 +167,14 @@ fn collect_definition<'db>(
             // For inline modules, collect bindings into a temporary environment
             // then register them under the module's namespace
             if let Some(body) = &m.body {
+                // Build nested module path by appending current module name
+                let mut nested_path = module_path.to_vec();
+                nested_path.push(m.name);
+
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
                 for inner_decl in body {
-                    collect_definition(db, &mut inner_env, inner_decl);
+                    collect_definition(db, &mut inner_env, inner_decl, &nested_path);
                 }
 
                 // Register each inner definition under the module's namespace
