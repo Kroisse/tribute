@@ -89,10 +89,13 @@ cargo run --bin trbi -- <file.trb>
 cargo run --bin trbc -- <file.trb>
 ```
 
-## Tree-sitter Grammar Development (Repo Tooling)
+## Tree-sitter Grammar Development
+
+The grammar source of truth is in a separate repository:
+https://github.com/Kroisse/tree-sitter-tribute/blob/main/grammar.js
 
 ```bash
-# Manual generation: run from crates/tree-sitter-tribute/
+# Manual generation: run from the tree-sitter-tribute repo
 tree-sitter generate
 tree-sitter test
 tree-sitter build-wasm
