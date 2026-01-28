@@ -97,9 +97,6 @@ where
         spread: Option<Expr<V>>,
     },
 
-    /// Field access: `expr.field`
-    FieldAccess { expr: Expr<V>, field: Symbol },
-
     /// Method call: `expr.method(args)`
     ///
     /// This is kept separate from Call during parsing for TDNR.

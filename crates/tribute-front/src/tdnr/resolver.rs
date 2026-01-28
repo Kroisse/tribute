@@ -9,7 +9,7 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
-    ResolvedRef, Stmt, Type, TypedRef,
+    ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
 
 /// TDNR resolver for AST expressions.
@@ -96,6 +96,46 @@ impl<'db> TdnrResolver<'db> {
                         .entry((type_name, func_name))
                         .or_default()
                         .push((func_id, func_ty));
+                }
+                Decl::Struct(s) => {
+                    // Register each field as an accessor method
+                    // e.g., struct Point { x: Int, y: Int } registers:
+                    //   - (Point, x) → fn x(self: Point) -> Int
+                    //   - (Point, y) → fn y(self: Point) -> Int
+
+                    let struct_name = s.name;
+
+                    for field in &s.fields {
+                        let Some(field_name) = field.name else {
+                            continue; // Skip unnamed fields
+                        };
+
+                        // Create synthetic FuncDefId for the accessor
+                        let func_id = FuncDefId::new(self.db, field_name);
+
+                        // Build accessor function type: fn(self: StructType) -> FieldType
+                        let self_ty = self.annotation_to_type(&Some(TypeAnnotation {
+                            id: s.id,
+                            kind: TypeAnnotationKind::Named(struct_name),
+                        }));
+                        let field_ty = self.annotation_to_type(&Some(field.ty.clone()));
+
+                        let effect = crate::ast::EffectRow::pure(self.db);
+                        let func_ty = Type::new(
+                            self.db,
+                            TypeKind::Func {
+                                params: vec![self_ty],
+                                result: field_ty,
+                                effect,
+                            },
+                        );
+
+                        // Register in method index
+                        self.method_index
+                            .entry((struct_name, field_name))
+                            .or_default()
+                            .push((func_id, func_ty));
+                    }
                 }
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
@@ -342,11 +382,6 @@ impl<'db> TdnrResolver<'db> {
                 spread: spread.map(|e| self.resolve_expr(e)),
             },
 
-            ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
-                expr: self.resolve_expr(expr),
-                field,
-            },
-
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op,
                 lhs: self.resolve_expr(lhs),
@@ -461,10 +496,6 @@ impl<'db> TdnrResolver<'db> {
                     Some(ctor.ty)
                 }
             }
-
-            // For field access, the type would be the field's type (not available here)
-            // We'd need a type map to look this up
-            ExprKind::FieldAccess { .. } => None,
 
             // For Call expressions, the return type of the callee would be needed
             // This requires looking at the callee's function type

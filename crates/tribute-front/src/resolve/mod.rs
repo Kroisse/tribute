@@ -73,6 +73,17 @@ fn collect_definition<'db>(
             let ctor_id = CtorId::new(db, s.name);
             env.add_type(s.name, ctor_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
+
+            // Register field accessors in struct's namespace
+            // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
+            for field in &s.fields {
+                if let Some(field_name) = field.name {
+                    let func_id = FuncDefId::new(db, field_name);
+                    let binding = Binding::Function { id: func_id };
+                    // Add to namespace (e.g., Point::x)
+                    env.add_to_namespace(s.name, field_name, binding);
+                }
+            }
         }
 
         Decl::Enum(e) => {
@@ -588,5 +599,72 @@ mod tests {
 
         let input = TestModuleInput::new(db, module);
         verify_extern_function_registered(db, input);
+    }
+
+    #[salsa::tracked]
+    fn verify_struct_field_accessors_in_namespace(
+        db: &dyn salsa::Database,
+        input: TestModuleInput,
+    ) {
+        let env = build_env(db, input.module(db));
+
+        // Point::x should be registered as a function
+        let point_x = env.lookup_qualified(Symbol::new("Point"), Symbol::new("x"));
+        assert!(
+            point_x.is_some(),
+            "Point::x accessor should be in namespace"
+        );
+        assert!(
+            matches!(point_x, Some(Binding::Function { .. })),
+            "Point::x should be a function binding"
+        );
+
+        // Point::y should be registered as a function
+        let point_y = env.lookup_qualified(Symbol::new("Point"), Symbol::new("y"));
+        assert!(
+            point_y.is_some(),
+            "Point::y accessor should be in namespace"
+        );
+        assert!(
+            matches!(point_y, Some(Binding::Function { .. })),
+            "Point::y should be a function binding"
+        );
+    }
+
+    #[salsa_test]
+    fn test_struct_field_accessors_in_namespace(db: &dyn salsa::Database) {
+        let module = Module::new(
+            fresh_node_id(),
+            Some(Symbol::new("test")),
+            vec![Decl::Struct(StructDecl {
+                id: fresh_node_id(),
+                is_pub: false,
+                name: Symbol::new("Point"),
+                type_params: vec![],
+                fields: vec![
+                    FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: Some(Symbol::new("x")),
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                        },
+                    },
+                    FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: Some(Symbol::new("y")),
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                        },
+                    },
+                ],
+            })],
+        );
+
+        let input = TestModuleInput::new(db, module);
+        verify_struct_field_accessors_in_namespace(db, input);
     }
 }

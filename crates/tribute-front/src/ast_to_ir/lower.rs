@@ -490,7 +490,6 @@ fn lower_expr<'db>(
 
         // === Expressions not yet implemented ===
         ExprKind::Record { .. } => builder.emit_unsupported(location, "record construction"),
-        ExprKind::FieldAccess { .. } => builder.emit_unsupported(location, "field access"),
         ExprKind::MethodCall { .. } => {
             unreachable!("MethodCall should be desugared before IR lowering")
         }

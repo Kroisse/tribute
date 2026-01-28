@@ -771,16 +771,13 @@ mod tests {
             panic!("Expected block");
         };
         assert_eq!(stmts.len(), 1);
-        // Value expression may be field access or method call
+        // Value expression should be a method call now (field access is syntactic sugar)
         match value.kind.as_ref() {
-            ExprKind::FieldAccess { field, .. } => {
-                assert_eq!(field.to_string(), "x");
-            }
             ExprKind::MethodCall { method, .. } => {
                 assert_eq!(method.to_string(), "x");
             }
             _ => {
-                // Field access might be parsed differently - verify it parses
+                // Field access is now desugared to method call
             }
         }
     }
