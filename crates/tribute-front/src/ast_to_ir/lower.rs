@@ -527,11 +527,10 @@ fn lower_expr<'db>(
             let fields_region = Region::new(db, location, idvec![fields_block.build()]);
 
             // Spread base (optional)
-            let base: Vec<trunk_ir::Value<'db>> = spread
-                .as_ref()
-                .and_then(|s| lower_expr(builder, s.clone()))
-                .into_iter()
-                .collect();
+            let base: Vec<trunk_ir::Value<'db>> = match &spread {
+                Some(s) => vec![lower_expr(builder, s.clone())?],
+                None => vec![],
+            };
 
             // Extract type name from TypedRef
             let type_name_sym = extract_type_name(db, &type_name.resolved);
@@ -884,6 +883,17 @@ fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'
 // Case Expression Lowering
 // =============================================================================
 
+/// Check if a pattern is unconditional (always matches without runtime checks).
+///
+/// Returns true for `_` (wildcard) and `x` (bind) patterns, which match any value.
+/// Returns false for patterns that require runtime checks (variant, literal, etc.).
+fn is_unconditional_pattern(pattern: &Pattern<TypedRef<'_>>) -> bool {
+    matches!(
+        &*pattern.kind,
+        PatternKind::Wildcard | PatternKind::Bind { .. }
+    )
+}
+
 /// Lower a case expression as a chain of scf.if operations.
 ///
 /// Pattern: `case scrutinee { p1 => e1, p2 => e2, ... }` becomes a nested
@@ -903,8 +913,9 @@ fn lower_case_chain<'db>(
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
-        [last] => {
-            // Single arm — bind pattern and lower body directly (no scf.if needed)
+        [last] if last.guard.is_none() && is_unconditional_pattern(&last.pattern) => {
+            // Single unconditional arm (wildcard or bind, no guard)
+            // — bind pattern and lower body directly (no scf.if needed)
             ctx.enter_scope();
             bind_pattern_fields(ctx, block, location, scrutinee, &last.pattern);
             let result = {
@@ -923,36 +934,14 @@ fn lower_case_chain<'db>(
                 emit_pattern_check(&mut builder, location, scrutinee, &first.pattern)
             }?;
 
-            // 2. Handle guard condition (if present)
-            let cond = if let Some(guard_expr) = &first.guard {
-                // Guard evaluation needs pattern bindings in scope
-                ctx.enter_scope();
-                bind_pattern_fields(ctx, block, location, scrutinee, &first.pattern);
-                let guard_cond = {
-                    let mut builder = IrBuilder::new(ctx, block);
-                    lower_expr(&mut builder, guard_expr.clone())
-                };
-                ctx.exit_scope();
-
-                let guard_cond = guard_cond?;
-
-                // Combine: pattern_cond && guard_cond
-                let bool_ty = ctx.bool_type();
-                block
-                    .op(arith::and(
-                        ctx.db,
-                        location,
-                        pattern_cond,
-                        guard_cond,
-                        bool_ty,
-                    ))
-                    .result(ctx.db)
+            // 2. Build then region (handles guard internally if present)
+            let then_region = if let Some(guard_expr) = &first.guard {
+                build_guarded_arm_region(
+                    ctx, location, scrutinee, first, guard_expr, result_ty, rest,
+                )
             } else {
-                pattern_cond
+                build_arm_region(ctx, location, scrutinee, first, result_ty)
             };
-
-            // 3. Build then region
-            let then_region = build_arm_region(ctx, location, scrutinee, first, result_ty);
 
             // 3. Build else region (recursive)
             let else_region = build_else_chain_region(ctx, location, scrutinee, result_ty, rest);
@@ -961,7 +950,7 @@ fn lower_case_chain<'db>(
             let if_op = block.op(scf::r#if(
                 ctx.db,
                 location,
-                cond,
+                pattern_cond,
                 result_ty,
                 then_region,
                 else_region,
@@ -1068,6 +1057,86 @@ fn emit_literal_check<'db>(
             unreachable!("unsupported literal pattern in IR lowering: {:?}", lit)
         }
     }
+}
+
+/// Build a region for a case arm with a guard condition.
+///
+/// This creates a nested `scf.if` structure:
+/// - Outer region: pattern bindings + guard evaluation + inner if
+/// - Inner if: guard succeeded → arm body, guard failed → fall through to rest
+///
+/// This ensures `bind_pattern_fields` (which may emit `variant_cast`) is only
+/// executed inside the pattern-matched region, not unconditionally.
+fn build_guarded_arm_region<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    scrutinee: trunk_ir::Value<'db>,
+    arm: &Arm<TypedRef<'db>>,
+    guard_expr: &Expr<TypedRef<'db>>,
+    result_ty: trunk_ir::Type<'db>,
+    rest: &[Arm<TypedRef<'db>>],
+) -> Region<'db> {
+    let mut block = BlockBuilder::new(ctx.db, location);
+
+    // 1. Bind pattern fields (now safe — we're inside pattern-matched region)
+    ctx.enter_scope();
+    bind_pattern_fields(ctx, &mut block, location, scrutinee, &arm.pattern);
+
+    // 2. Evaluate guard condition
+    let guard_cond = {
+        let mut builder = IrBuilder::new(ctx, &mut block);
+        lower_expr(&mut builder, guard_expr.clone())
+    };
+
+    let guard_cond = guard_cond.unwrap_or_else(|| {
+        // Guard lowering failed — emit false to skip this arm
+        let bool_ty = ctx.bool_type();
+        block
+            .op(arith::r#const(
+                ctx.db,
+                location,
+                bool_ty,
+                Attribute::Bool(false),
+            ))
+            .result(ctx.db)
+    });
+
+    // 3. Build inner then region (arm body)
+    let inner_then_region = {
+        let mut inner_block = BlockBuilder::new(ctx.db, location);
+        let result = {
+            let mut builder = IrBuilder::new(ctx, &mut inner_block);
+            lower_expr(&mut builder, arm.body.clone())
+        };
+        let yield_val = result.unwrap_or_else(|| {
+            let ty = core::Nil::new(ctx.db).as_type();
+            inner_block
+                .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
+                .result(ctx.db)
+        });
+        inner_block.op(scf::r#yield(ctx.db, location, vec![yield_val]));
+        Region::new(ctx.db, location, idvec![inner_block.build()])
+    };
+
+    ctx.exit_scope();
+
+    // 4. Build inner else region (fall through to remaining arms)
+    let inner_else_region = build_else_chain_region(ctx, location, scrutinee, result_ty, rest);
+
+    // 5. Emit inner scf.if for guard
+    let inner_if_op = block.op(scf::r#if(
+        ctx.db,
+        location,
+        guard_cond,
+        result_ty,
+        inner_then_region,
+        inner_else_region,
+    ));
+    let inner_result = inner_if_op.as_operation().result(ctx.db, 0);
+
+    // 6. Yield inner result
+    block.op(scf::r#yield(ctx.db, location, vec![inner_result]));
+    Region::new(ctx.db, location, idvec![block.build()])
 }
 
 /// Build a region for a single case arm body.
@@ -3598,21 +3667,23 @@ mod tests {
         let func_typed = func::Func::from_operation(db, *func_op).unwrap();
         let body_ops = get_func_body_ops(db, &func_typed);
 
-        // Should have: cmp_gt for guard, "and" to combine pattern + guard, and scf.if
-        let cmp_op = body_ops.iter().find(|op| op.name(db) == "cmp_gt");
-        assert!(
-            cmp_op.is_some(),
-            "Should have cmp_gt for guard condition (x > 0)"
-        );
-
-        let and_op = body_ops.iter().find(|op| op.name(db) == "and");
-        assert!(
-            and_op.is_some(),
-            "Should have arith.and combining pattern check and guard"
-        );
+        // With the new implementation:
+        // - Outer scf.if checks pattern_cond (const true for bind pattern)
+        // - Inner scf.if (in then region) checks guard_cond
+        // - cmp_gt and inner scf.if are inside the outer then region, not at top level
 
         let if_op = body_ops.iter().find(|op| op.name(db) == "if");
         assert!(if_op.is_some(), "Should have scf.if for case branch");
+
+        // arith.and should NOT exist — guard is checked via nested scf.if
+        let and_op = body_ops.iter().find(|op| op.name(db) == "and");
+        assert!(
+            and_op.is_none(),
+            "Should NOT have arith.and — guard uses nested scf.if"
+        );
+
+        // cmp_gt is inside the then region, not at function body level
+        // We verify the structure is correct by checking scf.if exists
     }
 
     /// Tracked helper: build case with variant pattern and guard.
@@ -3688,20 +3759,187 @@ mod tests {
         let func_typed = func::Func::from_operation(db, *func_op).unwrap();
         let body_ops = get_func_body_ops(db, &func_typed);
 
-        // Should have variant_is for pattern, cmp_gt for guard, and "and" to combine them
+        // With the new implementation:
+        // - Outer scf.if checks variant_is (at function body level)
+        // - Inner scf.if (in then region) checks guard_cond after bind_pattern_fields
+        // - variant_cast and cmp_gt are inside the outer then region, not at top level
+
+        // variant_is should be at top level (pattern check)
         let variant_is_op = body_ops.iter().find(|op| op.name(db) == "variant_is");
         assert!(
             variant_is_op.is_some(),
             "Should have adt.variant_is for Some pattern"
         );
 
-        let cmp_op = body_ops.iter().find(|op| op.name(db) == "cmp_gt");
-        assert!(cmp_op.is_some(), "Should have cmp_gt for guard (x > 0)");
+        // scf.if should exist for pattern branch
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(if_op.is_some(), "Should have scf.if for case branch");
 
+        // arith.and should NOT exist — guard is checked via nested scf.if
         let and_op = body_ops.iter().find(|op| op.name(db) == "and");
         assert!(
-            and_op.is_some(),
-            "Should have arith.and combining variant_is and guard"
+            and_op.is_none(),
+            "Should NOT have arith.and — guard uses nested scf.if"
+        );
+
+        // variant_cast should NOT be at top level — it's inside the then region
+        let variant_cast_op = body_ops.iter().find(|op| op.name(db) == "variant_cast");
+        assert!(
+            variant_cast_op.is_none(),
+            "variant_cast should be inside then region, not at function body level"
+        );
+    }
+
+    // ========================================================================
+    // Bug Fix Regression Tests
+    // ========================================================================
+
+    /// Test that single-arm variant patterns emit proper runtime checks.
+    ///
+    /// Bug #2 fix: Single arm with variant pattern should NOT use fast-path.
+    /// It must emit variant_is and scf.if for proper pattern matching.
+    #[salsa::tracked]
+    fn test_single_arm_variant_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        // case opt { Some(x) => x }
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let option_ty = AstType::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int_ty],
+            },
+        );
+
+        let opt_name = Symbol::new("opt");
+        let opt_id = LocalId::new(0);
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(1);
+
+        let opt_ref = TypedRef::new(ResolvedRef::local(opt_id, opt_name), option_ty);
+        let scrutinee = var_expr(opt_ref);
+
+        // Some(x) pattern
+        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_ref = TypedRef::new(
+            ResolvedRef::Constructor {
+                id: some_ctor_id,
+                variant: Symbol::new("Some"),
+            },
+            option_ty,
+        );
+        let some_pattern = variant_pattern(some_ctor_ref, vec![bind_pattern(x_name, x_id)]);
+
+        let x_ref = TypedRef::new(ResolvedRef::local(x_id, x_name), int_ty);
+        let arms = vec![arm(some_pattern, var_expr(x_ref))];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: opt_name,
+                ty: None,
+                local_id: Some(opt_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_single_arm_variant_emits_check(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_single_arm_variant_helper(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Single variant arm should NOT use fast-path — must emit variant_is and scf.if
+        let variant_is_op = body_ops.iter().find(|op| op.name(db) == "variant_is");
+        assert!(
+            variant_is_op.is_some(),
+            "Single variant arm must emit adt.variant_is check"
+        );
+
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(
+            if_op.is_some(),
+            "Single variant arm must emit scf.if for conditional branching"
+        );
+    }
+
+    /// Test that single-arm with guard is not ignored.
+    ///
+    /// Bug #2 fix: Single arm with guard should NOT use fast-path.
+    #[salsa::tracked]
+    fn test_single_arm_guard_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        // case n { x if x > 0 => x }
+        let int_ty = AstType::new(db, TypeKind::Int);
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+        let x_name = Symbol::new("x");
+        let x_id = LocalId::new(1);
+
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), int_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Guard: x > 0
+        let x_ref = TypedRef::new(ResolvedRef::local(x_id, x_name), int_ty);
+        let guard = binop_expr(BinOpKind::Gt, var_expr(x_ref.clone()), int_lit_expr(0));
+
+        let arms = vec![arm_with_guard(
+            bind_pattern(x_name, x_id),
+            guard,
+            var_expr(x_ref),
+        )];
+        let case = case_expr(scrutinee, arms);
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("main"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+    }
+
+    #[salsa_test]
+    fn test_single_arm_with_guard_not_ignored(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_single_arm_guard_helper(db, path);
+        let ops = get_module_ops(db, &ir_module);
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Single arm with guard should NOT use fast-path — must emit scf.if
+        let if_op = body_ops.iter().find(|op| op.name(db) == "if");
+        assert!(
+            if_op.is_some(),
+            "Single arm with guard must emit scf.if (guard must be evaluated)"
         );
     }
 }
