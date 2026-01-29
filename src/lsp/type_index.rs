@@ -39,10 +39,10 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 
         TypeKind::UniVar { id } => {
             // Unification variables are displayed as lowercase letters
-            // Use the index for polymorphic sources, or the counter for anonymous sources
-            let display_index = {
-                let UniVarSource::Anonymous(counter) = id.source(db);
-                counter as u32 + id.index(db)
+            // Use the index for polymorphic sources, or the counter for anonymous/function-local sources
+            let display_index = match id.source(db) {
+                UniVarSource::FunctionLocal { index, .. } => index as u32 + id.index(db),
+                UniVarSource::Anonymous(counter) => counter as u32 + id.index(db),
             };
             let name = if display_index < 26 {
                 char::from_u32('a' as u32 + display_index).map(|c| c.to_string())

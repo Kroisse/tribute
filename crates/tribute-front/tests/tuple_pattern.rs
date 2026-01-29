@@ -43,7 +43,7 @@ fn run_ast_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) {
 
     // Type check - this is where UniVar issues manifest
     let checker = tribute_front::typeck::TypeChecker::new(db);
-    let (typed_ast, function_types) = checker.check_module_with_types(resolved);
+    let (typed_ast, function_types) = checker.check_module(resolved);
 
     // TDNR
     let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, typed_ast);

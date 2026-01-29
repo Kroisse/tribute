@@ -23,7 +23,7 @@ pub use resolver::Resolver;
 use trunk_ir::Symbol;
 
 use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
-use crate::build_qualified_field_name;
+use crate::{build_qualified_field_name, build_qualified_func_name};
 
 /// Resolve names in a module.
 ///
@@ -82,12 +82,14 @@ fn collect_definition<'db>(
 ) {
     match decl {
         Decl::Function(func) => {
-            let id = FuncDefId::new(db, func.name);
+            let qualified_name = build_qualified_func_name(module_path, func.name);
+            let id = FuncDefId::new(db, qualified_name);
             env.add_function(func.name, id);
         }
 
         Decl::ExternFunction(func) => {
-            let id = FuncDefId::new(db, func.name);
+            let qualified_name = build_qualified_func_name(module_path, func.name);
+            let id = FuncDefId::new(db, qualified_name);
             env.add_function(func.name, id);
         }
 

@@ -25,10 +25,16 @@ pub struct Type<'db> {
 
 /// Source of a unification variable.
 ///
-/// This identifies where a type variable came from, for debugging purposes.
+/// This identifies where a type variable came from, enabling unique identification
+/// across functions and aiding debugging.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum UniVarSource {
-    /// Anonymous type variable (for lambdas, local bindings, polymorphic instantiation, etc.).
+    /// Type variable created within a specific function.
+    /// - `func_name`: The qualified function name (e.g., "module::func")
+    /// - `index`: Local index within that function (0, 1, 2, ...)
+    FunctionLocal { func_name: Symbol, index: u64 },
+
+    /// Anonymous type variable (for tests or contexts without a function name).
     /// The u64 is a unique counter value.
     Anonymous(u64),
 }

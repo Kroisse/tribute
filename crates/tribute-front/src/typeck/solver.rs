@@ -227,6 +227,19 @@ impl<'db> TypeSubst<'db> {
     }
 
     /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
+    ///
+    /// Public wrapper for use by other modules.
+    pub fn collect_univars_from_type(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        out: &mut Vec<UniVarId<'db>>,
+    ) {
+        self.collect_unresolved_univars(db, ty, row_subst, out);
+    }
+
+    /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
     fn collect_unresolved_univars(
         &self,
         db: &'db dyn salsa::Database,

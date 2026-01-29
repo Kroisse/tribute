@@ -22,12 +22,14 @@ mod checker;
 mod constraint;
 mod context;
 pub mod effect_row;
+mod func_context;
 mod solver;
 
-pub use checker::TypeChecker;
+pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet, TypeVar};
-pub use context::TypeContext;
-pub use solver::{SolveError, TypeSolver};
+pub use context::{ModuleTypeEnv, TypeContext};
+pub use func_context::FunctionInferenceContext;
+pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
 use trunk_ir::Symbol;
 
@@ -76,7 +78,7 @@ pub fn typecheck_module_full<'db>(
     module: Module<ResolvedRef<'db>>,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db);
-    let (typed_module, function_types) = checker.check_module_with_types(module);
+    let (typed_module, function_types) = checker.check_module(module);
     TypeCheckOutput::new(db, typed_module, function_types)
 }
 
@@ -88,5 +90,6 @@ pub fn typecheck_module<'db>(
     module: Module<ResolvedRef<'db>>,
 ) -> Module<TypedRef<'db>> {
     let checker = TypeChecker::new(db);
-    checker.check_module(module)
+    let (typed_module, _function_types) = checker.check_module(module);
+    typed_module
 }

@@ -31,6 +31,23 @@ pub use tirgen::{ParsedCst, derive_module_name_from_path, lower_cst, lower_sourc
 
 use trunk_ir::Symbol;
 
+/// Build a qualified name for a function.
+///
+/// This ensures that FuncDefIds are unique across modules.
+/// For example, `foo::bar::my_func` instead of just `my_func`.
+pub fn build_qualified_func_name(module_path: &[Symbol], func_name: Symbol) -> Symbol {
+    if module_path.is_empty() {
+        func_name
+    } else {
+        let path_str = module_path
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        Symbol::from_dynamic(&format!("{}::{}", path_str, func_name))
+    }
+}
+
 /// Build a qualified name for a struct field or ability operation.
 ///
 /// This ensures that FuncDefIds are unique across modules.
