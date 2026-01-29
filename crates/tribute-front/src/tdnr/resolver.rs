@@ -11,27 +11,7 @@ use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
     ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
-
-/// Build a qualified name for a struct field accessor.
-///
-/// This ensures that FuncDefIds are unique across modules.
-/// For example, `foo::Point::x` instead of just `x` or `Point::x`.
-fn build_qualified_field_name(
-    module_path: &[Symbol],
-    type_name: Symbol,
-    field_name: Symbol,
-) -> Symbol {
-    if module_path.is_empty() {
-        Symbol::from_dynamic(&format!("{}::{}", type_name, field_name))
-    } else {
-        let path_str = module_path
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        Symbol::from_dynamic(&format!("{}::{}::{}", path_str, type_name, field_name))
-    }
-}
+use crate::build_qualified_field_name;
 
 /// TDNR resolver for AST expressions.
 ///
