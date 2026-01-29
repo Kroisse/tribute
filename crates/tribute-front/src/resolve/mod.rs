@@ -63,8 +63,12 @@ pub fn build_env<'db>(
 ) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
-    // Build module path from the module name (if any)
-    let module_path: Vec<Symbol> = module.name.into_iter().collect();
+    // Note: We don't use module.name as the initial module_path because
+    // module.name is derived from the file name (e.g., "add" from "add.trb"),
+    // but top-level functions within the file should use simple names.
+    // The file-derived name is for external references, not internal ones.
+    // Only nested `mod foo { ... }` declarations extend the module path.
+    let module_path: Vec<Symbol> = Vec::new();
 
     for decl in &module.decls {
         collect_definition(db, &mut env, decl, &module_path);

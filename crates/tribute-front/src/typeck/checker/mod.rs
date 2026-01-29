@@ -122,6 +122,8 @@ impl<'db> TypeChecker<'db> {
         module: Module<ResolvedRef<'db>>,
     ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
+        // Note: module_path starts empty because module.name is the file-derived name,
+        // which is for external references, not internal function naming.
         self.collect_declarations(&module);
 
         // Phase 2: Type check each declaration with per-function inference
@@ -156,6 +158,7 @@ impl<'db> TypeChecker<'db> {
         module: Module<ResolvedRef<'db>>,
     ) -> PreludeExports<'db> {
         // Phase 1: Collect type definitions and function signatures
+        // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
 
         // Phase 2: Type check all declarations with per-function inference
