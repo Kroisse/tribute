@@ -23,6 +23,7 @@ pub use resolver::Resolver;
 use trunk_ir::Symbol;
 
 use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
+use crate::build_qualified_field_name;
 
 /// Resolve names in a module.
 ///
@@ -44,8 +45,11 @@ pub fn resolve_module<'db>(
 fn build_env<'db>(db: &'db dyn salsa::Database, module: &Module<UnresolvedName>) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
+    // Build module path from the module name (if any)
+    let module_path: Vec<Symbol> = module.name.into_iter().collect();
+
     for decl in &module.decls {
-        collect_definition(db, &mut env, decl);
+        collect_definition(db, &mut env, decl, &module_path);
     }
 
     env
@@ -56,6 +60,7 @@ fn collect_definition<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
     decl: &Decl<UnresolvedName>,
+    module_path: &[Symbol],
 ) {
     match decl {
         Decl::Function(func) => {
@@ -73,6 +78,21 @@ fn collect_definition<'db>(
             let ctor_id = CtorId::new(db, s.name);
             env.add_type(s.name, ctor_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
+
+            // Register field accessors in struct's namespace
+            // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
+            for field in &s.fields {
+                if let Some(field_name) = field.name {
+                    // Build qualified name to avoid FuncDefId collisions across modules
+                    // e.g., "foo::Point::x" instead of just "x"
+                    let qualified_name =
+                        build_qualified_field_name(module_path, s.name, field_name);
+                    let func_id = FuncDefId::new(db, qualified_name);
+                    let binding = Binding::Function { id: func_id };
+                    // Add to namespace (e.g., Point::x)
+                    env.add_to_namespace(s.name, field_name, binding);
+                }
+            }
         }
 
         Decl::Enum(e) => {
@@ -103,10 +123,10 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
-                let func_id = FuncDefId::new(
-                    db,
-                    Symbol::from_dynamic(&format!("{}::{}", a.name, op.name)),
-                );
+                // Build qualified name to avoid FuncDefId collisions across modules
+                // e.g., "foo::MyAbility::op" instead of just "MyAbility::op"
+                let qualified_name = build_qualified_field_name(module_path, a.name, op.name);
+                let func_id = FuncDefId::new(db, qualified_name);
                 let binding = Binding::Function { id: func_id };
                 env.add_to_namespace(a.name, op.name, binding);
             }
@@ -127,10 +147,14 @@ fn collect_definition<'db>(
             // For inline modules, collect bindings into a temporary environment
             // then register them under the module's namespace
             if let Some(body) = &m.body {
+                // Build nested module path by appending current module name
+                let mut nested_path = module_path.to_vec();
+                nested_path.push(m.name);
+
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
                 for inner_decl in body {
-                    collect_definition(db, &mut inner_env, inner_decl);
+                    collect_definition(db, &mut inner_env, inner_decl, &nested_path);
                 }
 
                 // Register each inner definition under the module's namespace
@@ -588,5 +612,72 @@ mod tests {
 
         let input = TestModuleInput::new(db, module);
         verify_extern_function_registered(db, input);
+    }
+
+    #[salsa::tracked]
+    fn verify_struct_field_accessors_in_namespace(
+        db: &dyn salsa::Database,
+        input: TestModuleInput,
+    ) {
+        let env = build_env(db, input.module(db));
+
+        // Point::x should be registered as a function
+        let point_x = env.lookup_qualified(Symbol::new("Point"), Symbol::new("x"));
+        assert!(
+            point_x.is_some(),
+            "Point::x accessor should be in namespace"
+        );
+        assert!(
+            matches!(point_x, Some(Binding::Function { .. })),
+            "Point::x should be a function binding"
+        );
+
+        // Point::y should be registered as a function
+        let point_y = env.lookup_qualified(Symbol::new("Point"), Symbol::new("y"));
+        assert!(
+            point_y.is_some(),
+            "Point::y accessor should be in namespace"
+        );
+        assert!(
+            matches!(point_y, Some(Binding::Function { .. })),
+            "Point::y should be a function binding"
+        );
+    }
+
+    #[salsa_test]
+    fn test_struct_field_accessors_in_namespace(db: &dyn salsa::Database) {
+        let module = Module::new(
+            fresh_node_id(),
+            Some(Symbol::new("test")),
+            vec![Decl::Struct(StructDecl {
+                id: fresh_node_id(),
+                is_pub: false,
+                name: Symbol::new("Point"),
+                type_params: vec![],
+                fields: vec![
+                    FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: Some(Symbol::new("x")),
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                        },
+                    },
+                    FieldDecl {
+                        id: fresh_node_id(),
+                        is_pub: false,
+                        name: Some(Symbol::new("y")),
+                        ty: TypeAnnotation {
+                            id: fresh_node_id(),
+                            kind: TypeAnnotationKind::Named(Symbol::new("Int")),
+                        },
+                    },
+                ],
+            })],
+        );
+
+        let input = TestModuleInput::new(db, module);
+        verify_struct_field_accessors_in_namespace(db, input);
     }
 }

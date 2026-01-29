@@ -689,11 +689,6 @@ impl<'db> TypeChecker<'db> {
                 let _ = (type_name, fields, spread);
                 self.ctx.fresh_type_var() // TODO: Proper record typing
             }
-            ExprKind::FieldAccess { expr, field } => {
-                // Field access
-                let _ = (expr, field);
-                self.ctx.fresh_type_var() // TODO: Proper field access typing
-            }
             ExprKind::MethodCall {
                 receiver,
                 method,
@@ -974,10 +969,6 @@ impl<'db> TypeChecker<'db> {
                     .map(|(name, expr)| (name, self.check_expr(expr, Mode::Infer)))
                     .collect(),
                 spread: spread.map(|e| self.check_expr(e, Mode::Infer)),
-            },
-            ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
-                expr: self.check_expr(expr, Mode::Infer),
-                field,
             },
             ExprKind::MethodCall {
                 receiver,
@@ -1378,10 +1369,6 @@ fn apply_subst_to_expr<'db>(
                 .map(|(name, e)| (name, apply_subst_to_expr(db, e, type_subst, row_subst)))
                 .collect(),
             spread: spread.map(|e| apply_subst_to_expr(db, e, type_subst, row_subst)),
-        },
-        ExprKind::FieldAccess { expr: inner, field } => ExprKind::FieldAccess {
-            expr: apply_subst_to_expr(db, inner, type_subst, row_subst),
-            field,
         },
         ExprKind::MethodCall {
             receiver,

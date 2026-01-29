@@ -321,10 +321,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                     self.collect_expr(spread_expr);
                 }
             }
-            ExprKind::FieldAccess { expr: inner, .. } => {
-                self.collect_expr(inner);
-                // Field access type would need type information from the struct
-            }
+            // (Field access is now MethodCall)
             ExprKind::MethodCall { receiver, args, .. } => {
                 self.collect_expr(receiver);
                 for arg in args {

@@ -285,11 +285,6 @@ impl<'db> Resolver<'db> {
                 }
             }
 
-            ExprKind::FieldAccess { expr, field } => {
-                let expr = self.resolve_expr(expr);
-                ExprKind::FieldAccess { expr, field }
-            }
-
             ExprKind::MethodCall {
                 receiver,
                 method,

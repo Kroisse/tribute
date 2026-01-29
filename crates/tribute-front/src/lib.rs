@@ -28,3 +28,26 @@ pub mod typeck;
 pub use fluent_uri::Uri;
 pub use source_file::{SourceCst, path_to_uri};
 pub use tirgen::{ParsedCst, derive_module_name_from_path, lower_cst, lower_source_cst, parse_cst};
+
+use trunk_ir::Symbol;
+
+/// Build a qualified name for a struct field or ability operation.
+///
+/// This ensures that FuncDefIds are unique across modules.
+/// For example, `foo::Point::x` instead of just `x` or `Point::x`.
+pub fn build_qualified_field_name(
+    module_path: &[Symbol],
+    type_name: Symbol,
+    field_name: Symbol,
+) -> Symbol {
+    if module_path.is_empty() {
+        Symbol::from_dynamic(&format!("{}::{}", type_name, field_name))
+    } else {
+        let path_str = module_path
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        Symbol::from_dynamic(&format!("{}::{}::{}", path_str, type_name, field_name))
+    }
+}

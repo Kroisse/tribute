@@ -9,8 +9,9 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
-    ResolvedRef, Stmt, Type, TypedRef,
+    ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
+use crate::build_qualified_field_name;
 
 /// TDNR resolver for AST expressions.
 ///
@@ -61,11 +62,13 @@ impl<'db> TdnrResolver<'db> {
     /// This indexes functions by their first parameter's type name,
     /// enabling efficient UFCS resolution.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
-        self.index_decls(&module.decls);
+        // Build module path from the module name (if any)
+        let module_path: Vec<Symbol> = module.name.into_iter().collect();
+        self.index_decls(&module.decls, &module_path);
     }
 
     /// Recursively index declarations, including nested modules.
-    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>]) {
+    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>], module_path: &[Symbol]) {
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
@@ -97,9 +100,81 @@ impl<'db> TdnrResolver<'db> {
                         .or_default()
                         .push((func_id, func_ty));
                 }
+                Decl::Struct(s) => {
+                    // Register each field as an accessor method
+                    // e.g., struct Point { x: Int, y: Int } registers:
+                    //   - (Point, x) → fn x(self: Point) -> Int
+                    //   - (Point, y) → fn y(self: Point) -> Int
+
+                    let struct_name = s.name;
+
+                    for field in &s.fields {
+                        let Some(field_name) = field.name else {
+                            continue; // Skip unnamed fields
+                        };
+
+                        // Create synthetic FuncDefId for the accessor
+                        // Use qualified name to avoid collisions across modules
+                        let qualified_name =
+                            build_qualified_field_name(module_path, struct_name, field_name);
+                        let func_id = FuncDefId::new(self.db, qualified_name);
+
+                        // Build accessor function type: fn(self: StructType) -> FieldType
+                        // Note: Reusing struct's NodeId for synthetic type annotation.
+                        // This is safe for type construction but won't be used for span lookups.
+                        let self_annotation = if s.type_params.is_empty() {
+                            TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::Named(struct_name),
+                            }
+                        } else {
+                            // Include type parameters: StructName(a, b, ...)
+                            let ctor = TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::Named(struct_name),
+                            };
+                            let args: Vec<TypeAnnotation> = s
+                                .type_params
+                                .iter()
+                                .map(|tp| TypeAnnotation {
+                                    id: tp.id,
+                                    kind: TypeAnnotationKind::Named(tp.name),
+                                })
+                                .collect();
+                            TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::App {
+                                    ctor: Box::new(ctor),
+                                    args,
+                                },
+                            }
+                        };
+                        let self_ty = self.annotation_to_type(&Some(self_annotation));
+                        let field_ty = self.annotation_to_type(&Some(field.ty.clone()));
+
+                        let effect = crate::ast::EffectRow::pure(self.db);
+                        let func_ty = Type::new(
+                            self.db,
+                            TypeKind::Func {
+                                params: vec![self_ty],
+                                result: field_ty,
+                                effect,
+                            },
+                        );
+
+                        // Register in method index
+                        self.method_index
+                            .entry((struct_name, field_name))
+                            .or_default()
+                            .push((func_id, func_ty));
+                    }
+                }
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
-                        self.index_decls(body);
+                        // Build nested module path by appending current module name
+                        let mut nested_path = module_path.to_vec();
+                        nested_path.push(m.name);
+                        self.index_decls(body, &nested_path);
                     }
                 }
                 _ => {}
@@ -342,11 +417,6 @@ impl<'db> TdnrResolver<'db> {
                 spread: spread.map(|e| self.resolve_expr(e)),
             },
 
-            ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
-                expr: self.resolve_expr(expr),
-                field,
-            },
-
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op,
                 lhs: self.resolve_expr(lhs),
@@ -461,10 +531,6 @@ impl<'db> TdnrResolver<'db> {
                     Some(ctor.ty)
                 }
             }
-
-            // For field access, the type would be the field's type (not available here)
-            // We'd need a type map to look this up
-            ExprKind::FieldAccess { .. } => None,
 
             // For Call expressions, the return type of the callee would be needed
             // This requires looking at the callee's function type

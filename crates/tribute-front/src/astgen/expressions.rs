@@ -323,7 +323,12 @@ fn lower_field_access(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolv
     let expr = lower_expr(ctx, expr_node);
     let field = ctx.node_symbol(&field_node);
 
-    ExprKind::FieldAccess { expr, field }
+    // Field access is syntactic sugar for a zero-arg method call: expr.field → expr.field()
+    ExprKind::MethodCall {
+        receiver: expr,
+        method: field,
+        args: vec![],
+    }
 }
 
 /// Returns true if the node is a statement-like construct that should be
