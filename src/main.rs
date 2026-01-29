@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
-    compile_to_wasm_binary, compile_with_diagnostics, parse_and_lower, stage_resolve,
+    compile_to_wasm_binary, compile_with_diagnostics, parse_and_lower_ast, stage_resolve,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_passes::diagnostic::Diagnostic;
@@ -169,7 +169,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         // Show environment if requested
         if show_env {
             println!("\n=== Module Environment ===");
-            let module = parse_and_lower(db, source);
+            let module = parse_and_lower_ast(db, source);
             let resolved = stage_resolve(db, module);
             let env = build_env(db, &resolved);
             println!("{:#?}", env);

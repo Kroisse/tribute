@@ -86,8 +86,8 @@ use crate::SourceCst;
 use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Parser;
+use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
-use tribute_front::{derive_module_name_from_path, lower_cst, parse_cst};
 use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::const_inline::inline_module;
@@ -131,15 +131,48 @@ use trunk_ir_wasm_backend::{
 /// The prelude source code, embedded at compile time.
 const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
-/// Load and cache the prelude module (TrunkIR version).
+/// Load and cache the prelude module using the AST pipeline.
 ///
 /// This is a Salsa tracked function, so the prelude is parsed only once
 /// and cached for all subsequent compilations.
+///
+/// Unlike the legacy tirgen-based approach, this uses the AST pipeline:
+/// parse → resolve → typecheck → TDNR → ast_to_ir
+/// This properly handles case expressions, tuple patterns, and other features
+/// that tirgen doesn't support.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
     let prelude_source = create_prelude_source(db)?;
-    let cst = parse_cst(db, prelude_source)?;
-    Some(lower_cst(db, prelude_source, cst))
+    let parsed = ast_query::parsed_ast_with_module_path(
+        db,
+        prelude_source,
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+
+    let prelude_ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+
+    // Build prelude ModuleEnv and resolve
+    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+
+    // Typecheck with independent TypeContext
+    let checker = ast_typeck::TypeChecker::new(db);
+    let (typed_ast, function_types_vec) = checker.check_module_with_types(resolved);
+
+    // TDNR
+    let tdnr_ast = ast_tdnr::resolve_tdnr(db, typed_ast);
+
+    // AST → TrunkIR
+    let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
+    let source_uri = prelude_source.uri(db).as_str();
+    Some(ast_to_ir::lower_ast_to_ir(
+        db,
+        tdnr_ast,
+        span_map,
+        source_uri,
+        function_types,
+    ))
 }
 
 /// Create a SourceCst for the prelude.
@@ -288,25 +321,6 @@ pub struct CompilationResult<'db> {
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
 
-/// Parse source to CST and lower to initial TrunkIR module.
-///
-/// This is the entry point that converts source text to TrunkIR.
-/// Returns a module with `tribute.*` operations that need further processing.
-#[salsa::tracked]
-pub fn parse_and_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let Some(cst) = parse_cst(db, source) else {
-        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        let module_name = derive_module_name_from_path(db, path);
-        return Module::build(db, location, module_name, |_| {});
-    };
-    emit_parse_errors(db, &cst);
-    let user_module = lower_cst(db, source, cst);
-
-    // Merge prelude definitions into the user module
-    merge_with_prelude(db, user_module)
-}
-
 /// Resolve names in the module.
 ///
 /// This pass resolves:
@@ -324,65 +338,6 @@ pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     // Resolve names in the module
     let mut resolver = Resolver::new(db, env);
     resolver.resolve_module(&module)
-}
-
-fn emit_parse_errors(db: &dyn salsa::Database, cst: &tribute_front::ParsedCst) {
-    let root = cst.root_node();
-    if !root.has_error() {
-        return;
-    }
-
-    let mut stack = vec![root];
-    while let Some(node) = stack.pop() {
-        if node.is_error() || node.is_missing() {
-            let message = if node.is_missing() {
-                // For missing nodes, show what kind was expected
-                let kind = node.kind();
-                let parent_ctx = node
-                    .parent()
-                    .map(|p| format!(" in {}", format_node_kind(p.kind())))
-                    .unwrap_or_default();
-                format!("missing {}{}", format_node_kind(kind), parent_ctx)
-            } else {
-                // For error nodes, try to provide context
-                let parent = node.parent();
-                let parent_kind = parent.map(|p| p.kind()).unwrap_or("source_file");
-
-                // Check what unexpected content was found
-                let content_preview = if node.end_byte() > node.start_byte() {
-                    // We don't have direct access to source here, so just note there's content
-                    " (unexpected token)".to_string()
-                } else {
-                    String::new()
-                };
-
-                format!(
-                    "syntax error{} while parsing {}",
-                    content_preview,
-                    format_node_kind(parent_kind)
-                )
-            };
-            Diagnostic {
-                message,
-                span: Span::new(node.start_byte(), node.end_byte()),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Parsing,
-            }
-            .accumulate(db);
-            continue;
-        }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            stack.push(child);
-        }
-    }
-}
-
-/// Format a tree-sitter node kind into a human-readable name.
-fn format_node_kind(kind: &str) -> String {
-    // Convert snake_case to space-separated words
-    kind.replace('_', " ")
 }
 
 /// Inline constant values.
@@ -673,18 +628,7 @@ pub fn stage_lower_to_wasm<'db>(
 
 /// Compile for LSP: minimal pipeline preserving source structure.
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    run_tdnr(db, source)
-}
-
-/// Run pipeline up to TDNR stage.
-///
-/// Includes: parse → resolve → typecheck → tdnr
-#[salsa::tracked]
-pub fn run_tdnr<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower(db, source);
-    let module = stage_resolve(db, module);
-    let module = stage_typecheck(db, module);
-    stage_tdnr(db, module)
+    run_tdnr_ast(db, source)
 }
 
 /// Run pipeline up to lambda lift stage.
@@ -693,7 +637,7 @@ pub fn run_lambda_lift<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    let module = run_tdnr(db, source);
+    let module = run_tdnr_ast(db, source);
     let module = stage_const_inline(db, module);
     let module = stage_inline_refs(db, module)?;
     let module = stage_boxing(db, module);
@@ -714,36 +658,6 @@ pub fn run_closure_lower<'db>(
 // =============================================================================
 // Full Pipeline (Orchestration)
 // =============================================================================
-
-/// Run the full compilation pipeline on a source file.
-///
-/// This is the central orchestration function that sequences all stages.
-/// Each stage is a pure transformation that takes a Module and returns a Module.
-#[salsa::tracked]
-pub fn compile<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    // Frontend + closure processing (up to inline_refs)
-    let module = run_closure_lower(db, source)?;
-
-    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
-    let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
-    let module = stage_tribute_to_scf(db, module);
-    let module = stage_handler_lower(db, module)?;
-
-    // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module)?;
-
-    let module = stage_dce(db, module);
-    let module = stage_resolve_casts(db, module);
-
-    // Final pass: resolve any remaining unresolved references and emit diagnostics
-    let env = build_env(db, &module);
-    let mut resolver = Resolver::with_unresolved_reporting(db, env);
-    Ok(resolver.resolve_module(&module))
-}
 
 /// Compile to WebAssembly binary.
 ///
@@ -854,43 +768,18 @@ pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Mod
 
 /// Compile using the AST-based pipeline.
 ///
-/// This is the AST-based alternative to `compile`.
 /// The AST pipeline provides better type safety and separation of concerns.
-///
-/// # Two-Phase Name Resolution and Type Checking
-///
-/// This pipeline has two distinct phases that may appear similar but operate on different representations:
-///
-/// 1. **AST Phase** (in `parse_and_lower_ast`):
-///    - Operates on typed AST nodes (`Module<UnresolvedName>` → `Module<TypedRef>`)
-///    - Performs Hindley-Milner type inference with bidirectional checking
-///    - Assigns LocalIds to pattern bindings for variable tracking
-///    - Resolves UFCS method calls based on inferred receiver types
-///    - Produces resolved TrunkIR ops (e.g., `func.constant`, `func.call`)
-///
-/// 2. **TrunkIR Phase** (stages below):
-///    - Operates on TrunkIR operations like `tribute.var`, `tribute.call`
-///    - **Required for prelude**: The prelude module is generated via `lower_cst` (tirgen),
-///      NOT `ast_to_ir`, so it produces unresolved `tribute.*` ops that need processing
-///    - Handles cross-module references and builtin operations
-///    - These are NOT duplicates - AST phases work on AST nodes; IR phases work on IR ops
+/// Name resolution, type checking, and TDNR are performed on AST nodes,
+/// then lowered to TrunkIR for further transformations.
 #[salsa::tracked]
 pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    // Phase 1: AST pipeline (resolve, typecheck, TDNR on AST nodes)
-    // This produces resolved IR for user code, but prelude uses tirgen (lower_cst)
+    // AST pipeline: parse → resolve → typecheck → TDNR → ast_to_ir
     let module = parse_and_lower_ast(db, source);
 
-    // Phase 2: TrunkIR transformation passes
-    // These are required because:
-    // - Prelude module (merged in parse_and_lower_ast) uses tirgen, producing tribute.* ops
-    // - User code from ast_to_ir is already resolved, so these passes are mostly no-ops for it
-    // - Cross-module references may need resolution
-    let module = stage_resolve(db, module);
-    let module = stage_typecheck(db, module);
-    let module = stage_tdnr(db, module);
+    // TrunkIR transformation passes
     let module = stage_const_inline(db, module);
     let module = stage_inline_refs(db, module)?;
     let module = stage_boxing(db, module);
@@ -898,7 +787,7 @@ pub fn compile_ast<'db>(
     let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
 
-    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    // Evidence call transformation - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
     let module = stage_tribute_to_scf(db, module);
@@ -908,12 +797,7 @@ pub fn compile_ast<'db>(
     let module = stage_cont_to_trampoline(db, module)?;
 
     let module = stage_dce(db, module);
-    let module = stage_resolve_casts(db, module);
-
-    // Final pass: resolve any remaining unresolved references and emit diagnostics
-    let env = build_env(db, &module);
-    let mut resolver = Resolver::with_unresolved_reporting(db, env);
-    Ok(resolver.resolve_module(&module))
+    Ok(stage_resolve_casts(db, module))
 }
 
 /// Run compilation and return detailed results including diagnostics.
@@ -923,13 +807,13 @@ pub fn compile_with_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> CompilationResult<'db> {
-    // Run the full compilation pipeline (which checks for unresolved references)
-    // Type checking is performed inside the tracked `compile` function,
+    // Run the full compilation pipeline
+    // Type checking is performed inside the tracked `compile_ast` function,
     // so diagnostics are properly accumulated via Salsa.
-    let result = compile(db, source);
+    let result = compile_ast(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let mut diagnostics: Vec<Diagnostic> = compile::accumulated::<Diagnostic>(db, source)
+    let mut diagnostics: Vec<Diagnostic> = compile_ast::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .cloned()
         .collect();
@@ -967,7 +851,7 @@ mod tests {
 
     #[salsa::tracked]
     fn test_compile(db: &dyn salsa::Database, source: SourceCst) -> Module<'_> {
-        compile(db, source).expect("compilation should succeed")
+        compile_ast(db, source).expect("compilation should succeed")
     }
 
     fn source_from_str(path: &str, text: &str) -> SourceCst {
@@ -991,7 +875,6 @@ mod tests {
     }
 
     #[salsa_test]
-    #[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
     fn test_compile_with_diagnostics(db: &salsa::DatabaseImpl) {
         let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
@@ -1115,7 +998,6 @@ mod tests {
     }
 
     #[salsa_test]
-    #[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
     fn test_case_lowering_exhaustive(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "test.trb",

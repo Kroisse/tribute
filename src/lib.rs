@@ -21,6 +21,6 @@ pub mod database;
 pub mod pipeline;
 
 pub use pipeline::{
-    CompilationResult, compile, compile_for_lsp, compile_to_wasm_binary, compile_with_diagnostics,
-    parse_and_lower,
+    CompilationResult, compile_ast, compile_for_lsp, compile_to_wasm_binary,
+    compile_with_diagnostics, parse_and_lower_ast,
 };
