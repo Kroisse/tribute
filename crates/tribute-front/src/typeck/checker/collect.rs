@@ -181,14 +181,55 @@ impl<'db> TypeChecker<'db> {
             .map(|tp| TypeParam::named(tp.name))
             .collect();
 
+        // Build name → BoundVar index lookup for field type resolution
+        let type_param_indices: Vec<(Symbol, u32)> = s
+            .type_params
+            .iter()
+            .enumerate()
+            .map(|(i, tp)| (tp.name, i as u32))
+            .collect();
+
         // The struct type itself
         let args: Vec<Type<'db>> = (0..type_params.len() as u32)
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let struct_ty = self.env.named_type(name, args);
 
-        let scheme = TypeScheme::new(self.db(), type_params, struct_ty);
+        let scheme = TypeScheme::new(self.db(), type_params.clone(), struct_ty);
         self.env.register_type_def(name, scheme);
+
+        // Register struct constructor
+        // Constructor type is: fn(field_types...) -> StructType
+        let field_types: Vec<Type<'db>> = s
+            .fields
+            .iter()
+            .map(|f| self.annotation_to_type_for_ctor(&f.ty, &type_param_indices))
+            .collect();
+
+        let ctor_ty = if field_types.is_empty() {
+            // Unit struct: constructor type is just the struct type
+            struct_ty
+        } else {
+            // Field struct: constructor type is fn(fields...) -> struct_ty
+            let effect = EffectRow::pure(self.db());
+            self.env.func_type(field_types, struct_ty, effect)
+        };
+
+        let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
+        let ctor_id = crate::ast::CtorId::new(self.db(), name);
+        self.env.register_constructor(ctor_id, ctor_scheme);
+
+        // Register struct field information for accessor resolution
+        let fields: Vec<(Symbol, Type<'db>)> = s
+            .fields
+            .iter()
+            .filter_map(|f| {
+                let field_name = f.name?;
+                let field_ty = self.annotation_to_type_for_ctor(&f.ty, &type_param_indices);
+                Some((field_name, field_ty))
+            })
+            .collect();
+        self.env.register_struct_fields(name, type_params, fields);
     }
 
     /// Collect an enum definition.

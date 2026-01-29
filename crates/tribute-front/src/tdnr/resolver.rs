@@ -587,6 +587,17 @@ impl<'db> TdnrResolver<'db> {
             // Block: type is the type of the value expression
             ExprKind::Block { value, .. } => self.get_expr_type(value),
 
+            // Record: get the return type from the constructor's type
+            ExprKind::Record { type_name, .. } => {
+                // type_name.ty is the constructor function type: fn(fields...) -> StructType
+                if let crate::ast::TypeKind::Func { result, .. } = type_name.ty.kind(self.db) {
+                    Some(*result)
+                } else {
+                    // If not a function type, use it directly
+                    Some(type_name.ty)
+                }
+            }
+
             // Lambda: we can't easily determine the type without full analysis
             // For other expressions, we'd need a type map from typechecking
             _ => None,

@@ -379,7 +379,7 @@ fn double(n: Int) -> Int {
 }
 
 fn main() ->{} Int {
-    apply(double, 21)
+    apply(double, +21)
 }
 "#,
     );
@@ -419,11 +419,11 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
     f(g(x))
 }
 
-fn inc(n: Int) -> Int { n + 1 }
+fn inc(n: Int) -> Int { n + +1 }
 fn double(n: Int) -> Int { n + n }
 
 fn main() ->{} Int {
-    compose(inc, double, 10)
+    compose(inc, double, +10)
 }
 "#,
     );
@@ -469,7 +469,7 @@ fn to_float(n: Int) -> Float {
 }
 
 fn main() ->{} Float {
-    apply_generic(to_float, 42)
+    apply_generic(to_float, +42)
 }
 "#,
     );
@@ -720,7 +720,7 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
 }
 
 fn main() ->{} Int {
-    apply(fn(n) { n + 1 }, 41)
+    apply(fn(n) { n + +1 }, +41)
 }
 "#,
     );
@@ -794,7 +794,7 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
 }
 
 fn main() ->{} Int {
-    apply(fn(n) { n + 1 }, 41)
+    apply(fn(n) { n + +1 }, +41)
 }
 "#,
     );

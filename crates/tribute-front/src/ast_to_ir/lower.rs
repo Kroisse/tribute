@@ -1071,13 +1071,25 @@ fn lower_struct_decl<'db>(
         })
         .collect();
 
+    // Build qualified accessor names using module_path
+    // This must match what TDNR generates via build_qualified_field_name
+    let module_path = ctx.module_path();
+
     let accessors_module = core::Module::build(db, location, name, |module_builder| {
         for (idx, (field_name, field_type)) in fields.iter().enumerate() {
-            // Generate getter: fn field_name(self: StructType) -> FieldType
+            // Generate getter: fn qualified_name(self: StructType) -> FieldType
+            // Qualified name: module_path::struct_name::field_name
+            let module_path_str = module_path.to_string();
+            let qualified_name = if module_path_str.is_empty() {
+                Symbol::from_dynamic(&format!("{}::{}", name, field_name))
+            } else {
+                Symbol::from_dynamic(&format!("{}::{}::{}", module_path_str, name, field_name))
+            };
+
             let getter = func::Func::build(
                 db,
                 location,
-                *field_name,
+                qualified_name,
                 idvec![struct_ty],
                 *field_type,
                 |entry| {

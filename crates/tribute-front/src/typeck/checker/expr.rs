@@ -58,9 +58,32 @@ impl<'db> TypeChecker<'db> {
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
                 }
             }
-            ExprKind::Record { .. } => ctx.fresh_type_var(), // TODO: Proper record typing
-            ExprKind::MethodCall { .. } => ctx.fresh_type_var(), // TODO: Proper method call typing
-            ExprKind::BinOp { .. } => ctx.fresh_type_var(),  // TODO: Proper binop typing
+            ExprKind::Record { type_name, .. } => {
+                // Get the struct constructor type and extract return type
+                let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
+                if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
+                    // Constructor has function type: fn(fields...) -> StructType
+                    *result
+                } else {
+                    // Fallback: use constructor type directly (shouldn't happen)
+                    ctor_ty
+                }
+            }
+            ExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                // Infer receiver type first
+                let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
+
+                // Try to look up the method as a struct field accessor
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
+                    result_ty
+                } else {
+                    // Method not found as field - leave as fresh type var for TDNR
+                    ctx.fresh_type_var()
+                }
+            }
+            ExprKind::BinOp { .. } => ctx.fresh_type_var(), // TODO: Proper binop typing
             ExprKind::Block { stmts: _, value } => self.infer_expr_type_with_ctx(ctx, value),
             ExprKind::Case { .. } => ctx.fresh_type_var(),
             ExprKind::Lambda { params, body } => {
@@ -268,6 +291,114 @@ impl<'db> TypeChecker<'db> {
         }
 
         result_ty
+    }
+
+    /// Look up a struct field type from the receiver type.
+    ///
+    /// Given a receiver type like `Point` or `Point(Int)`, look up the field `x`
+    /// and return its type with BoundVars substituted by the actual type arguments.
+    fn lookup_struct_field_type(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        receiver_ty: Type<'db>,
+        field_name: Symbol,
+    ) -> Option<Type<'db>> {
+        // Extract struct name from receiver type
+        let struct_name = match receiver_ty.kind(self.db()) {
+            TypeKind::Named { name, .. } => *name,
+            TypeKind::App { ctor, .. } => {
+                // Recursively extract from constructor
+                match ctor.kind(self.db()) {
+                    TypeKind::Named { name, .. } => *name,
+                    _ => return None,
+                }
+            }
+            TypeKind::UniVar { .. } => {
+                // Type not yet known - can't resolve field
+                return None;
+            }
+            _ => return None,
+        };
+
+        // Look up field in ModuleTypeEnv
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+
+        // Substitute BoundVars with actual type arguments if any
+        let actual_args: Vec<Type<'db>> = match receiver_ty.kind(self.db()) {
+            TypeKind::Named { args, .. } => args.clone(),
+            TypeKind::App { args, .. } => args.clone(),
+            _ => vec![],
+        };
+
+        // Substitute BoundVars in field_ty with actual_args
+        if type_params.is_empty() {
+            Some(field_ty)
+        } else {
+            Some(self.substitute_bound_vars(ctx, field_ty, &actual_args))
+        }
+    }
+
+    /// Substitute BoundVars in a type with actual types.
+    fn substitute_bound_vars(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        ty: Type<'db>,
+        args: &[Type<'db>],
+    ) -> Type<'db> {
+        match ty.kind(self.db()) {
+            TypeKind::BoundVar { index } => {
+                // Substitute with actual type argument
+                args.get(*index as usize).copied().unwrap_or_else(|| {
+                    // BoundVar index out of range - use fresh type var
+                    ctx.fresh_type_var()
+                })
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let subst_params: Vec<_> = params
+                    .iter()
+                    .map(|p| self.substitute_bound_vars(ctx, *p, args))
+                    .collect();
+                let subst_result = self.substitute_bound_vars(ctx, *result, args);
+                ctx.func_type(subst_params, subst_result, *effect)
+            }
+            TypeKind::Named { name, args: targs } => {
+                let subst_args: Vec<_> = targs
+                    .iter()
+                    .map(|a| self.substitute_bound_vars(ctx, *a, args))
+                    .collect();
+                ctx.named_type(*name, subst_args)
+            }
+            TypeKind::App {
+                ctor,
+                args: app_args,
+            } => {
+                let subst_ctor = self.substitute_bound_vars(ctx, *ctor, args);
+                let subst_args: Vec<_> = app_args
+                    .iter()
+                    .map(|a| self.substitute_bound_vars(ctx, *a, args))
+                    .collect();
+                Type::new(
+                    self.db(),
+                    TypeKind::App {
+                        ctor: subst_ctor,
+                        args: subst_args,
+                    },
+                )
+            }
+            TypeKind::Tuple(elems) => {
+                let subst_elems: Vec<_> = elems
+                    .iter()
+                    .map(|e| self.substitute_bound_vars(ctx, *e, args))
+                    .collect();
+                Type::new(self.db(), TypeKind::Tuple(subst_elems))
+            }
+            // Other types don't contain BoundVars
+            _ => ty,
+        }
     }
 
     // =========================================================================

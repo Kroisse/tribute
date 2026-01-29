@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
-    UniVarSource,
+    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeParam,
+    TypeScheme, UniVarId, UniVarSource,
 };
 
 use super::constraint::ConstraintSet;
@@ -23,12 +23,18 @@ use super::constraint::ConstraintSet;
 // ModuleTypeEnv: Module-level type information (read-only after collection)
 // =========================================================================
 
+/// Struct field information: (type_params, fields).
+/// - type_params: The struct's type parameters for field type generalization
+/// - fields: Vec of (field_name, field_type) pairs
+pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
+
 /// Module-level type environment.
 ///
 /// This struct holds type information that is shared across all functions in a module:
 /// - Function type schemes (polymorphic signatures)
 /// - Constructor type schemes (for enum variants)
 /// - Type definitions (struct/enum type schemes)
+/// - Struct field definitions for UFCS/accessor resolution
 ///
 /// After `collect_declarations` populates this, it becomes read-only during
 /// function body type checking.
@@ -43,6 +49,9 @@ pub struct ModuleTypeEnv<'db> {
 
     /// Type definitions (struct/enum names to their types).
     type_defs: HashMap<Symbol, TypeScheme<'db>>,
+
+    /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)])
+    struct_fields: HashMap<Symbol, StructFieldInfo<'db>>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -53,6 +62,7 @@ impl<'db> ModuleTypeEnv<'db> {
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
             type_defs: HashMap::new(),
+            struct_fields: HashMap::new(),
         }
     }
 
@@ -80,6 +90,17 @@ impl<'db> ModuleTypeEnv<'db> {
         self.type_defs.insert(name, scheme);
     }
 
+    /// Register struct field information.
+    pub fn register_struct_fields(
+        &mut self,
+        struct_name: Symbol,
+        type_params: Vec<TypeParam>,
+        fields: Vec<(Symbol, Type<'db>)>,
+    ) {
+        self.struct_fields
+            .insert(struct_name, (type_params, fields));
+    }
+
     // =========================================================================
     // Lookup (used during type checking)
     // =========================================================================
@@ -97,6 +118,22 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Look up a type definition.
     pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
         self.type_defs.get(&name).copied()
+    }
+
+    /// Look up struct field type by struct name and field name.
+    /// Returns (type_params, field_type) if found.
+    pub fn lookup_struct_field(
+        &self,
+        struct_name: Symbol,
+        field_name: Symbol,
+    ) -> Option<(&[TypeParam], Type<'db>)> {
+        let (type_params, fields) = self.struct_fields.get(&struct_name)?;
+        for (name, ty) in fields {
+            if *name == field_name {
+                return Some((type_params.as_slice(), *ty));
+            }
+        }
+        None
     }
 
     /// Return the number of registered constructors.
