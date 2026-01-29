@@ -113,9 +113,13 @@ use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region};
 
 // AST-based pipeline imports
-use tribute_front::ast::{Module as AstModule, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::query as ast_query;
+use tribute_front::resolve as ast_resolve;
+use tribute_front::resolve::ModuleEnv;
+use tribute_front::tdnr as ast_tdnr;
+use tribute_front::typeck as ast_typeck;
+use tribute_front::typeck::PreludeExports;
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
@@ -127,12 +131,19 @@ use trunk_ir_wasm_backend::{
 /// The prelude source code, embedded at compile time.
 const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
-/// Load and cache the prelude module.
+/// Load and cache the prelude module (TrunkIR version).
 ///
 /// This is a Salsa tracked function, so the prelude is parsed only once
 /// and cached for all subsequent compilations.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
+    let prelude_source = create_prelude_source(db)?;
+    let cst = parse_cst(db, prelude_source)?;
+    Some(lower_cst(db, prelude_source, cst))
+}
+
+/// Create a SourceCst for the prelude.
+fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
     let uri = fluent_uri::Uri::parse_from("prelude:///std/prelude".to_owned())
         .expect("valid prelude URI");
     let text: Rope = PRELUDE_SOURCE.into();
@@ -141,9 +152,56 @@ pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> 
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
     let tree = parse_with_rope(&mut parser, &text, None)?;
-    let source = SourceCst::new(db, uri, text, Some(tree));
-    let cst = parse_cst(db, source)?;
-    Some(lower_cst(db, source, cst))
+    Some(crate::SourceCst::new(db, uri, text, Some(tree)))
+}
+
+/// Get prelude's ModuleEnv for name resolution.
+///
+/// This parses the prelude to AST and builds its module environment.
+/// Cached by Salsa - computed once and reused.
+#[salsa::tracked]
+pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
+    let prelude_source = create_prelude_source(db)?;
+    let parsed = ast_query::parsed_ast_with_module_path(
+        db,
+        prelude_source,
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+    let prelude_ast = parsed.module(db);
+    Some(ast_resolve::build_env(db, &prelude_ast))
+}
+
+/// Process prelude through AST pipeline and extract type exports.
+///
+/// This function:
+/// 1. Parses prelude to AST
+/// 2. Builds prelude's ModuleEnv
+/// 3. Resolves names in prelude
+/// 4. Type checks prelude with independent TypeContext (all UniVars resolved)
+/// 5. Extracts PreludeExports (TypeSchemes only, no UniVars)
+///
+/// Cached by Salsa - computed once and reused.
+#[salsa::tracked]
+pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
+    let prelude_source = create_prelude_source(db)?;
+    let parsed = ast_query::parsed_ast_with_module_path(
+        db,
+        prelude_source,
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+
+    let prelude_ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+
+    // Build prelude ModuleEnv and resolve
+    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map);
+
+    // Typecheck with independent TypeContext (all UniVars resolved)
+    let checker = ast_typeck::TypeChecker::new(db);
+    let prelude_exports = checker.check_module_for_prelude(resolved);
+
+    Some(prelude_exports)
 }
 
 /// Merge prelude definitions into a user module.
@@ -728,67 +786,60 @@ pub fn compile_to_wasm_binary<'db>(
 //
 // This replaces the legacy tirgen-based pipeline that worked directly with IR.
 
-/// Parse and lower source to typed AST.
-///
-/// This function runs the AST pipeline through TDNR, producing a fully typed AST.
-/// Uses Salsa-tracked query functions for incremental caching at each stage.
-fn parse_and_typecheck_ast<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<AstModule<TypedRef<'db>>> {
-    // Use tracked query functions for incremental caching
-    // Each stage is cached independently by Salsa:
-    // - parsed_module: CST → AST
-    // - resolved_module: name resolution
-    // - typed_module: type checking
-    // - tdnr_module: type-directed name resolution
-    ast_query::tdnr_module(db, source)
-}
-
 /// Parse and lower source to TrunkIR using the AST pipeline.
 ///
 /// This is the AST-based alternative to `parse_and_lower`.
 /// Returns a module with resolved types, ready for further lowering passes.
+///
+/// Uses the Type Info Injection approach to make prelude types available:
+/// 1. Parse user code to AST
+/// 2. Merge prelude bindings into user's ModuleEnv
+/// 3. Resolve names with merged environment
+/// 4. Inject prelude TypeSchemes into user's TypeContext
+/// 5. Type check with injected types
+/// 6. Run TDNR
+/// 7. Lower to TrunkIR
+/// 8. Merge prelude IR for implementations (still needed for now)
 #[salsa::tracked]
 pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    // Run AST pipeline through TDNR
-    let Some(typed_ast) = parse_and_typecheck_ast(db, source) else {
-        // Return empty module on parse error
+    // Phase 1: Parse user code to AST
+    let Some(parsed) = ast_query::parsed_ast(db, source) else {
         let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
         let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
         let module_name = derive_module_name_from_path(db, path);
         return Module::build(db, location, module_name, |_| {});
     };
 
-    // Get span map for source location information
-    let span_map = match ast_query::span_map(db, source) {
-        Some(map) => map,
-        None => {
-            // Missing span map - emit warning and use default
-            // This may cause LSP features to have degraded source locations
-            Diagnostic {
-                message: "span map unavailable; source locations may be inaccurate".to_string(),
-                span: Span::default(),
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::AstGeneration,
-            }
-            .accumulate(db);
-            Default::default()
-        }
-    };
+    let user_ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
 
-    // Phase 5: AST → TrunkIR
-    // Get function type schemes from type checking for polymorphic lowering
-    let function_types: std::collections::HashMap<_, _> = ast_query::function_schemes(db, source)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+    // Phase 2: Build user env and merge prelude bindings
+    let mut user_env = ast_resolve::build_env(db, &user_ast);
+    if let Some(p_env) = prelude_env(db) {
+        user_env.merge(&p_env); // Prelude bindings injected, user definitions take precedence
+    }
 
+    // Phase 3: Name resolution with merged environment
+    let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, user_env, span_map.clone());
+
+    // Phase 4: Type checking with prelude types injected
+    let mut checker = ast_typeck::TypeChecker::new(db);
+    if let Some(p_exports) = prelude_exports(db) {
+        checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
+    }
+    let (typed_ast, function_types_vec) = checker.check_module_with_types(resolved_ast);
+
+    // Phase 5: TDNR (Type-Directed Name Resolution)
+    let tdnr_ast = ast_tdnr::resolve_tdnr(db, typed_ast);
+
+    // Phase 6: AST → TrunkIR
+    let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
     let source_uri = source.uri(db).as_str();
     let user_module =
-        ast_to_ir::lower_ast_to_ir(db, typed_ast, span_map, source_uri, function_types);
+        ast_to_ir::lower_ast_to_ir(db, tdnr_ast, span_map, source_uri, function_types);
 
-    // Merge prelude definitions into the user module
+    // Phase 7: Merge prelude at TrunkIR level
+    // Still needed for prelude implementations (function bodies, struct layouts)
     merge_with_prelude(db, user_module)
 }
 

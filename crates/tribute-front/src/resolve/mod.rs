@@ -41,8 +41,26 @@ pub fn resolve_module<'db>(
     resolver.resolve_module(module)
 }
 
+/// Resolve names in a module with a pre-built environment.
+///
+/// This variant is used when prelude bindings need to be injected
+/// before name resolution. The caller is responsible for merging
+/// prelude bindings into the environment before calling this.
+pub fn resolve_with_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<UnresolvedName>,
+    env: ModuleEnv<'db>,
+    span_map: SpanMap,
+) -> Module<ResolvedRef<'db>> {
+    let mut resolver = Resolver::new(db, env, span_map);
+    resolver.resolve_module(module)
+}
+
 /// Build a module environment from AST declarations.
-fn build_env<'db>(db: &'db dyn salsa::Database, module: &Module<UnresolvedName>) -> ModuleEnv<'db> {
+pub fn build_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
     // Build module path from the module name (if any)

@@ -44,6 +44,14 @@ impl<'db> TypeChecker<'db> {
         self.ctx.db()
     }
 
+    /// Inject prelude's resolved type information before type checking.
+    ///
+    /// This makes prelude's types (Option, Some, None, etc.) available
+    /// to user code without sharing a TypeContext, avoiding UniVar conflicts.
+    pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
+        self.ctx.inject_prelude(exports);
+    }
+
     /// Type check a module.
     pub fn check_module(self, module: Module<ResolvedRef<'db>>) -> Module<TypedRef<'db>> {
         self.check_module_inner(module).0
@@ -55,6 +63,17 @@ impl<'db> TypeChecker<'db> {
         module: Module<ResolvedRef<'db>>,
     ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
         self.check_module_inner(module)
+    }
+
+    /// Type check a module and return PreludeExports.
+    ///
+    /// This is used to process the prelude and extract its type information
+    /// for injection into user code's TypeContext.
+    pub fn check_module_for_prelude(
+        self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> super::PreludeExports<'db> {
+        self.check_module_inner_for_prelude(module)
     }
 
     /// Internal implementation for module type checking.
@@ -119,6 +138,82 @@ impl<'db> TypeChecker<'db> {
         };
 
         (typed_module, function_types)
+    }
+
+    /// Internal implementation for prelude module type checking.
+    ///
+    /// Similar to check_module_inner but returns PreludeExports with FuncDefId keys.
+    fn check_module_inner_for_prelude(
+        mut self,
+        module: Module<ResolvedRef<'db>>,
+    ) -> super::PreludeExports<'db> {
+        // Phase 1: Collect type definitions and function signatures
+        self.collect_declarations(&module);
+
+        // Phase 2: Type check all declarations and generate constraints
+        let _decls: Vec<Decl<TypedRef<'db>>> = module
+            .decls
+            .into_iter()
+            .map(|decl| self.check_decl(decl))
+            .collect();
+
+        // Phase 3: Solve constraints
+        let constraints = self.ctx.take_constraints();
+        let mut solver = TypeSolver::new(self.db());
+
+        // Solve constraints and emit diagnostics for errors
+        if let Err(error) = solver.solve(constraints) {
+            let span = Span::new(0, 0);
+            Diagnostic {
+                message: format!("Type error in prelude: {:?}", error),
+                span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db());
+        }
+
+        // Phase 4: Apply substitution and generalization
+        let type_subst = solver.type_subst();
+        let row_subst = solver.row_subst();
+
+        // Export function types with FuncDefId (for PreludeExports)
+        let function_types: Vec<_> = self
+            .ctx
+            .export_function_types_with_ids()
+            .into_iter()
+            .map(|(id, scheme)| {
+                let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
+                let (generalized, type_params) = type_subst.generalize(self.db(), body, row_subst);
+                (id, TypeScheme::new(self.db(), type_params, generalized))
+            })
+            .collect();
+
+        // Export constructor types
+        let constructor_types: Vec<_> = self
+            .ctx
+            .export_constructor_types()
+            .into_iter()
+            .map(|(id, scheme)| {
+                let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
+                let (generalized, type_params) = type_subst.generalize(self.db(), body, row_subst);
+                (id, TypeScheme::new(self.db(), type_params, generalized))
+            })
+            .collect();
+
+        // Export type definitions
+        let type_defs: Vec<_> = self
+            .ctx
+            .export_type_defs()
+            .into_iter()
+            .map(|(name, scheme)| {
+                let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
+                let (generalized, type_params) = type_subst.generalize(self.db(), body, row_subst);
+                (name, TypeScheme::new(self.db(), type_params, generalized))
+            })
+            .collect();
+
+        super::PreludeExports::new(self.db(), function_types, constructor_types, type_defs)
     }
 
     // =========================================================================

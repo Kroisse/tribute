@@ -31,7 +31,7 @@ pub use solver::{SolveError, TypeSolver};
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Module, ResolvedRef, TypeScheme, TypedRef};
+use crate::ast::{CtorId, FuncDefId, Module, ResolvedRef, TypeScheme, TypedRef};
 
 /// Salsa-tracked struct holding the complete type checking output.
 ///
@@ -45,6 +45,29 @@ pub struct TypeCheckOutput<'db> {
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
     #[returns(ref)]
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+}
+
+/// Prelude's exported type information.
+///
+/// This struct holds type information extracted from the prelude after it has been
+/// fully type-checked. All types are resolved TypeSchemes with no UniVars - only
+/// BoundVars for polymorphic parameters.
+///
+/// This allows user code to use prelude types without sharing a TypeContext,
+/// avoiding UniVar counter conflicts that caused issues in the AST merge approach.
+#[salsa::tracked]
+pub struct PreludeExports<'db> {
+    /// Function type schemes keyed by FuncDefId.
+    #[returns(ref)]
+    pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
+
+    /// Constructor type schemes keyed by CtorId.
+    #[returns(ref)]
+    pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
+
+    /// Type definitions keyed by name.
+    #[returns(ref)]
+    pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
 }
 
 /// Type check a module and return both the typed AST and function type schemes.

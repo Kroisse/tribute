@@ -88,14 +88,28 @@ pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ParsedAst<'db>> {
+    let module_name = derive_module_name_from_uri(source.uri(db));
+    lower_source_to_parsed_ast_with_module_path(db, source, module_name)
+}
+
+/// Parse and lower a source file to AST with a specific module path.
+///
+/// This variant allows specifying a custom module path for the AST nodes,
+/// which is useful for parsing library modules (like the prelude) where
+/// NodeIds need a different path to avoid collisions with user code.
+#[salsa::tracked]
+pub fn lower_source_to_parsed_ast_with_module_path<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    module_path: Option<trunk_ir::Symbol>,
+) -> Option<ParsedAst<'db>> {
     use crate::tirgen::parse_cst;
 
     use salsa::Accumulator;
 
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
-    let module_name = derive_module_name_from_uri(source.uri(db));
-    let result = lower_cst_to_ast_internal(text, &cst, module_name);
+    let result = lower_cst_to_ast_internal(text, &cst, module_path);
     for diag in result.diagnostics {
         diag.accumulate(db);
     }

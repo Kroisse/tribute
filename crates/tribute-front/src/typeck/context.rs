@@ -445,6 +445,46 @@ impl<'db> TypeContext<'db> {
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         Type::new(self.db, TypeKind::Named { name, args })
     }
+
+    // =========================================================================
+    // Prelude injection
+    // =========================================================================
+
+    /// Inject prelude's resolved type information into this context.
+    ///
+    /// This is called before type checking user code to make prelude's
+    /// types available. The injected types contain only BoundVars (no UniVars),
+    /// so when user code instantiates them, fresh UniVars are created from
+    /// the user's counter, avoiding conflicts.
+    pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
+        for (id, scheme) in exports.function_types(self.db) {
+            self.function_types.insert(*id, *scheme);
+        }
+        for (id, scheme) in exports.constructor_types(self.db) {
+            self.constructor_types.insert(*id, *scheme);
+        }
+        for (name, scheme) in exports.type_defs(self.db) {
+            self.type_defs.insert(*name, *scheme);
+        }
+    }
+
+    /// Export constructor types for PreludeExports.
+    pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
+        self.constructor_types
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect()
+    }
+
+    /// Export type definitions for PreludeExports.
+    pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+        self.type_defs.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+
+    /// Export function types with FuncDefId (not just Symbol).
+    pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
+        self.function_types.iter().map(|(k, v)| (*k, *v)).collect()
+    }
 }
 
 #[cfg(test)]

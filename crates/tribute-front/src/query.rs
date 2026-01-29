@@ -36,6 +36,19 @@ pub fn parsed_ast<'db>(
     crate::astgen::lower_source_to_parsed_ast(db, source)
 }
 
+/// Parse a source file to AST with a specific module path.
+///
+/// This variant is used for parsing the prelude or other library modules
+/// where NodeIds need a different module path to avoid collisions.
+#[salsa::tracked]
+pub fn parsed_ast_with_module_path<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    module_path: Symbol,
+) -> Option<crate::astgen::ParsedAst<'db>> {
+    crate::astgen::lower_source_to_parsed_ast_with_module_path(db, source, Some(module_path))
+}
+
 /// Parse a source file to an AST module.
 ///
 /// This is the entry point for parsing. The result is cached by Salsa.
