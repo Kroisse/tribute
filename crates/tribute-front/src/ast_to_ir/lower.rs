@@ -2,7 +2,7 @@
 //!
 //! Transforms AST declarations and expressions to TrunkIR operations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -11,11 +11,14 @@ use trunk_ir::{
     Attribute, BlockBuilder, DialectOp, DialectType, Location, PathId, Region, Symbol, idvec,
 };
 
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::ModulePathExt;
+use tribute_ir::dialect::{closure, tribute, tribute_rt};
+
+use super::context::CaptureInfo;
 
 use crate::ast::{
-    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, Module, Param,
-    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
+    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId, Module,
+    Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
     TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
@@ -104,13 +107,30 @@ pub fn lower_module<'db>(
     let location = Location::new(path, module_location);
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
 
-    core::Module::build(db, location, module_name, |top| {
-        let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types);
+    // Create context outside the build closure so we can access lifted_functions after
+    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_name);
 
-        for decl in module.decls {
-            lower_decl(&mut ctx, top, decl);
-        }
-    })
+    // Build the module body
+    let mut top = BlockBuilder::new(db, location);
+    for decl in module.decls {
+        lower_decl(&mut ctx, &mut top, decl);
+    }
+
+    // Prepend lifted functions to the module
+    let lifted_functions = ctx.take_lifted_functions();
+    let mut all_ops = lifted_functions;
+    all_ops.extend(top.build().operations(db).iter().copied());
+
+    // Build the final module with all operations
+    let block = trunk_ir::Block::new(
+        db,
+        trunk_ir::BlockId::fresh(),
+        location,
+        trunk_ir::IdVec::new(),
+        all_ops.into_iter().collect(),
+    );
+    let region = Region::new(db, location, idvec![block]);
+    core::Module::create(db, location, module_name, region)
 }
 
 /// Lower a declaration to TrunkIR.
@@ -133,9 +153,11 @@ fn lower_decl<'db>(
         Decl::Module(m) => {
             // Inline module: recursively lower nested declarations
             if let Some(body) = m.body {
+                ctx.enter_module(m.name);
                 for inner_decl in body {
                     lower_decl(ctx, top, inner_decl);
                 }
+                ctx.exit_module();
             }
         }
     }
@@ -188,7 +210,7 @@ fn lower_function<'db>(
             // Use index-based matching to handle params with None local_id correctly
             for (i, param) in func.params.iter().enumerate() {
                 if let Some(local_id) = param.local_id {
-                    ctx.bind(local_id, arg_values[i]);
+                    ctx.bind(local_id, param.name, arg_values[i]);
                 }
             }
 
@@ -573,57 +595,274 @@ fn lower_expr<'db>(
     }
 }
 
-/// Lower a lambda expression.
+// =============================================================================
+// Capture Analysis
+// =============================================================================
+
+/// Collect all LocalIds referenced in an expression (free variables).
+fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<LocalId>) {
+    match &*expr.kind {
+        ExprKind::Var(typed_ref) => {
+            if let ResolvedRef::Local { id, .. } = &typed_ref.resolved {
+                free_vars.insert(*id);
+            }
+        }
+        ExprKind::IntLit(_)
+        | ExprKind::NatLit(_)
+        | ExprKind::FloatLit(_)
+        | ExprKind::BoolLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::BytesLit(_)
+        | ExprKind::RuneLit(_)
+        | ExprKind::Nil
+        | ExprKind::Error => {}
+        ExprKind::BinOp { lhs, rhs, .. } => {
+            collect_free_vars(lhs, free_vars);
+            collect_free_vars(rhs, free_vars);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_free_vars(callee, free_vars);
+            for arg in args {
+                collect_free_vars(arg, free_vars);
+            }
+        }
+        ExprKind::Cons { args, .. } => {
+            for arg in args {
+                collect_free_vars(arg, free_vars);
+            }
+        }
+        ExprKind::MethodCall { receiver, args, .. } => {
+            collect_free_vars(receiver, free_vars);
+            for arg in args {
+                collect_free_vars(arg, free_vars);
+            }
+        }
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::Let { value, .. } => collect_free_vars(value, free_vars),
+                    Stmt::Expr { expr, .. } => collect_free_vars(expr, free_vars),
+                }
+            }
+            collect_free_vars(value, free_vars);
+        }
+        ExprKind::Record { fields, .. } => {
+            for (_, value) in fields {
+                collect_free_vars(value, free_vars);
+            }
+        }
+        ExprKind::Tuple(elements) => {
+            for elem in elements {
+                collect_free_vars(elem, free_vars);
+            }
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            collect_free_vars(scrutinee, free_vars);
+            for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    collect_free_vars(guard, free_vars);
+                }
+                collect_free_vars(&arm.body, free_vars);
+            }
+        }
+        ExprKind::Lambda { body, .. } => {
+            // Note: nested lambda's body is traversed, but its params are bound
+            // within that lambda, so they won't be in our outer scope anyway
+            collect_free_vars(body, free_vars);
+        }
+        ExprKind::Handle { body, .. } => {
+            collect_free_vars(body, free_vars);
+            // TODO: traverse handler arms as well
+        }
+        ExprKind::List(elements) => {
+            for elem in elements {
+                collect_free_vars(elem, free_vars);
+            }
+        }
+    }
+}
+
+/// Analyze captures for a lambda expression.
+/// Returns the list of captured variables (those referenced but not lambda params).
+fn analyze_captures<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    params: &[Param],
+    body: &Expr<TypedRef<'db>>,
+) -> Vec<CaptureInfo<'db>> {
+    // Collect all LocalIds referenced in the body
+    let mut free_vars = HashSet::new();
+    collect_free_vars(body, &mut free_vars);
+
+    // Get param LocalIds to exclude
+    let param_ids: HashSet<LocalId> = params.iter().filter_map(|p| p.local_id).collect();
+
+    // Filter to only those that are:
+    // 1. Not lambda parameters
+    // 2. Actually bound in the current scope
+    let mut captures = Vec::new();
+    for (local_id, name, value) in ctx.all_bindings() {
+        if free_vars.contains(&local_id) && !param_ids.contains(&local_id) {
+            let ty = tribute_rt::any_type(ctx.db); // Type-erased for now
+            captures.push(CaptureInfo {
+                name,
+                local_id,
+                ty,
+                value,
+            });
+        }
+    }
+
+    captures
+}
+
+// =============================================================================
+// Lambda Lowering (Closure Conversion)
+// =============================================================================
+
+/// Lower a lambda expression to a closure.
+///
+/// This performs closure conversion:
+/// 1. Analyze captures (free variables referenced in body)
+/// 2. Create a lifted function at module level
+/// 3. Create an env struct with captured values
+/// 4. Return a closure.new with the env and function reference
 fn lower_lambda<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location<'db>,
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
-    let infer_ty = tribute_rt::any_type(builder.db());
+    let db = builder.db();
+    let any_ty = tribute_rt::any_type(db);
 
-    // Build parameter types (all type-erased to any)
-    let param_types: trunk_ir::IdVec<trunk_ir::Type<'db>> =
-        std::iter::repeat_n(infer_ty, params.len()).collect();
+    // Step 1: Analyze captures
+    let captures = analyze_captures(builder.ctx, params, body);
 
-    // Build lambda body block with args
-    let mut body_block = BlockBuilder::new(builder.db(), location);
-    for param in params {
-        body_block = body_block
-            .arg(infer_ty)
-            .attr(Symbol::new("bind_name"), param.name);
+    // Step 2: Generate unique name for the lifted function
+    let lifted_name = builder.ctx.gen_lambda_name();
+
+    // Step 3: Build the lifted function
+    // Signature: (env, param1, param2, ...) -> result
+    // All types are erased to any for simplicity
+    let mut all_param_types: trunk_ir::IdVec<trunk_ir::Type<'db>> = trunk_ir::IdVec::new();
+
+    // First param is env (or nil if no captures)
+    let env_ty = if captures.is_empty() {
+        builder.ctx.nil_type()
+    } else {
+        // Create env struct type
+        let fields: Vec<(Symbol, trunk_ir::Type<'db>)> = captures
+            .iter()
+            .enumerate()
+            .map(|(i, cap)| (Symbol::from_dynamic(&format!("_{}", i)), cap.ty))
+            .collect();
+        let env_name = lifted_name.join_path(Symbol::new("env"));
+        adt::struct_type(db, env_name, fields)
+    };
+    all_param_types.push(env_ty);
+
+    // Then the original lambda params
+    for _ in params {
+        all_param_types.push(any_ty);
     }
-    body_block.flush_pending_arg();
 
-    let arg_values: Vec<trunk_ir::Value<'db>> = (0..params.len())
-        .map(|i| body_block.block_arg(builder.db(), i))
-        .collect();
-
-    // Lower body in parameter scope
-    let result_value = builder.ctx.scoped(|ctx| {
-        for (param, arg_value) in params.iter().zip(arg_values.iter().copied()) {
-            if let Some(local_id) = param.local_id {
-                ctx.bind(local_id, arg_value);
-            }
-        }
-
-        let mut inner_builder = IrBuilder::new(ctx, &mut body_block);
-        lower_expr(&mut inner_builder, body.clone())
-    })?;
-
-    body_block.op(tribute::r#yield(builder.db(), location, result_value));
-
-    let func_type = core::Func::new(builder.db(), param_types, infer_ty).as_type();
-    let region = Region::new(builder.db(), location, idvec![body_block.build()]);
-
-    let lambda_op = builder.block.op(tribute::lambda(
-        builder.db(),
+    // Build the lifted function body
+    let lifted_func = func::Func::build_with_named_params(
+        db,
         location,
-        infer_ty,
-        func_type,
-        region,
+        lifted_name,
+        None, // visibility
+        {
+            let mut param_specs = Vec::new();
+            param_specs.push((env_ty, Some(Symbol::new("__env"))));
+            for param in params {
+                param_specs.push((any_ty, Some(param.name)));
+            }
+            param_specs
+        },
+        any_ty, // return type
+        None,   // effect type
+        |body_block, arg_values| {
+            // arg_values[0] is env, arg_values[1..] are params
+            let env_value = arg_values[0];
+
+            // Create a new context for the lambda body
+            builder.ctx.enter_scope();
+
+            // Bind lambda parameters (skip env at index 0)
+            for (i, param) in params.iter().enumerate() {
+                if let Some(local_id) = param.local_id {
+                    builder.ctx.bind(local_id, param.name, arg_values[i + 1]);
+                }
+            }
+
+            // Extract captured values from env and bind them
+            for (i, cap) in captures.iter().enumerate() {
+                let extracted = body_block
+                    .op(adt::struct_get(
+                        db, location, env_value, cap.ty, env_ty, i as u64,
+                    ))
+                    .result(db);
+                builder.ctx.bind(cap.local_id, cap.name, extracted);
+            }
+
+            // Lower the lambda body
+            let mut inner_builder = IrBuilder::new(builder.ctx, body_block);
+            if let Some(result) = lower_expr(&mut inner_builder, body.clone()) {
+                inner_builder
+                    .block
+                    .op(func::Return::value(db, location, result));
+            } else {
+                // Return nil on error
+                let nil = inner_builder.emit_nil(location);
+                inner_builder
+                    .block
+                    .op(func::Return::value(db, location, nil));
+            }
+
+            builder.ctx.exit_scope();
+        },
+    );
+
+    // Add the lifted function to the module
+    builder.ctx.add_lifted_function(lifted_func.as_operation());
+
+    // Step 4: Create env struct with captured values
+    let capture_values: Vec<trunk_ir::Value<'db>> = captures.iter().map(|c| c.value).collect();
+
+    let env_value = if captures.is_empty() {
+        // No captures - create nil value
+        builder.emit_nil(location)
+    } else {
+        builder
+            .block
+            .op(adt::struct_new(
+                db,
+                location,
+                capture_values,
+                env_ty,
+                env_ty,
+            ))
+            .result(db)
+    };
+
+    // Step 5: Create closure.new
+    let func_type = core::Func::new(
+        db,
+        std::iter::repeat_n(any_ty, params.len()).collect(),
+        any_ty,
+    )
+    .as_type();
+    let closure_ty = closure::Closure::new(db, func_type);
+
+    let closure_op = builder.block.op(closure::new(
+        db,
+        location,
+        env_value,
+        *closure_ty,
+        lifted_name,
     ));
-    Some(lambda_op.result(builder.db()))
+    Some(closure_op.result(db))
 }
 
 /// Check if an expression evaluates to a float type.
@@ -749,11 +988,11 @@ fn lower_block<'db>(
                 if let Some(val) = lower_expr(builder, value) {
                     match &*pattern.kind {
                         crate::ast::PatternKind::Bind {
+                            name,
                             local_id: Some(local_id),
-                            ..
                         } => {
                             // Register the binding so Var expressions can find it
-                            builder.ctx.bind(*local_id, val);
+                            builder.ctx.bind(*local_id, *name, val);
                         }
                         crate::ast::PatternKind::Wildcard => {
                             // Wildcard binds nothing, value is computed for side effects
@@ -1299,9 +1538,10 @@ fn bind_pattern_fields<'db>(
 ) {
     match &*pattern.kind {
         PatternKind::Bind {
-            local_id: Some(id), ..
+            name,
+            local_id: Some(id),
         } => {
-            ctx.bind(*id, scrutinee);
+            ctx.bind(*id, *name, scrutinee);
         }
         PatternKind::Variant { ctor, fields } => {
             let (variant_name, enum_ty) = match &ctor.resolved {
@@ -2173,7 +2413,13 @@ mod tests {
     fn test_convert_annotation_to_ir_type_named(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map, HashMap::new());
+        let ctx = super::super::context::IrLoweringCtx::new(
+            db,
+            path,
+            span_map,
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         // Test Int annotation
         let int_ann = TypeAnnotation {
@@ -2204,7 +2450,13 @@ mod tests {
     fn test_convert_annotation_to_ir_type_default(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = super::super::context::IrLoweringCtx::new(db, path, span_map, HashMap::new());
+        let ctx = super::super::context::IrLoweringCtx::new(
+            db,
+            path,
+            span_map,
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         // No annotation should default to int
         let ty = convert_annotation_to_ir_type(&ctx, None);
@@ -4193,44 +4445,44 @@ mod tests {
         let ir_module = test_lower(db, path, SpanMap::default(), module);
         let ops = get_module_ops(db, &ir_module);
 
-        // Should have a function
-        let func_op = ops.iter().find(|op| op.name(db) == "func");
-        assert!(func_op.is_some(), "Should emit func operation");
+        // Should have the original function
+        let func_ops: Vec<_> = ops.iter().filter(|op| op.name(db) == "func").collect();
+        assert!(
+            func_ops.len() >= 2,
+            "Should have at least 2 func operations (lifted lambda + original)"
+        );
 
-        let func_typed = func::Func::from_operation(db, *func_op.unwrap()).unwrap();
+        // Find the make_adder function (not the lifted lambda)
+        let make_adder = func_ops.iter().find(|op| {
+            if let Ok(f) = func::Func::from_operation(db, ***op) {
+                f.sym_name(db).last_segment() == "make_adder"
+            } else {
+                false
+            }
+        });
+        assert!(make_adder.is_some(), "Should have make_adder function");
+
+        let func_typed = func::Func::from_operation(db, **make_adder.unwrap()).unwrap();
         let body_ops = get_func_body_ops(db, &func_typed);
 
-        // Should have a lambda operation
-        let lambda_op = body_ops.iter().find(|op| op.name(db) == "lambda");
+        // Should have a closure.new operation (not tribute.lambda)
+        let closure_op = body_ops.iter().find(|op| op.name(db) == "new");
         assert!(
-            lambda_op.is_some(),
-            "Should emit tribute.lambda operation for lambda expression"
+            closure_op.is_some(),
+            "Should emit closure.new operation for lambda expression"
         );
 
-        // The lambda should have a body region with yield
-        let lambda_op = lambda_op.unwrap();
-        let regions = lambda_op.regions(db);
-        assert_eq!(
-            regions.len(),
-            1,
-            "Lambda should have exactly one body region"
-        );
-
-        let body_region = regions[0];
-        let body_blocks = body_region.blocks(db);
-        assert!(
-            !body_blocks.is_empty(),
-            "Lambda body should have at least one block"
-        );
-
-        // The body block should have a yield operation
-        let body_block = body_blocks[0];
-        let body_ops = body_block.operations(db);
-        let yield_op = body_ops.iter().find(|op| op.name(db) == "yield");
-        assert!(
-            yield_op.is_some(),
-            "Lambda body should end with tribute.yield"
-        );
+        // Check that a lifted lambda function exists
+        let lifted = func_ops.iter().find(|op| {
+            if let Ok(f) = func::Func::from_operation(db, ***op) {
+                f.sym_name(db)
+                    .last_segment()
+                    .with_str(|s| s.starts_with("__lambda_"))
+            } else {
+                false
+            }
+        });
+        assert!(lifted.is_some(), "Should have lifted __lambda_ function");
     }
 
     #[salsa_test]
@@ -4287,22 +4539,35 @@ mod tests {
         let ir_module = test_lower(db, path, SpanMap::default(), module);
         let ops = get_module_ops(db, &ir_module);
 
-        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
-        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
-        let body_ops = get_func_body_ops(db, &func_typed);
+        // Find all func operations
+        let func_ops: Vec<_> = ops.iter().filter(|op| op.name(db) == "func").collect();
+        assert!(
+            func_ops.len() >= 2,
+            "Should have at least 2 func operations (lifted lambda + original)"
+        );
 
-        let lambda_op = body_ops.iter().find(|op| op.name(db) == "lambda").unwrap();
-        let regions = lambda_op.regions(db);
-        let body_region = regions[0];
-        let body_blocks = body_region.blocks(db);
-        let body_block = body_blocks[0];
+        // Find the lifted lambda function
+        let lifted = func_ops.iter().find(|op| {
+            if let Ok(f) = func::Func::from_operation(db, ***op) {
+                f.sym_name(db)
+                    .last_segment()
+                    .with_str(|s| s.starts_with("__lambda_"))
+            } else {
+                false
+            }
+        });
+        assert!(lifted.is_some(), "Should have lifted __lambda_ function");
 
-        // Check that the lambda has 3 block arguments
-        let args = body_block.args(db);
+        let lifted_func = func::Func::from_operation(db, **lifted.unwrap()).unwrap();
+        let body = lifted_func.body(db);
+        let entry_block = body.blocks(db)[0];
+
+        // Check that the lifted function has 4 block arguments: env + 3 params
+        let args = entry_block.args(db);
         assert_eq!(
             args.len(),
-            3,
-            "Lambda with 3 params should have 3 block arguments"
+            4,
+            "Lifted lambda with 3 params should have 4 block arguments (env + 3 params)"
         );
     }
 }

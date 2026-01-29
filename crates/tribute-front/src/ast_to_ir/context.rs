@@ -4,11 +4,25 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core;
-use trunk_ir::{DialectType, Location, PathId, Symbol, Type, Value};
+use trunk_ir::{DialectType, Location, Operation, PathId, Symbol, Type, Value};
 
 use crate::ast::{LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
+
+/// Information about a captured variable.
+#[derive(Clone, Debug)]
+pub struct CaptureInfo<'db> {
+    /// Variable name.
+    pub name: Symbol,
+    /// Variable's LocalId.
+    pub local_id: LocalId,
+    /// Variable type (IR type).
+    pub ty: Type<'db>,
+    /// The SSA value in the outer scope.
+    pub value: Value<'db>,
+}
 
 /// Context for lowering AST to TrunkIR.
 pub struct IrLoweringCtx<'db> {
@@ -16,10 +30,16 @@ pub struct IrLoweringCtx<'db> {
     pub path: PathId<'db>,
     /// Span map for looking up source locations.
     span_map: SpanMap,
-    /// Stack of scopes, each mapping LocalId to SSA value.
-    scopes: Vec<HashMap<LocalId, Value<'db>>>,
+    /// Stack of scopes, each mapping LocalId to (name, SSA value).
+    scopes: Vec<HashMap<LocalId, (Symbol, Value<'db>)>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
+    /// Module path for generating qualified lambda names (e.g., "std::Option").
+    module_path: Symbol,
+    /// Counter for generating unique lambda names.
+    lambda_counter: u64,
+    /// Lifted lambda functions to be added at module level.
+    lifted_functions: Vec<Operation<'db>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -29,6 +49,7 @@ impl<'db> IrLoweringCtx<'db> {
         path: PathId<'db>,
         span_map: SpanMap,
         function_types: HashMap<Symbol, TypeScheme<'db>>,
+        module_path: Symbol,
     ) -> Self {
         Self {
             db,
@@ -36,6 +57,26 @@ impl<'db> IrLoweringCtx<'db> {
             span_map,
             scopes: vec![HashMap::new()],
             function_types,
+            module_path,
+            lambda_counter: 0,
+            lifted_functions: Vec::new(),
+        }
+    }
+
+    /// Get the current module path.
+    pub fn module_path(&self) -> Symbol {
+        self.module_path
+    }
+
+    /// Enter a nested module, updating the module path.
+    pub fn enter_module(&mut self, name: Symbol) {
+        self.module_path = self.module_path.join_path(name);
+    }
+
+    /// Exit a nested module, restoring the parent module path.
+    pub fn exit_module(&mut self) {
+        if let Some(parent) = self.module_path.parent_path() {
+            self.module_path = parent;
         }
     }
 
@@ -67,9 +108,9 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Bind a local variable to an SSA value.
-    pub fn bind(&mut self, local_id: LocalId, value: Value<'db>) {
+    pub fn bind(&mut self, local_id: LocalId, name: Symbol, value: Value<'db>) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(local_id, value);
+            scope.insert(local_id, (name, value));
         }
     }
 
@@ -81,11 +122,37 @@ impl<'db> IrLoweringCtx<'db> {
     /// Look up a local variable.
     pub fn lookup(&self, local_id: LocalId) -> Option<Value<'db>> {
         for scope in self.scopes.iter().rev() {
-            if let Some(value) = scope.get(&local_id) {
+            if let Some((_, value)) = scope.get(&local_id) {
                 return Some(*value);
             }
         }
         None
+    }
+
+    /// Generate a unique lambda name qualified with module name.
+    pub fn gen_lambda_name(&mut self) -> Symbol {
+        let name = Symbol::from_dynamic(&format!("__lambda_{}", self.lambda_counter));
+        self.lambda_counter += 1;
+        self.module_path.join_path(name)
+    }
+
+    /// Add a lifted function to be included in the module.
+    pub fn add_lifted_function(&mut self, func: Operation<'db>) {
+        self.lifted_functions.push(func);
+    }
+
+    /// Take all lifted functions (consumes them).
+    pub fn take_lifted_functions(&mut self) -> Vec<Operation<'db>> {
+        std::mem::take(&mut self.lifted_functions)
+    }
+
+    /// Get all bindings visible in the current scope (for capture analysis).
+    /// Returns bindings from all scopes, innermost first.
+    pub fn all_bindings(&self) -> impl Iterator<Item = (LocalId, Symbol, Value<'db>)> + '_ {
+        self.scopes
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter().map(|(&id, &(name, value))| (id, name, value)))
     }
 
     /// Convert an AST type to a TrunkIR type.
@@ -156,7 +223,13 @@ mod tests {
     #[salsa_test]
     fn test_convert_type_bound_var_to_any(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         let ty = AstType::new(db, TypeKind::BoundVar { index: 0 });
         let ir_ty = ctx.convert_type(ty);
@@ -166,7 +239,13 @@ mod tests {
     #[salsa_test]
     fn test_convert_type_named_to_any(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         let int_ty = AstType::new(db, TypeKind::Int);
         let ty = AstType::new(
@@ -183,7 +262,13 @@ mod tests {
     #[salsa_test]
     fn test_convert_type_tuple_to_any(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         let int_ty = AstType::new(db, TypeKind::Int);
         let bool_ty = AstType::new(db, TypeKind::Bool);
@@ -195,7 +280,13 @@ mod tests {
     #[salsa_test]
     fn test_convert_type_func_with_bound_vars(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         let bound_var = AstType::new(db, TypeKind::BoundVar { index: 0 });
         let effect = EffectRow::pure(db);
@@ -218,7 +309,13 @@ mod tests {
     #[salsa_test]
     fn test_convert_type_primitives_unchanged(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
 
         // Int → I64
         let int_ty = AstType::new(db, TypeKind::Int);
@@ -255,14 +352,26 @@ mod tests {
         let mut ft = HashMap::new();
         ft.insert(name, scheme);
 
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), ft);
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            ft,
+            Symbol::new("test"),
+        );
         assert_eq!(ctx.lookup_function_type(name), Some(&scheme));
     }
 
     #[salsa_test]
     fn test_lookup_function_type_not_found(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
-        let ctx = IrLoweringCtx::new(db, path, crate::ast::SpanMap::default(), HashMap::new());
+        let ctx = IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            Symbol::new("test"),
+        );
         assert_eq!(ctx.lookup_function_type(Symbol::new("missing")), None);
     }
 }
