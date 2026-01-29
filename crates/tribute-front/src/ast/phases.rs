@@ -74,15 +74,19 @@ impl LocalId {
 
 /// A unique identifier for a function definition.
 ///
-/// FuncDefIds are tracked by Salsa for incremental compilation.
-#[salsa::tracked(debug)]
+/// FuncDefId is interned (not tracked) so that the same name always
+/// produces the same FuncDefId, regardless of where it's created.
+#[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
     /// The function name.
     pub name: Symbol,
 }
 
 /// A unique identifier for a constructor (enum variant or struct).
-#[salsa::tracked(debug)]
+///
+/// CtorId is interned (not tracked) so that the same type_name always
+/// produces the same CtorId, regardless of where it's created.
+#[salsa::interned(debug)]
 pub struct CtorId<'db> {
     /// The type name (enum or struct name).
     pub type_name: Symbol,
