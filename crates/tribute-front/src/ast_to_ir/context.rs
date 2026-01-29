@@ -40,6 +40,9 @@ pub struct IrLoweringCtx<'db> {
     lambda_counter: u64,
     /// Lifted lambda functions to be added at module level.
     lifted_functions: Vec<Operation<'db>>,
+    /// Struct field order: struct_name → [field_names in definition order].
+    /// Used for lowering Record expressions to adt.struct_new.
+    struct_fields: HashMap<Symbol, Vec<Symbol>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -60,6 +63,7 @@ impl<'db> IrLoweringCtx<'db> {
             module_path,
             lambda_counter: 0,
             lifted_functions: Vec::new(),
+            struct_fields: HashMap::new(),
         }
     }
 
@@ -144,6 +148,16 @@ impl<'db> IrLoweringCtx<'db> {
     /// Take all lifted functions (consumes them).
     pub fn take_lifted_functions(&mut self) -> Vec<Operation<'db>> {
         std::mem::take(&mut self.lifted_functions)
+    }
+
+    /// Register struct field order for lowering Record expressions.
+    pub fn register_struct_fields(&mut self, struct_name: Symbol, field_names: Vec<Symbol>) {
+        self.struct_fields.insert(struct_name, field_names);
+    }
+
+    /// Get struct field order (for lowering Record → adt.struct_new).
+    pub fn get_struct_field_order(&self, struct_name: Symbol) -> Option<&Vec<Symbol>> {
+        self.struct_fields.get(&struct_name)
     }
 
     /// Get all bindings visible in the current scope (for capture analysis).

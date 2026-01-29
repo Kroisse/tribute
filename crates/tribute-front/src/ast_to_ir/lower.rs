@@ -535,34 +535,62 @@ fn lower_expr<'db>(
             let db = builder.db();
             let result_ty = tribute_rt::any_type(db);
 
-            // Lower field values, propagating errors properly
-            let field_values: Vec<(Symbol, trunk_ir::Value<'db>)> = fields
-                .iter()
-                .map(|(name, expr)| lower_expr(builder, expr.clone()).map(|val| (*name, val)))
-                .collect::<Option<Vec<_>>>()?;
-
-            // Build fields region with tribute.field_arg ops
-            let mut fields_block = BlockBuilder::new(db, location);
-            for (name, val) in &field_values {
-                fields_block.op(tribute::field_arg(db, location, *val, *name));
+            // Spread syntax is not yet supported
+            if spread.is_some() {
+                return builder.emit_unsupported(location, "record spread syntax");
             }
-            let fields_region = Region::new(db, location, idvec![fields_block.build()]);
 
-            // Spread base (optional)
-            let base: Vec<trunk_ir::Value<'db>> = match &spread {
-                Some(s) => vec![lower_expr(builder, s.clone())?],
-                None => vec![],
+            // Extract struct type name
+            let struct_name = extract_type_name(db, &type_name.resolved);
+            let struct_ty = adt::typeref(db, struct_name);
+
+            // Get field order from struct definition
+            let Some(field_order) = builder.ctx.get_struct_field_order(struct_name) else {
+                // Struct not found - emit diagnostic and return nil
+                Diagnostic {
+                    message: format!("unknown struct: {}", struct_name),
+                    span: location.span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::Lowering,
+                }
+                .accumulate(db);
+                return Some(builder.emit_nil(location));
             };
+            let field_order = field_order.clone();
 
-            // Extract type name from TypedRef
-            let type_name_sym = extract_type_name(db, &type_name.resolved);
-            let op = builder.block.op(tribute::record(
+            // Lower field values into a map for quick lookup
+            let mut field_map: HashMap<Symbol, trunk_ir::Value<'db>> = HashMap::new();
+            for (name, expr) in fields {
+                let val = lower_expr(builder, expr.clone())?;
+                field_map.insert(name, val);
+            }
+
+            // Collect field values in definition order
+            let mut ordered_values: Vec<trunk_ir::Value<'db>> =
+                Vec::with_capacity(field_order.len());
+            for field_name in &field_order {
+                if let Some(val) = field_map.get(field_name) {
+                    ordered_values.push(*val);
+                } else {
+                    // Missing field - emit diagnostic and return nil
+                    Diagnostic {
+                        message: format!("missing field: {}", field_name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    return Some(builder.emit_nil(location));
+                }
+            }
+
+            // Generate adt.struct_new directly
+            let op = builder.block.op(adt::struct_new(
                 db,
                 location,
-                base,
+                ordered_values,
+                struct_ty,
                 result_ty,
-                type_name_sym,
-                fields_region,
             ));
             Some(op.result(db))
         }
@@ -1041,6 +1069,14 @@ fn lower_struct_decl<'db>(
     let location = ctx.location(decl.id);
     let name = decl.name;
     let struct_ty = adt::typeref(db, name);
+
+    // 0. Register struct field order for lowering Record expressions
+    let field_names: Vec<Symbol> = decl
+        .fields
+        .iter()
+        .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
+        .collect();
+    ctx.register_struct_fields(name, field_names);
 
     // 1. Build fields region for struct_def
     let mut fields_block = BlockBuilder::new(db, location);
