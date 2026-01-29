@@ -9,8 +9,8 @@ use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
     Arm, BuiltinRef, Decl, EffectRow, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId,
-    HandlerArm, HandlerKind, Module, Pattern, PatternKind, ResolvedRef, Stmt, StructDecl, Type,
-    TypeKind, TypeParam, TypeScheme, TypedRef,
+    HandlerArm, HandlerKind, LiteralPattern, Module, Pattern, PatternKind, ResolvedRef, Stmt,
+    StructDecl, Type, TypeKind, TypeParam, TypeScheme, TypedRef,
 };
 
 use super::context::TypeContext;
@@ -29,6 +29,8 @@ pub enum Mode<'db> {
 /// Type checker for AST expressions.
 pub struct TypeChecker<'db> {
     ctx: TypeContext<'db>,
+    /// Current module path for qualified function names.
+    module_path: Vec<Symbol>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -36,6 +38,26 @@ impl<'db> TypeChecker<'db> {
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             ctx: TypeContext::new(db),
+            module_path: Vec::new(),
+        }
+    }
+
+    /// Build a qualified function name from the current module path and function name.
+    fn qualified_func_name(&self, name: Symbol) -> Symbol {
+        if self.module_path.is_empty() {
+            name
+        } else {
+            // Join module path with "::" separator
+            let mut qualified = String::new();
+            for part in &self.module_path {
+                if !qualified.is_empty() {
+                    qualified.push_str("::");
+                }
+                qualified.push_str(&part.to_string());
+            }
+            qualified.push_str("::");
+            qualified.push_str(&name.to_string());
+            Symbol::from_dynamic(&qualified)
         }
     }
 
@@ -113,6 +135,12 @@ impl<'db> TypeChecker<'db> {
         let row_subst = solver.row_subst();
 
         // Export function type schemes with substitution applied + generalization
+        // Also collect the generalization mappings for each function
+        let mut func_gen_mappings: std::collections::HashMap<
+            trunk_ir::Symbol,
+            std::collections::HashMap<crate::ast::UniVarId<'db>, u32>,
+        > = std::collections::HashMap::new();
+
         let function_types: Vec<_> = self
             .ctx
             .export_function_types()
@@ -120,16 +148,30 @@ impl<'db> TypeChecker<'db> {
             .map(|(name, scheme)| {
                 // 1. Apply substitution
                 let body = type_subst.apply_with_rows(self.db(), scheme.body(self.db()), row_subst);
-                // 2. Generalize remaining UniVars → BoundVars + type_params
-                let (generalized, type_params) = type_subst.generalize(self.db(), body, row_subst);
+                // 2. Generalize remaining UniVars → BoundVars + type_params + mapping
+                let (generalized, type_params, var_to_index) =
+                    type_subst.generalize_with_mapping(self.db(), body, row_subst);
+                // Store the mapping for this function
+                if !var_to_index.is_empty() {
+                    func_gen_mappings.insert(name, var_to_index);
+                }
                 (name, TypeScheme::new(self.db(), type_params, generalized))
             })
             .collect();
 
-        let decls = decls
-            .into_iter()
-            .map(|d| apply_subst_to_decl(self.db(), d, type_subst, row_subst))
-            .collect();
+        // Use a for loop to avoid closure lifetime issues
+        let mut processed_decls = Vec::with_capacity(decls.len());
+        for d in decls {
+            processed_decls.push(apply_subst_to_decl(
+                self.db(),
+                d,
+                type_subst,
+                row_subst,
+                &func_gen_mappings,
+                &[], // Top-level declarations have empty module path
+            ));
+        }
+        let decls = processed_decls;
 
         let typed_module = Module {
             id: module.id,
@@ -242,6 +284,8 @@ impl<'db> TypeChecker<'db> {
                 Decl::Module(m) => {
                     // For inline modules, recursively collect from nested declarations
                     if let Some(body) = &m.body {
+                        // Push module name to path
+                        self.module_path.push(m.name);
                         // Create a temporary module to reuse collect_declarations
                         let inner_module = Module {
                             id: m.id,
@@ -249,6 +293,8 @@ impl<'db> TypeChecker<'db> {
                             decls: body.clone(),
                         };
                         self.collect_declarations(&inner_module);
+                        // Pop module name from path
+                        self.module_path.pop();
                     }
                 }
             }
@@ -297,8 +343,9 @@ impl<'db> TypeChecker<'db> {
         // type_params left empty — generalization fills them in Phase 4
         let scheme = TypeScheme::new(self.db(), vec![], func_ty);
 
-        // Register the function with its FuncDefId
-        let func_id = FuncDefId::new(self.db(), func.name);
+        // Register the function with its FuncDefId (using qualified name)
+        let qualified_name = self.qualified_func_name(func.name);
+        let func_id = FuncDefId::new(self.db(), qualified_name);
         self.ctx.register_function(func_id, scheme);
     }
 
@@ -651,9 +698,15 @@ impl<'db> TypeChecker<'db> {
         &mut self,
         module: crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
+        // Push module name to path
+        self.module_path.push(module.name);
+
         let body = module
             .body
             .map(|decls| decls.into_iter().map(|d| self.check_decl(d)).collect());
+
+        // Pop module name from path
+        self.module_path.pop();
 
         crate::ast::ModuleDecl {
             id: module.id,
@@ -667,11 +720,13 @@ impl<'db> TypeChecker<'db> {
     fn check_func_decl(&mut self, func: FuncDecl<ResolvedRef<'db>>) -> FuncDecl<TypedRef<'db>> {
         // Bind parameter types to the context using the registered type scheme
         // This ensures annotated parameter types are used instead of fresh variables
-        let func_id = FuncDefId::new(self.db(), func.name);
+        let qualified_name = self.qualified_func_name(func.name);
+        let func_id = FuncDefId::new(self.db(), qualified_name);
 
         // Get function type info from scheme
+        let looked_up_scheme = self.ctx.lookup_function(func_id);
         let func_type_info: Option<(Vec<Type<'db>>, Type<'db>)> =
-            self.ctx.lookup_function(func_id).and_then(|scheme| {
+            looked_up_scheme.and_then(|scheme| {
                 let func_ty = self.ctx.instantiate_scheme(scheme);
                 if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
                     Some((params.clone(), *result))
@@ -803,10 +858,11 @@ impl<'db> TypeChecker<'db> {
                 let _ = stmts;
                 self.infer_expr_type(value)
             }
-            ExprKind::Case { scrutinee, arms } => {
-                // Case expression
-                let _ = (scrutinee, arms);
-                self.ctx.fresh_type_var() // TODO: Proper case typing
+            ExprKind::Case { .. } => {
+                // Case expression: actual type inference is done in convert_expr_kind
+                // to avoid duplicate UniVar generation between infer and convert phases.
+                // Return fresh type var here, will be constrained to arm body types later.
+                self.ctx.fresh_type_var()
             }
             ExprKind::Lambda { params, body } => {
                 // Lambda expression: infer param types and body type
@@ -902,9 +958,10 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::Local { id, name } => {
                 // Try LocalId first, then fall back to name-based lookup
                 // (needed for function parameters which may not have LocalId in TypeContext)
-                self.ctx
-                    .lookup_local(*id)
-                    .or_else(|| self.ctx.lookup_local_by_name(*name))
+                let by_id = self.ctx.lookup_local(*id);
+                let by_name = self.ctx.lookup_local_by_name(*name);
+                by_id
+                    .or(by_name)
                     .unwrap_or_else(|| self.ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => self
@@ -1086,10 +1143,46 @@ impl<'db> TypeChecker<'db> {
                 stmts: stmts.into_iter().map(|s| self.convert_stmt(s)).collect(),
                 value: self.check_expr(value, Mode::Infer),
             },
-            ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-                scrutinee: self.check_expr(scrutinee, Mode::Infer),
-                arms: arms.into_iter().map(|a| self.convert_arm(a)).collect(),
-            },
+            ExprKind::Case { scrutinee, arms } => {
+                // Convert scrutinee first to get its type
+                let scrutinee_expr = self.check_expr(scrutinee, Mode::Infer);
+                // Get the scrutinee type from node_types
+                let scrutinee_ty = self
+                    .ctx
+                    .get_node_type(scrutinee_expr.id)
+                    .unwrap_or_else(|| self.ctx.fresh_type_var());
+
+                // Result type is unified across all arms
+                let result_ty = self.ctx.fresh_type_var();
+
+                // Process arms: infer pattern types, bind vars, convert, and unify body types
+                let converted_arms: Vec<_> = arms
+                    .into_iter()
+                    .map(|arm| {
+                        // Infer pattern type and constrain with scrutinee type
+                        let pattern_ty = self.infer_pattern_type(&arm.pattern);
+                        self.ctx.constrain_eq(pattern_ty, scrutinee_ty);
+
+                        // Bind pattern variables with the scrutinee type
+                        self.bind_pattern_vars(&arm.pattern, scrutinee_ty);
+
+                        // Convert the arm
+                        let converted = self.convert_arm_with_scrutinee(arm, scrutinee_ty);
+
+                        // Unify arm body type with result type
+                        if let Some(body_ty) = self.ctx.get_node_type(converted.body.id) {
+                            self.ctx.constrain_eq(body_ty, result_ty);
+                        }
+
+                        converted
+                    })
+                    .collect();
+
+                ExprKind::Case {
+                    scrutinee: scrutinee_expr,
+                    arms: converted_arms,
+                }
+            }
             ExprKind::Lambda { params, body } => ExprKind::Lambda {
                 params,
                 body: self.check_expr(body, Mode::Infer),
@@ -1170,6 +1263,102 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Infer the type that a pattern matches against.
+    ///
+    /// This returns the type of the scrutinee that this pattern can match.
+    /// For example:
+    /// - `Some(x)` returns `Option(?a)` where `?a` is a fresh type variable
+    /// - `#(a, b)` returns `#(?a, ?b)` with fresh type variables
+    /// - `True` returns `Bool`
+    /// - `_` or `x` returns a fresh type variable
+    fn infer_pattern_type(&mut self, pattern: &Pattern<ResolvedRef<'db>>) -> Type<'db> {
+        let ty = match &*pattern.kind {
+            PatternKind::Wildcard | PatternKind::Bind { .. } => {
+                // Wildcard and bind patterns match any type
+                self.ctx.fresh_type_var()
+            }
+            PatternKind::Literal(lit) => {
+                // Literal patterns have concrete types
+                match lit {
+                    LiteralPattern::Bool(_) => self.ctx.bool_type(),
+                    LiteralPattern::Int(_) => self.ctx.int_type(),
+                    LiteralPattern::Float(_) => self.ctx.float_type(),
+                    LiteralPattern::String(_) => self.ctx.string_type(),
+                    LiteralPattern::Unit => self.ctx.nil_type(),
+                }
+            }
+            PatternKind::Variant { ctor, fields } => {
+                // Get the constructor's type scheme and instantiate it
+                // Constructor type is: field_types -> result_type
+                // We need the result_type (e.g., Option(a) for Some)
+                let ctor_ty = self.infer_var(ctor);
+
+                // Store the constructor type for later use in convert_pattern_with_expected
+                // This ensures the same UniVars are used in both phases
+                self.ctx.record_node_type(pattern.id, ctor_ty);
+
+                // Extract result type from function type
+                match ctor_ty.kind(self.db()) {
+                    TypeKind::Func { result, .. } => {
+                        // For each field, infer its pattern type and constrain
+                        // with the constructor's parameter types
+                        if let TypeKind::Func { params, .. } = ctor_ty.kind(self.db()) {
+                            for (field_pat, param_ty) in fields.iter().zip(params.iter()) {
+                                let field_ty = self.infer_pattern_type(field_pat);
+                                self.ctx.constrain_eq(field_ty, *param_ty);
+                            }
+                        }
+                        *result
+                    }
+                    // Nullary constructor (e.g., None, True, False)
+                    _ => ctor_ty,
+                }
+            }
+            PatternKind::Tuple(pats) => {
+                // Tuple pattern: infer each element's type
+                let elem_tys: Vec<_> = pats.iter().map(|p| self.infer_pattern_type(p)).collect();
+                self.ctx.tuple_type(elem_tys)
+            }
+            PatternKind::List(pats) => {
+                // List pattern: all elements should have the same type
+                let elem_ty = self.ctx.fresh_type_var();
+                for pat in pats {
+                    let pat_ty = self.infer_pattern_type(pat);
+                    self.ctx.constrain_eq(pat_ty, elem_ty);
+                }
+                self.ctx.named_type(Symbol::new("List"), vec![elem_ty])
+            }
+            PatternKind::ListRest { head, .. } => {
+                // List rest pattern: head elements determine element type
+                let elem_ty = self.ctx.fresh_type_var();
+                for pat in head {
+                    let pat_ty = self.infer_pattern_type(pat);
+                    self.ctx.constrain_eq(pat_ty, elem_ty);
+                }
+                self.ctx.named_type(Symbol::new("List"), vec![elem_ty])
+            }
+            PatternKind::Record { type_name, .. } => {
+                // Record pattern: use type name if available
+                if let Some(type_ref) = type_name {
+                    self.infer_var(type_ref)
+                } else {
+                    self.ctx.fresh_type_var()
+                }
+            }
+            PatternKind::As { pattern, .. } => {
+                // As pattern: same type as inner pattern
+                self.infer_pattern_type(pattern)
+            }
+            PatternKind::Error => self.ctx.error_type(),
+        };
+        // Store the pattern type for use in convert_pattern_with_expected
+        // Note: Variant patterns already stored ctor_ty above, so skip to avoid overwriting
+        if !matches!(&*pattern.kind, PatternKind::Variant { .. }) {
+            self.ctx.record_node_type(pattern.id, ty);
+        }
+        ty
+    }
+
     /// Bind pattern variables to the given type.
     fn bind_pattern_vars(&mut self, pattern: &Pattern<ResolvedRef<'db>>, ty: Type<'db>) {
         match &*pattern.kind {
@@ -1195,10 +1384,14 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Variant { fields, .. } => {
-                // For variants, bind each field with a fresh type var
-                let fresh_vars: Vec<_> = fields.iter().map(|_| self.ctx.fresh_type_var()).collect();
-                for (field, fresh_ty) in fields.iter().zip(fresh_vars) {
-                    self.bind_pattern_vars(field, fresh_ty);
+                // For variants, use stored field types from infer_pattern_type
+                // This ensures the types are connected to the constructor's param types
+                for field in fields {
+                    let field_ty = self
+                        .ctx
+                        .get_node_type(field.id)
+                        .unwrap_or_else(|| self.ctx.fresh_type_var());
+                    self.bind_pattern_vars(field, field_ty);
                 }
             }
             PatternKind::Record { fields, .. } => {
@@ -1323,14 +1516,147 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Convert a case arm.
-    fn convert_arm(&mut self, arm: Arm<ResolvedRef<'db>>) -> Arm<TypedRef<'db>> {
+    /// Convert a case arm with an expected scrutinee type.
+    ///
+    /// This ensures that the pattern's type is unified with the scrutinee type,
+    /// preventing UniVars in the pattern from being orphaned.
+    fn convert_arm_with_scrutinee(
+        &mut self,
+        arm: Arm<ResolvedRef<'db>>,
+        scrutinee_ty: Type<'db>,
+    ) -> Arm<TypedRef<'db>> {
         Arm {
             id: arm.id,
-            pattern: self.convert_pattern(arm.pattern),
+            pattern: self.convert_pattern_with_expected(arm.pattern, scrutinee_ty),
             guard: arm.guard.map(|g| self.check_expr(g, Mode::Infer)),
             body: self.check_expr(arm.body, Mode::Infer),
         }
+    }
+
+    /// Convert a pattern with an expected type.
+    ///
+    /// This unifies the pattern's inferred type with the expected type,
+    /// ensuring that any UniVars created during conversion are properly constrained.
+    fn convert_pattern_with_expected(
+        &mut self,
+        pattern: Pattern<ResolvedRef<'db>>,
+        expected: Type<'db>,
+    ) -> Pattern<TypedRef<'db>> {
+        let kind = match *pattern.kind {
+            PatternKind::Wildcard => PatternKind::Wildcard,
+            PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
+            PatternKind::Literal(lit) => PatternKind::Literal(lit),
+            PatternKind::Variant { ctor, fields } => {
+                // Get the constructor's instantiated type
+                // Prefer stored type from infer_pattern_type to avoid double UniVar generation
+                let ctor_ty = self
+                    .ctx
+                    .get_node_type(pattern.id)
+                    .unwrap_or_else(|| self.infer_var(&ctor));
+
+                // For Variant patterns, the expected type should match the constructor's result type
+                // e.g., if ctor is Some: a -> Option(a), and expected is Option(Int),
+                // we need to unify Option(a) with Option(Int) so that a = Int
+                match ctor_ty.kind(self.db()) {
+                    TypeKind::Func { params, result, .. } => {
+                        // Unify the result type with expected
+                        self.ctx.constrain_eq(*result, expected);
+
+                        // Convert fields with their expected types from params
+                        let fields = fields
+                            .into_iter()
+                            .zip(params.iter())
+                            .map(|(p, param_ty)| self.convert_pattern_with_expected(p, *param_ty))
+                            .collect();
+
+                        PatternKind::Variant {
+                            ctor: self.convert_ref_with_type(ctor, ctor_ty),
+                            fields,
+                        }
+                    }
+                    _ => {
+                        // Nullary constructor (e.g., None, True)
+                        self.ctx.constrain_eq(ctor_ty, expected);
+                        PatternKind::Variant {
+                            ctor: self.convert_ref_with_type(ctor, ctor_ty),
+                            fields: vec![],
+                        }
+                    }
+                }
+            }
+            PatternKind::Record {
+                type_name,
+                fields,
+                rest,
+            } => PatternKind::Record {
+                type_name: type_name.map(|t| self.convert_ref(t)),
+                fields: fields
+                    .into_iter()
+                    .map(|f| self.convert_field_pattern(f))
+                    .collect(),
+                rest,
+            },
+            PatternKind::Tuple(patterns) => {
+                // Extract expected element types if available
+                let elem_expectations: Vec<Type<'db>> =
+                    if let TypeKind::Tuple(elems) = expected.kind(self.db()) {
+                        elems.clone()
+                    } else {
+                        patterns.iter().map(|_| self.ctx.fresh_type_var()).collect()
+                    };
+
+                PatternKind::Tuple(
+                    patterns
+                        .into_iter()
+                        .zip(elem_expectations)
+                        .map(|(p, exp)| self.convert_pattern_with_expected(p, exp))
+                        .collect(),
+                )
+            }
+            PatternKind::List(patterns) => {
+                // Extract element type from List(elem) if available
+                let elem_ty = self.ctx.fresh_type_var();
+                // Unify expected with List(elem_ty)
+                let list_ty = self.ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                self.ctx.constrain_eq(expected, list_ty);
+
+                PatternKind::List(
+                    patterns
+                        .into_iter()
+                        .map(|p| self.convert_pattern_with_expected(p, elem_ty))
+                        .collect(),
+                )
+            }
+            PatternKind::ListRest {
+                head,
+                rest,
+                rest_local_id,
+            } => {
+                let elem_ty = self.ctx.fresh_type_var();
+                let list_ty = self.ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                self.ctx.constrain_eq(expected, list_ty);
+
+                PatternKind::ListRest {
+                    head: head
+                        .into_iter()
+                        .map(|p| self.convert_pattern_with_expected(p, elem_ty))
+                        .collect(),
+                    rest,
+                    rest_local_id,
+                }
+            }
+            PatternKind::As {
+                pattern,
+                name,
+                local_id,
+            } => PatternKind::As {
+                pattern: self.convert_pattern_with_expected(pattern, expected),
+                name,
+                local_id,
+            },
+            PatternKind::Error => PatternKind::Error,
+        };
+        Pattern::new(pattern.id, kind)
     }
 
     /// Convert a handler arm.
@@ -1370,17 +1696,46 @@ impl<'db> TypeChecker<'db> {
 // =========================================================================
 
 use super::solver::{RowSubst, TypeSubst};
+use crate::ast::UniVarId;
 
-/// Apply a type reference substitution to a `TypedRef`.
+/// Type alias for generalization mappings per function.
+type FuncGenMappings<'db> =
+    std::collections::HashMap<trunk_ir::Symbol, std::collections::HashMap<UniVarId<'db>, u32>>;
+
+/// Apply a type reference substitution and optional generalization to a `TypedRef`.
 fn apply_subst_to_ref<'db>(
     db: &'db dyn salsa::Database,
     r: TypedRef<'db>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&std::collections::HashMap<UniVarId<'db>, u32>>,
 ) -> TypedRef<'db> {
+    let mut ty = type_subst.apply_with_rows(db, r.ty, row_subst);
+    // Apply generalization if mapping is provided
+    if let Some(mapping) = gen_mapping.filter(|m| !m.is_empty()) {
+        ty = type_subst.apply_generalization(db, ty, row_subst, mapping);
+    }
     TypedRef {
         resolved: r.resolved,
-        ty: type_subst.apply_with_rows(db, r.ty, row_subst),
+        ty,
+    }
+}
+
+/// Build a qualified function name from module path and function name.
+fn build_qualified_name(module_path: &[Symbol], name: Symbol) -> Symbol {
+    if module_path.is_empty() {
+        name
+    } else {
+        let mut qualified = String::new();
+        for part in module_path {
+            if !qualified.is_empty() {
+                qualified.push_str("::");
+            }
+            qualified.push_str(&part.to_string());
+        }
+        qualified.push_str("::");
+        qualified.push_str(&name.to_string());
+        Symbol::from_dynamic(&qualified)
     }
 }
 
@@ -1390,13 +1745,38 @@ fn apply_subst_to_decl<'db>(
     decl: Decl<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    func_gen_mappings: &FuncGenMappings<'db>,
+    module_path: &[Symbol],
 ) -> Decl<TypedRef<'db>> {
     match decl {
-        Decl::Function(f) => Decl::Function(apply_subst_to_func(db, f, type_subst, row_subst)),
+        Decl::Function(f) => {
+            // Get the generalization mapping for this function using qualified name
+            let qualified_name = build_qualified_name(module_path, f.name);
+            let gen_mapping = func_gen_mappings.get(&qualified_name);
+            Decl::Function(apply_subst_to_func(
+                db,
+                f,
+                type_subst,
+                row_subst,
+                gen_mapping,
+            ))
+        }
         Decl::Module(m) => {
+            // Build new module path
+            let mut new_path = module_path.to_vec();
+            new_path.push(m.name);
             let body = m.body.map(|ds| {
                 ds.into_iter()
-                    .map(|d| apply_subst_to_decl(db, d, type_subst, row_subst))
+                    .map(|d| {
+                        apply_subst_to_decl(
+                            db,
+                            d,
+                            type_subst,
+                            row_subst,
+                            func_gen_mappings,
+                            &new_path,
+                        )
+                    })
                     .collect()
             });
             Decl::Module(crate::ast::ModuleDecl {
@@ -1411,12 +1791,16 @@ fn apply_subst_to_decl<'db>(
     }
 }
 
-/// Apply substitution to a function declaration.
+/// Type alias for inner generalization mapping (UniVarId -> BoundVar index).
+type InnerGenMapping<'db> = std::collections::HashMap<UniVarId<'db>, u32>;
+
+/// Apply substitution and generalization to a function declaration.
 fn apply_subst_to_func<'db>(
     db: &'db dyn salsa::Database,
     f: FuncDecl<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> FuncDecl<TypedRef<'db>> {
     FuncDecl {
         id: f.id,
@@ -1426,31 +1810,38 @@ fn apply_subst_to_func<'db>(
         params: f.params,
         return_ty: f.return_ty,
         effects: f.effects,
-        body: apply_subst_to_expr(db, f.body, type_subst, row_subst),
+        body: apply_subst_to_expr(db, f.body, type_subst, row_subst, gen_mapping),
     }
 }
 
-/// Apply substitution to an expression.
+/// Apply substitution and optional generalization to an expression.
 fn apply_subst_to_expr<'db>(
     db: &'db dyn salsa::Database,
     expr: Expr<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> Expr<TypedRef<'db>> {
     let kind = match *expr.kind {
-        ExprKind::Var(r) => ExprKind::Var(apply_subst_to_ref(db, r, type_subst, row_subst)),
+        ExprKind::Var(r) => ExprKind::Var(apply_subst_to_ref(
+            db,
+            r,
+            type_subst,
+            row_subst,
+            gen_mapping,
+        )),
         ExprKind::Call { callee, args } => ExprKind::Call {
-            callee: apply_subst_to_expr(db, callee, type_subst, row_subst),
+            callee: apply_subst_to_expr(db, callee, type_subst, row_subst, gen_mapping),
             args: args
                 .into_iter()
-                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         ExprKind::Cons { ctor, args } => ExprKind::Cons {
-            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst),
+            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst, gen_mapping),
             args: args
                 .into_iter()
-                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         ExprKind::Record {
@@ -1458,65 +1849,70 @@ fn apply_subst_to_expr<'db>(
             fields,
             spread,
         } => ExprKind::Record {
-            type_name: apply_subst_to_ref(db, type_name, type_subst, row_subst),
+            type_name: apply_subst_to_ref(db, type_name, type_subst, row_subst, gen_mapping),
             fields: fields
                 .into_iter()
-                .map(|(name, e)| (name, apply_subst_to_expr(db, e, type_subst, row_subst)))
+                .map(|(name, e)| {
+                    (
+                        name,
+                        apply_subst_to_expr(db, e, type_subst, row_subst, gen_mapping),
+                    )
+                })
                 .collect(),
-            spread: spread.map(|e| apply_subst_to_expr(db, e, type_subst, row_subst)),
+            spread: spread.map(|e| apply_subst_to_expr(db, e, type_subst, row_subst, gen_mapping)),
         },
         ExprKind::MethodCall {
             receiver,
             method,
             args,
         } => ExprKind::MethodCall {
-            receiver: apply_subst_to_expr(db, receiver, type_subst, row_subst),
+            receiver: apply_subst_to_expr(db, receiver, type_subst, row_subst, gen_mapping),
             method,
             args: args
                 .into_iter()
-                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst))
+                .map(|a| apply_subst_to_expr(db, a, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
             op,
-            lhs: apply_subst_to_expr(db, lhs, type_subst, row_subst),
-            rhs: apply_subst_to_expr(db, rhs, type_subst, row_subst),
+            lhs: apply_subst_to_expr(db, lhs, type_subst, row_subst, gen_mapping),
+            rhs: apply_subst_to_expr(db, rhs, type_subst, row_subst, gen_mapping),
         },
         ExprKind::Block { stmts, value } => ExprKind::Block {
             stmts: stmts
                 .into_iter()
-                .map(|s| apply_subst_to_stmt(db, s, type_subst, row_subst))
+                .map(|s| apply_subst_to_stmt(db, s, type_subst, row_subst, gen_mapping))
                 .collect(),
-            value: apply_subst_to_expr(db, value, type_subst, row_subst),
+            value: apply_subst_to_expr(db, value, type_subst, row_subst, gen_mapping),
         },
         ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-            scrutinee: apply_subst_to_expr(db, scrutinee, type_subst, row_subst),
+            scrutinee: apply_subst_to_expr(db, scrutinee, type_subst, row_subst, gen_mapping),
             arms: arms
                 .into_iter()
-                .map(|a| apply_subst_to_arm(db, a, type_subst, row_subst))
+                .map(|a| apply_subst_to_arm(db, a, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         ExprKind::Lambda { params, body } => ExprKind::Lambda {
             params,
-            body: apply_subst_to_expr(db, body, type_subst, row_subst),
+            body: apply_subst_to_expr(db, body, type_subst, row_subst, gen_mapping),
         },
         ExprKind::Handle { body, handlers } => ExprKind::Handle {
-            body: apply_subst_to_expr(db, body, type_subst, row_subst),
+            body: apply_subst_to_expr(db, body, type_subst, row_subst, gen_mapping),
             handlers: handlers
                 .into_iter()
-                .map(|h| apply_subst_to_handler_arm(db, h, type_subst, row_subst))
+                .map(|h| apply_subst_to_handler_arm(db, h, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         ExprKind::Tuple(elems) => ExprKind::Tuple(
             elems
                 .into_iter()
-                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst))
+                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst, gen_mapping))
                 .collect(),
         ),
         ExprKind::List(elems) => ExprKind::List(
             elems
                 .into_iter()
-                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst))
+                .map(|e| apply_subst_to_expr(db, e, type_subst, row_subst, gen_mapping))
                 .collect(),
         ),
         // Literals and Error don't contain TypedRefs
@@ -1533,12 +1929,13 @@ fn apply_subst_to_expr<'db>(
     Expr::new(expr.id, kind)
 }
 
-/// Apply substitution to a statement.
+/// Apply substitution and optional generalization to a statement.
 fn apply_subst_to_stmt<'db>(
     db: &'db dyn salsa::Database,
     stmt: Stmt<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> Stmt<TypedRef<'db>> {
     match stmt {
         Stmt::Let {
@@ -1548,30 +1945,31 @@ fn apply_subst_to_stmt<'db>(
             ty,
         } => Stmt::Let {
             id,
-            pattern: apply_subst_to_pattern(db, pattern, type_subst, row_subst),
-            value: apply_subst_to_expr(db, value, type_subst, row_subst),
+            pattern: apply_subst_to_pattern(db, pattern, type_subst, row_subst, gen_mapping),
+            value: apply_subst_to_expr(db, value, type_subst, row_subst, gen_mapping),
             ty,
         },
         Stmt::Expr { id, expr } => Stmt::Expr {
             id,
-            expr: apply_subst_to_expr(db, expr, type_subst, row_subst),
+            expr: apply_subst_to_expr(db, expr, type_subst, row_subst, gen_mapping),
         },
     }
 }
 
-/// Apply substitution to a pattern.
+/// Apply substitution and optional generalization to a pattern.
 fn apply_subst_to_pattern<'db>(
     db: &'db dyn salsa::Database,
     pattern: Pattern<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> Pattern<TypedRef<'db>> {
     let kind = match *pattern.kind {
         PatternKind::Variant { ctor, fields } => PatternKind::Variant {
-            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst),
+            ctor: apply_subst_to_ref(db, ctor, type_subst, row_subst, gen_mapping),
             fields: fields
                 .into_iter()
-                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping))
                 .collect(),
         },
         PatternKind::Record {
@@ -1579,7 +1977,8 @@ fn apply_subst_to_pattern<'db>(
             fields,
             rest,
         } => PatternKind::Record {
-            type_name: type_name.map(|t| apply_subst_to_ref(db, t, type_subst, row_subst)),
+            type_name: type_name
+                .map(|t| apply_subst_to_ref(db, t, type_subst, row_subst, gen_mapping)),
             fields: fields
                 .into_iter()
                 .map(|f| FieldPattern {
@@ -1587,19 +1986,19 @@ fn apply_subst_to_pattern<'db>(
                     name: f.name,
                     pattern: f
                         .pattern
-                        .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst)),
+                        .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping)),
                 })
                 .collect(),
             rest,
         },
         PatternKind::Tuple(pats) => PatternKind::Tuple(
             pats.into_iter()
-                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping))
                 .collect(),
         ),
         PatternKind::List(pats) => PatternKind::List(
             pats.into_iter()
-                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping))
                 .collect(),
         ),
         PatternKind::ListRest {
@@ -1609,7 +2008,7 @@ fn apply_subst_to_pattern<'db>(
         } => PatternKind::ListRest {
             head: head
                 .into_iter()
-                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping))
                 .collect(),
             rest,
             rest_local_id,
@@ -1619,7 +2018,7 @@ fn apply_subst_to_pattern<'db>(
             name,
             local_id,
         } => PatternKind::As {
-            pattern: apply_subst_to_pattern(db, inner, type_subst, row_subst),
+            pattern: apply_subst_to_pattern(db, inner, type_subst, row_subst, gen_mapping),
             name,
             local_id,
         },
@@ -1632,33 +2031,35 @@ fn apply_subst_to_pattern<'db>(
     Pattern::new(pattern.id, kind)
 }
 
-/// Apply substitution to a case arm.
+/// Apply substitution and optional generalization to a case arm.
 fn apply_subst_to_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: Arm<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> Arm<TypedRef<'db>> {
     Arm {
         id: arm.id,
-        pattern: apply_subst_to_pattern(db, arm.pattern, type_subst, row_subst),
+        pattern: apply_subst_to_pattern(db, arm.pattern, type_subst, row_subst, gen_mapping),
         guard: arm
             .guard
-            .map(|g| apply_subst_to_expr(db, g, type_subst, row_subst)),
-        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst),
+            .map(|g| apply_subst_to_expr(db, g, type_subst, row_subst, gen_mapping)),
+        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst, gen_mapping),
     }
 }
 
-/// Apply substitution to a handler arm.
+/// Apply substitution and optional generalization to a handler arm.
 fn apply_subst_to_handler_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: HandlerArm<TypedRef<'db>>,
     type_subst: &TypeSubst<'db>,
     row_subst: &RowSubst<'db>,
+    gen_mapping: Option<&InnerGenMapping<'db>>,
 ) -> HandlerArm<TypedRef<'db>> {
     let kind = match arm.kind {
         HandlerKind::Result { binding } => HandlerKind::Result {
-            binding: apply_subst_to_pattern(db, binding, type_subst, row_subst),
+            binding: apply_subst_to_pattern(db, binding, type_subst, row_subst, gen_mapping),
         },
         HandlerKind::Effect {
             ability,
@@ -1666,11 +2067,11 @@ fn apply_subst_to_handler_arm<'db>(
             params,
             continuation,
         } => HandlerKind::Effect {
-            ability: apply_subst_to_ref(db, ability, type_subst, row_subst),
+            ability: apply_subst_to_ref(db, ability, type_subst, row_subst, gen_mapping),
             op,
             params: params
                 .into_iter()
-                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst))
+                .map(|p| apply_subst_to_pattern(db, p, type_subst, row_subst, gen_mapping))
                 .collect(),
             continuation,
         },
@@ -1678,7 +2079,7 @@ fn apply_subst_to_handler_arm<'db>(
     HandlerArm {
         id: arm.id,
         kind,
-        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst),
+        body: apply_subst_to_expr(db, arm.body, type_subst, row_subst, gen_mapping),
     }
 }
 
