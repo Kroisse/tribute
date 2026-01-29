@@ -142,10 +142,34 @@ impl<'db> TdnrResolver<'db> {
                         // Build accessor function type: fn(self: StructType) -> FieldType
                         // Note: Reusing struct's NodeId for synthetic type annotation.
                         // This is safe for type construction but won't be used for span lookups.
-                        let self_ty = self.annotation_to_type(&Some(TypeAnnotation {
-                            id: s.id,
-                            kind: TypeAnnotationKind::Named(struct_name),
-                        }));
+                        let self_annotation = if s.type_params.is_empty() {
+                            TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::Named(struct_name),
+                            }
+                        } else {
+                            // Include type parameters: StructName(a, b, ...)
+                            let ctor = TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::Named(struct_name),
+                            };
+                            let args: Vec<TypeAnnotation> = s
+                                .type_params
+                                .iter()
+                                .map(|tp| TypeAnnotation {
+                                    id: tp.id,
+                                    kind: TypeAnnotationKind::Named(tp.name),
+                                })
+                                .collect();
+                            TypeAnnotation {
+                                id: s.id,
+                                kind: TypeAnnotationKind::App {
+                                    ctor: Box::new(ctor),
+                                    args,
+                                },
+                            }
+                        };
+                        let self_ty = self.annotation_to_type(&Some(self_annotation));
                         let field_ty = self.annotation_to_type(&Some(field.ty.clone()));
 
                         let effect = crate::ast::EffectRow::pure(self.db);
