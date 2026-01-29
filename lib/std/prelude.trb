@@ -170,15 +170,19 @@ pub mod Bytes {
     /// Clamps start and end to valid bounds.
     pub fn slice(bytes: Bytes, start: Int, end: Int) -> Bytes {
         let len = bytes.len()
-        let s = case #(start < 0, start > len) {
-            #(True, _) -> 0
-            #(False, True) -> len
-            _ -> start
+        let s = case start < 0 {
+            True -> 0
+            False -> case start > len {
+                True -> len
+                False -> start
+            }
         }
-        let e = case #(end < s, end > len) {
-            #(True, _) -> s
-            #(False, True) -> len
-            _ -> end
+        let e = case end < s {
+            True -> s
+            False -> case end > len {
+                True -> len
+                False -> end
+            }
         }
         bytes.slice_or_panic(s, e)
     }
