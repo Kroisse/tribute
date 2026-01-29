@@ -241,7 +241,11 @@ fn lower_method_call(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
 fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let name_node = node.child_by_field_name("constructor");
-    let args_node = node.child_by_field_name("arguments");
+
+    // argument_list doesn't have a field name in the grammar, so we find it by kind
+    let args_node = node
+        .named_children(&mut node.walk())
+        .find(|child| child.kind() == "argument_list");
 
     let Some(name_node) = name_node else {
         return ExprKind::Error;
