@@ -46,11 +46,17 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Cons { ctor, args } => {
                 let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
-                let arg_types: Vec<Type<'db>> = args
-                    .iter()
-                    .map(|a| self.infer_expr_type_with_ctx(ctx, a))
-                    .collect();
-                self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
+                if args.is_empty() {
+                    // Unit constructor (e.g., None) - just return the constructor type
+                    ctor_ty
+                } else {
+                    // Constructor with arguments (e.g., Some(x)) - treat as function call
+                    let arg_types: Vec<Type<'db>> = args
+                        .iter()
+                        .map(|a| self.infer_expr_type_with_ctx(ctx, a))
+                        .collect();
+                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
+                }
             }
             ExprKind::Record { .. } => ctx.fresh_type_var(), // TODO: Proper record typing
             ExprKind::MethodCall { .. } => ctx.fresh_type_var(), // TODO: Proper method call typing
@@ -114,6 +120,30 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(_) => ctx.bytes_type(),
             ExprKind::Nil => ctx.nil_type(),
             ExprKind::RuneLit(_) => ctx.rune_type(),
+            ExprKind::Var(resolved) => self.infer_var_with_ctx(ctx, resolved),
+            ExprKind::Call { callee, args } => {
+                let callee_ty = self.infer_expr_type_with_ctx(ctx, callee);
+                let arg_types: Vec<Type<'db>> = args
+                    .iter()
+                    .map(|a| self.infer_expr_type_with_ctx(ctx, a))
+                    .collect();
+                self.infer_call_with_ctx(ctx, callee_ty, &arg_types)
+            }
+            ExprKind::Cons { ctor, args } => {
+                let ctor_ty = self.infer_var_with_ctx(ctx, ctor);
+                if args.is_empty() {
+                    // Unit constructor (e.g., None) - just return the constructor type
+                    ctor_ty
+                } else {
+                    // Constructor with arguments (e.g., Some(x)) - treat as function call
+                    let arg_types: Vec<Type<'db>> = args
+                        .iter()
+                        .map(|a| self.infer_expr_type_with_ctx(ctx, a))
+                        .collect();
+                    self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
+                }
+            }
+            ExprKind::Block { value, .. } => self.infer_expr_type_with_ctx(ctx, value),
             _ => ctx.fresh_type_var(),
         }
     }
@@ -133,9 +163,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.lookup_local(*id)
                 };
                 let by_name = ctx.lookup_local_by_name(*name);
-                by_id
-                    .or(by_name)
-                    .unwrap_or_else(|| ctx.fresh_type_var())
+                by_id.or(by_name).unwrap_or_else(|| ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => ctx
                 .instantiate_function(*id)
@@ -157,7 +185,11 @@ impl<'db> TypeChecker<'db> {
         let effect = EffectRow::pure(self.db());
         match builtin {
             // Arithmetic operations: (a, a) -> a
-            BuiltinRef::Add | BuiltinRef::Sub | BuiltinRef::Mul | BuiltinRef::Div | BuiltinRef::Mod => {
+            BuiltinRef::Add
+            | BuiltinRef::Sub
+            | BuiltinRef::Mul
+            | BuiltinRef::Div
+            | BuiltinRef::Mod => {
                 let a = ctx.fresh_type_var();
                 ctx.func_type(vec![a, a], a, effect)
             }
@@ -167,20 +199,29 @@ impl<'db> TypeChecker<'db> {
                 ctx.func_type(vec![a], a, effect)
             }
             // Comparison operations: (a, a) -> Bool
-            BuiltinRef::Eq | BuiltinRef::Ne | BuiltinRef::Lt | BuiltinRef::Le | BuiltinRef::Gt | BuiltinRef::Ge => {
+            BuiltinRef::Eq
+            | BuiltinRef::Ne
+            | BuiltinRef::Lt
+            | BuiltinRef::Le
+            | BuiltinRef::Gt
+            | BuiltinRef::Ge => {
                 let a = ctx.fresh_type_var();
                 ctx.func_type(vec![a, a], ctx.bool_type(), effect)
             }
             // Boolean binary ops: (Bool, Bool) -> Bool
-            BuiltinRef::And | BuiltinRef::Or => {
-                ctx.func_type(vec![ctx.bool_type(), ctx.bool_type()], ctx.bool_type(), effect)
-            }
+            BuiltinRef::And | BuiltinRef::Or => ctx.func_type(
+                vec![ctx.bool_type(), ctx.bool_type()],
+                ctx.bool_type(),
+                effect,
+            ),
             // Boolean unary op: Bool -> Bool
             BuiltinRef::Not => ctx.func_type(vec![ctx.bool_type()], ctx.bool_type(), effect),
             // String concatenation: (String, String) -> String
-            BuiltinRef::Concat => {
-                ctx.func_type(vec![ctx.string_type(), ctx.string_type()], ctx.string_type(), effect)
-            }
+            BuiltinRef::Concat => ctx.func_type(
+                vec![ctx.string_type(), ctx.string_type()],
+                ctx.string_type(),
+                effect,
+            ),
             // List cons: (a, List a) -> List a
             BuiltinRef::Cons => {
                 let a = ctx.fresh_type_var();
@@ -248,9 +289,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
-            ExprKind::Var(resolved) => {
-                ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved))
-            }
+            ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved)),
             ExprKind::Call { callee, args } => ExprKind::Call {
                 callee: self.check_expr_with_ctx(ctx, callee, Mode::Infer),
                 args: args

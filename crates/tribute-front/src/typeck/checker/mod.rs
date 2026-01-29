@@ -26,13 +26,10 @@ mod func_check;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{
-    Decl, Module, ResolvedRef, Type, TypeScheme, TypedRef,
-};
+use crate::ast::{Decl, Module, ResolvedRef, Type, TypeScheme, TypedRef};
 
-use super::context::ModuleTypeEnv;
-use super::func_context::FunctionInferenceContext;
 use super::PreludeExports;
+use super::context::ModuleTypeEnv;
 
 /// Type checking mode.
 #[derive(Clone, Debug)]
@@ -238,6 +235,3 @@ impl<'db> TypeChecker<'db> {
         u
     }
 }
-
-// Re-export for backward compatibility
-pub use super::solver::{RowSubst, TypeSubst};

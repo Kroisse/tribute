@@ -69,7 +69,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///
     /// `func_name` should be the qualified function name (e.g., "module::func")
     /// to ensure UniVar IDs are globally unique.
-    pub fn new(db: &'db dyn salsa::Database, env: &'a ModuleTypeEnv<'db>, func_name: Symbol) -> Self {
+    pub fn new(
+        db: &'db dyn salsa::Database,
+        env: &'a ModuleTypeEnv<'db>,
+        func_name: Symbol,
+    ) -> Self {
         Self {
             db,
             env,

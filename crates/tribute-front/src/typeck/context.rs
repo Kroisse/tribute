@@ -104,6 +104,17 @@ impl<'db> ModuleTypeEnv<'db> {
         self.constructor_types.len()
     }
 
+    /// Debug: print all registered constructors.
+    pub fn debug_print_constructors(&self, db: &'db dyn salsa::Database) {
+        eprintln!(
+            "DEBUG: Registered constructors ({}):",
+            self.constructor_types.len()
+        );
+        for id in self.constructor_types.keys() {
+            eprintln!("  - {:?} (type_name: {:?})", id, id.type_name(db));
+        }
+    }
+
     // =========================================================================
     // Prelude injection
     // =========================================================================

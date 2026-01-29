@@ -1264,7 +1264,7 @@ fn emit_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type();
 
     match &*pattern.kind {
-        PatternKind::Wildcard | PatternKind::Bind { .. } => {
+        PatternKind::Wildcard | PatternKind::Bind { .. } | PatternKind::Error => {
             // Always matches
             Some(
                 builder
@@ -1574,7 +1574,7 @@ fn bind_pattern_fields<'db>(
                 bind_pattern_fields(ctx, block, location, field_val, field_pat);
             }
         }
-        PatternKind::Wildcard | PatternKind::Literal(_) => {
+        PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {
             // No bindings needed
         }
         PatternKind::Bind { local_id: None, .. } => {

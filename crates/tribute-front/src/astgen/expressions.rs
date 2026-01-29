@@ -203,7 +203,11 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
 fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let callee_node = node.child_by_field_name("function");
-    let args_node = node.child_by_field_name("arguments");
+    // Note: tree-sitter grammar doesn't define "arguments" field for call_expression,
+    // so we find argument_list by kind instead
+    let args_node = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "argument_list");
 
     let Some(callee_node) = callee_node else {
         return ExprKind::Error;

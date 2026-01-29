@@ -83,7 +83,12 @@ impl<'db> TypeChecker<'db> {
         // This ensures that UniVars created during body type checking (e.g., from builtin calls)
         // are also included in the generalization mapping.
         let mut all_univars = Vec::new();
-        type_subst.collect_univars_from_type(self.db(), instantiated_func_ty, row_subst, &mut all_univars);
+        type_subst.collect_univars_from_type(
+            self.db(),
+            instantiated_func_ty,
+            row_subst,
+            &mut all_univars,
+        );
         self.collect_univars_from_body(&body, type_subst, row_subst, &mut all_univars);
 
         // Create a comprehensive mapping from all UniVars to BoundVars
@@ -94,9 +99,9 @@ impl<'db> TypeChecker<'db> {
             .collect();
 
         // Apply substitution and generalization to the function type
-        let substituted_ty =
-            type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
-        let generalized = type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
+        let substituted_ty = type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
+        let generalized =
+            type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
 
         // Create type params for all generalized UniVars
         let type_params: Vec<crate::ast::TypeParam> = (0..var_to_index.len())
@@ -140,7 +145,8 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Fallback: create fresh type variables
-        let param_types: Vec<Type<'db>> = func.params.iter().map(|_| ctx.fresh_type_var()).collect();
+        let param_types: Vec<Type<'db>> =
+            func.params.iter().map(|_| ctx.fresh_type_var()).collect();
         let return_ty = ctx.fresh_type_var();
         let effect = ctx.fresh_effect_row();
         let func_ty = ctx.func_type(param_types.clone(), return_ty, effect);
@@ -186,9 +192,12 @@ impl<'db> TypeChecker<'db> {
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
             ExprKind::Error => ExprKind::Error,
 
-            ExprKind::Var(typed_ref) => {
-                ExprKind::Var(self.apply_subst_to_typed_ref(typed_ref, type_subst, row_subst, var_to_index))
-            }
+            ExprKind::Var(typed_ref) => ExprKind::Var(self.apply_subst_to_typed_ref(
+                typed_ref,
+                type_subst,
+                row_subst,
+                var_to_index,
+            )),
             ExprKind::Call { callee, args } => ExprKind::Call {
                 callee: self.apply_subst_to_body(callee, type_subst, row_subst, var_to_index),
                 args: args
@@ -203,17 +212,34 @@ impl<'db> TypeChecker<'db> {
                     .map(|a| self.apply_subst_to_body(a, type_subst, row_subst, var_to_index))
                     .collect(),
             },
-            ExprKind::Record { type_name, fields, spread } => ExprKind::Record {
-                type_name: self.apply_subst_to_typed_ref(type_name, type_subst, row_subst, var_to_index),
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+            } => ExprKind::Record {
+                type_name: self.apply_subst_to_typed_ref(
+                    type_name,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                ),
                 fields: fields
                     .into_iter()
                     .map(|(name, expr)| {
-                        (name, self.apply_subst_to_body(expr, type_subst, row_subst, var_to_index))
+                        (
+                            name,
+                            self.apply_subst_to_body(expr, type_subst, row_subst, var_to_index),
+                        )
                     })
                     .collect(),
-                spread: spread.map(|e| self.apply_subst_to_body(e, type_subst, row_subst, var_to_index)),
+                spread: spread
+                    .map(|e| self.apply_subst_to_body(e, type_subst, row_subst, var_to_index)),
             },
-            ExprKind::MethodCall { receiver, method, args } => ExprKind::MethodCall {
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => ExprKind::MethodCall {
                 receiver: self.apply_subst_to_body(receiver, type_subst, row_subst, var_to_index),
                 method,
                 args: args
@@ -248,7 +274,9 @@ impl<'db> TypeChecker<'db> {
                 body: self.apply_subst_to_body(body, type_subst, row_subst, var_to_index),
                 handlers: handlers
                     .into_iter()
-                    .map(|h| self.apply_subst_to_handler_arm(h, type_subst, row_subst, var_to_index))
+                    .map(|h| {
+                        self.apply_subst_to_handler_arm(h, type_subst, row_subst, var_to_index)
+                    })
                     .collect(),
             },
             ExprKind::Tuple(elems) => ExprKind::Tuple(
@@ -304,7 +332,12 @@ impl<'db> TypeChecker<'db> {
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> Stmt<TypedRef<'db>> {
         match stmt {
-            Stmt::Let { id, pattern, value, ty } => Stmt::Let {
+            Stmt::Let {
+                id,
+                pattern,
+                value,
+                ty,
+            } => Stmt::Let {
                 id,
                 pattern: self.apply_subst_to_pattern(pattern, type_subst, row_subst, var_to_index),
                 value: self.apply_subst_to_body(value, type_subst, row_subst, var_to_index),
@@ -328,7 +361,9 @@ impl<'db> TypeChecker<'db> {
         Arm {
             id: arm.id,
             pattern: self.apply_subst_to_pattern(arm.pattern, type_subst, row_subst, var_to_index),
-            guard: arm.guard.map(|g| self.apply_subst_to_body(g, type_subst, row_subst, var_to_index)),
+            guard: arm
+                .guard
+                .map(|g| self.apply_subst_to_body(g, type_subst, row_subst, var_to_index)),
             body: self.apply_subst_to_body(arm.body, type_subst, row_subst, var_to_index),
         }
     }
@@ -345,8 +380,18 @@ impl<'db> TypeChecker<'db> {
             HandlerKind::Result { binding } => HandlerKind::Result {
                 binding: self.apply_subst_to_pattern(binding, type_subst, row_subst, var_to_index),
             },
-            HandlerKind::Effect { ability, op, params, continuation } => HandlerKind::Effect {
-                ability: self.apply_subst_to_typed_ref(ability, type_subst, row_subst, var_to_index),
+            HandlerKind::Effect {
+                ability,
+                op,
+                params,
+                continuation,
+            } => HandlerKind::Effect {
+                ability: self.apply_subst_to_typed_ref(
+                    ability,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                ),
                 op,
                 params: params
                     .into_iter()
@@ -382,11 +427,18 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
                     .collect(),
             },
-            PatternKind::Record { type_name, fields, rest } => PatternKind::Record {
-                type_name: type_name.map(|t| self.apply_subst_to_typed_ref(t, type_subst, row_subst, var_to_index)),
+            PatternKind::Record {
+                type_name,
+                fields,
+                rest,
+            } => PatternKind::Record {
+                type_name: type_name
+                    .map(|t| self.apply_subst_to_typed_ref(t, type_subst, row_subst, var_to_index)),
                 fields: fields
                     .into_iter()
-                    .map(|f| self.apply_subst_to_field_pattern(f, type_subst, row_subst, var_to_index))
+                    .map(|f| {
+                        self.apply_subst_to_field_pattern(f, type_subst, row_subst, var_to_index)
+                    })
                     .collect(),
                 rest,
             },
@@ -400,7 +452,11 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
                     .collect(),
             ),
-            PatternKind::ListRest { head, rest, rest_local_id } => PatternKind::ListRest {
+            PatternKind::ListRest {
+                head,
+                rest,
+                rest_local_id,
+            } => PatternKind::ListRest {
                 head: head
                     .into_iter()
                     .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
@@ -408,7 +464,11 @@ impl<'db> TypeChecker<'db> {
                 rest,
                 rest_local_id,
             },
-            PatternKind::As { pattern, name, local_id } => PatternKind::As {
+            PatternKind::As {
+                pattern,
+                name,
+                local_id,
+            } => PatternKind::As {
                 pattern: self.apply_subst_to_pattern(pattern, type_subst, row_subst, var_to_index),
                 name,
                 local_id,
@@ -428,7 +488,9 @@ impl<'db> TypeChecker<'db> {
         FieldPattern {
             id: fp.id,
             name: fp.name,
-            pattern: fp.pattern.map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index)),
+            pattern: fp
+                .pattern
+                .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index)),
         }
     }
 
@@ -480,7 +542,11 @@ impl<'db> TypeChecker<'db> {
                     self.collect_univars_from_body(arg, type_subst, row_subst, out);
                 }
             }
-            ExprKind::Record { type_name, fields, spread } => {
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+            } => {
                 type_subst.collect_univars_from_type(self.db(), type_name.ty, row_subst, out);
                 for (_, expr) in fields {
                     self.collect_univars_from_body(expr, type_subst, row_subst, out);
@@ -525,8 +591,15 @@ impl<'db> TypeChecker<'db> {
                         HandlerKind::Result { binding } => {
                             self.collect_univars_from_pattern(binding, type_subst, row_subst, out);
                         }
-                        HandlerKind::Effect { ability, params, .. } => {
-                            type_subst.collect_univars_from_type(self.db(), ability.ty, row_subst, out);
+                        HandlerKind::Effect {
+                            ability, params, ..
+                        } => {
+                            type_subst.collect_univars_from_type(
+                                self.db(),
+                                ability.ty,
+                                row_subst,
+                                out,
+                            );
                             for p in params {
                                 self.collect_univars_from_pattern(p, type_subst, row_subst, out);
                             }
@@ -579,7 +652,9 @@ impl<'db> TypeChecker<'db> {
                     self.collect_univars_from_pattern(f, type_subst, row_subst, out);
                 }
             }
-            PatternKind::Record { type_name, fields, .. } => {
+            PatternKind::Record {
+                type_name, fields, ..
+            } => {
                 if let Some(t) = type_name {
                     type_subst.collect_univars_from_type(self.db(), t.ty, row_subst, out);
                 }

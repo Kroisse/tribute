@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    is_type_variable, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, FuncDefId, Module,
-    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme,
+    Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, FuncDefId, Module, ResolvedRef, StructDecl,
+    Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
 };
 
 use super::TypeChecker;
@@ -74,7 +74,9 @@ impl<'db> TypeChecker<'db> {
             .params
             .iter()
             .map(|p| match &p.ty {
-                Some(ann) => self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var),
+                Some(ann) => {
+                    self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
+                }
                 // No annotation: use a fresh BoundVar (will be inferred during function body check)
                 None => {
                     let index = next_bound_var;
@@ -103,7 +105,9 @@ impl<'db> TypeChecker<'db> {
                 crate::ast::abilities_to_effect_row(
                     self.db(),
                     anns,
-                    &mut |ann| self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var),
+                    &mut |ann| {
+                        self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
+                    },
                     || EffectVar { id: 0 }, // Placeholder, will be replaced during function check
                 )
             }
@@ -138,7 +142,9 @@ impl<'db> TypeChecker<'db> {
             .params
             .iter()
             .map(|p| match &p.ty {
-                Some(ann) => self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var),
+                Some(ann) => {
+                    self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
+                }
                 None => {
                     let index = next_bound_var;
                     next_bound_var += 1;
@@ -147,7 +153,11 @@ impl<'db> TypeChecker<'db> {
             })
             .collect();
 
-        let return_ty = self.annotation_to_type_for_sig(&func.return_ty, &mut type_var_map, &mut next_bound_var);
+        let return_ty = self.annotation_to_type_for_sig(
+            &func.return_ty,
+            &mut type_var_map,
+            &mut next_bound_var,
+        );
 
         let effect = EffectRow::pure(self.db());
         let func_ty = self.env.func_type(param_types, return_ty, effect);
@@ -285,7 +295,8 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|p| self.annotation_to_type_for_sig(p, type_var_map, next_bound_var))
                     .collect();
-                let result_ty = self.annotation_to_type_for_sig(result, type_var_map, next_bound_var);
+                let result_ty =
+                    self.annotation_to_type_for_sig(result, type_var_map, next_bound_var);
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
