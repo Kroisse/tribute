@@ -55,6 +55,17 @@ impl<'db> IrLoweringCtx<'db> {
         self.scopes.pop();
     }
 
+    /// Execute a closure with a new scope, automatically entering and exiting.
+    pub fn scoped<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.enter_scope();
+        let result = f(self);
+        self.exit_scope();
+        result
+    }
+
     /// Bind a local variable to an SSA value.
     pub fn bind(&mut self, local_id: LocalId, value: Value<'db>) {
         if let Some(scope) = self.scopes.last_mut() {

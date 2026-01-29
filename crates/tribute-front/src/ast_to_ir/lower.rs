@@ -14,9 +14,9 @@ use trunk_ir::{
 use tribute_ir::dialect::{tribute, tribute_rt};
 
 use crate::ast::{
-    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, Module, Pattern,
-    PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation, TypeAnnotationKind,
-    TypeKind, TypeScheme, TypedRef,
+    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, Module, Param,
+    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -562,7 +562,7 @@ fn lower_expr<'db>(
                 &arms,
             )
         }
-        ExprKind::Lambda { .. } => builder.emit_unsupported(location, "lambda expression"),
+        ExprKind::Lambda { params, body } => lower_lambda(builder, location, &params, &body),
         ExprKind::Handle { .. } => builder.emit_unsupported(location, "handle expression"),
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
@@ -571,6 +571,59 @@ fn lower_expr<'db>(
             Some(builder.emit_nil(location))
         }
     }
+}
+
+/// Lower a lambda expression.
+fn lower_lambda<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    params: &[Param],
+    body: &Expr<TypedRef<'db>>,
+) -> Option<trunk_ir::Value<'db>> {
+    let infer_ty = tribute_rt::any_type(builder.db());
+
+    // Build parameter types (all type-erased to any)
+    let param_types: trunk_ir::IdVec<trunk_ir::Type<'db>> =
+        std::iter::repeat_n(infer_ty, params.len()).collect();
+
+    // Build lambda body block with args
+    let mut body_block = BlockBuilder::new(builder.db(), location);
+    for param in params {
+        body_block = body_block
+            .arg(infer_ty)
+            .attr(Symbol::new("bind_name"), param.name);
+    }
+    body_block.flush_pending_arg();
+
+    let arg_values: Vec<trunk_ir::Value<'db>> = (0..params.len())
+        .map(|i| body_block.block_arg(builder.db(), i))
+        .collect();
+
+    // Lower body in parameter scope
+    let result_value = builder.ctx.scoped(|ctx| {
+        for (param, arg_value) in params.iter().zip(arg_values.iter().copied()) {
+            if let Some(local_id) = param.local_id {
+                ctx.bind(local_id, arg_value);
+            }
+        }
+
+        let mut inner_builder = IrBuilder::new(ctx, &mut body_block);
+        lower_expr(&mut inner_builder, body.clone())
+    })?;
+
+    body_block.op(tribute::r#yield(builder.db(), location, result_value));
+
+    let func_type = core::Func::new(builder.db(), param_types, infer_ty).as_type();
+    let region = Region::new(builder.db(), location, idvec![body_block.build()]);
+
+    let lambda_op = builder.block.op(tribute::lambda(
+        builder.db(),
+        location,
+        infer_ty,
+        func_type,
+        region,
+    ));
+    Some(lambda_op.result(builder.db()))
 }
 
 /// Check if an expression evaluates to a float type.
@@ -1002,6 +1055,52 @@ fn emit_pattern_check<'db>(
             Some(op.as_operation().result(builder.db(), 0))
         }
         PatternKind::Literal(lit) => emit_literal_check(builder, location, scrutinee, lit),
+        PatternKind::Tuple(elements) => {
+            // Tuple patterns always match structurally (untagged)
+            // We need to recursively check all element patterns
+            let mut conditions = Vec::new();
+            let any_ty = tribute_rt::any_type(builder.db());
+
+            for (i, elem_pat) in elements.iter().enumerate() {
+                // Extract the element from the tuple
+                let elem_val = builder
+                    .block
+                    .op(adt::struct_get(
+                        builder.db(),
+                        location,
+                        scrutinee,
+                        any_ty,
+                        any_ty,
+                        i as u64,
+                    ))
+                    .result(builder.db());
+
+                // Recursively check the element pattern
+                if let Some(cond) = emit_pattern_check(builder, location, elem_val, elem_pat) {
+                    conditions.push(cond);
+                }
+            }
+
+            // Combine all conditions with AND
+            if conditions.is_empty() {
+                // Empty tuple or all wildcards - always matches
+                Some(
+                    builder
+                        .block
+                        .op(arith::r#const(builder.db(), location, bool_ty, true.into()))
+                        .result(builder.db()),
+                )
+            } else {
+                let mut result = conditions[0];
+                for cond in conditions.into_iter().skip(1) {
+                    result = builder
+                        .block
+                        .op(arith::and(builder.db(), location, result, cond, bool_ty))
+                        .result(builder.db());
+                }
+                Some(result)
+            }
+        }
         _ => {
             unreachable!("unsupported pattern in IR lowering: {:?}", pattern.kind)
         }
@@ -1240,6 +1339,18 @@ fn bind_pattern_fields<'db>(
         }
         PatternKind::Bind { local_id: None, .. } => {
             // Bind pattern without local_id (e.g., from unresolved names) — no binding needed
+        }
+        PatternKind::Tuple(elements) => {
+            // Extract each element from the tuple and recursively bind
+            let any_ty = tribute_rt::any_type(ctx.db);
+            for (i, elem_pat) in elements.iter().enumerate() {
+                let elem_val = block
+                    .op(adt::struct_get(
+                        ctx.db, location, scrutinee, any_ty, any_ty, i as u64,
+                    ))
+                    .result(ctx.db);
+                bind_pattern_fields(ctx, block, location, elem_val, elem_pat);
+            }
         }
         _ => {
             unreachable!(
@@ -3940,6 +4051,258 @@ mod tests {
         assert!(
             if_op.is_some(),
             "Single arm with guard must emit scf.if (guard must be evaluated)"
+        );
+    }
+
+    // =========================================================================
+    // Tuple Pattern Tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_tuple_pattern_lowering(db: &salsa::DatabaseImpl) {
+        // Test: case pair { #(a, b) => a + b }
+        let path = PathId::new(db, "test.trb".to_owned());
+        let int_ty = AstType::new(db, TypeKind::Int);
+
+        // Create bind patterns for 'a' and 'b' with LocalIds
+        let local_a = LocalId::new(0);
+        let local_b = LocalId::new(1);
+        let pair_id = LocalId::new(2);
+
+        let bind_a = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("a"),
+                local_id: Some(local_a),
+            },
+        );
+        let bind_b = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Bind {
+                name: Symbol::new("b"),
+                local_id: Some(local_b),
+            },
+        );
+
+        // Tuple pattern #(a, b)
+        let tuple_pattern: Pattern<TypedRef<'_>> =
+            Pattern::new(fresh_node_id(), PatternKind::Tuple(vec![bind_a, bind_b]));
+
+        // Arm body: a + b (using variables)
+        let a_ref = TypedRef::new(ResolvedRef::local(local_a, Symbol::new("a")), int_ty);
+        let b_ref = TypedRef::new(ResolvedRef::local(local_b, Symbol::new("b")), int_ty);
+        let body = binop_expr(BinOpKind::Add, var_expr(a_ref), var_expr(b_ref));
+
+        let arm = Arm {
+            id: fresh_node_id(),
+            pattern: tuple_pattern,
+            guard: None,
+            body,
+        };
+
+        // Scrutinee: a tuple variable
+        let tuple_ty = AstType::new(db, TypeKind::Tuple(vec![int_ty, int_ty]));
+        let pair_ref = TypedRef::new(ResolvedRef::local(pair_id, Symbol::new("pair")), tuple_ty);
+        let scrutinee = var_expr(pair_ref);
+
+        // Case expression
+        let case_expr = Expr::new(
+            fresh_node_id(),
+            ExprKind::Case {
+                scrutinee,
+                arms: vec![arm],
+            },
+        );
+
+        // Function definition
+        let func_decl = FuncDecl {
+            id: fresh_node_id(),
+            name: Symbol::new("test_fn"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: Symbol::new("pair"),
+                ty: None,
+                local_id: Some(pair_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: block_expr(vec![], case_expr),
+            is_pub: false,
+        };
+
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have a function
+        let func_op = ops.iter().find(|op| op.name(db) == "func");
+        assert!(func_op.is_some(), "Should emit func operation");
+
+        let func_typed = func::Func::from_operation(db, *func_op.unwrap()).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have struct_get operations for extracting tuple elements
+        let struct_gets: Vec<_> = body_ops
+            .iter()
+            .filter(|op| op.name(db) == "struct_get")
+            .collect();
+        assert!(
+            struct_gets.len() >= 2,
+            "Should emit at least 2 struct_get operations for tuple element extraction, got {}",
+            struct_gets.len()
+        );
+    }
+
+    // =========================================================================
+    // Lambda Expression Tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_lambda_expression_lowering(db: &salsa::DatabaseImpl) {
+        // Test: fn(x) { x + 1 }
+        let path = PathId::new(db, "test.trb".to_owned());
+        let int_ty = AstType::new(db, TypeKind::Int);
+
+        let local_x = LocalId::new(0);
+
+        // Lambda body: x + 1
+        let x_ref = TypedRef::new(ResolvedRef::local(local_x, Symbol::new("x")), int_ty);
+        let body = binop_expr(BinOpKind::Add, var_expr(x_ref), nat_lit_expr(1));
+
+        // Lambda: fn(x) { x + 1 }
+        let lambda = Expr::new(
+            fresh_node_id(),
+            ExprKind::Lambda {
+                params: vec![Param {
+                    id: fresh_node_id(),
+                    name: Symbol::new("x"),
+                    ty: None,
+                    local_id: Some(local_x),
+                }],
+                body,
+            },
+        );
+
+        // Function that returns the lambda
+        let func_decl = simple_func(Symbol::new("make_adder"), lambda);
+
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ops = get_module_ops(db, &ir_module);
+
+        // Should have a function
+        let func_op = ops.iter().find(|op| op.name(db) == "func");
+        assert!(func_op.is_some(), "Should emit func operation");
+
+        let func_typed = func::Func::from_operation(db, *func_op.unwrap()).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        // Should have a lambda operation
+        let lambda_op = body_ops.iter().find(|op| op.name(db) == "lambda");
+        assert!(
+            lambda_op.is_some(),
+            "Should emit tribute.lambda operation for lambda expression"
+        );
+
+        // The lambda should have a body region with yield
+        let lambda_op = lambda_op.unwrap();
+        let regions = lambda_op.regions(db);
+        assert_eq!(
+            regions.len(),
+            1,
+            "Lambda should have exactly one body region"
+        );
+
+        let body_region = regions[0];
+        let body_blocks = body_region.blocks(db);
+        assert!(
+            !body_blocks.is_empty(),
+            "Lambda body should have at least one block"
+        );
+
+        // The body block should have a yield operation
+        let body_block = body_blocks[0];
+        let body_ops = body_block.operations(db);
+        let yield_op = body_ops.iter().find(|op| op.name(db) == "yield");
+        assert!(
+            yield_op.is_some(),
+            "Lambda body should end with tribute.yield"
+        );
+    }
+
+    #[salsa_test]
+    fn test_lambda_with_multiple_params(db: &salsa::DatabaseImpl) {
+        // Test: fn(a, b, c) { a + b + c }
+        let path = PathId::new(db, "test.trb".to_owned());
+        let int_ty = AstType::new(db, TypeKind::Int);
+
+        let local_a = LocalId::new(0);
+        let local_b = LocalId::new(1);
+        let local_c = LocalId::new(2);
+
+        // Lambda body: (a + b) + c
+        let a_ref = TypedRef::new(ResolvedRef::local(local_a, Symbol::new("a")), int_ty);
+        let b_ref = TypedRef::new(ResolvedRef::local(local_b, Symbol::new("b")), int_ty);
+        let c_ref = TypedRef::new(ResolvedRef::local(local_c, Symbol::new("c")), int_ty);
+
+        let add_ab = binop_expr(BinOpKind::Add, var_expr(a_ref), var_expr(b_ref));
+        let body = binop_expr(BinOpKind::Add, add_ab, var_expr(c_ref));
+
+        // Lambda: fn(a, b, c) { a + b + c }
+        let lambda = Expr::new(
+            fresh_node_id(),
+            ExprKind::Lambda {
+                params: vec![
+                    Param {
+                        id: fresh_node_id(),
+                        name: Symbol::new("a"),
+                        ty: None,
+                        local_id: Some(local_a),
+                    },
+                    Param {
+                        id: fresh_node_id(),
+                        name: Symbol::new("b"),
+                        ty: None,
+                        local_id: Some(local_b),
+                    },
+                    Param {
+                        id: fresh_node_id(),
+                        name: Symbol::new("c"),
+                        ty: None,
+                        local_id: Some(local_c),
+                    },
+                ],
+                body,
+            },
+        );
+
+        // Function that returns the lambda
+        let func_decl = simple_func(Symbol::new("triple_sum"), lambda);
+
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ops = get_module_ops(db, &ir_module);
+
+        let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
+        let func_typed = func::Func::from_operation(db, *func_op).unwrap();
+        let body_ops = get_func_body_ops(db, &func_typed);
+
+        let lambda_op = body_ops.iter().find(|op| op.name(db) == "lambda").unwrap();
+        let regions = lambda_op.regions(db);
+        let body_region = regions[0];
+        let body_blocks = body_region.blocks(db);
+        let body_block = body_blocks[0];
+
+        // Check that the lambda has 3 block arguments
+        let args = body_block.args(db);
+        assert_eq!(
+            args.len(),
+            3,
+            "Lambda with 3 params should have 3 block arguments"
         );
     }
 }
