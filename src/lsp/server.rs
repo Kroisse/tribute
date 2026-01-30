@@ -1940,4 +1940,206 @@ mod tests {
             other => panic!("Expected notification, got {:?}", other),
         }
     }
+
+    // =========================================================================
+    // Type Index Tests (Hover type content verification)
+    // =========================================================================
+
+    /// Extract the type string from a Hover result.
+    fn extract_hover_type(hover: &Hover) -> Option<&str> {
+        match &hover.contents {
+            HoverContents::Markup(markup) => {
+                // Format: "```tribute\n{type}\n```"
+                let value = &markup.value;
+                value
+                    .strip_prefix("```tribute\n")
+                    .and_then(|s| s.strip_suffix("\n```"))
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn test_hover_type_content_for_parameter() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_param");
+        //                    0         1         2         3
+        //                    0123456789012345678901234567890123456
+        let source = "fn add(x: Int, y: Int): Int { x + y }";
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'x' in the body (position 30)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 0,
+                    character: 30,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(type_str, "Int", "Parameter 'x' should have type Int");
+    }
+
+    #[test]
+    fn test_hover_type_content_for_nat_literal() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_nat_literal");
+        // Hover on natural number literals directly
+        let source = r#"fn main() {
+    42
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on '42' (line 1, character 4)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(
+            type_str, "Nat",
+            "Natural number literal should have type Nat"
+        );
+    }
+
+    #[test]
+    fn test_hover_type_content_for_string_literal() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_string");
+        let source = r#"fn main() {
+    "hello"
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on the string literal
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 5,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(type_str, "String", "String literal should have type String");
+    }
+
+    #[test]
+    fn test_hover_type_content_for_function_name() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_func_name");
+        let source = r#"fn double(n: Int): Int { n + n }
+fn main() {
+    double(5)
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on the function name 'double' in the call (line 2, character 4)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        // Hovering on function name should show function type
+        assert!(
+            type_str.starts_with("fn(Int)"),
+            "Function name should have function type, got: {}",
+            type_str
+        );
+    }
+
+    #[test]
+    fn test_hover_type_content_for_binary_expression() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_binop");
+        // Integer literals default to Nat type in Tribute
+        let source = r#"fn main() {
+    let result = 1 + 2
+    result
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'result' in the last line
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(
+            type_str, "Nat",
+            "Binary expression result should have type Nat (natural number literals have type Nat)"
+        );
+    }
+
+    #[test]
+    fn test_hover_type_content_for_bool_literal() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_bool");
+        // Bool literals in Tribute are True/False (capitalized)
+        let source = r#"fn main() {
+    True
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'True'
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 1,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(type_str, "Bool", "Bool literal True should have type Bool");
+    }
 }
