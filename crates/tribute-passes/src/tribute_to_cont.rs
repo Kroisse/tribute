@@ -500,12 +500,11 @@ impl<'db> HandlerLowerer<'db> {
         let ops = last_block.operations(self.db);
 
         // Check if last operation is already a yield
-        if let Some(last_op) = ops.last() {
-            if last_op.dialect(self.db) == scf::DIALECT_NAME()
-                && last_op.name(self.db) == scf::YIELD()
-            {
-                return region;
-            }
+        if let Some(last_op) = ops.last()
+            && last_op.dialect(self.db) == scf::DIALECT_NAME()
+            && last_op.name(self.db) == scf::YIELD()
+        {
+            return region;
         }
 
         // Add yield at the end
