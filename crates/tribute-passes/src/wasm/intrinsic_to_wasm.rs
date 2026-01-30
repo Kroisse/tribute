@@ -393,7 +393,9 @@ fn is_bytes_intrinsic_call<'db>(
     callee.last_segment() == Symbol::new(intrinsic_name)
 }
 
-/// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2` + `i64.extend_i32_u`
+/// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2`
+///
+/// Returns i32 directly since Nat is mapped to i32.
 struct BytesLenPattern;
 
 impl<'db> RewritePattern<'db> for BytesLenPattern {
@@ -414,7 +416,6 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
 
         // struct.get to get len field (field 2)
         let get_len = wasm::struct_get(
@@ -426,14 +427,13 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
             BYTES_LEN_FIELD,
         );
 
-        // Extend i32 to i64 (Int type in Tribute is i64)
-        let extend = wasm::i64_extend_i32_u(db, location, get_len.result(db), i64_ty);
-
-        RewriteResult::Expand(vec![get_len.operation(), extend.operation()])
+        RewriteResult::Replace(get_len.operation())
     }
 }
 
 /// Pattern for `Bytes::get_or_panic(bytes, index)` -> array access with offset
+///
+/// Index is i32 (Nat), returns i32 (Nat, byte value 0-255).
 struct BytesGetOrPanicPattern;
 
 impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
@@ -452,11 +452,10 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
             return RewriteResult::Unchanged;
         }
         let bytes_ref = operands[0];
-        let index = operands[1]; // i64
+        let index = operands[1]; // i32 (Nat)
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
         let i8_ty = core::I8::new(db).as_type();
 
         // Get data array ref (field 0)
@@ -481,17 +480,8 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
             BYTES_OFFSET_FIELD,
         );
 
-        // Wrap index to i32
-        let index_i32 = wasm::i32_wrap_i64(db, location, index, i32_ty);
-
         // Add offset to index: actual_index = offset + index
-        let add_offset = wasm::i32_add(
-            db,
-            location,
-            get_offset.result(db),
-            index_i32.result(db),
-            i32_ty,
-        );
+        let add_offset = wasm::i32_add(db, location, get_offset.result(db), index, i32_ty);
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
         let array_get = wasm::array_get_u(
@@ -503,21 +493,18 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
             BYTES_ARRAY_IDX,
         );
 
-        // Extend i32 to i64 (unsigned, Int type in Tribute is i64)
-        let extend = wasm::i64_extend_i32_u(db, location, array_get.result(db), i64_ty);
-
         RewriteResult::Expand(vec![
             get_data.operation(),
             get_offset.operation(),
-            index_i32.operation(),
             add_offset.operation(),
             array_get.operation(),
-            extend.operation(),
         ])
     }
 }
 
 /// Pattern for `Bytes::slice_or_panic(bytes, start, end)` -> new struct with adjusted offset/len
+///
+/// Start and end are i32 (Nat), returns Bytes.
 struct BytesSliceOrPanicPattern;
 
 impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
@@ -536,8 +523,8 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
             return RewriteResult::Unchanged;
         }
         let bytes_ref = operands[0];
-        let start = operands[1]; // i64
-        let end = operands[2]; // i64
+        let start = operands[1]; // i32 (Nat)
+        let end = operands[2]; // i32 (Nat)
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
@@ -566,28 +553,11 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
             BYTES_OFFSET_FIELD,
         );
 
-        // Wrap start and end to i32
-        let start_i32 = wasm::i32_wrap_i64(db, location, start, i32_ty);
-
-        let end_i32 = wasm::i32_wrap_i64(db, location, end, i32_ty);
-
         // new_offset = offset + start
-        let new_offset = wasm::i32_add(
-            db,
-            location,
-            get_offset.result(db),
-            start_i32.result(db),
-            i32_ty,
-        );
+        let new_offset = wasm::i32_add(db, location, get_offset.result(db), start, i32_ty);
 
         // new_len = end - start
-        let new_len = wasm::i32_sub(
-            db,
-            location,
-            end_i32.result(db),
-            start_i32.result(db),
-            i32_ty,
-        );
+        let new_len = wasm::i32_sub(db, location, end, start, i32_ty);
 
         // struct.new to create new Bytes (shares the underlying array)
         let struct_new = wasm::struct_new(
@@ -605,8 +575,6 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
         RewriteResult::Expand(vec![
             get_data.operation(),
             get_offset.operation(),
-            start_i32.operation(),
-            end_i32.operation(),
             new_offset.operation(),
             new_len.operation(),
             struct_new.operation(),
@@ -822,18 +790,18 @@ mod tests {
     fn make_bytes_len_module(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
         let bytes_ty = core::Bytes::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
 
         // Create a fake bytes value (block arg)
         let block_id = BlockId::fresh();
         let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
 
-        // Create Bytes::len call
+        // Create Bytes::len call (returns i32/Nat)
         let len_call = wasm::call(
             db,
             location,
             vec![bytes_val],
-            vec![i64_ty],
+            vec![i32_ty],
             bytes_intrinsic_name("len"),
         )
         .as_operation();
@@ -854,9 +822,8 @@ mod tests {
         let module = make_bytes_len_module(db);
         let op_names = lower_and_check(db, module);
 
-        // Should have struct_get and extend operations, not a wasm.call
+        // Should have struct_get, no extend needed (Nat is i32)
         assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
-        assert!(op_names.iter().any(|n| n == "wasm.i64_extend_i32_u"));
         // No Bytes::len call should remain
         let callees = extract_callees(db, module);
         assert!(!callees.iter().any(|n| n == "__bytes_len"));
@@ -866,18 +833,18 @@ mod tests {
     fn make_bytes_get_module(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
         let bytes_ty = core::Bytes::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
 
         let block_id = BlockId::fresh();
         let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
         let index_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
 
-        // Create Bytes::get_or_panic call
+        // Create Bytes::get_or_panic call (index and result are i32/Nat)
         let get_call = wasm::call(
             db,
             location,
             vec![bytes_val, index_val],
-            vec![i64_ty],
+            vec![i32_ty],
             bytes_intrinsic_name("get_or_panic"),
         )
         .as_operation();
@@ -888,7 +855,7 @@ mod tests {
             location,
             idvec![
                 BlockArg::of_type(db, bytes_ty),
-                BlockArg::of_type(db, i64_ty)
+                BlockArg::of_type(db, i32_ty)
             ],
             idvec![get_call],
         );
@@ -914,14 +881,14 @@ mod tests {
     fn make_bytes_slice_module(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
         let bytes_ty = core::Bytes::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
 
         let block_id = BlockId::fresh();
         let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
         let start_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
         let end_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 2);
 
-        // Create Bytes::slice_or_panic call
+        // Create Bytes::slice_or_panic call (start and end are i32/Nat)
         let slice_call = wasm::call(
             db,
             location,
@@ -937,8 +904,8 @@ mod tests {
             location,
             idvec![
                 BlockArg::of_type(db, bytes_ty),
-                BlockArg::of_type(db, i64_ty),
-                BlockArg::of_type(db, i64_ty)
+                BlockArg::of_type(db, i32_ty),
+                BlockArg::of_type(db, i32_ty)
             ],
             idvec![slice_call],
         );
