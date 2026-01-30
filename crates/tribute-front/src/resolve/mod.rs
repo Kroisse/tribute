@@ -22,7 +22,9 @@ pub use resolver::Resolver;
 
 use trunk_ir::{Symbol, smallvec::SmallVec};
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName};
+use crate::ast::{
+    CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+};
 use crate::build_field_module_path;
 
 /// Resolve names in a module.
