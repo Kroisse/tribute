@@ -83,10 +83,6 @@ cargo nextest run -p tribute
 cargo nextest run -p tree-sitter-tribute
 cargo nextest run -p tribute-passes
 cargo nextest run -p trunk-ir
-
-# Legacy drivers (example inputs may still be .trb today)
-cargo run --bin trbi -- <file.trb>
-cargo run --bin trbc -- <file.trb>
 ```
 
 ## Tree-sitter Grammar Development
