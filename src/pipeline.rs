@@ -138,7 +138,7 @@ pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> 
     let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
     // Typecheck with independent TypeContext
-    let checker = ast_typeck::TypeChecker::new(db);
+    let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let (typed_ast, function_types_vec) = checker.check_module(resolved);
 
     // TDNR
@@ -209,10 +209,10 @@ pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExpor
 
     // Build prelude ModuleEnv and resolve
     let prelude_env = ast_resolve::build_env(db, &prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map);
+    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
     // Typecheck with independent TypeContext (all UniVars resolved)
-    let checker = ast_typeck::TypeChecker::new(db);
+    let checker = ast_typeck::TypeChecker::new(db, span_map);
     let prelude_exports = checker.check_module_for_prelude(resolved);
 
     Some(prelude_exports)
@@ -604,7 +604,7 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, user_env, span_map.clone());
 
     // Phase 4: Type checking with prelude types injected
-    let mut checker = ast_typeck::TypeChecker::new(db);
+    let mut checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     if let Some(p_exports) = prelude_exports(db) {
         checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
     }

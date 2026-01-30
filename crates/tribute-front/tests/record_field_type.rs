@@ -50,7 +50,7 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
     // Type check - this is where field type constraints are applied
-    let checker = tribute_front::typeck::TypeChecker::new(db);
+    let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
     let (typed_ast, function_types) = checker.check_module(resolved);
 
     // TDNR

@@ -28,6 +28,8 @@ mod solver;
 pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet, TypeVar};
 pub use context::{ModuleTypeEnv, TypeContext};
+
+use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
@@ -84,8 +86,9 @@ pub struct PreludeExports<'db> {
 pub fn typecheck_module_full<'db>(
     db: &'db dyn salsa::Database,
     module: Module<ResolvedRef<'db>>,
+    span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db);
+    let checker = TypeChecker::new(db, span_map);
     let (typed_module, function_types) = checker.check_module(module);
     TypeCheckOutput::new(db, typed_module, function_types)
 }
@@ -96,8 +99,9 @@ pub fn typecheck_module_full<'db>(
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: Module<ResolvedRef<'db>>,
+    span_map: SpanMap,
 ) -> Module<TypedRef<'db>> {
-    let checker = TypeChecker::new(db);
+    let checker = TypeChecker::new(db, span_map);
     let (typed_module, _function_types) = checker.check_module(module);
     typed_module
 }

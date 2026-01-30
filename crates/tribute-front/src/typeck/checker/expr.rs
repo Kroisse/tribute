@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
@@ -1298,7 +1298,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         // Empty arms is definitely non-exhaustive
         if arms.is_empty() {
-            let span = Span::new(0, 0); // TODO: Get proper span from scrutinee
+            let span = self.get_span(span_node_id);
             Diagnostic {
                 message: "non-exhaustive case expression: no patterns provided".to_string(),
                 span,
@@ -1340,7 +1340,7 @@ impl<'db> TypeChecker<'db> {
                 if has_true && has_false {
                     return; // Exhaustive
                 }
-                let span = Span::new(0, 0);
+                let span = self.get_span(span_node_id);
                 let missing = match (has_true, has_false) {
                     (true, false) => "False",
                     (false, true) => "True",
@@ -1357,7 +1357,7 @@ impl<'db> TypeChecker<'db> {
             }
             TypeKind::Int | TypeKind::String | TypeKind::Float | TypeKind::Nat => {
                 // Primitive types without catch-all are non-exhaustive
-                let span = Span::new(0, 0);
+                let span = self.get_span(span_node_id);
                 Diagnostic {
                     message: "non-exhaustive case expression: not all cases are covered"
                         .to_string(),
@@ -1395,7 +1395,7 @@ impl<'db> TypeChecker<'db> {
 
         if !missing.is_empty() {
             let missing_names: Vec<_> = missing.iter().map(|s| s.to_string()).collect();
-            let span = Span::new(0, 0);
+            let span = self.get_span(span_node_id);
             Diagnostic {
                 message: format!(
                     "non-exhaustive case expression: missing variants: {}",
@@ -1457,8 +1457,8 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Emit a warning for patterns we can't fully analyze.
-    fn emit_exhaustiveness_warning(&self, _span_node_id: crate::ast::NodeId) {
-        let span = Span::new(0, 0);
+    fn emit_exhaustiveness_warning(&self, span_node_id: crate::ast::NodeId) {
+        let span = self.get_span(span_node_id);
         Diagnostic {
             message: "exhaustiveness check: unable to verify all cases are covered".to_string(),
             span,

@@ -24,9 +24,9 @@ mod collect;
 mod expr;
 mod func_check;
 
-use trunk_ir::{Symbol, SymbolVec, smallvec::SmallVec};
+use trunk_ir::{Span, Symbol, SymbolVec, smallvec::SmallVec};
 
-use crate::ast::{Decl, FuncDefId, Module, ResolvedRef, Type, TypeScheme, TypedRef};
+use crate::ast::{Decl, FuncDefId, Module, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef};
 
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
@@ -50,15 +50,23 @@ pub struct TypeChecker<'db> {
     pub(crate) env: ModuleTypeEnv<'db>,
     /// Current module path for qualified function names.
     pub(crate) module_path: Vec<Symbol>,
+    /// Span map for converting NodeId to Span in diagnostics.
+    pub(crate) span_map: SpanMap,
 }
 
 impl<'db> TypeChecker<'db> {
-    /// Create a new type checker.
-    pub fn new(db: &'db dyn salsa::Database) -> Self {
+    /// Create a new type checker with the given span map.
+    pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
             module_path: Vec::new(),
+            span_map,
         }
+    }
+
+    /// Get the span for a NodeId, falling back to Span::new(0, 0) if not found.
+    pub(crate) fn get_span(&self, node_id: crate::ast::NodeId) -> Span {
+        self.span_map.get_or_default(node_id)
     }
 
     /// Get the current module path as a SymbolVec.

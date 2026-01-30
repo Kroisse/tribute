@@ -8,7 +8,6 @@ use std::collections::HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::Span;
 
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Pattern,
@@ -69,7 +68,7 @@ impl<'db> TypeChecker<'db> {
         let mut solver = TypeSolver::new(self.db());
 
         if let Err(error) = solver.solve(constraints) {
-            let span = Span::new(0, 0);
+            let span = self.get_span(func.id);
             Diagnostic {
                 message: format!("Type error in function '{}': {:?}", func.name, error),
                 span,
