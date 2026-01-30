@@ -12,12 +12,11 @@ use salsa::Database;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{
-    compile_to_wasm_binary, compile_with_diagnostics, parse_and_lower_ast, stage_resolve,
-};
+use tribute::pipeline::{compile_to_wasm_binary, compile_with_diagnostics};
 use tribute::{SourceCst, TributeDatabaseImpl};
+use tribute_front::query::parsed_ast;
+use tribute_front::resolve::build_env;
 use tribute_passes::diagnostic::Diagnostic;
-use tribute_passes::resolve::build_env;
 
 fn main() {
     let cli = Cli::parse();
@@ -169,10 +168,12 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         // Show environment if requested
         if show_env {
             println!("\n=== Module Environment ===");
-            let module = parse_and_lower_ast(db, source);
-            let resolved = stage_resolve(db, module);
-            let env = build_env(db, &resolved);
-            println!("{:#?}", env);
+            if let Some(parsed) = parsed_ast(db, source) {
+                let env = build_env(db, &parsed.module(db));
+                println!("{:#?}", env);
+            } else {
+                println!("(Failed to parse AST)");
+            }
         }
 
         println!();

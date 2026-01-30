@@ -12,6 +12,3 @@ pub mod ability;
 
 // === Closures ===
 pub mod closure;
-
-// === Data structures ===
-pub mod list;

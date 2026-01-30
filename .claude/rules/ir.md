@@ -32,11 +32,10 @@ Dialects are split across two crates:
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `tribute` | `tribute.rs` | Tribute AST/HIR: var, call, case, struct_def, enum_def, type_var, int, nat |
-| `tribute_pat` | `tribute_pat.rs` | Pattern operations: wildcard, bind, variant, literal, tuple |
+| `tribute_pat` | `tribute_pat.rs` | Pattern operations: wildcard, bind, variant, tuple |
 | `ability` | `ability.rs` | Effect operations: perform, resume, abort |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
 | `closure` | `closure.rs` | Closures and captures |
-| `list` | `list.rs` | List operations |
 
 ### Mid-level (trunk-ir)
 | Dialect | File | Purpose |

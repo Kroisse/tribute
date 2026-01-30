@@ -501,10 +501,8 @@ impl<'db> HandlerLowerer<'db> {
 
         // Check if last operation is already a yield
         if let Some(last_op) = ops.last() {
-            let dialect = last_op.dialect(self.db);
-            let name = last_op.name(self.db);
-            if (dialect == scf::DIALECT_NAME() && name == scf::YIELD())
-                || (dialect == tribute::DIALECT_NAME() && name == tribute::YIELD())
+            if last_op.dialect(self.db) == scf::DIALECT_NAME()
+                && last_op.name(self.db) == scf::YIELD()
             {
                 return region;
             }

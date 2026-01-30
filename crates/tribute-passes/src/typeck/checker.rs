@@ -16,11 +16,10 @@ use std::sync::Arc;
 use crate::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use salsa::Accumulator;
 use tracing::trace;
-use tribute_ir::dialect::{ability, closure, list, tribute, tribute_pat};
+use tribute_ir::dialect::{ability, closure, tribute, tribute_pat};
 use trunk_ir::dialect::adt;
 use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
-    Value,
+    Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
     dialect::{arith, cont, core, func},
 };
 
@@ -536,26 +535,8 @@ impl<'db> TypeChecker<'db> {
                 self.check_unknown_op(op);
             }
         } else if dialect == tribute::DIALECT_NAME() {
-            if name == tribute::PATH() {
-                self.check_src_path(op);
-            } else if name == tribute::REF() {
-                self.check_src_ref(op);
-            } else if name == tribute::CALL() || name == tribute::CONS() {
-                self.check_src_call(op);
-            } else if name == tribute::BINOP() {
-                self.check_src_binop(op);
-            } else if name == tribute::LAMBDA() {
-                self.check_src_lambda(op);
-            } else if name == tribute::BLOCK() {
-                self.check_src_block(op);
-            } else if name == tribute::YIELD() {
-                self.check_src_yield(op);
-            } else if name == tribute::TUPLE() {
+            if name == tribute::TUPLE() {
                 self.check_src_tuple(op);
-            } else if name == tribute::CONST() {
-                self.check_src_const(op);
-            } else if name == tribute::CASE() {
-                self.check_case(op);
             } else if name == tribute::HANDLE() {
                 self.check_ability_prompt(op);
             } else if name == tribute::STRUCT_DEF()
@@ -564,11 +545,6 @@ impl<'db> TypeChecker<'db> {
             {
                 // Type declarations don't need type checking - no-op
             } else {
-                // Note: tribute.let is erased during resolution (resolve.rs:resolve_let).
-                // Effect propagation happens naturally because let bindings are directly
-                // mapped to the values they bind. Effects from init expressions are
-                // tracked when those operations are checked, and naturally propagate
-                // through value references. See Issue #200 for verification tests.
                 self.check_unknown_op(op);
             }
         } else if dialect == adt::DIALECT_NAME() {
@@ -584,12 +560,6 @@ impl<'db> TypeChecker<'db> {
                 self.check_variant_get(op);
             } else if name == adt::STRUCT_GET() {
                 self.check_struct_get(op);
-            } else {
-                self.check_unknown_op(op);
-            }
-        } else if dialect == list::DIALECT_NAME() {
-            if name == list::NEW() {
-                self.check_list_new(op);
             } else {
                 self.check_unknown_op(op);
             }
@@ -1009,120 +979,6 @@ impl<'db> TypeChecker<'db> {
         self.record_type(value, *bool_type);
     }
 
-    // === src dialect checking ===
-
-    fn check_src_path(&mut self, op: &Operation<'db>) {
-        // Path reference - type is determined by what it resolves to
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    fn check_src_ref(&mut self, op: &Operation<'db>) {
-        // Local variable reference - result type equals operand type
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // Get operand type and constrain result to match
-        if let Some(&operand) = op.operands(self.db).first()
-            && let Some(operand_type) = self.get_type(operand)
-        {
-            self.constrain_eq(result_type, operand_type);
-        }
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    fn check_src_call(&mut self, op: &Operation<'db>) {
-        // Call expression - need to check callee type and argument types
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // Create fresh type var for result
-        let actual_result = self.fresh_type_var();
-        self.constrain_eq(actual_result, result_type);
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, actual_result);
-
-        // TODO: Once name resolution is done, constrain callee function type
-        // with argument types
-    }
-
-    fn check_src_binop(&mut self, op: &Operation<'db>) {
-        let operands = op.operands(self.db);
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // For most binops, operands should have compatible types
-        if operands.len() >= 2 {
-            let lhs = operands[0];
-            let rhs = operands[1];
-
-            if let (Some(lhs_ty), Some(rhs_ty)) = (self.get_type(lhs), self.get_type(rhs)) {
-                // For now, require same type (will be refined with type classes)
-                self.constrain_eq(lhs_ty, rhs_ty);
-            }
-        }
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    fn check_src_lambda(&mut self, op: &Operation<'db>) {
-        // Lambda expression
-        let results = op.results(self.db);
-        let lambda_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // Check the body
-        let regions = op.regions(self.db);
-        if let Some(body) = regions.first() {
-            self.check_region(body);
-        }
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, lambda_type);
-    }
-
-    fn check_src_block(&mut self, op: &Operation<'db>) {
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // Check the body
-        let regions = op.regions(self.db);
-        if let Some(body) = regions.first() {
-            self.check_region(body);
-        }
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    fn check_src_yield(&mut self, _op: &Operation<'db>) {
-        // Yield doesn't have a result
-        // The value should match the enclosing block's result type
-    }
-
     /// Get the type of the value yielded by a region.
     ///
     /// This looks for a terminator operation (`tribute.yield` or `func.return`)
@@ -1132,20 +988,10 @@ impl<'db> TypeChecker<'db> {
         let last_block = blocks.last()?;
         let ops = last_block.operations(self.db);
 
-        // Find tribute.yield or func.return in the block
+        // Find func.return in the block
         for op in ops.iter().rev() {
             let dialect = op.dialect(self.db);
             let name = op.name(self.db);
-
-            // Check for tribute.yield
-            if dialect == tribute::DIALECT_NAME() && name == tribute::YIELD() {
-                let operands = op.operands(self.db);
-                if let Some(value) = operands.first() {
-                    let ty = self.get_type(*value);
-                    tracing::debug!(?value, ?ty, "get_region_yield_type: found yield operand");
-                    return ty;
-                }
-            }
 
             // Check for func.return
             if dialect == func::DIALECT_NAME() && name == func::RETURN() {
@@ -1163,16 +1009,6 @@ impl<'db> TypeChecker<'db> {
     }
 
     fn check_src_tuple(&mut self, op: &Operation<'db>) {
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    fn check_src_const(&mut self, op: &Operation<'db>) {
         let results = op.results(self.db);
         let result_type = results
             .first()
@@ -1301,409 +1137,6 @@ impl<'db> TypeChecker<'db> {
             Attribute::IntBits(idx) => fields.get(*idx as usize).map(|(_, ty)| *ty),
             _ => None,
         }
-    }
-
-    // === list dialect checking ===
-
-    fn check_list_new(&mut self, op: &Operation<'db>) {
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    // === case dialect checking ===
-
-    fn check_case(&mut self, op: &Operation<'db>) {
-        let results = op.results(self.db);
-        let result_type = results
-            .first()
-            .copied()
-            .unwrap_or_else(|| self.fresh_type_var());
-
-        // Get scrutinee type (the value being matched on)
-        let scrutinee_type = op.operands(self.db).first().and_then(|v| self.get_type(*v));
-
-        // Check each branch region and collect handled abilities from handler patterns
-        let regions = op.regions(self.db);
-        let mut handled_abilities = Vec::new();
-
-        for region in regions.iter() {
-            // Look for case.arm operations in the region
-            for block in region.blocks(self.db).iter() {
-                for arm_op in block.operations(self.db).iter() {
-                    if arm_op.dialect(self.db) == tribute::DIALECT_NAME()
-                        && arm_op.name(self.db) == tribute::ARM()
-                    {
-                        // Extract handled abilities from the pattern region
-                        let arm_regions = arm_op.regions(self.db);
-                        if let Some(pattern_region) = arm_regions.first() {
-                            // Check for handler patterns and bind continuation types
-                            self.check_handler_pattern_continuations(
-                                pattern_region,
-                                &mut handled_abilities,
-                                result_type,
-                            );
-
-                            // For variant patterns, constrain variant_get result types
-                            // based on the pattern's variant and the enum definition
-                            if let Some(scrutinee_ty) = scrutinee_type
-                                && let Some(body_region) = arm_regions.get(1)
-                            {
-                                self.constrain_variant_get_types_in_arm(
-                                    pattern_region,
-                                    body_region,
-                                    scrutinee_ty,
-                                );
-                            }
-                        }
-
-                        // Check the body region (second region)
-                        if let Some(body_region) = arm_regions.get(1) {
-                            self.check_region(body_region);
-                        }
-                    } else {
-                        // Regular operation in case body
-                        self.check_operation(arm_op);
-                    }
-                }
-            }
-        }
-
-        // Remove handled abilities from the current effect row
-        for ability in handled_abilities {
-            self.current_effect.remove_ability(&ability);
-        }
-
-        let value = op.result(self.db, 0);
-        self.record_type(value, result_type);
-    }
-
-    /// Constrain types in a case arm body based on the pattern.
-    ///
-    /// When a case arm has a pattern (e.g., `Add(Num(n), r)`), we need to constrain:
-    /// 1. Block argument types - these represent pattern bindings
-    /// 2. `adt.variant_get` result types (legacy: for backwards compatibility)
-    ///
-    /// This method:
-    /// 1. Collects binding types by traversing the pattern structure recursively
-    /// 2. Constrains block arg types to match the collected binding types
-    /// 3. Constrains variant_get result types for backwards compatibility
-    fn constrain_variant_get_types_in_arm(
-        &mut self,
-        pattern_region: &Region<'db>,
-        body_region: &Region<'db>,
-        scrutinee_type: Type<'db>,
-    ) {
-        // Collect binding types by traversing the pattern structure
-        // This correctly handles nested patterns like Add(Num(n), r)
-        let binding_types = self.collect_binding_types_from_pattern(pattern_region, scrutinee_type);
-
-        trace!(
-            ?binding_types,
-            "constrain_variant_get_types_in_arm: collected binding types"
-        );
-
-        // Constrain body block argument types based on collected binding types
-        if let Some(entry_block) = body_region.blocks(self.db).first() {
-            let block_args = entry_block.args(self.db);
-            for (i, arg) in block_args.iter().enumerate() {
-                if let Some(&expected_type) = binding_types.get(i) {
-                    let arg_ty = arg.ty(self.db);
-                    trace!(
-                        i,
-                        ?expected_type,
-                        ?arg_ty,
-                        "constrain_variant_get_types_in_arm: constraining block arg type"
-                    );
-                    self.constrain_eq(arg_ty, expected_type);
-                }
-            }
-        }
-
-        // Also constrain adt.variant_get operations (for backwards compatibility)
-        // Extract variant tag for looking up field types
-        // Resolve tribute.type reference before enum lookup, as adt::get_enum_variants
-        // cannot handle unresolved type references.
-        let resolved_scrutinee_type = self.resolve_tribute_type(scrutinee_type);
-        let variant_tag = self.extract_variant_tag_from_pattern(pattern_region);
-        let field_types = variant_tag.and_then(|tag| {
-            adt::get_enum_variants(self.db, resolved_scrutinee_type).and_then(|variants| {
-                variants
-                    .iter()
-                    .find(|(name, _)| *name == tag)
-                    .map(|(_, types)| types.clone())
-            })
-        });
-
-        // Also constrain adt.variant_get operations (for backwards compatibility)
-        let Some(field_types) = field_types else {
-            return;
-        };
-
-        for block in body_region.blocks(self.db).iter() {
-            for op in block.operations(self.db).iter() {
-                if op.dialect(self.db) == adt::DIALECT_NAME()
-                    && op.name(self.db) == adt::VARIANT_GET()
-                {
-                    // Get field index from the operation
-                    if let Some(Attribute::IntBits(idx)) =
-                        op.attributes(self.db).get(&Symbol::new("field"))
-                    {
-                        let field_idx = *idx as usize;
-                        if let Some(field_type) = field_types.get(field_idx) {
-                            // Resolve tribute.type to concrete types before constraining
-                            let resolved_field_type = self.resolve_tribute_type(*field_type);
-                            // Get the result type variable
-                            let result_types = op.results(self.db);
-                            if let Some(&result_ty) = result_types.first() {
-                                trace!(
-                                    field_idx,
-                                    ?resolved_field_type,
-                                    ?result_ty,
-                                    "constrain_variant_get_types_in_arm: constraining field type"
-                                );
-                                self.constrain_eq(result_ty, resolved_field_type);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Resolve `tribute.type` references to concrete types.
-    ///
-    /// The enum definition stores field types as `tribute.type { name: "Int" }`
-    /// which are type references, not concrete types. This method resolves them
-    /// to their concrete counterparts (e.g., `tribute_rt.int`).
-    ///
-    /// User-defined types (like `Expr`) are resolved by looking up the type name
-    /// in the collected type definitions (`type_defs`).
-    fn resolve_tribute_type(&self, ty: Type<'db>) -> Type<'db> {
-        use tribute_ir::dialect::tribute_rt;
-
-        // Check if this is a tribute.type reference
-        if ty.dialect(self.db) != tribute::DIALECT_NAME() || ty.name(self.db) != tribute::TYPE() {
-            return ty;
-        }
-
-        // Get the type name from the name attribute
-        let Some(Attribute::Symbol(name_sym)) = ty.get_attr(self.db, Symbol::new("name")) else {
-            return ty;
-        };
-
-        // Resolve well-known primitive types
-        let name_str = name_sym.to_string();
-        match &*name_str {
-            "Int" => tribute_rt::int_type(self.db),
-            "Bool" => tribute_rt::bool_type(self.db),
-            "Float" => tribute_rt::float_type(self.db),
-            "Nat" => tribute_rt::nat_type(self.db),
-            "String" => *core::String::new(self.db),
-            "Bytes" => *core::Bytes::new(self.db),
-            "Nil" => *core::Nil::new(self.db),
-            // User-defined types - look up in type definitions
-            _ => {
-                if let Some(&adt_ty) = self.type_defs.get(name_sym) {
-                    trace!(
-                        "resolve_tribute_type: resolved {:?} to {:?}",
-                        name_sym, adt_ty
-                    );
-                    adt_ty
-                } else {
-                    trace!(
-                        "resolve_tribute_type: no definition found for {:?}",
-                        name_sym
-                    );
-                    ty
-                }
-            }
-        }
-    }
-
-    /// Extract the variant tag from a pattern region.
-    ///
-    /// Looks for `tribute_pat.variant` operation and extracts its `variant` attribute.
-    fn extract_variant_tag_from_pattern(&self, pattern_region: &Region<'db>) -> Option<Symbol> {
-        for block in pattern_region.blocks(self.db).iter() {
-            for op in block.operations(self.db).iter() {
-                if op.dialect(self.db) == tribute_pat::DIALECT_NAME()
-                    && op.name(self.db) == tribute_pat::VARIANT()
-                    && let Some(Attribute::Symbol(tag)) =
-                        op.attributes(self.db).get(&Symbol::new("variant"))
-                {
-                    return Some(*tag);
-                }
-            }
-        }
-        None
-    }
-
-    /// Collect binding types from a pattern region by traversing the pattern structure.
-    ///
-    /// This function recursively walks the pattern IR to determine the expected type
-    /// for each binding (`tribute_pat.bind`). For nested patterns like `Add(Num(n), r)`,
-    /// it correctly assigns:
-    /// - `n` → the field type of `Num` (e.g., `Int`)
-    /// - `r` → the field type of `Add` at position 1 (e.g., `Expr`)
-    ///
-    /// Returns types in the order bindings appear (depth-first, left-to-right).
-    fn collect_binding_types_from_pattern(
-        &mut self,
-        pattern_region: &Region<'db>,
-        expected_type: Type<'db>,
-    ) -> Vec<Type<'db>> {
-        let mut binding_types = Vec::new();
-        self.collect_binding_types_recursive(pattern_region, expected_type, &mut binding_types);
-        binding_types
-    }
-
-    /// Recursive helper for collect_binding_types_from_pattern.
-    fn collect_binding_types_recursive(
-        &mut self,
-        pattern_region: &Region<'db>,
-        expected_type: Type<'db>,
-        binding_types: &mut Vec<Type<'db>>,
-    ) {
-        for block in pattern_region.blocks(self.db).iter() {
-            for op in block.operations(self.db).iter() {
-                let dialect = op.dialect(self.db);
-                let op_name = op.name(self.db);
-
-                if dialect != tribute_pat::DIALECT_NAME() {
-                    continue;
-                }
-
-                if op_name == tribute_pat::BIND() {
-                    // Binding: add the expected type at this position
-                    let resolved = self.resolve_tribute_type(expected_type);
-                    trace!(?resolved, "collect_binding_types_recursive: found bind");
-                    binding_types.push(resolved);
-                } else if op_name == tribute_pat::VARIANT() {
-                    // Variant pattern: get field types and recurse into each field
-                    let variant_tag = op
-                        .attributes(self.db)
-                        .get(&Symbol::new("variant"))
-                        .and_then(|attr| match attr {
-                            Attribute::Symbol(s) => Some(*s),
-                            _ => None,
-                        });
-
-                    let Some(tag) = variant_tag else {
-                        continue;
-                    };
-
-                    // Resolve tribute.type reference before looking up enum variants.
-                    // expected_type may be a tribute.type reference which adt::get_enum_variants
-                    // cannot handle directly.
-                    let resolved_expected_type = self.resolve_tribute_type(expected_type);
-
-                    // Look up field types for this variant
-                    let field_types = adt::get_enum_variants(self.db, resolved_expected_type)
-                        .and_then(|variants| {
-                            variants
-                                .iter()
-                                .find(|(name, _)| *name == tag)
-                                .map(|(_, types)| types.clone())
-                        })
-                        .unwrap_or_default();
-
-                    trace!(
-                        ?tag,
-                        ?field_types,
-                        "collect_binding_types_recursive: found variant"
-                    );
-
-                    // The variant operation has a fields region containing field patterns
-                    if let Some(fields_region) = op.regions(self.db).first() {
-                        let mut field_idx = 0;
-                        for field_block in fields_region.blocks(self.db).iter() {
-                            for field_op in field_block.operations(self.db).iter() {
-                                // Get the expected type for this field.
-                                // If field type is unavailable (malformed IR or unresolved type),
-                                // fall back to parent type. This is semantically imprecise but
-                                // allows compilation to continue; type errors will surface elsewhere.
-                                let field_type = field_types
-                                    .get(field_idx)
-                                    .copied()
-                                    .unwrap_or(resolved_expected_type);
-
-                                // Create a temporary region containing just this field op
-                                // to recurse into
-                                let temp_region = self.wrap_op_in_region(*field_op);
-                                self.collect_binding_types_recursive(
-                                    &temp_region,
-                                    field_type,
-                                    binding_types,
-                                );
-                                field_idx += 1;
-                            }
-                        }
-                    }
-                } else if op_name == tribute_pat::WILDCARD() {
-                    // Wildcard: no binding, nothing to add
-                } else if op_name == tribute_pat::LITERAL() {
-                    // Literal: no binding, nothing to add
-                } else if op_name == tribute_pat::AS_PAT() {
-                    // As pattern: add binding for the outer name, then recurse into inner
-                    let resolved = self.resolve_tribute_type(expected_type);
-                    binding_types.push(resolved);
-
-                    // Recurse into the inner pattern region
-                    if let Some(inner_region) = op.regions(self.db).first() {
-                        self.collect_binding_types_recursive(
-                            inner_region,
-                            expected_type,
-                            binding_types,
-                        );
-                    }
-                } else if op_name == tribute_pat::TUPLE() {
-                    // Tuple pattern: get element types from tuple type params
-                    let element_types: Vec<Type<'db>> = expected_type.params(self.db).to_vec();
-
-                    if let Some(elements_region) = op.regions(self.db).first() {
-                        let mut elem_idx = 0;
-                        for elem_block in elements_region.blocks(self.db).iter() {
-                            for elem_op in elem_block.operations(self.db).iter() {
-                                // If element type is unavailable (malformed IR or unresolved type),
-                                // fall back to parent type. This is semantically imprecise but
-                                // allows compilation to continue; type errors will surface elsewhere.
-                                let elem_type = element_types
-                                    .get(elem_idx)
-                                    .copied()
-                                    .unwrap_or(expected_type);
-
-                                let temp_region = self.wrap_op_in_region(*elem_op);
-                                self.collect_binding_types_recursive(
-                                    &temp_region,
-                                    elem_type,
-                                    binding_types,
-                                );
-                                elem_idx += 1;
-                            }
-                        }
-                    }
-                }
-                // Other pattern types (list, etc.) can be added as needed
-            }
-        }
-    }
-
-    /// Helper to wrap an operation in a temporary region for recursive processing.
-    fn wrap_op_in_region(&self, op: Operation<'db>) -> Region<'db> {
-        let location = op.location(self.db);
-        let block = Block::new(
-            self.db,
-            BlockId::fresh(),
-            location,
-            IdVec::new(),
-            IdVec::from(vec![op]),
-        );
-        Region::new(self.db, location, IdVec::from(vec![block]))
     }
 
     /// Check handler patterns and bind continuation types.

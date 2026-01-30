@@ -556,7 +556,7 @@ fn main() ->{} Int {
             SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = run_lambda_lift(db, source_file).expect("lambda lift failed");
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
@@ -619,7 +619,7 @@ fn main() ->{} Int {
         let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = run_lambda_lift(db, source_file).expect("lambda lift failed");
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
@@ -685,7 +685,7 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
 
-        let module = run_lambda_lift(db, source_file).expect("lambda lift failed");
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
@@ -730,7 +730,7 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
 
-        let module = run_lambda_lift(db, source_file).expect("lambda lift failed");
+        let module = run_lambda_lift(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
@@ -804,7 +804,7 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
 
-        let module = run_closure_lower(db, source_file).expect("closure lower failed");
+        let module = run_closure_lower(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =

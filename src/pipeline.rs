@@ -32,21 +32,12 @@
 //!     ▼ tdnr
 //! Module (UFCS resolved)
 //!     │
-//!     ▼ const_inline
-//! Module (const values inlined)
-//!     │
-//!     ▼ inline_refs
-//! Module (tribute.ref inlined)
-//!     │
 //!     ▼ boxing
 //! Module (boxing explicit)
 //!     │
 //!     ├─────────────── Evidence & Closure Processing ─┤
 //!     ▼ evidence_params (Phase 1)
 //! Module (evidence params added to signatures)
-//!     │
-//!     ▼ lambda_lift
-//! Module (lambdas lifted, captures evidence)
 //!     │
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
@@ -56,10 +47,7 @@
 //!     │
 //!     ├─────────────── Final Lowering ────────────────┤
 //!     ▼ tribute_to_cont
-//! Module (tribute → continuation ops)
-//!     │
-//!     ▼ tribute_to_scf
-//! Module (case → scf.if)
+//! Module (tribute.handle → continuation ops)
 //!     │
 //!     ▼ handler_lower
 //! Module (ability.* → cont.*)
@@ -90,18 +78,12 @@ use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
-use tribute_passes::const_inline::inline_module;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
-use tribute_passes::inline_refs::inline_refs;
-use tribute_passes::lambda_lift::lift_lambdas;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_tribute_to_cont;
-use tribute_passes::lower_tribute_to_scf;
-use tribute_passes::resolve::{Resolver, build_env};
-use tribute_passes::tdnr::resolve_tdnr;
 use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
@@ -300,9 +282,6 @@ pub fn merge_with_prelude<'db>(
     user_module
 }
 
-// Re-exports for external use
-pub use tribute_passes::resolve::build_env as build_module_env;
-
 /// Result of the full compilation pipeline.
 pub struct CompilationResult<'db> {
     /// The compiled module with resolved types.
@@ -320,35 +299,6 @@ pub struct CompilationResult<'db> {
 // Each stage is a #[salsa::tracked] function that takes a Module as input
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
-
-/// Resolve names in the module.
-///
-/// This pass resolves:
-/// - `tribute.var` → `func.constant` or `adt.struct_new`/`adt.variant_new`
-/// - `tribute.call` → `func.call` with resolved callee
-/// - `tribute.path` → resolved module paths
-///
-/// After this pass, all resolvable `tribute.*` operations are transformed.
-/// Some may remain for type-directed resolution (UFCS).
-#[salsa::tracked]
-pub fn stage_resolve<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Build module environment from declarations (including prelude)
-    let env = build_env(db, &module);
-
-    // Resolve names in the module
-    let mut resolver = Resolver::new(db, env);
-    resolver.resolve_module(&module)
-}
-
-/// Inline constant values.
-///
-/// This pass inlines constant values at their use sites:
-/// - Finds `src.var` operations marked with `resolved_const=true`
-/// - Replaces them with `arith.const` operations containing the inlined value
-#[salsa::tracked]
-pub fn stage_const_inline<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    inline_module(db, &module)
-}
 
 /// Infer and check types.
 ///
@@ -387,14 +337,6 @@ pub fn stage_boxing<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> M
 
 /// Lambda Lifting.
 ///
-/// This pass transforms lambda expressions into:
-/// 1. Lifted top-level functions (with captured variables as parameters)
-/// 2. `closure.new` operations at the original lambda locations
-#[salsa::tracked]
-pub fn stage_lambda_lift<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    lift_lambdas(db, module)
-}
-
 /// Closure Lowering.
 ///
 /// This pass transforms `func.call_indirect` operations on closures:
@@ -404,34 +346,6 @@ pub fn stage_lambda_lift<'db>(db: &'db dyn salsa::Database, module: Module<'db>)
 #[salsa::tracked]
 pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_closures(db, module)
-}
-
-/// Type-Directed Name Resolution (TDNR).
-///
-/// This pass resolves UFCS method calls that couldn't be resolved during
-/// initial name resolution because they required type information.
-///
-/// For example:
-/// - `list.len()` → `List::len(list)` (based on list's type being `List(a)`)
-/// - `x.map(f)` → `Type::map(x, f)` (based on x's inferred type)
-#[salsa::tracked]
-pub fn stage_tdnr<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    resolve_tdnr(db, module)
-}
-
-/// Inline References.
-///
-/// This pass inlines `tribute.ref` operations by replacing their results
-/// with their operands. `tribute.ref` preserves source location for LSP hover.
-///
-/// Must run after TDNR (which preserves tribute.ref for LSP) and before
-/// code generation passes that don't understand tribute.ref.
-#[salsa::tracked]
-pub fn stage_inline_refs<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Result<Module<'db>, ConversionError> {
-    inline_refs(db, module)
 }
 
 /// Evidence Parameters (Phase 1).
@@ -529,14 +443,6 @@ pub fn stage_tribute_to_cont<'db>(
     lower_tribute_to_cont(db, module)
 }
 
-/// Lower tribute.case to scf dialect operations.
-///
-/// This pass lowers `tribute.case` expressions to `scf.if` operations.
-#[salsa::tracked]
-pub fn stage_tribute_to_scf<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    lower_tribute_to_scf(db, module)
-}
-
 /// Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
@@ -631,28 +537,19 @@ pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     run_tdnr_ast(db, source)
 }
 
-/// Run pipeline up to lambda lift stage.
+/// Run pipeline up to evidence params stage (lambdas are now lowered directly in ast_to_ir).
 #[salsa::tracked]
-pub fn run_lambda_lift<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
+pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = run_tdnr_ast(db, source);
-    let module = stage_const_inline(db, module);
-    let module = stage_inline_refs(db, module)?;
     let module = stage_boxing(db, module);
-    let module = stage_evidence_params(db, module);
-    Ok(stage_lambda_lift(db, module))
+    stage_evidence_params(db, module)
 }
 
 /// Run pipeline up to closure lower stage.
 #[salsa::tracked]
-pub fn run_closure_lower<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    let module = run_lambda_lift(db, source)?;
-    Ok(stage_closure_lower(db, module))
+pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let module = run_lambda_lift(db, source);
+    stage_closure_lower(db, module)
 }
 
 // =============================================================================
@@ -667,18 +564,16 @@ pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    // Frontend + closure processing (up to inline_refs)
-    let module = run_closure_lower(db, source).ok()?;
+    // Frontend + closure processing
+    let module = run_closure_lower(db, source);
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
 
-    // Resolve tribute.type references to ADT types (must run before tribute_to_scf
-    // so that enum field types are properly resolved for pattern matching)
+    // Resolve tribute.type references to ADT types
     let module = tribute_passes::resolve_type_references::lower(db, module);
 
-    let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module).ok()?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
@@ -780,17 +675,13 @@ pub fn compile_ast<'db>(
     let module = parse_and_lower_ast(db, source);
 
     // TrunkIR transformation passes
-    let module = stage_const_inline(db, module);
-    let module = stage_inline_refs(db, module)?;
     let module = stage_boxing(db, module);
     let module = stage_evidence_params(db, module);
-    let module = stage_lambda_lift(db, module);
     let module = stage_closure_lower(db, module);
 
-    // Evidence call transformation - AFTER lambda/closure lowering
+    // Evidence call transformation - AFTER closure lowering
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
-    let module = stage_tribute_to_scf(db, module);
     let module = stage_handler_lower(db, module)?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
