@@ -543,9 +543,6 @@ pub fn compile_to_wasm_binary<'db>(
     let module = stage_evidence_calls(db, module);
     let module = stage_tribute_to_cont(db, module);
 
-    // Resolve tribute.type references to ADT types
-    let module = tribute_passes::resolve_type_references::lower(db, module);
-
     let module = stage_handler_lower(db, module).ok()?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)

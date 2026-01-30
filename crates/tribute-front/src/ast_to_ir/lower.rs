@@ -1133,9 +1133,9 @@ fn lower_block<'db>(
 
 /// Lower a struct declaration to TrunkIR.
 ///
-/// Generates:
-/// 1. A `tribute.struct_def` operation with field definitions
-/// 2. An accessor module containing getter functions for each field
+/// Generates an accessor module containing getter functions for each field.
+/// Note: The struct type itself is already registered via `adt::struct_type`
+/// in the type environment during type checking.
 fn lower_struct_decl<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     top: &mut BlockBuilder<'db>,
@@ -1148,25 +1148,7 @@ fn lower_struct_decl<'db>(
 
     // Note: struct field order is already registered in prescan_struct_fields
 
-    // 1. Build fields region for struct_def
-    let mut fields_block = BlockBuilder::new(db, location);
-    for field in &decl.fields {
-        let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
-        let field_ty = convert_annotation_to_ir_type(ctx, Some(&field.ty));
-        fields_block.op(tribute::field_def(db, location, field_name, field_ty));
-    }
-    let fields_region = Region::new(db, location, idvec![fields_block.build()]);
-
-    // 2. Emit struct_def
-    top.op(tribute::struct_def(
-        db,
-        location,
-        struct_ty,
-        name,
-        fields_region,
-    ));
-
-    // 3. Generate accessor module with getter functions
+    // Generate accessor module with getter functions
     let fields: Vec<(Symbol, trunk_ir::Type<'db>)> = decl
         .fields
         .iter()
@@ -1227,55 +1209,17 @@ fn lower_struct_decl<'db>(
 // =============================================================================
 
 /// Lower an enum declaration to TrunkIR.
-fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db>, decl: EnumDecl) {
-    let location = ctx.location(decl.id);
-    let name = decl.name;
-
-    // Build adt.enum type with variant information
-    let enum_variants: Vec<(Symbol, Vec<trunk_ir::Type<'db>>)> = decl
-        .variants
-        .iter()
-        .map(|v| {
-            let field_types: Vec<_> = v
-                .fields
-                .iter()
-                .map(|f| convert_annotation_to_ir_type(ctx, Some(&f.ty)))
-                .collect();
-            (v.name, field_types)
-        })
-        .collect();
-
-    let result_ty = adt::enum_type(ctx.db, name, enum_variants);
-
-    // Build variants region containing tribute.variant_def operations
-    let mut variants_block = BlockBuilder::new(ctx.db, location);
-    for variant in &decl.variants {
-        // Build fields region for this variant
-        let mut variant_fields_block = BlockBuilder::new(ctx.db, location);
-        for field in &variant.fields {
-            let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
-            let field_type = convert_annotation_to_ir_type(ctx, Some(&field.ty));
-            variant_fields_block.op(tribute::field_def(ctx.db, location, field_name, field_type));
-        }
-        let variant_fields_region =
-            Region::new(ctx.db, location, idvec![variant_fields_block.build()]);
-
-        variants_block.op(tribute::variant_def(
-            ctx.db,
-            location,
-            variant.name,
-            variant_fields_region,
-        ));
-    }
-    let variants_region = Region::new(ctx.db, location, idvec![variants_block.build()]);
-
-    top.op(tribute::enum_def(
-        ctx.db,
-        location,
-        result_ty,
-        name,
-        variants_region,
-    ));
+///
+/// Note: The enum type itself is already registered via `adt::enum_type`
+/// in the type environment during type checking. No operation is emitted
+/// because enum definitions are purely type-level metadata.
+fn lower_enum_decl<'db>(
+    _ctx: &mut IrLoweringCtx<'db>,
+    _top: &mut BlockBuilder<'db>,
+    _decl: EnumDecl,
+) {
+    // Enum type is already registered in the type environment.
+    // No IR operation needed - enum definitions are purely type metadata.
 }
 
 // =============================================================================
@@ -3735,16 +3679,11 @@ mod tests {
         let ir_module = test_lower(db, path, span_map, module);
         let ops = get_module_ops(db, &ir_module);
 
-        // Should have tribute.enum_def operation
-        let enum_op = ops.iter().find(|op| op.name(db) == "enum_def");
+        // Enum declarations no longer emit operations (type-only metadata).
+        // The module should be empty.
         assert!(
-            enum_op.is_some(),
-            "Should have a tribute.enum_def operation"
-        );
-        assert_eq!(
-            enum_op.unwrap().dialect(db),
-            "tribute",
-            "enum_def should be in tribute dialect"
+            ops.is_empty(),
+            "Enum declarations should not emit IR operations"
         );
     }
 
@@ -3806,10 +3745,11 @@ mod tests {
         let ir_module = test_lower(db, path, span_map, module);
         let ops = get_module_ops(db, &ir_module);
 
-        let enum_op = ops.iter().find(|op| op.name(db) == "enum_def");
+        // Enum declarations no longer emit operations (type-only metadata).
+        // The module should be empty.
         assert!(
-            enum_op.is_some(),
-            "Should have a tribute.enum_def operation"
+            ops.is_empty(),
+            "Enum declarations should not emit IR operations"
         );
     }
 
@@ -3896,16 +3836,11 @@ mod tests {
         let ir_module = test_lower(db, path, SpanMap::default(), module);
         let ops = get_module_ops(db, &ir_module);
 
-        // Should have two operations: tribute.struct_def and core.module (accessors)
-        assert_eq!(ops.len(), 2, "Expected struct_def and accessor module");
+        // Struct declarations only emit accessor module (no struct_def operation).
+        assert_eq!(ops.len(), 1, "Expected only accessor module");
 
-        // First operation should be tribute.struct_def
-        let struct_def_op = ops[0];
-        assert_eq!(struct_def_op.dialect(db), tribute::DIALECT_NAME());
-        assert_eq!(struct_def_op.name(db), tribute::STRUCT_DEF());
-
-        // Second operation should be core.module (accessor module)
-        let accessor_module_op = ops[1];
+        // The operation should be core.module (accessor module)
+        let accessor_module_op = ops[0];
         assert_eq!(accessor_module_op.dialect(db), core::DIALECT_NAME());
         assert_eq!(accessor_module_op.name(db), core::MODULE());
 

@@ -1,11 +1,9 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 233
 expression: ir_module
 ---
 Module(test) {
     operations: [
-        tribute.struct_def,
         Module(Pair) {
             operations: [
                 func @test::Pair::first(adt.typeref) -> core.nil {
