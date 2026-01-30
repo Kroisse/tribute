@@ -84,7 +84,6 @@ use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_tribute_to_cont;
-use tribute_passes::typeck::{TypeChecker, TypeSolver, apply_subst_to_module};
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
@@ -286,8 +285,6 @@ pub fn merge_with_prelude<'db>(
 pub struct CompilationResult<'db> {
     /// The compiled module with resolved types.
     pub module: Module<'db>,
-    /// The type solver with final substitutions.
-    pub solver: TypeSolver<'db>,
     /// Diagnostics collected during compilation.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -299,31 +296,6 @@ pub struct CompilationResult<'db> {
 // Each stage is a #[salsa::tracked] function that takes a Module as input
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
-
-/// Infer and check types.
-///
-/// This pass:
-/// - Collects type constraints from the module
-/// - Solves constraints via unification
-/// - Substitutes inferred types back into the module
-/// - Reports type errors
-#[salsa::tracked]
-pub fn stage_typecheck<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let mut checker = TypeChecker::new(db);
-    checker.check_module(&module);
-
-    // Solve constraints
-    match checker.solve() {
-        Ok(solver) => {
-            // Apply substitution to replace type variables with concrete types
-            apply_subst_to_module(db, module, solver.type_subst())
-        }
-        Err(_err) => {
-            // TODO: Report type error
-            module
-        }
-    }
-}
 
 /// Insert explicit boxing/unboxing operations.
 ///
@@ -729,7 +701,6 @@ pub fn compile_with_diagnostics<'db>(
 
     CompilationResult {
         module,
-        solver: TypeSolver::new(db),
         diagnostics,
     }
 }
