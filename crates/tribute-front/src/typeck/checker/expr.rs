@@ -310,6 +310,12 @@ impl<'db> TypeChecker<'db> {
                 .instantiate_constructor(*id)
                 .unwrap_or_else(|| ctx.fresh_type_var()),
             ResolvedRef::Module { .. } => ctx.error_type(),
+            ResolvedRef::TypeDef { .. } => {
+                // Type definitions cannot be used as values in expression context.
+                // This typically happens when an enum name like `Option` is used
+                // directly without a variant like `Some` or `None`.
+                ctx.error_type()
+            }
             ResolvedRef::Builtin(builtin) => self.infer_builtin_with_ctx(ctx, builtin),
         }
     }

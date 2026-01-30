@@ -756,8 +756,11 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 name: id.name(self.db),
             },
             ResolvedRef::Constructor { id, variant } => ResolvedTarget::Constructor {
-                type_name: id.type_name(self.db),
+                type_name: id.ctor_name(self.db),
                 variant: *variant,
+            },
+            ResolvedRef::TypeDef { id } => ResolvedTarget::Type {
+                name: id.name(self.db),
             },
             ResolvedRef::Builtin(_) => ResolvedTarget::Other {
                 name: Symbol::new("builtin"),

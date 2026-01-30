@@ -433,7 +433,7 @@ fn lower_expr<'db>(
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
+                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
                 let func_ty = builder.ctx.convert_type(typed_ref.ty);
                 let op =
                     builder
@@ -449,7 +449,9 @@ fn lower_expr<'db>(
                         .op(func::constant(builder.db(), location, func_ty, *variant));
                 Some(op.result(builder.db()))
             }
-            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } => None,
+            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } | ResolvedRef::TypeDef { .. } => {
+                None
+            }
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
@@ -484,7 +486,8 @@ fn lower_expr<'db>(
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
-                        let callee_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
+                        let callee_name =
+                            Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op = builder.block.op(func::call(
                             builder.db(),
@@ -1285,7 +1288,7 @@ fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db
 /// Record type_name must always resolve to a Constructor.
 fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'db>) -> Symbol {
     match resolved {
-        ResolvedRef::Constructor { id, .. } => id.type_name(db),
+        ResolvedRef::Constructor { id, .. } => id.ctor_name(db),
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }

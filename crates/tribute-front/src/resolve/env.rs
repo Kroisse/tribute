@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, FuncDefId};
+use crate::ast::{CtorId, FuncDefId, TypeDefId};
 
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
@@ -27,10 +27,8 @@ pub enum Binding<'db> {
 
     /// A type definition (struct or enum).
     TypeDef {
-        /// The type name.
-        name: Symbol,
-        /// The constructor ID for value construction.
-        ctor_id: CtorId<'db>,
+        /// The type definition ID.
+        id: TypeDefId<'db>,
     },
 
     /// A module or namespace binding.
@@ -77,9 +75,8 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Add a type definition.
-    pub fn add_type(&mut self, name: Symbol, ctor_id: CtorId<'db>) {
-        self.definitions
-            .insert(name, Binding::TypeDef { name, ctor_id });
+    pub fn add_type(&mut self, name: Symbol, id: TypeDefId<'db>) {
+        self.definitions.insert(name, Binding::TypeDef { id });
     }
 
     /// Add a qualified name to a namespace.

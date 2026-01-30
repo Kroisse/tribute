@@ -156,7 +156,7 @@ impl<'db> ModuleTypeEnv<'db> {
             self.constructor_types.len()
         );
         for id in self.constructor_types.keys() {
-            eprintln!("  - {:?} (type_name: {:?})", id, id.type_name(db));
+            eprintln!("  - {:?} (ctor_name: {:?})", id, id.ctor_name(db));
         }
     }
 
@@ -217,7 +217,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Export constructor types for PreludeExports.
     ///
-    /// Results are sorted alphabetically by type name for deterministic output.
+    /// Results are sorted alphabetically by constructor name for deterministic output.
     pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
             .constructor_types
@@ -225,8 +225,8 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, *v))
             .collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.type_name(self.db)
-                .with_str(|a| b.type_name(self.db).with_str(|b| a.cmp(b)))
+            a.ctor_name(self.db)
+                .with_str(|a| b.ctor_name(self.db).with_str(|b| a.cmp(b)))
         });
         result
     }
@@ -432,8 +432,8 @@ mod tests {
 
         let exported = env.export_constructor_types();
 
-        // Should be sorted alphabetically by type name
-        let names: Vec<_> = exported.iter().map(|(id, _)| id.type_name(db)).collect();
+        // Should be sorted alphabetically by constructor name
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.ctor_name(db)).collect();
         assert_eq!(
             names,
             vec![

@@ -22,7 +22,9 @@ pub use resolver::Resolver;
 
 use trunk_ir::{Symbol, smallvec::SmallVec};
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
+use crate::ast::{
+    CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+};
 use crate::build_field_module_path;
 
 /// Resolve names in a module.
@@ -99,8 +101,9 @@ fn collect_definition<'db>(
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
+            let type_def_id = TypeDefId::new(db, path_vec.clone(), s.name);
             let ctor_id = CtorId::new(db, path_vec.clone(), s.name);
-            env.add_type(s.name, ctor_id);
+            env.add_type(s.name, type_def_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
 
             // Register field accessors in struct's namespace
@@ -120,8 +123,8 @@ fn collect_definition<'db>(
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let ctor_id = CtorId::new(db, path_vec.clone(), e.name);
-            env.add_type(e.name, ctor_id);
+            let type_def_id = TypeDefId::new(db, path_vec.clone(), e.name);
+            env.add_type(e.name, type_def_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
