@@ -191,45 +191,79 @@ impl<'db> ModuleTypeEnv<'db> {
     // =========================================================================
 
     /// Export function type schemes as a Vec keyed by Symbol (function name).
+    ///
+    /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
-        self.function_types
+        let mut result: Vec<_> = self
+            .function_types
             .iter()
             .map(|(id, scheme)| (id.name(self.db), *scheme))
-            .collect()
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
     }
 
     /// Export function types with FuncDefId (for PreludeExports).
+    ///
+    /// Results are sorted alphabetically by function name for deterministic output.
     pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
-        self.function_types.iter().map(|(k, v)| (*k, *v)).collect()
+        let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.name(self.db)
+                .with_str(|a| b.name(self.db).with_str(|b| a.cmp(b)))
+        });
+        result
     }
 
     /// Export constructor types for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by type name for deterministic output.
     pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
-        self.constructor_types
+        let mut result: Vec<_> = self
+            .constructor_types
             .iter()
             .map(|(k, v)| (*k, *v))
-            .collect()
+            .collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.type_name(self.db)
+                .with_str(|a| b.type_name(self.db).with_str(|b| a.cmp(b)))
+        });
+        result
     }
 
     /// Export type definitions for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
-        self.type_defs.iter().map(|(k, v)| (*k, *v)).collect()
+        let mut result: Vec<_> = self.type_defs.iter().map(|(k, v)| (*k, *v)).collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
     }
 
     /// Export struct field definitions for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by struct name for deterministic output.
     pub fn export_struct_fields(&self) -> Vec<(Symbol, StructFieldInfo<'db>)> {
-        self.struct_fields
+        let mut result: Vec<_> = self
+            .struct_fields
             .iter()
             .map(|(k, v)| (*k, v.clone()))
-            .collect()
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
     }
 
     /// Export enum variant information for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by enum name for deterministic output.
     pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
-        self.enum_variants
+        let mut result: Vec<_> = self
+            .enum_variants
             .iter()
             .map(|(k, v)| (*k, v.clone()))
-            .collect()
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
     }
 
     // =========================================================================
@@ -306,5 +340,218 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Create a named type.
     pub fn named_type(&self, name: Symbol, args: Vec<Type<'db>>) -> Type<'db> {
         Type::new(self.db, TypeKind::Named { name, args })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::{Symbol, SymbolVec};
+
+    use crate::ast::{CtorId, FuncDefId, Type, TypeKind, TypeScheme};
+
+    use super::ModuleTypeEnv;
+
+    // =========================================================================
+    // Export ordering tests - verify deterministic output
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_export_function_types_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        // Insert in non-alphabetical order
+        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_function(func_z, scheme);
+        env.register_function(func_a, scheme);
+        env.register_function(func_m, scheme);
+
+        let exported = env.export_function_types();
+
+        // Should be sorted alphabetically by name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("alpha"),
+                Symbol::new("middle"),
+                Symbol::new("zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_function_types_with_ids_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_function(func_z, scheme);
+        env.register_function(func_a, scheme);
+        env.register_function(func_m, scheme);
+
+        let exported = env.export_function_types_with_ids();
+
+        // Should be sorted alphabetically by function name
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.name(db)).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("alpha"),
+                Symbol::new("middle"),
+                Symbol::new("zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_constructor_types_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let ctor_z = CtorId::new(db, SymbolVec::new(), Symbol::new("Zebra"));
+        let ctor_a = CtorId::new(db, SymbolVec::new(), Symbol::new("Alpha"));
+        let ctor_m = CtorId::new(db, SymbolVec::new(), Symbol::new("Middle"));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_constructor(ctor_z, scheme);
+        env.register_constructor(ctor_a, scheme);
+        env.register_constructor(ctor_m, scheme);
+
+        let exported = env.export_constructor_types();
+
+        // Should be sorted alphabetically by type name
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.type_name(db)).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_type_defs_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_type_def(Symbol::new("Zebra"), scheme);
+        env.register_type_def(Symbol::new("Alpha"), scheme);
+        env.register_type_def(Symbol::new("Middle"), scheme);
+
+        let exported = env.export_type_defs();
+
+        // Should be sorted alphabetically by name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_struct_fields_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let fields = vec![(Symbol::new("x"), int_ty)];
+
+        env.register_struct_fields(Symbol::new("Zebra"), vec![], fields.clone());
+        env.register_struct_fields(Symbol::new("Alpha"), vec![], fields.clone());
+        env.register_struct_fields(Symbol::new("Middle"), vec![], fields);
+
+        let exported = env.export_struct_fields();
+
+        // Should be sorted alphabetically by struct name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_enum_variants_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let variants = vec![Symbol::new("A"), Symbol::new("B")];
+
+        env.register_enum_variants(Symbol::new("Zebra"), variants.clone());
+        env.register_enum_variants(Symbol::new("Alpha"), variants.clone());
+        env.register_enum_variants(Symbol::new("Middle"), variants);
+
+        let exported = env.export_enum_variants();
+
+        // Should be sorted alphabetically by enum name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_ordering_is_deterministic(db: &dyn salsa::Database) {
+        // Run export multiple times and verify consistent ordering
+        let mut env = ModuleTypeEnv::new(db);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        // Add items in random order
+        for name in ["d", "b", "e", "a", "c"] {
+            let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new(name));
+            env.register_function(func_id, scheme);
+        }
+
+        // Export multiple times and verify same ordering
+        let first = env.export_function_types();
+        let second = env.export_function_types();
+        let third = env.export_function_types();
+
+        let first_names: Vec<_> = first.iter().map(|(n, _)| *n).collect();
+        let second_names: Vec<_> = second.iter().map(|(n, _)| *n).collect();
+        let third_names: Vec<_> = third.iter().map(|(n, _)| *n).collect();
+
+        assert_eq!(first_names, second_names);
+        assert_eq!(second_names, third_names);
+        assert_eq!(
+            first_names,
+            vec![
+                Symbol::new("a"),
+                Symbol::new("b"),
+                Symbol::new("c"),
+                Symbol::new("d"),
+                Symbol::new("e")
+            ]
+        );
     }
 }

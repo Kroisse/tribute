@@ -426,6 +426,29 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Extract the element type from a List type.
+    ///
+    /// If the type is `List<T>`, returns `T`. Otherwise, creates a fresh type variable.
+    fn extract_list_element_type(
+        &self,
+        ty: Type<'db>,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+    ) -> Type<'db> {
+        let list_sym = Symbol::new("List");
+        match ty.kind(self.db()) {
+            TypeKind::Named { name, args } if *name == list_sym && args.len() == 1 => args[0],
+            TypeKind::App { ctor, args } if args.len() == 1 => {
+                if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
+                    if *name == list_sym {
+                        return args[0];
+                    }
+                }
+                ctx.fresh_type_var()
+            }
+            _ => ctx.fresh_type_var(),
+        }
+    }
+
     /// Look up a struct field type by struct name and field name.
     ///
     /// Returns the field type with BoundVars substituted by the given type arguments.
@@ -819,9 +842,10 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::List(pats) => {
-                let fresh_vars: Vec<_> = pats.iter().map(|_| ctx.fresh_type_var()).collect();
-                for (pat, fresh_ty) in pats.iter().zip(fresh_vars) {
-                    self.bind_pattern_vars_with_ctx(ctx, pat, fresh_ty);
+                // Extract element type from the list type, or create a fresh var
+                let elem_ty = self.extract_list_element_type(ty, ctx);
+                for pat in pats {
+                    self.bind_pattern_vars_with_ctx(ctx, pat, elem_ty);
                 }
             }
             PatternKind::ListRest {
@@ -829,13 +853,15 @@ impl<'db> TypeChecker<'db> {
                 rest_local_id,
                 ..
             } => {
-                let fresh_vars: Vec<_> = head.iter().map(|_| ctx.fresh_type_var()).collect();
-                for (pat, fresh_ty) in head.iter().zip(fresh_vars) {
-                    self.bind_pattern_vars_with_ctx(ctx, pat, fresh_ty);
+                // Extract element type from the list type, or create a fresh var
+                let elem_ty = self.extract_list_element_type(ty, ctx);
+                for pat in head {
+                    self.bind_pattern_vars_with_ctx(ctx, pat, elem_ty);
                 }
                 if let Some(local_id) = rest_local_id {
-                    let rest_ty = ctx.fresh_type_var();
-                    ctx.bind_local(*local_id, rest_ty);
+                    // The rest is also a list of the same element type
+                    let list_ty = ctx.named_type(Symbol::new("List"), vec![elem_ty]);
+                    ctx.bind_local(*local_id, list_ty);
                 }
             }
             PatternKind::As {
@@ -2051,5 +2077,146 @@ mod tests {
 
         let result = checker.substitute_bound_vars(&mut ctx, int_ty, &args);
         assert_eq!(result, int_ty);
+    }
+
+    // =========================================================================
+    // extract_list_element_type tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_extract_list_element_type_from_list(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // List<Int> → Int
+        let int_ty = Type::new(db, TypeKind::Int);
+        let list_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+
+        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
+        assert_eq!(elem_ty, int_ty);
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_from_list_string(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // List<String> → String
+        let string_ty = Type::new(db, TypeKind::String);
+        let list_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![string_ty],
+            },
+        );
+
+        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
+        assert_eq!(elem_ty, string_ty);
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_non_list_returns_fresh_var(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // Int → fresh type var (not a List type)
+        let int_ty = Type::new(db, TypeKind::Int);
+
+        let elem_ty = checker.extract_list_element_type(int_ty, &mut ctx);
+
+        // Should be a fresh UniVar, not Int
+        assert!(
+            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
+            "Expected UniVar for non-list type, got {:?}",
+            elem_ty.kind(db)
+        );
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_other_named_returns_fresh_var(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // Option<Int> → fresh type var (not a List type)
+        let int_ty = Type::new(db, TypeKind::Int);
+        let option_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int_ty],
+            },
+        );
+
+        let elem_ty = checker.extract_list_element_type(option_ty, &mut ctx);
+
+        // Should be a fresh UniVar, not Int
+        assert!(
+            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
+            "Expected UniVar for Option type, got {:?}",
+            elem_ty.kind(db)
+        );
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_empty_args_returns_fresh_var(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // List with no type args → fresh type var
+        let list_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![],
+            },
+        );
+
+        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
+
+        // Should be a fresh UniVar
+        assert!(
+            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
+            "Expected UniVar for List with no args, got {:?}",
+            elem_ty.kind(db)
+        );
+    }
+
+    #[salsa_test]
+    fn test_extract_list_element_type_nested_list(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // List<List<Int>> → List<Int>
+        let int_ty = Type::new(db, TypeKind::Int);
+        let inner_list = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+        let outer_list = Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![inner_list],
+            },
+        );
+
+        let elem_ty = checker.extract_list_element_type(outer_list, &mut ctx);
+        assert_eq!(elem_ty, inner_list);
     }
 }
