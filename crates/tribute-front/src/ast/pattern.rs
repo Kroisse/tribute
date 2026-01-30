@@ -125,7 +125,9 @@ where
 /// Literal values in patterns.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum LiteralPattern {
-    /// Integer literal: `42`, `-1`
+    /// Natural number literal: `0`, `42`
+    Nat(u64),
+    /// Signed integer literal: `-1`, `-42`
     Int(i64),
     /// Float literal: `3.14`
     Float(FloatBits),

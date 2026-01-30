@@ -28,8 +28,8 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Literal patterns ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            match parse_nat_literal(&text).and_then(|v| i64::try_from(v).ok()) {
-                Some(value) => PatternKind::Literal(LiteralPattern::Int(value)),
+            match parse_nat_literal(&text) {
+                Some(value) => PatternKind::Literal(LiteralPattern::Nat(value)),
                 None => PatternKind::Error,
             }
         }
@@ -537,8 +537,8 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        let PatternKind::Literal(LiteralPattern::Int(42)) = pattern else {
-            panic!("Expected int literal pattern 42, got {:?}", pattern);
+        let PatternKind::Literal(LiteralPattern::Nat(42)) = pattern else {
+            panic!("Expected nat literal pattern 42, got {:?}", pattern);
         };
     }
 

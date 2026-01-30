@@ -864,7 +864,7 @@ mod tests {
         let source = source_from_str(
             "test.trb",
             r#"
-            fn test(x: Int) -> Int {
+            fn test(x: Nat) -> Nat {
                 case x {
                     0 -> 1
                     _ -> 2
@@ -886,7 +886,7 @@ mod tests {
         let source = source_from_str(
             "test.trb",
             r#"
-            fn test(x: Int) -> Int {
+            fn test(x: Nat) -> Nat {
                 case x {
                     0 -> 1
                 }
@@ -901,6 +901,28 @@ mod tests {
         assert!(
             has_non_exhaustive,
             "Expected non-exhaustive case diagnostic, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_case_lowering_bool_exhaustive(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn test(x: Bool) -> Nat {
+                case x {
+                    True -> 1
+                    False -> 0
+                }
+            }
+            "#,
+        );
+
+        let result = compile_with_diagnostics(db, source);
+        assert!(
+            result.diagnostics.is_empty(),
+            "Expected no diagnostics, got: {:?}",
             result.diagnostics
         );
     }

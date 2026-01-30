@@ -1449,6 +1449,24 @@ fn emit_literal_check<'db>(
 ) -> Option<trunk_ir::Value<'db>> {
     let bool_ty = builder.ctx.bool_type();
     match lit {
+        LiteralPattern::Nat(n) => {
+            let const_val = builder
+                .block
+                .op(arith::Const::i64(builder.db(), location, *n as i64))
+                .result(builder.db());
+            Some(
+                builder
+                    .block
+                    .op(arith::cmp_eq(
+                        builder.db(),
+                        location,
+                        scrutinee,
+                        const_val,
+                        bool_ty,
+                    ))
+                    .result(builder.db()),
+            )
+        }
         LiteralPattern::Int(n) => {
             let const_val = builder
                 .block

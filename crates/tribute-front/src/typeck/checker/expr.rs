@@ -148,7 +148,24 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Block { stmts: _, value } => self.infer_expr_type_with_ctx(ctx, value),
-            ExprKind::Case { .. } => ctx.fresh_type_var(),
+            ExprKind::Case { scrutinee, arms } => {
+                // Infer scrutinee type
+                let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
+
+                // Create result type and constrain all arms to it
+                let result_ty = ctx.fresh_type_var();
+                for arm in arms {
+                    ctx.push_scope();
+                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                    ctx.constrain_eq(pattern_ty, scrutinee_ty);
+                    self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
+                    let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
+                    ctx.constrain_eq(arm_ty, result_ty);
+                    ctx.pop_scope();
+                }
+
+                result_ty
+            }
             ExprKind::Lambda { params, body } => {
                 let param_types: Vec<Type<'db>> = params
                     .iter()
@@ -252,6 +269,18 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Block { value, .. } => self.infer_expr_type_with_ctx(ctx, value),
+            ExprKind::Case { scrutinee, arms } => {
+                let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
+                let result_ty = ctx.fresh_type_var();
+                for arm in arms {
+                    ctx.push_scope();
+                    self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
+                    let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
+                    ctx.constrain_eq(arm_ty, result_ty);
+                    ctx.pop_scope();
+                }
+                result_ty
+            }
             _ => ctx.fresh_type_var(),
         }
     }
@@ -659,7 +688,9 @@ impl<'db> TypeChecker<'db> {
                     .get_node_type(scrutinee_expr.id)
                     .unwrap_or_else(|| ctx.fresh_type_var());
 
-                let result_ty = ctx.fresh_type_var();
+                // Note: result_ty is NOT created here - it was already created and recorded
+                // in check_expr_with_ctx. The arm body types are constrained to the result
+                // type during pattern processing in check_expr_with_ctx.
 
                 let converted_arms: Vec<_> = arms
                     .into_iter()
@@ -671,9 +702,6 @@ impl<'db> TypeChecker<'db> {
                         ctx.constrain_eq(pattern_ty, scrutinee_ty);
                         self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                         let converted = self.convert_arm_with_scrutinee_ctx(ctx, arm, scrutinee_ty);
-                        if let Some(body_ty) = ctx.get_node_type(converted.body.id) {
-                            ctx.constrain_eq(body_ty, result_ty);
-                        }
 
                         ctx.pop_scope();
                         converted
@@ -783,6 +811,7 @@ impl<'db> TypeChecker<'db> {
             PatternKind::Wildcard | PatternKind::Bind { .. } => ctx.fresh_type_var(),
             PatternKind::Literal(lit) => match lit {
                 LiteralPattern::Bool(_) => ctx.bool_type(),
+                LiteralPattern::Nat(_) => ctx.nat_type(),
                 LiteralPattern::Int(_) => ctx.int_type(),
                 LiteralPattern::Float(_) => ctx.float_type(),
                 LiteralPattern::String(_) => ctx.string_type(),
