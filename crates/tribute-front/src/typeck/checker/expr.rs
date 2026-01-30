@@ -438,10 +438,10 @@ impl<'db> TypeChecker<'db> {
         match ty.kind(self.db()) {
             TypeKind::Named { name, args } if *name == list_sym && args.len() == 1 => args[0],
             TypeKind::App { ctor, args } if args.len() == 1 => {
-                if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
-                    if *name == list_sym {
-                        return args[0];
-                    }
+                if let TypeKind::Named { name, .. } = ctor.kind(self.db())
+                    && *name == list_sym
+                {
+                    return args[0];
                 }
                 ctx.fresh_type_var()
             }
