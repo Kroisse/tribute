@@ -1,7 +1,6 @@
 //! Tests for tuple pattern type inference.
 //!
-//! These tests track Issue #283: UniVar resolution failures in tuple patterns.
-//! The tests are marked as `#[ignore]` until the underlying issue is fixed.
+//! These tests verify correct UniVar resolution in tuple patterns.
 
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
@@ -62,7 +61,6 @@ fn run_ast_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) {
 /// Test basic tuple pattern matching in case expression.
 /// This should infer types correctly without UniVar leakage.
 #[salsa_test]
-#[ignore = "Issue #283: UniVar survives substitution in tuple patterns"]
 fn test_tuple_pattern_basic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
         "test.trb",
@@ -82,7 +80,6 @@ fn test(x: Bool, y: Bool) -> Int {
 
 /// Test tuple pattern with nested structure.
 #[salsa_test]
-#[ignore = "Issue #283: UniVar survives substitution in tuple patterns"]
 fn test_tuple_pattern_nested(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
         "test.trb",
@@ -102,7 +99,6 @@ fn test(a: Bool, b: Bool, c: Bool) -> Int {
 
 /// Test tuple pattern in generic function context.
 #[salsa_test]
-#[ignore = "Issue #283: UniVar survives substitution in tuple patterns"]
 fn test_tuple_pattern_generic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
         "test.trb",
