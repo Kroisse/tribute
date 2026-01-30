@@ -94,6 +94,44 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     }
 }
 
+/// Pre-scan declarations to register struct field orders.
+///
+/// This ensures Record expressions can be lowered correctly even when they
+/// appear before the struct definition in source order (forward references).
+///
+/// The `module_path` parameter tracks the current module path for CtorId generation,
+/// matching the logic in `resolve::build_env` (which uses an empty path for top-level
+/// definitions and extends it only for nested modules).
+fn prescan_struct_fields<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    module_path: &[Symbol],
+) {
+    let path_vec = trunk_ir::SymbolVec::from_slice(module_path);
+    for decl in decls {
+        match decl {
+            Decl::Struct(s) => {
+                let ctor_id = CtorId::new(ctx.db, path_vec.clone(), s.name);
+                let field_names: Vec<Symbol> = s
+                    .fields
+                    .iter()
+                    .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
+                    .collect();
+                ctx.register_struct_fields(ctor_id, field_names);
+            }
+            Decl::Module(m) => {
+                // Recursively scan nested modules
+                if let Some(body) = &m.body {
+                    let mut nested_path: Vec<Symbol> = module_path.to_vec();
+                    nested_path.push(m.name);
+                    prescan_struct_fields(ctx, body, &nested_path);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Lower a module to TrunkIR.
 pub fn lower_module<'db>(
     db: &'db dyn salsa::Database,
@@ -110,6 +148,11 @@ pub fn lower_module<'db>(
 
     // Create context outside the build closure so we can access lifted_functions after
     let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_path);
+
+    // Pre-scan: register all struct field orders before lowering any declarations.
+    // This ensures Record expressions can be lowered regardless of declaration order.
+    // Note: Uses empty module_path to match resolve::build_env behavior.
+    prescan_struct_fields(&mut ctx, &module.decls, &[]);
 
     // Build the module body
     let mut top = BlockBuilder::new(db, location);
@@ -546,18 +589,18 @@ fn lower_expr<'db>(
             let ctor_id = extract_ctor_id(&type_name.resolved);
             let struct_ty = adt::typeref(db, struct_name);
 
-            // Get field order from struct definition
-            let Some(field_order) = builder.ctx.get_struct_field_order(ctor_id) else {
-                // Struct not found - emit diagnostic and return nil
-                Diagnostic {
-                    message: format!("unknown struct: {}", struct_name),
-                    span: location.span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::Lowering,
-                }
-                .accumulate(db);
-                return Some(builder.emit_nil(location));
-            };
+            // Get field order from struct definition.
+            // Invariant: struct field order must be registered during prescan_struct_fields.
+            // If missing, the pipeline ordering is broken and IR lowering cannot recover.
+            let field_order = builder
+                .ctx
+                .get_struct_field_order(ctor_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ICE: struct `{}` field order not registered before IR lowering",
+                        struct_name
+                    )
+                });
             let field_order = field_order.clone();
 
             // Build a set of valid field names for validation
@@ -1100,14 +1143,7 @@ fn lower_struct_decl<'db>(
     let name = decl.name;
     let struct_ty = adt::typeref(db, name);
 
-    // 0. Register struct field order for lowering Record expressions
-    let ctor_id = CtorId::new(db, ctx.module_path().clone(), name);
-    let field_names: Vec<Symbol> = decl
-        .fields
-        .iter()
-        .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
-        .collect();
-    ctx.register_struct_fields(ctor_id, field_names);
+    // Note: struct field order is already registered in prescan_struct_fields
 
     // 1. Build fields region for struct_def
     let mut fields_block = BlockBuilder::new(db, location);

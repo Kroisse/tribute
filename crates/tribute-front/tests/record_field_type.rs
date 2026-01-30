@@ -229,3 +229,29 @@ fn make_pair() -> Pair(Int, Bool) {
     let ir_module = run_ast_pipeline_with_ir(db, source);
     assert_debug_snapshot!(ir_module);
 }
+
+// ========================================================================
+// Forward Reference Tests
+// ========================================================================
+
+/// Test record construction where the function using the record appears
+/// before the struct definition (forward reference).
+///
+/// This tests that prescan_struct_fields correctly registers field orders
+/// before lowering, regardless of declaration order in the source.
+#[salsa_test]
+fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+fn make_point() -> Point {
+    Point { x: 1, y: 2 }
+}
+
+struct Point { x: Int, y: Int }
+"#,
+    );
+
+    // Should compile without ICE, emitting adt.struct_new
+    run_ast_pipeline(db, source);
+}
