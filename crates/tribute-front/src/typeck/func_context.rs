@@ -320,11 +320,58 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Merge an effect into the current effect row.
+    ///
+    /// Implements row-polymorphic effect union:
+    /// - `{} ∪ ρ = ρ` (pure is identity)
+    /// - `{A} ∪ {B} = {A, B}` (closed rows merge directly)
+    /// - `{A | e1} ∪ {B | e2} = {A, B | e3}` with constraints:
+    ///   - `e1 = {B | e3}`
+    ///   - `e2 = {A | e3}`
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
-        // TODO: Implement effect row union
-        // For now, just replace
-        if !effect.is_pure(self.db) {
+        use super::effect_row;
+
+        let db = self.db;
+        let current = self.current_effect;
+
+        // Pure effect doesn't change anything
+        if effect.is_pure(db) {
+            return;
+        }
+
+        // If current is pure, just use the new effect
+        if current.is_pure(db) {
             self.current_effect = effect;
+            return;
+        }
+
+        match (current.rest(db), effect.rest(db)) {
+            (None, None) | (Some(_), None) | (None, Some(_)) => {
+                // At most one row is open: simple union
+                self.current_effect = effect_row::union(db, current, effect, || {
+                    unreachable!("fresh var not needed when at most one row is open")
+                });
+            }
+            (Some(e1), Some(e2)) => {
+                // Both open: generate constraints
+                let e3 = self.fresh_row_var();
+
+                // e1 = {effect's effects | e3}
+                let row_for_e1 = EffectRow::new(db, effect.effects(db).clone(), Some(e3));
+                self.constrain_row_eq(EffectRow::open(db, e1), row_for_e1);
+
+                // e2 = {current's effects | e3}
+                let row_for_e2 = EffectRow::new(db, current.effects(db).clone(), Some(e3));
+                self.constrain_row_eq(EffectRow::open(db, e2), row_for_e2);
+
+                // Result: {current effects ∪ effect effects | e3}
+                let mut effects = current.effects(db).clone();
+                for e in effect.effects(db) {
+                    if !effects.contains(e) {
+                        effects.push(e.clone());
+                    }
+                }
+                self.current_effect = EffectRow::new(db, effects, Some(e3));
+            }
         }
     }
 
@@ -643,5 +690,157 @@ mod tests {
             test_instantiate_constructor_inner(db),
             "Each constructor instantiation should produce fresh type variables"
         );
+    }
+}
+
+#[cfg(test)]
+mod merge_effect_tests {
+    use super::*;
+    use crate::typeck::constraint::Constraint;
+    use crate::typeck::effect_row::simple_effect;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::SymbolVec;
+
+    #[salsa_test]
+    fn merge_pure_rows(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let pure = EffectRow::pure(db);
+
+        // Pure + Pure = Pure
+        ctx.set_current_effect(pure);
+        ctx.merge_effect(pure);
+        assert!(ctx.current_effect().is_pure(db));
+
+        // No constraints generated
+        assert!(ctx.take_constraints().is_empty());
+    }
+
+    #[salsa_test]
+    fn merge_concrete_effects(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+        let state = simple_effect(Symbol::new("State"));
+
+        let row1 = EffectRow::single(db, console.clone());
+        let row2 = EffectRow::single(db, state.clone());
+
+        // {Console} + {State} = {Console, State}
+        ctx.set_current_effect(row1);
+        ctx.merge_effect(row2);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 2);
+        assert!(effects.contains(&console));
+        assert!(effects.contains(&state));
+        assert!(result.rest(db).is_none()); // Still closed
+
+        // No constraints for closed rows
+        assert!(ctx.take_constraints().is_empty());
+    }
+
+    #[salsa_test]
+    fn merge_open_rows(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+        let state = simple_effect(Symbol::new("State"));
+
+        let e1 = EffectVar { id: 1 };
+        let e2 = EffectVar { id: 2 };
+
+        let row1 = EffectRow::new(db, vec![console.clone()], Some(e1));
+        let row2 = EffectRow::new(db, vec![state.clone()], Some(e2));
+
+        // {Console | e1} + {State | e2} = {Console, State | e3}
+        ctx.set_current_effect(row1);
+        ctx.merge_effect(row2);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 2);
+        assert!(effects.contains(&console));
+        assert!(effects.contains(&state));
+
+        // Result should have a fresh row variable (e3)
+        let e3 = result.rest(db).expect("Should have a row variable");
+        assert_ne!(e3, e1);
+        assert_ne!(e3, e2);
+
+        // Should have generated 2 constraints
+        let constraints = ctx.take_constraints();
+        assert_eq!(constraints.len(), 2);
+
+        // Verify constraint structure
+        for constraint in constraints.constraints() {
+            match constraint {
+                Constraint::RowEq(lhs, rhs) => {
+                    // LHS should be an open row with e1 or e2
+                    let lhs_rest = lhs.rest(db);
+                    assert!(lhs_rest == Some(e1) || lhs_rest == Some(e2));
+                    // RHS should contain the other effect with e3 as rest
+                    assert_eq!(rhs.rest(db), Some(e3));
+                }
+                _ => panic!("Expected RowEq constraint"),
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn merge_deduplicates(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+
+        let row1 = EffectRow::single(db, console.clone());
+        let row2 = EffectRow::single(db, console.clone());
+
+        // {Console} + {Console} = {Console}
+        ctx.set_current_effect(row1);
+        ctx.merge_effect(row2);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 1);
+        assert!(effects.contains(&console));
+    }
+
+    #[salsa_test]
+    fn merge_closed_with_open(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+        let state = simple_effect(Symbol::new("State"));
+
+        let e1 = EffectVar { id: 1 };
+
+        let closed_row = EffectRow::single(db, console.clone());
+        let open_row = EffectRow::new(db, vec![state.clone()], Some(e1));
+
+        // {Console} + {State | e1} = {Console, State | e1}
+        ctx.set_current_effect(closed_row);
+        ctx.merge_effect(open_row);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 2);
+        assert!(effects.contains(&console));
+        assert!(effects.contains(&state));
+        assert_eq!(result.rest(db), Some(e1)); // Preserves the row variable
+
+        // No constraints needed when only one is open
+        assert!(ctx.take_constraints().is_empty());
     }
 }
