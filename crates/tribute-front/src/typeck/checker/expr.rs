@@ -148,7 +148,15 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
             }
-            ExprKind::Block { stmts: _, value } => self.infer_expr_type_with_ctx(ctx, value),
+            ExprKind::Block { stmts, value } => {
+                ctx.push_scope();
+                for stmt in stmts {
+                    self.infer_stmt_and_bind_with_ctx(ctx, stmt);
+                }
+                let ty = self.infer_expr_type_with_ctx(ctx, value);
+                ctx.pop_scope();
+                ty
+            }
             ExprKind::Case { scrutinee, arms } => {
                 // Infer scrutinee type
                 let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
@@ -269,7 +277,15 @@ impl<'db> TypeChecker<'db> {
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
                 }
             }
-            ExprKind::Block { value, .. } => self.infer_expr_type_with_ctx(ctx, value),
+            ExprKind::Block { stmts, value } => {
+                ctx.push_scope();
+                for stmt in stmts {
+                    self.infer_stmt_and_bind_with_ctx(ctx, stmt);
+                }
+                let ty = self.infer_expr_type_with_ctx(ctx, value);
+                ctx.pop_scope();
+                ty
+            }
             ExprKind::Case { scrutinee, arms } => {
                 let scrutinee_ty = self.infer_expr_type_with_ctx(ctx, scrutinee);
                 let result_ty = ctx.fresh_type_var();
@@ -598,13 +614,19 @@ impl<'db> TypeChecker<'db> {
                 lhs: self.check_expr_with_ctx(ctx, lhs, Mode::Infer),
                 rhs: self.check_expr_with_ctx(ctx, rhs, Mode::Infer),
             },
-            ExprKind::Block { stmts, value } => ExprKind::Block {
-                stmts: stmts
+            ExprKind::Block { stmts, value } => {
+                ctx.push_scope();
+                let converted_stmts: Vec<_> = stmts
                     .into_iter()
                     .map(|s| self.convert_stmt_with_ctx(ctx, s))
-                    .collect(),
-                value: self.check_expr_with_ctx(ctx, value, Mode::Infer),
-            },
+                    .collect();
+                let converted_value = self.check_expr_with_ctx(ctx, value, Mode::Infer);
+                ctx.pop_scope();
+                ExprKind::Block {
+                    stmts: converted_stmts,
+                    value: converted_value,
+                }
+            }
             ExprKind::Case { scrutinee, arms } => {
                 let scrutinee_expr = self.check_expr_with_ctx(ctx, scrutinee, Mode::Infer);
                 let scrutinee_ty = ctx
@@ -674,6 +696,38 @@ impl<'db> TypeChecker<'db> {
     ) -> TypedRef<'db> {
         let ty = self.infer_var_with_ctx(ctx, &resolved);
         TypedRef { resolved, ty }
+    }
+
+    /// Infer a statement's type and bind its pattern variables.
+    /// This is used during type inference to process block statements before
+    /// inferring the block value's type.
+    fn infer_stmt_and_bind_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        stmt: &Stmt<ResolvedRef<'db>>,
+    ) {
+        match stmt {
+            Stmt::Let {
+                pattern, value, ty, ..
+            } => {
+                let value_ty = if let Some(ann) = ty {
+                    let expected = self.annotation_to_type_with_ctx(ctx, ann);
+                    let inferred = self.infer_expr_type_with_ctx(ctx, value);
+                    ctx.constrain_eq(inferred, expected);
+                    expected
+                } else {
+                    self.infer_expr_type_with_ctx(ctx, value)
+                };
+                // Constrain pattern type to match value type
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+                ctx.constrain_eq(pattern_ty, value_ty);
+                self.bind_pattern_vars_with_ctx(ctx, pattern, value_ty);
+            }
+            Stmt::Expr { expr, .. } => {
+                // Just infer the type for side effects (constraints)
+                self.infer_expr_type_with_ctx(ctx, expr);
+            }
+        }
     }
 
     /// Convert a statement.

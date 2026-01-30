@@ -173,7 +173,7 @@ pub fn find_conflicting_effects<'db>(
 }
 
 /// Create a simple effect with no type arguments.
-pub fn simple_effect(name: Symbol) -> Effect<'static> {
+pub fn simple_effect<'db>(name: Symbol) -> Effect<'db> {
     Effect {
         name,
         args: Vec::new(),
