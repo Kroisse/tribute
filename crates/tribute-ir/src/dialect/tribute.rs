@@ -141,7 +141,7 @@ dialect! {
 
         /// `tribute.arm` operation: a single pattern-matching arm (used in handler arms).
         /// The pattern region contains a tree of `tribute_pat.*` operations.
-        /// The body region contains the arm's expression (ends with `tribute.yield`).
+        /// The body region contains the arm's expression.
         fn arm() {
             #[region(pattern)] {}
             #[region(body)] {}

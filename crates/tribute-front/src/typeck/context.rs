@@ -185,6 +185,12 @@ impl<'db> ModuleTypeEnv<'db> {
         for (name, scheme) in exports.type_defs(self.db) {
             self.type_defs.insert(*name, *scheme);
         }
+        for (name, info) in exports.struct_fields(self.db) {
+            self.struct_fields.insert(*name, info.clone());
+        }
+        for (name, variants) in exports.enum_variants(self.db) {
+            self.enum_variants.insert(*name, variants.clone());
+        }
     }
 
     // =========================================================================
@@ -215,6 +221,22 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export type definitions for PreludeExports.
     pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
         self.type_defs.iter().map(|(k, v)| (*k, *v)).collect()
+    }
+
+    /// Export struct field definitions for PreludeExports.
+    pub fn export_struct_fields(&self) -> Vec<(Symbol, StructFieldInfo<'db>)> {
+        self.struct_fields
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
+    }
+
+    /// Export enum variant information for PreludeExports.
+    pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
+        self.enum_variants
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
     }
 
     // =========================================================================

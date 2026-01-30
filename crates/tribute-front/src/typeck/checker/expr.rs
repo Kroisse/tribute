@@ -10,8 +10,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
-    Arm, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
-    LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
+    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
@@ -87,7 +87,43 @@ impl<'db> TypeChecker<'db> {
                     ctx.fresh_type_var()
                 }
             }
-            ExprKind::BinOp { .. } => ctx.fresh_type_var(), // TODO: Proper binop typing
+            ExprKind::BinOp { op, lhs, rhs } => {
+                let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
+                let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
+                match op {
+                    // Arithmetic operators: operands must be same type, result is that type
+                    BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Mod => {
+                        ctx.constrain_eq(lhs_ty, rhs_ty);
+                        lhs_ty
+                    }
+                    // Comparison operators: operands must be same type, result is Bool
+                    BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Lt
+                    | BinOpKind::Le
+                    | BinOpKind::Gt
+                    | BinOpKind::Ge => {
+                        ctx.constrain_eq(lhs_ty, rhs_ty);
+                        ctx.bool_type()
+                    }
+                    // Boolean operators: operands must be Bool, result is Bool
+                    BinOpKind::And | BinOpKind::Or => {
+                        let bool_ty = ctx.bool_type();
+                        ctx.constrain_eq(lhs_ty, bool_ty);
+                        ctx.constrain_eq(rhs_ty, bool_ty);
+                        bool_ty
+                    }
+                    // String concatenation: operands must be Text, result is Text
+                    BinOpKind::Concat => {
+                        ctx.constrain_eq(lhs_ty, rhs_ty);
+                        lhs_ty
+                    }
+                }
+            }
             ExprKind::Block { stmts: _, value } => self.infer_expr_type_with_ctx(ctx, value),
             ExprKind::Case { .. } => ctx.fresh_type_var(),
             ExprKind::Lambda { params, body } => {
@@ -99,7 +135,10 @@ impl<'db> TypeChecker<'db> {
                     })
                     .collect();
 
-                // Bind lambda parameters
+                // Use a new scope for lambda parameters so they don't leak out
+                ctx.push_scope();
+
+                // Bind lambda parameters in the new scope
                 for (param, ty) in params.iter().zip(param_types.iter()) {
                     if let Some(local_id) = param.local_id {
                         ctx.bind_local(local_id, *ty);
@@ -108,14 +147,33 @@ impl<'db> TypeChecker<'db> {
                 }
 
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
+
+                ctx.pop_scope();
+
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
                 let effect = ctx.fresh_effect_row();
                 ctx.func_type(param_types, result_ty, effect)
             }
-            ExprKind::Handle { .. } => ctx.fresh_type_var(), // TODO: Proper handle typing
-            ExprKind::Tuple(_) => ctx.fresh_type_var(),      // TODO: Proper tuple typing
-            ExprKind::List(_) => ctx.fresh_type_var(),       // TODO: Proper list typing
+            ExprKind::Handle { body, .. } => {
+                // Handle returns the body's type, with handled effects removed
+                self.infer_expr_type_with_ctx(ctx, body)
+            }
+            ExprKind::Tuple(elems) => {
+                let elem_tys: Vec<Type<'db>> = elems
+                    .iter()
+                    .map(|e| self.infer_expr_type_with_ctx(ctx, e))
+                    .collect();
+                ctx.tuple_type(elem_tys)
+            }
+            ExprKind::List(elems) => {
+                let elem_ty = ctx.fresh_type_var();
+                for elem in elems.iter() {
+                    let ty = self.infer_expr_type_with_ctx(ctx, elem);
+                    ctx.constrain_eq(ty, elem_ty);
+                }
+                ctx.named_type(Symbol::new("List"), vec![elem_ty])
+            }
             ExprKind::Error => ctx.error_type(),
         };
 
@@ -583,6 +641,9 @@ impl<'db> TypeChecker<'db> {
                 let converted_arms: Vec<_> = arms
                     .into_iter()
                     .map(|arm| {
+                        // Each arm gets its own scope for pattern bindings
+                        ctx.push_scope();
+
                         let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
                         ctx.constrain_eq(pattern_ty, scrutinee_ty);
                         self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
@@ -590,6 +651,8 @@ impl<'db> TypeChecker<'db> {
                         if let Some(body_ty) = ctx.get_node_type(converted.body.id) {
                             ctx.constrain_eq(body_ty, result_ty);
                         }
+
+                        ctx.pop_scope();
                         converted
                     })
                     .collect();
@@ -924,9 +987,10 @@ impl<'db> TypeChecker<'db> {
         Arm {
             id: arm.id,
             pattern: self.convert_pattern_with_expected_ctx(ctx, arm.pattern, scrutinee_ty),
-            guard: arm
-                .guard
-                .map(|g| self.check_expr_with_ctx(ctx, g, Mode::Infer)),
+            guard: arm.guard.map(|g| {
+                let bool_ty = ctx.bool_type();
+                self.check_expr_with_ctx(ctx, g, Mode::Check(bool_ty))
+            }),
             body: self.check_expr_with_ctx(ctx, arm.body, Mode::Infer),
         }
     }
@@ -1214,7 +1278,32 @@ impl<'db> TypeChecker<'db> {
                 // Type not yet resolved - can't check
                 return;
             }
-            TypeKind::Int | TypeKind::Bool | TypeKind::String | TypeKind::Float => {
+            TypeKind::Bool => {
+                // Bool can be exhaustive if both True and False are covered
+                let mut has_true = false;
+                let mut has_false = false;
+                for arm in arms {
+                    self.collect_bool_coverage(&arm.pattern, &mut has_true, &mut has_false);
+                }
+                if has_true && has_false {
+                    return; // Exhaustive
+                }
+                let span = Span::new(0, 0);
+                let missing = match (has_true, has_false) {
+                    (true, false) => "False",
+                    (false, true) => "True",
+                    _ => "True, False",
+                };
+                Diagnostic {
+                    message: format!("non-exhaustive case expression: missing cases: {}", missing),
+                    span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::TypeChecking,
+                }
+                .accumulate(self.db());
+                return;
+            }
+            TypeKind::Int | TypeKind::String | TypeKind::Float | TypeKind::Nat => {
                 // Primitive types without catch-all are non-exhaustive
                 let span = Span::new(0, 0);
                 Diagnostic {
@@ -1287,12 +1376,29 @@ impl<'db> TypeChecker<'db> {
         match &*pattern.kind {
             PatternKind::Variant { ctor, .. } => {
                 // Extract variant name from constructor
-                if let crate::ast::ResolvedRef::Constructor { id, .. } = &ctor.resolved {
-                    covered.insert(id.type_name(self.db()));
+                if let crate::ast::ResolvedRef::Constructor { variant, .. } = &ctor.resolved {
+                    covered.insert(*variant);
                 }
             }
             PatternKind::As { pattern, .. } => {
                 self.collect_covered_variants(pattern, covered);
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect Bool literal coverage from a pattern.
+    fn collect_bool_coverage(
+        &self,
+        pattern: &Pattern<TypedRef<'db>>,
+        has_true: &mut bool,
+        has_false: &mut bool,
+    ) {
+        match &*pattern.kind {
+            PatternKind::Literal(LiteralPattern::Bool(true)) => *has_true = true,
+            PatternKind::Literal(LiteralPattern::Bool(false)) => *has_false = true,
+            PatternKind::As { pattern, .. } => {
+                self.collect_bool_coverage(pattern, has_true, has_false);
             }
             _ => {}
         }

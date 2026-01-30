@@ -57,6 +57,11 @@ impl<'db> TypeChecker<'db> {
             ctx.bind_local_by_name(param.name, ty);
         }
 
+        // Set effect row from the function's declared type before checking body
+        if let TypeKind::Func { effect, .. } = instantiated_func_ty.kind(self.db()) {
+            ctx.set_current_effect(*effect);
+        }
+
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, func.body, Mode::Check(expected_return));
 

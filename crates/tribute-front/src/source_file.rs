@@ -61,7 +61,12 @@ fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
 /// Falls back to "main" if the path cannot be parsed.
 pub fn derive_module_name_from_path(db: &dyn salsa::Database, path: PathId<'_>) -> Symbol {
     let uri_str = path.uri(db);
-    std::path::Path::new(uri_str)
+    // Parse URI and extract path component (handle file:// URIs)
+    let file_path = Uri::parse(uri_str)
+        .ok()
+        .and_then(|uri| uri.path().as_str().strip_prefix('/').map(|s| s.to_string()))
+        .unwrap_or_else(|| uri_str.to_string());
+    Path::new(&file_path)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(Symbol::from_dynamic)

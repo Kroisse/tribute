@@ -165,8 +165,17 @@ impl<'db> TypeChecker<'db> {
         let function_types = self.env.export_function_types_with_ids();
         let constructor_types = self.env.export_constructor_types();
         let type_defs = self.env.export_type_defs();
+        let struct_fields = self.env.export_struct_fields();
+        let enum_variants = self.env.export_enum_variants();
 
-        PreludeExports::new(self.db(), function_types, constructor_types, type_defs)
+        PreludeExports::new(
+            self.db(),
+            function_types,
+            constructor_types,
+            type_defs,
+            struct_fields,
+            enum_variants,
+        )
     }
 
     // =========================================================================

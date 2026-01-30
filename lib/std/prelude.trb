@@ -118,9 +118,9 @@ pub mod Result {
 // These functions are implemented by the backend (e.g., wasm).
 // The `__` prefix marks them as internal/reserved.
 
-extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Int
-extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Int) -> Int
-extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes
+extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Nat
+extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
+extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 extern "intrinsic" fn __bytes_concat(left: Bytes, right: Bytes) -> Bytes
 extern "intrinsic" fn __print_line(message: String) -> Nil
 
@@ -131,19 +131,19 @@ extern "intrinsic" fn __print_line(message: String) -> Nil
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
     /// Get the length of a byte sequence.
-    pub fn len(bytes: Bytes) -> Int {
+    pub fn len(bytes: Bytes) -> Nat {
         __bytes_len(bytes)
     }
 
     /// Get the byte at the given index.
     /// Panics if index is out of bounds.
-    pub fn get_or_panic(bytes: Bytes, index: Int) -> Int {
+    pub fn get_or_panic(bytes: Bytes, index: Nat) -> Nat {
         __bytes_get_or_panic(bytes, index)
     }
 
     /// Create a slice of the byte sequence.
     /// Panics if start or end is out of bounds.
-    pub fn slice_or_panic(bytes: Bytes, start: Int, end: Int) -> Bytes {
+    pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
         __bytes_slice_or_panic(bytes, start, end)
     }
 
@@ -159,8 +159,8 @@ pub mod Bytes {
 
     /// Get the byte at the given index.
     /// Returns None if index is out of bounds.
-    pub fn get(bytes: Bytes, index: Int) -> Option(Int) {
-        case index >= 0 && index < bytes.len() {
+    pub fn get(bytes: Bytes, index: Nat) -> Option(Nat) {
+        case index < bytes.len() {
             True -> Some(bytes.get_or_panic(index))
             False -> None
         }
@@ -168,14 +168,11 @@ pub mod Bytes {
 
     /// Create a slice of the byte sequence.
     /// Clamps start and end to valid bounds.
-    pub fn slice(bytes: Bytes, start: Int, end: Int) -> Bytes {
+    pub fn slice(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
         let len = bytes.len()
-        let s = case start < 0 {
-            True -> 0
-            False -> case start > len {
-                True -> len
-                False -> start
-            }
+        let s = case start > len {
+            True -> len
+            False -> start
         }
         let e = case end < s {
             True -> s

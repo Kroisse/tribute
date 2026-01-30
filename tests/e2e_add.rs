@@ -933,3 +933,246 @@ fn main() ->{} Int {
         // assert_eq!(result, 42, "Expected f(41) = 42, got {}", result);
     });
 }
+
+// =============================================================================
+// Type Error Tests
+// =============================================================================
+
+/// Test that binary operations with mismatched types produce a type error.
+/// Int + Nat should fail because they are different types.
+/// Note: +1 is Int (signed), 2 is Nat (unsigned)
+#[test]
+fn test_binop_type_mismatch_int_nat() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    // +1 is Int (explicit sign), 2 is Nat (no sign)
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Int {
+    +1 + 2
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "binop_type_mismatch.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for Int + Nat, but got no diagnostics"
+        );
+    });
+}
+
+/// Test that comparison operations with mismatched types produce a type error.
+/// Note: +1 is Int, 2.0 is Float
+#[test]
+fn test_binop_comparison_type_mismatch() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Bool {
+    +1 < 2.0
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(
+            db,
+            "comparison_type_mismatch.trb",
+            source_code.clone(),
+            tree,
+        );
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for Int < Float, but got no diagnostics"
+        );
+    });
+}
+
+/// Test that boolean operations require Bool operands.
+/// Note: +1 and +2 are Int, but && requires Bool
+#[test]
+fn test_binop_boolean_requires_bool() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Bool {
+    +1 && +2
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "boolean_requires_bool.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        assert!(
+            !diagnostics.is_empty(),
+            "Expected type error for Int && Int, but got no diagnostics"
+        );
+    });
+}
+
+/// Test that valid binary operations with matching types succeed.
+/// Note: +1 and +2 are both Int
+#[test]
+fn test_binop_matching_types_succeed() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Int {
+    +1 + +2
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "matching_types.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors for Int + Int, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
+
+/// Test that Nat + Nat succeeds (both operands are unsigned).
+#[test]
+fn test_binop_nat_plus_nat_succeeds() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Nat {
+    1 + 2
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "nat_plus_nat.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors for Nat + Nat, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
+
+/// Test that Float + Float succeeds.
+#[test]
+fn test_binop_float_plus_float_succeeds() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Float {
+    1.5 + 2.5
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file =
+            SourceCst::from_path(db, "float_plus_float.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors for Float + Float, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}
+
+/// Test that comparison with Bool operands produces a type error.
+/// Bool == Bool should work, but Bool < Bool should fail (or at least be questionable)
+/// Actually: We just test that True && False works (valid Bool operands)
+#[test]
+fn test_binop_bool_and_bool_succeeds() {
+    use tribute::database::parse_with_thread_local;
+    use tribute::pipeline::run_tdnr_ast;
+
+    let source_code = Rope::from_str(
+        r#"
+fn main() ->{} Bool {
+    True && False
+}
+"#,
+    );
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "bool_and_bool.trb", source_code.clone(), tree);
+
+        let _module = run_tdnr_ast(db, source_file);
+
+        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            diagnostics.is_empty(),
+            "Expected no type errors for Bool && Bool, got {} diagnostics",
+            diagnostics.len()
+        );
+    });
+}

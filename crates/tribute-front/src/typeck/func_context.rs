@@ -25,7 +25,7 @@ use super::context::ModuleTypeEnv;
 ///
 /// Each function body is type-checked with its own `FunctionInferenceContext`,
 /// which provides:
-/// - Local variable type bindings
+/// - Local variable type bindings (with scoping for lambdas and case arms)
 /// - Fresh type/row variable generation (scoped to this function)
 /// - Constraint collection (solved per-function)
 /// - Node type recording (for TypedRef construction)
@@ -33,6 +33,11 @@ use super::context::ModuleTypeEnv;
 /// UniVar IDs are unique because they include the function name.
 /// Module-level type information (function signatures, constructors, type defs)
 /// is accessed via a reference to `ModuleTypeEnv`.
+///
+/// Scoping: Bindings are stored in a stack of scopes. When entering a new
+/// scope (e.g., lambda body, case arm), push_scope() creates a new scope.
+/// When exiting, pop_scope() removes it. Lookups search from innermost to
+/// outermost scope.
 pub struct FunctionInferenceContext<'a, 'db> {
     db: &'db dyn salsa::Database,
 
@@ -42,11 +47,13 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Qualified function name (used in UniVarSource for globally unique IDs).
     func_name: Symbol,
 
-    /// Types of local variables (by LocalId).
-    local_types: HashMap<LocalId, Type<'db>>,
+    /// Types of local variables (by LocalId), organized as a stack of scopes.
+    /// The last element is the innermost (current) scope.
+    local_scopes: Vec<HashMap<LocalId, Type<'db>>>,
 
-    /// Types of local variables by name (for parameters without LocalId).
-    local_types_by_name: HashMap<Symbol, Type<'db>>,
+    /// Types of local variables by name, organized as a stack of scopes.
+    /// The last element is the innermost (current) scope.
+    name_scopes: Vec<HashMap<Symbol, Type<'db>>>,
 
     /// Types of AST nodes (for TypedRef construction).
     node_types: HashMap<NodeId, Type<'db>>,
@@ -78,8 +85,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             db,
             env,
             func_name,
-            local_types: HashMap::new(),
-            local_types_by_name: HashMap::new(),
+            // Start with one scope (the function's top-level scope)
+            local_scopes: vec![HashMap::new()],
+            name_scopes: vec![HashMap::new()],
             node_types: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
@@ -131,27 +139,77 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     // =========================================================================
+    // Scope management
+    // =========================================================================
+
+    /// Push a new scope. Call this when entering a lambda body or case arm.
+    pub fn push_scope(&mut self) {
+        self.local_scopes.push(HashMap::new());
+        self.name_scopes.push(HashMap::new());
+    }
+
+    /// Pop the current scope. Call this when exiting a lambda body or case arm.
+    pub fn pop_scope(&mut self) {
+        // Never pop the last scope (function's top-level scope)
+        if self.local_scopes.len() > 1 {
+            self.local_scopes.pop();
+            self.name_scopes.pop();
+        }
+    }
+
+    /// Execute a closure within a new scope.
+    ///
+    /// This is a convenience method that ensures scope is properly pushed and popped.
+    pub fn with_scope<F, R>(&mut self, f: F) -> R
+    where
+        F: FnOnce(&mut Self) -> R,
+    {
+        self.push_scope();
+        let result = f(self);
+        self.pop_scope();
+        result
+    }
+
+    // =========================================================================
     // Local variable bindings
     // =========================================================================
 
-    /// Bind a local variable to a type.
+    /// Bind a local variable to a type in the current scope.
     pub fn bind_local(&mut self, local: LocalId, ty: Type<'db>) {
-        self.local_types.insert(local, ty);
+        if let Some(scope) = self.local_scopes.last_mut() {
+            scope.insert(local, ty);
+        }
     }
 
     /// Look up the type of a local variable.
+    ///
+    /// Searches from innermost to outermost scope.
     pub fn lookup_local(&self, local: LocalId) -> Option<Type<'db>> {
-        self.local_types.get(&local).copied()
+        for scope in self.local_scopes.iter().rev() {
+            if let Some(ty) = scope.get(&local) {
+                return Some(*ty);
+            }
+        }
+        None
     }
 
-    /// Bind a local variable by name (for parameters without LocalId).
+    /// Bind a local variable by name in the current scope.
     pub fn bind_local_by_name(&mut self, name: Symbol, ty: Type<'db>) {
-        self.local_types_by_name.insert(name, ty);
+        if let Some(scope) = self.name_scopes.last_mut() {
+            scope.insert(name, ty);
+        }
     }
 
     /// Look up a local variable by name.
+    ///
+    /// Searches from innermost to outermost scope.
     pub fn lookup_local_by_name(&self, name: Symbol) -> Option<Type<'db>> {
-        self.local_types_by_name.get(&name).copied()
+        for scope in self.name_scopes.iter().rev() {
+            if let Some(ty) = scope.get(&name) {
+                return Some(*ty);
+            }
+        }
+        None
     }
 
     // =========================================================================

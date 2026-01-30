@@ -33,7 +33,7 @@ pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, FuncDefId, Module, ResolvedRef, TypeScheme, TypedRef};
+use crate::ast::{CtorId, FuncDefId, Module, ResolvedRef, Type, TypeParam, TypeScheme, TypedRef};
 
 /// Salsa-tracked struct holding the complete type checking output.
 ///
@@ -70,6 +70,14 @@ pub struct PreludeExports<'db> {
     /// Type definitions keyed by name.
     #[returns(ref)]
     pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
+
+    /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)]).
+    #[returns(ref)]
+    pub struct_fields: Vec<(Symbol, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
+
+    /// Enum variant information: enum_name → [variant_names].
+    #[returns(ref)]
+    pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
 }
 
 /// Type check a module and return both the typed AST and function type schemes.
