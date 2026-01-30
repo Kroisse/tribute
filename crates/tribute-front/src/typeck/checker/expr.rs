@@ -62,16 +62,39 @@ impl<'db> TypeChecker<'db> {
                     self.infer_call_with_ctx(ctx, ctor_ty, &arg_types)
                 }
             }
-            ExprKind::Record { type_name, .. } => {
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+            } => {
                 // Get the struct constructor type and extract return type
                 let ctor_ty = self.infer_var_with_ctx(ctx, type_name);
-                if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
+                let struct_ty = if let TypeKind::Func { result, .. } = ctor_ty.kind(self.db()) {
                     // Constructor has function type: fn(fields...) -> StructType
                     *result
                 } else {
                     // Fallback: use constructor type directly (shouldn't happen)
                     ctor_ty
+                };
+
+                // Validate each field expression against the declared field type
+                for (field_name, field_expr) in fields {
+                    let expr_ty = self.infer_expr_type_with_ctx(ctx, field_expr);
+                    if let Some(expected_field_ty) =
+                        self.lookup_struct_field_type(ctx, struct_ty, *field_name)
+                    {
+                        ctx.constrain_eq(expr_ty, expected_field_ty);
+                    }
+                    // If field not found, we'll let later phases handle the error
                 }
+
+                // Validate spread expression if present
+                if let Some(spread_expr) = spread {
+                    let spread_ty = self.infer_expr_type_with_ctx(ctx, spread_expr);
+                    ctx.constrain_eq(spread_ty, struct_ty);
+                }
+
+                struct_ty
             }
             ExprKind::MethodCall {
                 receiver, method, ..

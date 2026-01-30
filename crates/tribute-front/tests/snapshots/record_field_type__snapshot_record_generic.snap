@@ -1,0 +1,32 @@
+---
+source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 233
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        tribute.struct_def,
+        Module(Pair) {
+            operations: [
+                func @test::Pair::first(adt.typeref) -> core.nil {
+                    body: [
+                        "adt.struct_get",
+                        "func.return",
+                    ],
+                },
+                func @test::Pair::second(adt.typeref) -> core.nil {
+                    body: [
+                        "adt.struct_get",
+                        "func.return",
+                    ],
+                },
+            ],
+        },
+        func @make_pair() -> tribute_rt.any {
+            body: [
+                "arith.const",
+                "func.return",
+            ],
+        },
+    ],
+}
