@@ -592,9 +592,9 @@ mod tests {
         assert_eq!(s, "hello");
     }
 
-    // Note: lowercase true/false in patterns are parsed as identifiers by tree-sitter,
-    // not as bool literals. This is a grammar limitation - keywords like true/false
-    // need special handling in the pattern context.
+    // Note: In Tribute, `True` and `False` (capitalized) are boolean literals,
+    // while lowercase `true` and `false` are valid identifiers. This is an intentional
+    // design choice similar to some ML-family languages.
     #[test]
     fn test_lowercase_true_in_pattern_becomes_identifier() {
         let source = r#"
