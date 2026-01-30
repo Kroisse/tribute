@@ -14,12 +14,15 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## tribute-passes
 
-**Role**: Compiler transformation passes (name resolution, type checking, TDNR)
+**Role**: TrunkIR transformation passes (boxing, closures, effects, continuations)
 
 **Key Modules**:
-- `resolve.rs` - Name resolution (`tribute.*` ops → concrete ops)
-- `typeck/` - Type checking (bidirectional, row-polymorphic effects)
-- `tdnr.rs` - Type-directed name resolution (UFCS method calls)
+- `boxing.rs` - Insert explicit box/unbox operations for polymorphism
+- `closure_lower.rs` - Lower closure operations to function calls
+- `evidence.rs` - Evidence parameter insertion for effect handling
+- `handler_lower.rs` - Lower `ability.*` to `cont.*` dialect
+- `tribute_to_cont.rs` - Lower `tribute.handle` to continuation ops
+- `cont_to_trampoline.rs` - Lower continuations to trampoline implementation
 
 **Location**: `crates/tribute-passes/`
 
