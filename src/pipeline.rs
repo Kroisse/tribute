@@ -94,7 +94,10 @@ use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region};
 
 // AST-based pipeline imports
+use tribute_front::ast::ResolvedRef;
+use tribute_front::ast::SpanMap;
 use tribute_front::ast_to_ir;
+use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::ModuleEnv;
@@ -112,6 +115,31 @@ use trunk_ir_wasm_backend::{
 /// The prelude source code, embedded at compile time.
 const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
+/// Parse the prelude source.
+///
+/// This is the first stage of prelude processing, shared by all prelude-related functions.
+fn parse_prelude(db: &dyn salsa::Database) -> Option<ParsedAst<'_>> {
+    let prelude_source = create_prelude_source(db)?;
+    ast_query::parsed_ast_with_module_path(db, prelude_source, trunk_ir::Symbol::new("prelude"))
+}
+
+/// Type alias for resolved AST module.
+type ResolvedModule<'db> = tribute_front::ast::Module<ResolvedRef<'db>>;
+
+/// Parse and resolve names in the prelude.
+///
+/// Returns the resolved AST and span map, ready for type checking.
+fn resolve_prelude(db: &dyn salsa::Database) -> Option<(ResolvedModule<'_>, SpanMap)> {
+    let parsed = parse_prelude(db)?;
+    let prelude_ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+
+    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+
+    Some((resolved, span_map))
+}
+
 /// Load and cache the prelude module using the AST pipeline.
 ///
 /// This is a Salsa tracked function, so the prelude is parsed only once
@@ -123,19 +151,7 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 /// that tirgen doesn't support.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
-
-    let prelude_ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    // Build prelude ModuleEnv and resolve
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+    let (resolved, span_map) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -146,6 +162,7 @@ pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> 
 
     // AST → TrunkIR
     let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
+    let prelude_source = create_prelude_source(db)?;
     let source_uri = prelude_source.uri(db).as_str();
     Some(ast_to_ir::lower_ast_to_ir(
         db,
@@ -175,12 +192,7 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
+    let parsed = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     Some(ast_resolve::build_env(db, &prelude_ast))
 }
@@ -188,28 +200,14 @@ pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> 
 /// Process prelude through AST pipeline and extract type exports.
 ///
 /// This function:
-/// 1. Parses prelude to AST
-/// 2. Builds prelude's ModuleEnv
-/// 3. Resolves names in prelude
-/// 4. Type checks prelude with independent TypeContext (all UniVars resolved)
-/// 5. Extracts PreludeExports (TypeSchemes only, no UniVars)
+/// 1. Uses `resolved_prelude` for parsing and name resolution (cached)
+/// 2. Type checks prelude with independent TypeContext (all UniVars resolved)
+/// 3. Extracts PreludeExports (TypeSchemes only, no UniVars)
 ///
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
-
-    let prelude_ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    // Build prelude ModuleEnv and resolve
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+    let (resolved, span_map) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
