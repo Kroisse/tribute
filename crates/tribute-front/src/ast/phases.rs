@@ -14,6 +14,26 @@ use super::node_id::NodeId;
 use super::types::Type;
 
 // ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Build a qualified name string from module path and name.
+///
+/// Returns the full qualified name like "foo::bar::name".
+fn build_qualified_name(module_path: &SymbolVec, name: Symbol) -> String {
+    if module_path.is_empty() {
+        name.to_string()
+    } else {
+        let path_str = module_path
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        format!("{}::{}", path_str, name)
+    }
+}
+
+// ============================================================================
 // Phase 1: Unresolved (after parsing)
 // ============================================================================
 
@@ -90,17 +110,7 @@ impl<'db> FuncDefId<'db> {
     ///
     /// Returns the full qualified name like "foo::bar::func_name".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        let module_path = self.module_path(db);
-        if module_path.is_empty() {
-            self.name(db).to_string()
-        } else {
-            let path_str = module_path
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("::");
-            format!("{}::{}", path_str, self.name(db))
-        }
+        build_qualified_name(self.module_path(db), self.name(db))
     }
 }
 
@@ -126,17 +136,7 @@ impl<'db> TypeDefId<'db> {
     ///
     /// Returns the full qualified name like "std::option::Option".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        let module_path = self.module_path(db);
-        if module_path.is_empty() {
-            self.name(db).to_string()
-        } else {
-            let path_str = module_path
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("::");
-            format!("{}::{}", path_str, self.name(db))
-        }
+        build_qualified_name(self.module_path(db), self.name(db))
     }
 }
 
@@ -162,17 +162,7 @@ impl<'db> CtorId<'db> {
     ///
     /// Returns the full qualified name like "std::option::Some".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        let module_path = self.module_path(db);
-        if module_path.is_empty() {
-            self.ctor_name(db).to_string()
-        } else {
-            let path_str = module_path
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .join("::");
-            format!("{}::{}", path_str, self.ctor_name(db))
-        }
+        build_qualified_name(self.module_path(db), self.ctor_name(db))
     }
 }
 
