@@ -17,8 +17,8 @@ use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use super::context::CaptureInfo;
 
 use crate::ast::{
-    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId, Module,
-    Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
+    Arm, CtorId, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId,
+    Module, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
     TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
@@ -106,9 +106,10 @@ pub fn lower_module<'db>(
     let module_location = span_map.get_or_default(module.id);
     let location = Location::new(path, module_location);
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
+    let module_path = smallvec::smallvec![module_name];
 
     // Create context outside the build closure so we can access lifted_functions after
-    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_name);
+    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_path);
 
     // Build the module body
     let mut top = BlockBuilder::new(db, location);
@@ -540,12 +541,13 @@ fn lower_expr<'db>(
                 return builder.emit_unsupported(location, "record spread syntax");
             }
 
-            // Extract struct type name
+            // Extract struct type name and CtorId
             let struct_name = extract_type_name(db, &type_name.resolved);
+            let ctor_id = extract_ctor_id(&type_name.resolved);
             let struct_ty = adt::typeref(db, struct_name);
 
             // Get field order from struct definition
-            let Some(field_order) = builder.ctx.get_struct_field_order(struct_name) else {
+            let Some(field_order) = builder.ctx.get_struct_field_order(ctor_id) else {
                 // Struct not found - emit diagnostic and return nil
                 Diagnostic {
                     message: format!("unknown struct: {}", struct_name),
@@ -1099,12 +1101,13 @@ fn lower_struct_decl<'db>(
     let struct_ty = adt::typeref(db, name);
 
     // 0. Register struct field order for lowering Record expressions
+    let ctor_id = CtorId::new(db, ctx.module_path().clone(), name);
     let field_names: Vec<Symbol> = decl
         .fields
         .iter()
         .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
         .collect();
-    ctx.register_struct_fields(name, field_names);
+    ctx.register_struct_fields(ctor_id, field_names);
 
     // 1. Build fields region for struct_def
     let mut fields_block = BlockBuilder::new(db, location);
@@ -1143,10 +1146,14 @@ fn lower_struct_decl<'db>(
         for (idx, (field_name, field_type)) in fields.iter().enumerate() {
             // Generate getter: fn qualified_name(self: StructType) -> FieldType
             // Qualified name: module_path::struct_name::field_name
-            let module_path_str = module_path.to_string();
-            let qualified_name = if module_path_str.is_empty() {
+            let qualified_name = if module_path.is_empty() {
                 Symbol::from_dynamic(&format!("{}::{}", name, field_name))
             } else {
+                let module_path_str = module_path
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::");
                 Symbol::from_dynamic(&format!("{}::{}::{}", module_path_str, name, field_name))
             };
 
@@ -1243,6 +1250,17 @@ fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db
 fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'db>) -> Symbol {
     match resolved {
         ResolvedRef::Constructor { id, .. } => id.type_name(db),
+        _ => unreachable!("Record type must be a constructor: {:?}", resolved),
+    }
+}
+
+/// Extract the CtorId from a ResolvedRef.
+///
+/// Used for record construction to get the constructor ID.
+/// Record type_name must always resolve to a Constructor.
+fn extract_ctor_id<'db>(resolved: &ResolvedRef<'db>) -> CtorId<'db> {
+    match resolved {
+        ResolvedRef::Constructor { id, .. } => *id,
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }
@@ -2495,7 +2513,7 @@ mod tests {
             path,
             span_map,
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         // Test Int annotation
@@ -2532,7 +2550,7 @@ mod tests {
             path,
             span_map,
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         // No annotation should default to int

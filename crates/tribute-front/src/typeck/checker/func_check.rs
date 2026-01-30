@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Span;
 
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Pattern,
@@ -34,10 +34,9 @@ impl<'db> TypeChecker<'db> {
         func: FuncDecl<ResolvedRef<'db>>,
     ) -> FuncDecl<TypedRef<'db>> {
         // 1. Create a fresh FunctionInferenceContext for this function
-        // Use qualified function name for globally unique UniVar IDs
+        // Use function definition ID for globally unique UniVar IDs
         let func_id = self.func_def_id(func.name);
-        let qualified_name = Symbol::from_dynamic(&func_id.qualified_name(self.db()));
-        let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, qualified_name);
+        let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
 
         // 2. Get the function's registered type scheme and instantiate it
 

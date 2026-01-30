@@ -73,7 +73,13 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new(), Symbol::new("test"));
+        let ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            span_map,
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+        );
 
         // Verify context provides expected types
         let int_ty = ctx.int_type();
@@ -91,7 +97,13 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let mut ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new(), Symbol::new("test"));
+        let mut ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            span_map,
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+        );
 
         // Initially no binding
         let local_id = crate::ast::LocalId::new(0);
@@ -109,7 +121,13 @@ mod tests {
         let db = test_db();
         let path = PathId::new(&db, "test.trb".to_owned());
         let span_map = SpanMap::default();
-        let ctx = IrLoweringCtx::new(&db, path, span_map, HashMap::new(), Symbol::new("test"));
+        let ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            span_map,
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+        );
 
         // Verify location creation doesn't panic
         let node_id = crate::ast::NodeId::from_raw(42);

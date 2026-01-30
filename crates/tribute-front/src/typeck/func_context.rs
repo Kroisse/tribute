@@ -44,8 +44,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Module-level type information (read-only).
     env: &'a ModuleTypeEnv<'db>,
 
-    /// Qualified function name (used in UniVarSource for globally unique IDs).
-    func_name: Symbol,
+    /// Function definition ID (used in UniVarSource for globally unique IDs).
+    func_id: FuncDefId<'db>,
 
     /// Types of local variables (by LocalId), organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
@@ -74,17 +74,17 @@ pub struct FunctionInferenceContext<'a, 'db> {
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Create a new function inference context.
     ///
-    /// `func_name` should be the qualified function name (e.g., "module::func")
-    /// to ensure UniVar IDs are globally unique.
+    /// `func_id` is the function definition ID, which provides globally unique
+    /// identification for UniVar IDs.
     pub fn new(
         db: &'db dyn salsa::Database,
         env: &'a ModuleTypeEnv<'db>,
-        func_name: Symbol,
+        func_id: FuncDefId<'db>,
     ) -> Self {
         Self {
             db,
             env,
-            func_name,
+            func_id,
             // Start with one scope (the function's top-level scope)
             local_scopes: vec![HashMap::new()],
             name_scopes: vec![HashMap::new()],
@@ -112,13 +112,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Generate a fresh type variable.
     ///
-    /// UniVar IDs are globally unique because they include the function name
+    /// UniVar IDs are globally unique because they include the function ID
     /// and a local index. This prevents collisions across different functions.
     pub fn fresh_type_var(&mut self) -> Type<'db> {
         let index = self.next_type_var;
         self.next_type_var += 1;
         let source = UniVarSource::FunctionLocal {
-            func_name: self.func_name,
+            func_id: self.func_id,
             index,
         };
         let id = UniVarId::new(self.db, source, 0);
@@ -485,17 +485,19 @@ mod tests {
     fn test_fresh_type_var_per_function_inner<'db>(db: &'db dyn salsa::Database) -> bool {
         let env = ModuleTypeEnv::new(db);
 
-        // Two separate FunctionInferenceContexts with different function names
+        // Two separate FunctionInferenceContexts with different function IDs
         // should produce globally unique UniVar IDs
-        let mut ctx1 = FunctionInferenceContext::new(db, &env, Symbol::new("func1"));
-        let mut ctx2 = FunctionInferenceContext::new(db, &env, Symbol::new("func2"));
+        let func_id1 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("func1"));
+        let func_id2 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("func2"));
+        let mut ctx1 = FunctionInferenceContext::new(db, &env, func_id1);
+        let mut ctx2 = FunctionInferenceContext::new(db, &env, func_id2);
 
         let var1_1 = ctx1.fresh_type_var();
         let var1_2 = ctx1.fresh_type_var();
         let var2_1 = ctx2.fresh_type_var();
         let var2_2 = ctx2.fresh_type_var();
 
-        // All variables should be different (globally unique due to function names)
+        // All variables should be different (globally unique due to function IDs)
         if var1_1 == var1_2 || var1_1 == var2_1 || var1_1 == var2_2 {
             return false;
         }
@@ -539,7 +541,8 @@ mod tests {
         env.register_function(func_id, scheme);
 
         // Create a FunctionInferenceContext and instantiate the function
-        let mut ctx = FunctionInferenceContext::new(db, &env, Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         let ty1 = ctx.instantiate_function(func_id).unwrap();
         let ty2 = ctx.instantiate_function(func_id).unwrap();
@@ -584,7 +587,8 @@ mod tests {
     #[salsa_test]
     fn test_local_binding(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let mut ctx = FunctionInferenceContext::new(db, &env, Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         // Bind a local by LocalId
         let local_id = LocalId::new(1);
@@ -604,7 +608,8 @@ mod tests {
     #[salsa_test]
     fn test_constraints(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let mut ctx = FunctionInferenceContext::new(db, &env, Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         let var = ctx.fresh_type_var();
         let int_ty = ctx.int_type();
