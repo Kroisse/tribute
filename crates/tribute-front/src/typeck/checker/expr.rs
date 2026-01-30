@@ -608,13 +608,19 @@ impl<'db> TypeChecker<'db> {
                 lhs: self.check_expr_with_ctx(ctx, lhs, Mode::Infer),
                 rhs: self.check_expr_with_ctx(ctx, rhs, Mode::Infer),
             },
-            ExprKind::Block { stmts, value } => ExprKind::Block {
-                stmts: stmts
+            ExprKind::Block { stmts, value } => {
+                ctx.push_scope();
+                let converted_stmts: Vec<_> = stmts
                     .into_iter()
                     .map(|s| self.convert_stmt_with_ctx(ctx, s))
-                    .collect(),
-                value: self.check_expr_with_ctx(ctx, value, Mode::Infer),
-            },
+                    .collect();
+                let converted_value = self.check_expr_with_ctx(ctx, value, Mode::Infer);
+                ctx.pop_scope();
+                ExprKind::Block {
+                    stmts: converted_stmts,
+                    value: converted_value,
+                }
+            }
             ExprKind::Case { scrutinee, arms } => {
                 let scrutinee_expr = self.check_expr_with_ctx(ctx, scrutinee, Mode::Infer);
                 let scrutinee_ty = ctx

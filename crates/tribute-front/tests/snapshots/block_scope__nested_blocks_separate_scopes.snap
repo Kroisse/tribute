@@ -1,0 +1,15 @@
+---
+source: crates/tribute-front/tests/block_scope.rs
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        func @example() -> core.i64 {
+            body: [
+                "arith.const",
+                "arith.const",
+                "func.return",
+            ],
+        },
+    ],
+}

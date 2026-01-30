@@ -1,0 +1,16 @@
+---
+source: crates/tribute-front/tests/block_scope.rs
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        tribute.enum_def,
+        func @example(tribute_rt.any) -> core.i64 {
+            body: [
+                "adt.variant_is",
+                "scf.if",
+                "func.return",
+            ],
+        },
+    ],
+}
