@@ -351,8 +351,18 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     unreachable!("fresh var not needed when at most one row is open")
                 });
             }
+            (Some(e1), Some(e2)) if e1 == e2 => {
+                // Both open with the same rest variable: simple union, no constraints needed
+                let mut effects = current.effects(db).clone();
+                for e in effect.effects(db) {
+                    if !effects.contains(e) {
+                        effects.push(e.clone());
+                    }
+                }
+                self.current_effect = EffectRow::new(db, effects, Some(e1));
+            }
             (Some(e1), Some(e2)) => {
-                // Both open: generate constraints
+                // Both open with different rest variables: generate constraints
                 let e3 = self.fresh_row_var();
 
                 // e1 = {effect's effects | e3}
@@ -841,6 +851,69 @@ mod merge_effect_tests {
         assert_eq!(result.rest(db), Some(e1)); // Preserves the row variable
 
         // No constraints needed when only one is open
+        assert!(ctx.take_constraints().is_empty());
+    }
+
+    #[salsa_test]
+    fn merge_open_rows_same_rest_var(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+        let state = simple_effect(Symbol::new("State"));
+
+        // Both rows share the same rest variable
+        let shared_var = EffectVar { id: 1 };
+
+        let row1 = EffectRow::new(db, vec![console.clone()], Some(shared_var));
+        let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
+
+        // {Console | e1} + {State | e1} = {Console, State | e1}
+        // When rest vars are the same, we optimize by skipping constraint generation
+        ctx.set_current_effect(row1);
+        ctx.merge_effect(row2);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 2);
+        assert!(effects.contains(&console));
+        assert!(effects.contains(&state));
+
+        // Result should preserve the shared row variable (no fresh var created)
+        assert_eq!(result.rest(db), Some(shared_var));
+
+        // No constraints should be generated for same rest var optimization
+        assert!(ctx.take_constraints().is_empty());
+    }
+
+    #[salsa_test]
+    fn merge_open_rows_same_rest_var_with_overlap(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
+
+        let console = simple_effect(Symbol::new("Console"));
+        let state = simple_effect(Symbol::new("State"));
+
+        // Both rows share the same rest variable and have overlapping effects
+        let shared_var = EffectVar { id: 1 };
+
+        let row1 = EffectRow::new(db, vec![console.clone(), state.clone()], Some(shared_var));
+        let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
+
+        // {Console, State | e1} + {State | e1} = {Console, State | e1}
+        ctx.set_current_effect(row1);
+        ctx.merge_effect(row2);
+
+        let result = ctx.current_effect();
+        let effects = result.effects(db);
+        assert_eq!(effects.len(), 2); // Deduplication should work
+        assert!(effects.contains(&console));
+        assert!(effects.contains(&state));
+        assert_eq!(result.rest(db), Some(shared_var));
+
+        // No constraints for same rest var
         assert!(ctx.take_constraints().is_empty());
     }
 }
