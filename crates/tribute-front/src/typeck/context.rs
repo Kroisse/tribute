@@ -52,6 +52,10 @@ pub struct ModuleTypeEnv<'db> {
 
     /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)])
     struct_fields: HashMap<Symbol, StructFieldInfo<'db>>,
+
+    /// Enum variant information: enum_name → [variant_names]
+    /// Used for exhaustiveness checking in case expressions.
+    enum_variants: HashMap<Symbol, Vec<Symbol>>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -63,6 +67,7 @@ impl<'db> ModuleTypeEnv<'db> {
             constructor_types: HashMap::new(),
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
+            enum_variants: HashMap::new(),
         }
     }
 
@@ -99,6 +104,11 @@ impl<'db> ModuleTypeEnv<'db> {
     ) {
         self.struct_fields
             .insert(struct_name, (type_params, fields));
+    }
+
+    /// Register enum variant information.
+    pub fn register_enum_variants(&mut self, enum_name: Symbol, variants: Vec<Symbol>) {
+        self.enum_variants.insert(enum_name, variants);
     }
 
     // =========================================================================
@@ -139,6 +149,11 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Return the number of registered constructors.
     pub fn constructor_count(&self) -> usize {
         self.constructor_types.len()
+    }
+
+    /// Look up enum variants by enum name.
+    pub fn lookup_enum_variants(&self, enum_name: Symbol) -> Option<&[Symbol]> {
+        self.enum_variants.get(&enum_name).map(|v| v.as_slice())
     }
 
     /// Debug: print all registered constructors.

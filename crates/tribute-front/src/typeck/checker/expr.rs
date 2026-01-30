@@ -3,7 +3,11 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use trunk_ir::Symbol;
+use std::collections::HashSet;
+
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
     Arm, BuiltinRef, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
@@ -492,6 +496,9 @@ impl<'db> TypeChecker<'db> {
                         converted
                     })
                     .collect();
+
+                // Check exhaustiveness
+                self.check_exhaustiveness(scrutinee_ty, &converted_arms, scrutinee_expr.id);
 
                 ExprKind::Case {
                     scrutinee: scrutinee_expr,
@@ -1054,5 +1061,151 @@ impl<'db> TypeChecker<'db> {
             TypeAnnotationKind::Infer => ctx.fresh_type_var(),
             TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => ctx.error_type(),
         }
+    }
+
+    // =========================================================================
+    // Exhaustiveness checking
+    // =========================================================================
+
+    /// Check that a case expression is exhaustive.
+    ///
+    /// This performs a simplified exhaustiveness check:
+    /// - If the last arm has a wildcard or bind pattern, it's exhaustive
+    /// - If matching an enum, all variants must be covered
+    /// - Otherwise, emit a warning for patterns we can't fully analyze
+    fn check_exhaustiveness(
+        &self,
+        scrutinee_ty: Type<'db>,
+        arms: &[Arm<TypedRef<'db>>],
+        span_node_id: crate::ast::NodeId,
+    ) {
+        // Empty arms is definitely non-exhaustive
+        if arms.is_empty() {
+            let span = Span::new(0, 0); // TODO: Get proper span from scrutinee
+            Diagnostic {
+                message: "non-exhaustive case expression: no patterns provided".to_string(),
+                span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db());
+            return;
+        }
+
+        // Check if the last arm is a catch-all (wildcard or bind)
+        let last_arm = &arms[arms.len() - 1];
+        if self.is_catch_all_pattern(&last_arm.pattern) {
+            return; // Exhaustive via catch-all
+        }
+
+        // Extract the enum name from the scrutinee type
+        let enum_name = match scrutinee_ty.kind(self.db()) {
+            TypeKind::Named { name, .. } => *name,
+            TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
+                TypeKind::Named { name, .. } => *name,
+                _ => {
+                    // Can't determine type - emit warning
+                    self.emit_exhaustiveness_warning(span_node_id);
+                    return;
+                }
+            },
+            TypeKind::UniVar { .. } => {
+                // Type not yet resolved - can't check
+                return;
+            }
+            TypeKind::Int | TypeKind::Bool | TypeKind::String | TypeKind::Float => {
+                // Primitive types without catch-all are non-exhaustive
+                let span = Span::new(0, 0);
+                Diagnostic {
+                    message: "non-exhaustive case expression: not all cases are covered"
+                        .to_string(),
+                    span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::TypeChecking,
+                }
+                .accumulate(self.db());
+                return;
+            }
+            _ => {
+                self.emit_exhaustiveness_warning(span_node_id);
+                return;
+            }
+        };
+
+        // Look up the enum's variants
+        let Some(all_variants) = self.env.lookup_enum_variants(enum_name) else {
+            // Not a known enum - emit warning
+            self.emit_exhaustiveness_warning(span_node_id);
+            return;
+        };
+
+        // Collect covered variants from arms
+        let mut covered_variants: HashSet<Symbol> = HashSet::new();
+        for arm in arms {
+            self.collect_covered_variants(&arm.pattern, &mut covered_variants);
+        }
+
+        // Check if all variants are covered
+        let missing: Vec<_> = all_variants
+            .iter()
+            .filter(|v| !covered_variants.contains(v))
+            .collect();
+
+        if !missing.is_empty() {
+            let missing_names: Vec<_> = missing.iter().map(|s| s.to_string()).collect();
+            let span = Span::new(0, 0);
+            Diagnostic {
+                message: format!(
+                    "non-exhaustive case expression: missing variants: {}",
+                    missing_names.join(", ")
+                ),
+                span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db());
+        }
+    }
+
+    /// Check if a pattern is a catch-all (covers all values).
+    fn is_catch_all_pattern(&self, pattern: &Pattern<TypedRef<'db>>) -> bool {
+        match &*pattern.kind {
+            PatternKind::Wildcard => true,
+            PatternKind::Bind { .. } => true,
+            PatternKind::As { pattern, .. } => self.is_catch_all_pattern(pattern),
+            _ => false,
+        }
+    }
+
+    /// Collect variant names covered by a pattern.
+    fn collect_covered_variants(
+        &self,
+        pattern: &Pattern<TypedRef<'db>>,
+        covered: &mut HashSet<Symbol>,
+    ) {
+        match &*pattern.kind {
+            PatternKind::Variant { ctor, .. } => {
+                // Extract variant name from constructor
+                if let crate::ast::ResolvedRef::Constructor { id, .. } = &ctor.resolved {
+                    covered.insert(id.type_name(self.db()));
+                }
+            }
+            PatternKind::As { pattern, .. } => {
+                self.collect_covered_variants(pattern, covered);
+            }
+            _ => {}
+        }
+    }
+
+    /// Emit a warning for patterns we can't fully analyze.
+    fn emit_exhaustiveness_warning(&self, _span_node_id: crate::ast::NodeId) {
+        let span = Span::new(0, 0);
+        Diagnostic {
+            message: "exhaustiveness check: unable to verify all cases are covered".to_string(),
+            span,
+            severity: DiagnosticSeverity::Warning,
+            phase: CompilationPhase::TypeChecking,
+        }
+        .accumulate(self.db());
     }
 }

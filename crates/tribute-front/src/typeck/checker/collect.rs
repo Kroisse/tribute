@@ -250,6 +250,10 @@ impl<'db> TypeChecker<'db> {
         let scheme = TypeScheme::new(self.db(), type_params.clone(), enum_ty);
         self.env.register_type_def(name, scheme);
 
+        // Register enum variant names for exhaustiveness checking
+        let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name).collect();
+        self.env.register_enum_variants(name, variant_names);
+
         // Register constructors for each variant
         // Build name → BoundVar index lookup for type parameter resolution
         let type_param_indices: Vec<(Symbol, u32)> = e
