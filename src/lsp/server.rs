@@ -2142,4 +2142,111 @@ fn main() {
         let type_str = extract_hover_type(&hover).expect("Should have type content");
         assert_eq!(type_str, "Bool", "Bool literal True should have type Bool");
     }
+
+    #[test]
+    fn test_hover_type_content_for_let_binding_variable() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_let_binding");
+        // Test that let-bound variables have correctly inferred types
+        let source = r#"fn main() {
+    let x = 42
+    x
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'x' in the last line (line 2, character 4)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        // The variable x should have type Nat (inferred from the literal 42)
+        // NOT a univar like 'a' or '?0'
+        assert_eq!(
+            type_str, "Nat",
+            "Let-bound variable 'x' should have inferred type Nat, not a univar"
+        );
+    }
+
+    #[test]
+    fn test_hover_type_content_for_nested_block_variable() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_nested_block");
+        // Test that variables in nested blocks are correctly typed
+        let source = r#"fn main() {
+    let outer = {
+        let inner = "hello"
+        inner
+    }
+    outer
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'outer' in the last line (line 5, character 4)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 5,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        // outer should be String (from inner block's value)
+        assert_eq!(
+            type_str, "String",
+            "Nested block variable 'outer' should have type String"
+        );
+    }
+
+    #[test]
+    fn test_hover_type_content_for_multiple_let_bindings() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("hover_type_multiple_lets");
+        // Test multiple let bindings in sequence
+        let source = r#"fn main() {
+    let a = 1
+    let b = 2
+    let c = a + b
+    c
+}"#;
+
+        harness.open_document(&uri, source);
+
+        // Hover on 'c' in the last line (line 4, character 4)
+        let params = HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 4,
+                    character: 4,
+                },
+            },
+            work_done_progress_params: Default::default(),
+        };
+
+        let result: Option<Hover> = harness.request::<HoverRequest>(params);
+        let hover = result.expect("Hover should return type information");
+        let type_str = extract_hover_type(&hover).expect("Should have type content");
+        assert_eq!(
+            type_str, "Nat",
+            "Variable 'c' computed from other let-bound variables should have type Nat"
+        );
+    }
 }
