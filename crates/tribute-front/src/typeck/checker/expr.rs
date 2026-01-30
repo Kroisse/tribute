@@ -1468,3 +1468,657 @@ impl<'db> TypeChecker<'db> {
         .accumulate(self.db());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::{Symbol, SymbolVec};
+
+    use crate::ast::{
+        BuiltinRef, EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation,
+        TypeAnnotationKind, TypeKind,
+    };
+    use crate::typeck::{FunctionInferenceContext, ModuleTypeEnv};
+
+    use super::TypeChecker;
+
+    /// Helper to create a TypeChecker for testing.
+    fn make_test_checker(db: &dyn salsa::Database) -> TypeChecker<'_> {
+        TypeChecker::new(db, SpanMap::default())
+    }
+
+    /// Helper to create a FunctionInferenceContext for testing.
+    fn make_test_ctx<'a, 'db>(
+        db: &'db dyn salsa::Database,
+        env: &'a ModuleTypeEnv<'db>,
+    ) -> FunctionInferenceContext<'a, 'db> {
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        FunctionInferenceContext::new(db, env, func_id)
+    }
+
+    /// Helper to create a TypeAnnotation with a given kind.
+    fn make_annotation(kind: TypeAnnotationKind) -> TypeAnnotation {
+        TypeAnnotation {
+            id: NodeId::from_raw(0),
+            kind,
+        }
+    }
+
+    // =========================================================================
+    // infer_builtin_with_ctx tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_builtin_arithmetic_ops(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        for builtin in [
+            BuiltinRef::Add,
+            BuiltinRef::Sub,
+            BuiltinRef::Mul,
+            BuiltinRef::Div,
+            BuiltinRef::Mod,
+        ] {
+            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
+
+            // Should be fn(?a, ?a) -> ?a
+            if let TypeKind::Func {
+                params,
+                result,
+                effect,
+            } = ty.kind(db)
+            {
+                assert_eq!(params.len(), 2, "{:?} should have 2 params", builtin);
+                assert_eq!(
+                    params[0], params[1],
+                    "{:?} params should be same type",
+                    builtin
+                );
+                assert_eq!(
+                    params[0], *result,
+                    "{:?} param and result should be same",
+                    builtin
+                );
+                // Effect should be pure
+                assert!(effect.is_pure(db), "{:?} should be pure", builtin);
+                // Params should be UniVar (fresh type var)
+                assert!(
+                    matches!(params[0].kind(db), TypeKind::UniVar { .. }),
+                    "{:?} param should be UniVar",
+                    builtin
+                );
+            } else {
+                panic!(
+                    "{:?} should return Func type, got {:?}",
+                    builtin,
+                    ty.kind(db)
+                );
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_neg(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Neg);
+
+        // Should be fn(?a) -> ?a
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(db)
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], *result);
+            assert!(effect.is_pure(db));
+            assert!(matches!(params[0].kind(db), TypeKind::UniVar { .. }));
+        } else {
+            panic!("Neg should return Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_comparison_ops(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+
+        for builtin in [
+            BuiltinRef::Eq,
+            BuiltinRef::Ne,
+            BuiltinRef::Lt,
+            BuiltinRef::Le,
+            BuiltinRef::Gt,
+            BuiltinRef::Ge,
+        ] {
+            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
+
+            // Should be fn(?a, ?a) -> Bool
+            if let TypeKind::Func {
+                params,
+                result,
+                effect,
+            } = ty.kind(db)
+            {
+                assert_eq!(params.len(), 2, "{:?} should have 2 params", builtin);
+                assert_eq!(
+                    params[0], params[1],
+                    "{:?} params should be same type",
+                    builtin
+                );
+                assert_eq!(*result, bool_ty, "{:?} result should be Bool", builtin);
+                assert!(effect.is_pure(db), "{:?} should be pure", builtin);
+            } else {
+                panic!("{:?} should return Func type", builtin);
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_boolean_binary_ops(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+
+        for builtin in [BuiltinRef::And, BuiltinRef::Or] {
+            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
+
+            // Should be fn(Bool, Bool) -> Bool
+            if let TypeKind::Func {
+                params,
+                result,
+                effect,
+            } = ty.kind(db)
+            {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0], bool_ty);
+                assert_eq!(params[1], bool_ty);
+                assert_eq!(*result, bool_ty);
+                assert!(effect.is_pure(db));
+            } else {
+                panic!("{:?} should return Func type", builtin);
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_boolean_not(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+
+        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Not);
+
+        // Should be fn(Bool) -> Bool
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(db)
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], bool_ty);
+            assert_eq!(*result, bool_ty);
+            assert!(effect.is_pure(db));
+        } else {
+            panic!("Not should return Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_concat(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let string_ty = Type::new(db, TypeKind::String);
+
+        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Concat);
+
+        // Should be fn(String, String) -> String
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(db)
+        {
+            assert_eq!(params.len(), 2);
+            assert_eq!(params[0], string_ty);
+            assert_eq!(params[1], string_ty);
+            assert_eq!(*result, string_ty);
+            assert!(effect.is_pure(db));
+        } else {
+            panic!("Concat should return Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_list_ops(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // Cons: (a, List a) -> List a
+        let cons_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Cons);
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = cons_ty.kind(db)
+        {
+            assert_eq!(params.len(), 2);
+            // First param is element type
+            let elem_ty = params[0];
+            // Second param is List(elem_ty)
+            if let TypeKind::Named { name, args } = params[1].kind(db) {
+                assert_eq!(*name, Symbol::new("List"));
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], elem_ty);
+            } else {
+                panic!("Cons second param should be Named(List)");
+            }
+            // Result is List(elem_ty)
+            if let TypeKind::Named { name, args } = result.kind(db) {
+                assert_eq!(*name, Symbol::new("List"));
+                assert_eq!(args.len(), 1);
+                assert_eq!(args[0], elem_ty);
+            } else {
+                panic!("Cons result should be Named(List)");
+            }
+            assert!(effect.is_pure(db));
+        } else {
+            panic!("Cons should return Func type");
+        }
+
+        // ListConcat: (List a, List a) -> List a
+        let list_concat_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::ListConcat);
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = list_concat_ty.kind(db)
+        {
+            assert_eq!(params.len(), 2);
+            // Both params should be List types
+            assert_eq!(params[0], params[1]);
+            assert_eq!(params[0], *result);
+            if let TypeKind::Named { name, .. } = params[0].kind(db) {
+                assert_eq!(*name, Symbol::new("List"));
+            } else {
+                panic!("ListConcat params should be Named(List)");
+            }
+            assert!(effect.is_pure(db));
+        } else {
+            panic!("ListConcat should return Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_builtin_io_ops(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+        let nil_ty = Type::new(db, TypeKind::Nil);
+        let string_ty = Type::new(db, TypeKind::String);
+
+        // Print: (a) ->{?e} Nil
+        let print_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Print);
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = print_ty.kind(db)
+        {
+            assert_eq!(params.len(), 1);
+            // Param should be a fresh type var
+            assert!(matches!(params[0].kind(db), TypeKind::UniVar { .. }));
+            assert_eq!(*result, nil_ty);
+            // Effect should be open (fresh row var)
+            assert!(
+                effect.rest(db).is_some(),
+                "Print should have open effect row"
+            );
+        } else {
+            panic!("Print should return Func type");
+        }
+
+        // ReadLine: () ->{?e} String
+        let readline_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::ReadLine);
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = readline_ty.kind(db)
+        {
+            assert!(params.is_empty());
+            assert_eq!(*result, string_ty);
+            // Effect should be open (fresh row var)
+            assert!(
+                effect.rest(db).is_some(),
+                "ReadLine should have open effect row"
+            );
+        } else {
+            panic!("ReadLine should return Func type");
+        }
+    }
+
+    // =========================================================================
+    // annotation_to_type_with_ctx tests
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_annotation_primitive_types(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let cases = [
+            ("Int", TypeKind::Int),
+            ("Nat", TypeKind::Nat),
+            ("Float", TypeKind::Float),
+            ("Bool", TypeKind::Bool),
+            ("String", TypeKind::String),
+            ("Bytes", TypeKind::Bytes),
+            ("Rune", TypeKind::Rune),
+            ("Nil", TypeKind::Nil),
+        ];
+
+        for (name, expected_kind) in cases {
+            let ann = make_annotation(TypeAnnotationKind::Named(Symbol::new(name)));
+            let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+            let expected = Type::new(db, expected_kind);
+            assert_eq!(ty, expected, "Type annotation '{name}' mismatch");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_user_defined_type(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let ann = make_annotation(TypeAnnotationKind::Named(Symbol::new("MyType")));
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        // Should be Named { name: "MyType", args: [] }
+        if let TypeKind::Named { name, args } = ty.kind(db) {
+            assert_eq!(*name, Symbol::new("MyType"));
+            assert!(args.is_empty());
+        } else {
+            panic!("User-defined type should be Named");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_path(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        let ann = make_annotation(TypeAnnotationKind::Path(vec![
+            Symbol::new("std"),
+            Symbol::new("Option"),
+        ]));
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        // Should use last segment as name
+        if let TypeKind::Named { name, args } = ty.kind(db) {
+            assert_eq!(*name, Symbol::new("Option"));
+            assert!(args.is_empty());
+        } else {
+            panic!("Path type should be Named");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_app(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // List(Int)
+        let ann = make_annotation(TypeAnnotationKind::App {
+            ctor: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "List",
+            )))),
+            args: vec![make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Int",
+            )))],
+        });
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        // Should be Named { name: "List", args: [Int] }
+        if let TypeKind::Named { name, args } = ty.kind(db) {
+            assert_eq!(*name, Symbol::new("List"));
+            assert_eq!(args.len(), 1);
+            assert_eq!(args[0], Type::new(db, TypeKind::Int));
+        } else {
+            panic!("App type should be Named, got {:?}", ty.kind(db));
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_func_simple(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // fn(Int) -> Bool
+        let ann = make_annotation(TypeAnnotationKind::Func {
+            params: vec![make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Int",
+            )))],
+            result: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Bool",
+            )))),
+            abilities: vec![], // pure
+        });
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(db)
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], Type::new(db, TypeKind::Int));
+            assert_eq!(*result, Type::new(db, TypeKind::Bool));
+            // Empty abilities means open effect row (fresh row var)
+            assert!(effect.rest(db).is_some() || effect.is_pure(db));
+        } else {
+            panic!("Func annotation should be Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_func_with_effects(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // fn(Int) ->{IO} Bool
+        let ann = make_annotation(TypeAnnotationKind::Func {
+            params: vec![make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Int",
+            )))],
+            result: Box::new(make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "Bool",
+            )))),
+            abilities: vec![make_annotation(TypeAnnotationKind::Named(Symbol::new(
+                "IO",
+            )))],
+        });
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        if let TypeKind::Func {
+            params,
+            result,
+            effect,
+        } = ty.kind(db)
+        {
+            assert_eq!(params.len(), 1);
+            assert_eq!(params[0], Type::new(db, TypeKind::Int));
+            assert_eq!(*result, Type::new(db, TypeKind::Bool));
+            // Should have IO effect
+            let effects = effect.effects(db);
+            assert_eq!(effects.len(), 1);
+            assert_eq!(effects[0].name, Symbol::new("IO"));
+        } else {
+            panic!("Func annotation should be Func type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_tuple(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // (Int, String)
+        let ann = make_annotation(TypeAnnotationKind::Tuple(vec![
+            make_annotation(TypeAnnotationKind::Named(Symbol::new("Int"))),
+            make_annotation(TypeAnnotationKind::Named(Symbol::new("String"))),
+        ]));
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        if let TypeKind::Tuple(elems) = ty.kind(db) {
+            assert_eq!(elems.len(), 2);
+            assert_eq!(elems[0], Type::new(db, TypeKind::Int));
+            assert_eq!(elems[1], Type::new(db, TypeKind::String));
+        } else {
+            panic!("Tuple annotation should be Tuple type");
+        }
+    }
+
+    #[salsa_test]
+    fn test_annotation_infer(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // _
+        let ann = make_annotation(TypeAnnotationKind::Infer);
+        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+
+        // Should be fresh UniVar
+        assert!(
+            matches!(ty.kind(db), TypeKind::UniVar { .. }),
+            "Infer annotation should produce UniVar"
+        );
+    }
+
+    // =========================================================================
+    // substitute_bound_vars tests (via TypeChecker methods)
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_substitute_basic(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // BoundVar(0) + [Int] → Int
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let int_ty = Type::new(db, TypeKind::Int);
+        let args = vec![int_ty];
+
+        let result = checker.substitute_bound_vars(&mut ctx, bound_var, &args);
+        assert_eq!(result, int_ty);
+    }
+
+    #[salsa_test]
+    fn test_substitute_multiple(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // (BoundVar(0), BoundVar(1)) + [Int, Bool] → (Int, Bool)
+        let bound0 = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let bound1 = Type::new(db, TypeKind::BoundVar { index: 1 });
+        let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+        let args = vec![int_ty, bool_ty];
+
+        let result = checker.substitute_bound_vars(&mut ctx, tuple_ty, &args);
+        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, bool_ty]));
+        assert_eq!(result, expected);
+    }
+
+    #[salsa_test]
+    fn test_substitute_in_func(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // fn(BoundVar(0)) -> BoundVar(0) + [Int] → fn(Int) -> Int
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let effect = EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: bound_var,
+                effect,
+            },
+        );
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let args = vec![int_ty];
+
+        let result = checker.substitute_bound_vars(&mut ctx, func_ty, &args);
+        let expected = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert_eq!(result, expected);
+    }
+
+    #[salsa_test]
+    fn test_substitute_out_of_bounds_uses_fresh_var(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // BoundVar(5) + [Int] → fresh type var (out of bounds fallback)
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 5 });
+        let int_ty = Type::new(db, TypeKind::Int);
+        let args = vec![int_ty];
+
+        let result = checker.substitute_bound_vars(&mut ctx, bound_var, &args);
+        // Should be a fresh UniVar
+        assert!(
+            matches!(result.kind(db), TypeKind::UniVar { .. }),
+            "Out-of-bounds BoundVar should fall back to fresh UniVar"
+        );
+    }
+
+    #[salsa_test]
+    fn test_substitute_primitive_unchanged(db: &dyn salsa::Database) {
+        let checker = make_test_checker(db);
+        let env = ModuleTypeEnv::new(db);
+        let mut ctx = make_test_ctx(db, &env);
+
+        // Int + [Bool] → Int (primitives are unchanged)
+        let int_ty = Type::new(db, TypeKind::Int);
+        let bool_ty = Type::new(db, TypeKind::Bool);
+        let args = vec![bool_ty];
+
+        let result = checker.substitute_bound_vars(&mut ctx, int_ty, &args);
+        assert_eq!(result, int_ty);
+    }
+}

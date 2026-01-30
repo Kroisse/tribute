@@ -24,9 +24,10 @@ mod context;
 pub mod effect_row;
 mod func_context;
 mod solver;
+pub mod subst;
 
 pub use checker::{Mode, TypeChecker};
-pub use constraint::{Constraint, ConstraintSet, TypeVar};
+pub use constraint::{Constraint, ConstraintSet};
 pub use context::{ModuleTypeEnv, TypeContext};
 
 use crate::ast::SpanMap;
@@ -82,8 +83,11 @@ pub struct PreludeExports<'db> {
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
 }
 
-/// Type check a module and return both the typed AST and function type schemes.
-pub fn typecheck_module_full<'db>(
+/// Type check a module.
+///
+/// This is the main entry point for type checking.
+/// Returns both the typed AST and function type schemes.
+pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
     module: Module<ResolvedRef<'db>>,
     span_map: SpanMap,
@@ -91,17 +95,4 @@ pub fn typecheck_module_full<'db>(
     let checker = TypeChecker::new(db, span_map);
     let (typed_module, function_types) = checker.check_module(module);
     TypeCheckOutput::new(db, typed_module, function_types)
-}
-
-/// Type check a module.
-///
-/// This is the main entry point for type checking.
-pub fn typecheck_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<ResolvedRef<'db>>,
-    span_map: SpanMap,
-) -> Module<TypedRef<'db>> {
-    let checker = TypeChecker::new(db, span_map);
-    let (typed_module, _function_types) = checker.check_module(module);
-    typed_module
 }
