@@ -32,6 +32,13 @@ pub fn lower_module(
             continue;
         }
 
+        // Emit parse error diagnostic for ERROR nodes
+        if child.kind() == "ERROR" {
+            let span = trunk_ir::Span::new(child.start_byte(), child.end_byte());
+            ctx.parse_error(span, "syntax error: unexpected token");
+            continue;
+        }
+
         decls.extend(lower_decl(ctx, child));
     }
 

@@ -351,10 +351,18 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
     let mut stmts = Vec::new();
     let mut cursor = node.walk();
 
-    // Collect non-comment, non-error children
+    // Collect non-comment children, emitting diagnostics for ERROR nodes
     let children: Vec<_> = node
         .named_children(&mut cursor)
-        .filter(|c| !is_comment(c.kind()) && c.kind() != "ERROR")
+        .filter(|c| {
+            if c.kind() == "ERROR" {
+                let span = trunk_ir::Span::new(c.start_byte(), c.end_byte());
+                ctx.parse_error(span, "syntax error: unexpected token");
+                false
+            } else {
+                !is_comment(c.kind())
+            }
+        })
         .collect();
 
     // Process all but the last child as statements

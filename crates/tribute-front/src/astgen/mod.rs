@@ -49,12 +49,33 @@ fn lower_cst_to_ast_internal(
 ) -> LoweringResult {
     let mut ctx = AstLoweringCtx::new(source.clone());
     let root = cst.root_node();
+
+    // Check for ERROR nodes anywhere in the CST
+    collect_error_nodes(&mut ctx, root);
+
     let module = lower_module(&mut ctx, root, module_name);
     let (span_builder, diagnostics) = ctx.finish();
     LoweringResult {
         module,
         span_builder,
         diagnostics,
+    }
+}
+
+/// Recursively collect ERROR nodes from the CST and emit parse error diagnostics.
+fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
+    if node.kind() == "ERROR" {
+        let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
+        ctx.parse_error(span, "syntax error: unexpected token");
+        return; // Don't recurse into ERROR nodes
+    }
+
+    // Only recurse if there might be errors below
+    if node.has_error() {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_error_nodes(ctx, child);
+        }
     }
 }
 
