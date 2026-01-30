@@ -104,34 +104,74 @@ impl<'db> FuncDefId<'db> {
     }
 }
 
-/// A unique identifier for a constructor (enum variant or struct).
+/// A unique identifier for a type definition (struct or enum).
 ///
-/// CtorId is interned (not tracked) so that the same (module_path, type_name)
-/// always produces the same CtorId, regardless of where it's created.
+/// TypeDefId identifies the type definition itself, not its constructors.
+/// For example, `Option` as a type has one TypeDefId, while its constructors
+/// `Some` and `None` each have their own CtorId.
+///
+/// TypeDefId is interned (not tracked) so that the same (module_path, name)
+/// always produces the same TypeDefId, regardless of where it's created.
 #[salsa::interned(debug)]
-pub struct CtorId<'db> {
+pub struct TypeDefId<'db> {
     /// The module path (e.g., ["std", "option"]).
     #[returns(ref)]
     pub module_path: SymbolVec,
     /// The type name (enum or struct name).
-    pub type_name: Symbol,
+    pub name: Symbol,
 }
 
-impl<'db> CtorId<'db> {
+impl<'db> TypeDefId<'db> {
     /// Build a qualified name string for IR generation.
     ///
     /// Returns the full qualified name like "std::option::Option".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
         let module_path = self.module_path(db);
         if module_path.is_empty() {
-            self.type_name(db).to_string()
+            self.name(db).to_string()
         } else {
             let path_str = module_path
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>()
                 .join("::");
-            format!("{}::{}", path_str, self.type_name(db))
+            format!("{}::{}", path_str, self.name(db))
+        }
+    }
+}
+
+/// A unique identifier for a constructor (enum variant or struct constructor).
+///
+/// CtorId identifies a specific constructor, not the type itself.
+/// For structs, the struct name is both the type and its constructor.
+/// For enums, each variant has its own CtorId.
+///
+/// CtorId is interned (not tracked) so that the same (module_path, ctor_name)
+/// always produces the same CtorId, regardless of where it's created.
+#[salsa::interned(debug)]
+pub struct CtorId<'db> {
+    /// The module path (e.g., ["std", "option"]).
+    #[returns(ref)]
+    pub module_path: SymbolVec,
+    /// The constructor name (struct name or enum variant name).
+    pub ctor_name: Symbol,
+}
+
+impl<'db> CtorId<'db> {
+    /// Build a qualified name string for IR generation.
+    ///
+    /// Returns the full qualified name like "std::option::Some".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+        let module_path = self.module_path(db);
+        if module_path.is_empty() {
+            self.ctor_name(db).to_string()
+        } else {
+            let path_str = module_path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            format!("{}::{}", path_str, self.ctor_name(db))
         }
     }
 }
@@ -204,6 +244,18 @@ pub enum ResolvedRef<'db> {
         variant: Symbol,
     },
 
+    /// Reference to a type definition (struct or enum).
+    ///
+    /// This variant is used when a type name is referenced in expression context
+    /// without being resolved to a specific constructor. For structs, this is
+    /// typically overwritten by the Constructor binding. For enums, using the
+    /// enum name in expression context (e.g., `Option`) will resolve to this
+    /// variant, which should result in an error during type checking.
+    TypeDef {
+        /// The type definition ID.
+        id: TypeDefId<'db>,
+    },
+
     /// Reference to a builtin operation.
     Builtin(BuiltinRef),
 
@@ -225,6 +277,11 @@ impl<'db> ResolvedRef<'db> {
     /// Create a constructor reference.
     pub fn constructor(id: CtorId<'db>, variant: Symbol) -> Self {
         Self::Constructor { id, variant }
+    }
+
+    /// Create a type definition reference.
+    pub fn type_def(id: TypeDefId<'db>) -> Self {
+        Self::TypeDef { id }
     }
 
     /// Create a builtin reference.
