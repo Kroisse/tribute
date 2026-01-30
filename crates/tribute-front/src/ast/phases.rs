@@ -8,28 +8,37 @@
 //! The AST uses a generic parameter `V` that varies by phase, allowing
 //! the same structure to represent the AST at different compilation stages.
 
+use std::fmt::{self, Display, Formatter};
+
 use trunk_ir::{Symbol, SymbolVec};
 
 use super::node_id::NodeId;
 use super::types::Type;
 
 // ============================================================================
-// Helper functions
+// Helper types
 // ============================================================================
 
-/// Build a qualified name string from module path and name.
-///
-/// Returns the full qualified name like "foo::bar::name".
-fn build_qualified_name(module_path: &SymbolVec, name: Symbol) -> String {
-    if module_path.is_empty() {
-        name.to_string()
-    } else {
-        let path_str = module_path
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        format!("{}::{}", path_str, name)
+/// A qualified name that can be displayed efficiently without intermediate allocations.
+struct QualifiedName<'a> {
+    module_path: &'a SymbolVec,
+    name: Symbol,
+}
+
+impl Display for QualifiedName<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        for segment in self.module_path.iter() {
+            if !first {
+                f.write_str("::")?;
+            }
+            first = false;
+            segment.with_str(|s| f.write_str(s))?;
+        }
+        if !first {
+            f.write_str("::")?;
+        }
+        self.name.with_str(|s| f.write_str(s))
     }
 }
 
@@ -110,7 +119,11 @@ impl<'db> FuncDefId<'db> {
     ///
     /// Returns the full qualified name like "foo::bar::func_name".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        build_qualified_name(self.module_path(db), self.name(db))
+        QualifiedName {
+            module_path: self.module_path(db),
+            name: self.name(db),
+        }
+        .to_string()
     }
 }
 
@@ -136,7 +149,11 @@ impl<'db> TypeDefId<'db> {
     ///
     /// Returns the full qualified name like "std::option::Option".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        build_qualified_name(self.module_path(db), self.name(db))
+        QualifiedName {
+            module_path: self.module_path(db),
+            name: self.name(db),
+        }
+        .to_string()
     }
 }
 
@@ -162,7 +179,11 @@ impl<'db> CtorId<'db> {
     ///
     /// Returns the full qualified name like "std::option::Some".
     pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
-        build_qualified_name(self.module_path(db), self.ctor_name(db))
+        QualifiedName {
+            module_path: self.module_path(db),
+            name: self.ctor_name(db),
+        }
+        .to_string()
     }
 }
 
