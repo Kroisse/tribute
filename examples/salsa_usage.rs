@@ -1,10 +1,10 @@
 //! Example showing how to use the Salsa database for the Tribute language.
 //!
-//! This example demonstrates the CST→TrunkIR lowering pipeline.
+//! This example demonstrates the AST-based compilation pipeline.
 
 use salsa::Setter;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
+use tribute::{SourceCst, TributeDatabaseImpl, parse_and_lower_ast};
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::func;
 
@@ -37,7 +37,7 @@ fn basic_database_usage() {
     // Lower to TrunkIR using the convenience function
     let tree = parser.parse(source_code, None).expect("tree");
     let source = SourceCst::from_path(&db, "example.tr", source_code.into(), Some(tree));
-    let module = lower_source_cst(&db, source);
+    let module = parse_and_lower_ast(&db, source);
 
     // Get the operations from the module
     let body = module.body(&db);
@@ -77,7 +77,7 @@ fn incremental_compilation_demo() {
 
     // Lower it
     println!("Initial lowering...");
-    let module1 = lower_source_cst(&db, source_file);
+    let module1 = parse_and_lower_ast(&db, source_file);
     let body1 = module1.body(&db);
     let blocks1 = body1.blocks(&db);
     if !blocks1.is_empty() {
@@ -92,7 +92,7 @@ fn incremental_compilation_demo() {
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - Salsa will automatically detect the change and recompute
-    let module2 = lower_source_cst(&db, source_file);
+    let module2 = parse_and_lower_ast(&db, source_file);
     let body2 = module2.body(&db);
     let blocks2 = body2.blocks(&db);
     if !blocks2.is_empty() {
@@ -103,7 +103,7 @@ fn incremental_compilation_demo() {
     }
 
     // Lower again without changes - this should use the cached result
-    let module3 = lower_source_cst(&db, source_file);
+    let module3 = parse_and_lower_ast(&db, source_file);
     println!(
         "Cached result identical: {}",
         module2.body(&db).blocks(&db).len() == module3.body(&db).blocks(&db).len()

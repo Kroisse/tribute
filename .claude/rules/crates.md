@@ -25,11 +25,16 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## tribute-front
 
-**Role**: Front-end utilities (CST parsing/lowering and text helpers)
+**Role**: Front-end utilities (CST parsing, AST lowering, and text helpers)
 
 **Key Modules**:
-- `tirgen/` - TrunkIR generation from CST (Tree-sitter)
-- `line_index.rs` - Text/position conversions for editor integrations
+- `astgen/` - CST to AST lowering
+- `ast/` - Salsa-tracked AST types with phase-parameterized name resolution
+- `resolve.rs` - Name resolution (AST → AST)
+- `typeck/` - Type checking (AST → AST)
+- `tdnr.rs` - Type-directed name resolution (AST → AST)
+- `ast_to_ir/` - AST to TrunkIR lowering
+- `query.rs` - Salsa-tracked query functions (including CST parsing)
 - `source_file.rs` - `SourceCst` input and URI helpers
 
 **Location**: `crates/tribute-front/`

@@ -3,6 +3,7 @@ use std::path::Path;
 use fluent_uri::Uri;
 use ropey::Rope;
 use tree_sitter::{Parser, Tree};
+use trunk_ir::{PathId, Symbol};
 
 #[salsa::input(debug)]
 pub struct SourceCst {
@@ -52,4 +53,17 @@ fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
     let (chunk, chunk_start, _, _) = rope.chunk_at_byte(byte);
     let start = byte - chunk_start;
     &chunk.as_bytes()[start..]
+}
+
+/// Derive a module name from a PathId.
+///
+/// Extracts the file stem (filename without extension) from the URI path.
+/// Falls back to "main" if the path cannot be parsed.
+pub fn derive_module_name_from_path(db: &dyn salsa::Database, path: PathId<'_>) -> Symbol {
+    let uri_str = path.uri(db);
+    std::path::Path::new(uri_str)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(Symbol::from_dynamic)
+        .unwrap_or_else(|| Symbol::new("main"))
 }

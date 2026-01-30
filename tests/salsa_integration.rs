@@ -1,17 +1,41 @@
-//! Salsa integration tests for CST→TrunkIR lowering.
+//! Salsa integration tests for AST-based compilation pipeline.
 
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, lower_source_cst};
+use tribute::{SourceCst, TributeDatabaseImpl, parse_and_lower_ast};
 use trunk_ir::DialectOp;
+use trunk_ir::dialect::func;
+
+/// Helper to count user functions (excluding prelude) by checking for specific names.
+fn find_func_by_name<'db>(
+    db: &'db dyn salsa::Database,
+    module: &trunk_ir::dialect::core::Module<'db>,
+    name: &str,
+) -> bool {
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+    if blocks.is_empty() {
+        return false;
+    }
+
+    blocks[0].operations(db).iter().any(|op| {
+        func::Func::from_operation(db, *op)
+            .map(|f| f.name(db) == name)
+            .unwrap_or(false)
+    })
+}
 
 #[salsa_test]
 fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     // Example source code
     let examples = vec![
-        ("hello.trb", r#"fn main() { print_line("Hello, World!") }"#),
-        ("calc.trb", r#"fn main() { 1 + 2 + 3 }"#),
+        (
+            "hello.trb",
+            r#"fn main() { print_line("Hello, World!") }"#,
+            vec!["main"],
+        ),
+        ("calc.trb", r#"fn main() { 1 + 2 + 3 }"#, vec!["main"]),
         (
             "complex.trb",
             r#"
@@ -26,42 +50,27 @@ fn main() {
   factorial(5)
 }
 "#,
+            vec!["factorial", "main"],
         ),
     ];
 
-    for (filename, source_code) in examples {
+    for (filename, source_code, expected_funcs) in examples {
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let module = lower_source_cst(db, source_file);
+        let module = parse_and_lower_ast(db, source_file);
 
-        // Count top-level operations in the module
-        let body = module.body(db);
-        let blocks = body.blocks(db);
-        let op_count = if blocks.is_empty() {
-            0
-        } else {
-            blocks[0].operations(db).len()
-        };
-
-        // Verify parsing results
-        assert!(
-            op_count > 0,
-            "Should produce at least one operation for {}",
-            filename
-        );
-
-        match filename {
-            "hello.trb" | "calc.trb" => {
-                assert_eq!(op_count, 1, "Simple examples should have 1 function");
-            }
-            "complex.trb" => {
-                assert_eq!(op_count, 2, "Complex example should have 2 functions");
-            }
-            _ => {}
+        // Verify that expected user functions exist
+        for func_name in expected_funcs {
+            assert!(
+                find_func_by_name(db, &module, func_name),
+                "Expected function '{}' not found in {}",
+                func_name,
+                filename
+            );
         }
     }
 }
@@ -79,12 +88,11 @@ fn test_salsa_incremental_computation_detailed() {
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let module1 = lower_source_cst(&db, source_file);
-    let body1 = module1.body(&db);
-    let blocks1 = body1.blocks(&db);
-    assert!(!blocks1.is_empty());
-    let op_count1 = blocks1[0].operations(&db).len();
-    assert_eq!(op_count1, 1);
+    let module1 = parse_and_lower_ast(&db, source_file);
+    assert!(
+        find_func_by_name(&db, &module1, "main"),
+        "Should have main function"
+    );
 
     // Modify the source file
     let updated_text = "fn main() { 1 + 2 + 3 + 4 }";
@@ -93,15 +101,14 @@ fn test_salsa_incremental_computation_detailed() {
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - should recompute
-    let module2 = lower_source_cst(&db, source_file);
-    let body2 = module2.body(&db);
-    let blocks2 = body2.blocks(&db);
-    assert!(!blocks2.is_empty());
-    let op_count2 = blocks2[0].operations(&db).len();
-    assert_eq!(op_count2, 1);
+    let module2 = parse_and_lower_ast(&db, source_file);
+    assert!(
+        find_func_by_name(&db, &module2, "main"),
+        "Should have main function after update"
+    );
 
     // Lower again without changes - should use cached result
-    let module3 = lower_source_cst(&db, source_file);
+    let module3 = parse_and_lower_ast(&db, source_file);
 
     // Verify that cached results are the same
     assert_eq!(
@@ -124,17 +131,21 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let module = lower_source_cst(db, source);
+    let module = parse_and_lower_ast(db, source);
 
-    let body = module.body(db);
-    let blocks = body.blocks(db);
-    let op_count = if blocks.is_empty() {
-        0
-    } else {
-        blocks[0].operations(db).len()
-    };
-
-    assert_eq!(op_count, 3, "Should have 3 functions");
+    // Verify all user functions exist
+    assert!(
+        find_func_by_name(db, &module, "add"),
+        "Should have add function"
+    );
+    assert!(
+        find_func_by_name(db, &module, "multiply"),
+        "Should have multiply function"
+    );
+    assert!(
+        find_func_by_name(db, &module, "main"),
+        "Should have main function"
+    );
 }
 
 #[test]
@@ -148,7 +159,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let module1 = lower_source_cst(db, source1);
+        let module1 = parse_and_lower_ast(db, source1);
         module1.name(db).to_string()
     });
 
@@ -160,7 +171,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let module2 = lower_source_cst(db, source2);
+        let module2 = parse_and_lower_ast(db, source2);
         module2.name(db).to_string()
     });
 
@@ -171,8 +182,6 @@ fn test_salsa_database_isolation() {
 
 #[salsa_test]
 fn test_function_lowering(db: &salsa::DatabaseImpl) {
-    use trunk_ir::dialect::func;
-
     let source = "fn main() { 1 + 2 }";
     let mut parser = Parser::new();
     parser
@@ -180,16 +189,11 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let module = lower_source_cst(db, source_file);
+    let module = parse_and_lower_ast(db, source_file);
 
-    let body = module.body(db);
-    let blocks = body.blocks(db);
-    assert!(!blocks.is_empty());
-
-    let ops = blocks[0].operations(db);
-    assert_eq!(ops.len(), 1);
-
-    // Check that the operation is a func.func
-    let func_op = func::Func::from_operation(db, ops[0]).expect("Should be a func.func");
-    assert_eq!(func_op.name(db), "main");
+    // Verify the main function exists
+    assert!(
+        find_func_by_name(db, &module, "main"),
+        "Should have main function"
+    );
 }

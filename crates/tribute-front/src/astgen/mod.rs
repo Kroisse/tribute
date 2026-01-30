@@ -17,8 +17,8 @@ mod helpers;
 mod patterns;
 
 use crate::ast::{Module, SpanMap, SpanMapBuilder, UnresolvedName};
+use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
-use crate::tirgen::ParsedCst;
 use ropey::Rope;
 
 pub use context::AstLoweringCtx;
@@ -124,7 +124,7 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     source: SourceCst,
     module_path: Option<trunk_ir::Symbol>,
 ) -> Option<ParsedAst<'db>> {
-    use crate::tirgen::parse_cst;
+    use crate::query::parse_cst;
 
     use salsa::Accumulator;
 

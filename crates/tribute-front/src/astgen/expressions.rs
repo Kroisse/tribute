@@ -11,7 +11,6 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::helpers::is_comment;
 use super::patterns::lower_pattern;
-use crate::tirgen::parse_rune_literal;
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
@@ -916,5 +915,32 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
             .unwrap_or("")
             .as_bytes()
             .to_vec()
+    }
+}
+
+/// Parse a rune (character) literal.
+fn parse_rune_literal(text: &str) -> Option<char> {
+    // Format: ?c, ?\n, ?\xHH, ?\uHHHH
+    let text = text.strip_prefix('?')?;
+
+    if let Some(escape) = text.strip_prefix('\\') {
+        match escape.chars().next()? {
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            '\\' => Some('\\'),
+            '0' => Some('\0'),
+            'x' => {
+                let hex = &escape[1..];
+                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+            }
+            'u' => {
+                let hex = &escape[1..];
+                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+            }
+            _ => None,
+        }
+    } else {
+        text.chars().next()
     }
 }

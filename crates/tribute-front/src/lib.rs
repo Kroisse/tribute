@@ -13,7 +13,6 @@
 //! - [`ast_to_ir`]: AST to TrunkIR lowering
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
 //! - [`source_file`]: Source file management and URI handling
-//! - [`tirgen`]: CST to TrunkIR lowering (legacy, to be replaced by astgen)
 
 pub mod ast;
 pub mod ast_to_ir;
@@ -22,12 +21,11 @@ pub mod query;
 pub mod resolve;
 pub mod source_file;
 pub mod tdnr;
-pub mod tirgen;
 pub mod typeck;
 
 pub use fluent_uri::Uri;
-pub use source_file::{SourceCst, path_to_uri};
-pub use tirgen::{ParsedCst, derive_module_name_from_path, lower_cst, lower_source_cst, parse_cst};
+pub use query::{ParsedCst, parse_cst};
+pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
 use trunk_ir::Symbol;
 
