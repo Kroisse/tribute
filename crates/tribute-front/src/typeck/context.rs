@@ -776,6 +776,7 @@ mod tests {
     use super::*;
     use crate::ast::{Effect, TypeParam, TypeScheme};
     use salsa_test_macros::salsa_test;
+    use trunk_ir::SymbolVec;
 
     /// Create a type parameter with just a name.
     fn type_param(name: Symbol) -> TypeParam {
@@ -791,7 +792,7 @@ mod tests {
 
         // Create a polymorphic function type: forall a. a -> a
         let name = Symbol::new("identity");
-        let func_id = FuncDefId::new(db, name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), name);
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let effect = EffectRow::pure(db);
@@ -855,7 +856,7 @@ mod tests {
 
         // forall a. a -> Option a
         let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
@@ -895,8 +896,8 @@ mod tests {
     fn test_different_functions_inner<'db>(db: &'db dyn salsa::Database) -> bool {
         let mut ctx = TypeContext::new(db);
 
-        let func_id1 = FuncDefId::new(db, Symbol::new("f1"));
-        let func_id2 = FuncDefId::new(db, Symbol::new("f2"));
+        let func_id1 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("f1"));
+        let func_id2 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("f2"));
 
         // forall a. a -> a
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
@@ -1042,8 +1043,8 @@ mod tests {
 
         let f1_name = Symbol::new("foo");
         let f2_name = Symbol::new("bar");
-        let f1_id = FuncDefId::new(db, f1_name);
-        let f2_id = FuncDefId::new(db, f2_name);
+        let f1_id = FuncDefId::new(db, SymbolVec::new(), f1_name);
+        let f2_id = FuncDefId::new(db, SymbolVec::new(), f2_name);
 
         let int_ty = ctx.int_type();
         let scheme1 = TypeScheme::new(db, vec![], int_ty);

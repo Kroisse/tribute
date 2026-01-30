@@ -20,10 +20,10 @@ mod resolver;
 pub use env::{Binding, ModuleEnv};
 pub use resolver::Resolver;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, smallvec::SmallVec};
 
 use crate::ast::{CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, UnresolvedName};
-use crate::{build_qualified_field_name, build_qualified_func_name};
+use crate::build_field_module_path;
 
 /// Resolve names in a module.
 ///
@@ -84,22 +84,22 @@ fn collect_definition<'db>(
     decl: &Decl<UnresolvedName>,
     module_path: &[Symbol],
 ) {
+    let path_vec = SmallVec::from_slice(module_path);
+
     match decl {
         Decl::Function(func) => {
-            let qualified_name = build_qualified_func_name(module_path, func.name);
-            let id = FuncDefId::new(db, qualified_name);
+            let id = FuncDefId::new(db, path_vec.clone(), func.name);
             env.add_function(func.name, id);
         }
 
         Decl::ExternFunction(func) => {
-            let qualified_name = build_qualified_func_name(module_path, func.name);
-            let id = FuncDefId::new(db, qualified_name);
+            let id = FuncDefId::new(db, path_vec.clone(), func.name);
             env.add_function(func.name, id);
         }
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let ctor_id = CtorId::new(db, s.name);
+            let ctor_id = CtorId::new(db, path_vec.clone(), s.name);
             env.add_type(s.name, ctor_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
 
@@ -107,11 +107,10 @@ fn collect_definition<'db>(
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
             for field in &s.fields {
                 if let Some(field_name) = field.name {
-                    // Build qualified name to avoid FuncDefId collisions across modules
-                    // e.g., "foo::Point::x" instead of just "x"
-                    let qualified_name =
-                        build_qualified_field_name(module_path, s.name, field_name);
-                    let func_id = FuncDefId::new(db, qualified_name);
+                    // Build qualified path to avoid FuncDefId collisions across modules
+                    // e.g., ["foo", "Point"] for field "x" instead of just "x"
+                    let field_path = build_field_module_path(module_path, s.name);
+                    let func_id = FuncDefId::new(db, field_path, field_name);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
                     env.add_to_namespace(s.name, field_name, binding);
@@ -121,12 +120,12 @@ fn collect_definition<'db>(
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let ctor_id = CtorId::new(db, e.name);
+            let ctor_id = CtorId::new(db, path_vec.clone(), e.name);
             env.add_type(e.name, ctor_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_id = CtorId::new(db, variant.name);
+                let variant_id = CtorId::new(db, path_vec.clone(), variant.name);
                 let binding = Binding::Constructor {
                     id: variant_id,
                     tag: Some(variant.name),
@@ -147,10 +146,10 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
-                // Build qualified name to avoid FuncDefId collisions across modules
-                // e.g., "foo::MyAbility::op" instead of just "MyAbility::op"
-                let qualified_name = build_qualified_field_name(module_path, a.name, op.name);
-                let func_id = FuncDefId::new(db, qualified_name);
+                // Build qualified path to avoid FuncDefId collisions across modules
+                // e.g., ["foo", "MyAbility"] for operation "op"
+                let op_path = build_field_module_path(module_path, a.name);
+                let func_id = FuncDefId::new(db, op_path, op.name);
                 let binding = Binding::Function { id: func_id };
                 env.add_to_namespace(a.name, op.name, binding);
             }

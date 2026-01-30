@@ -24,9 +24,9 @@ mod collect;
 mod expr;
 mod func_check;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolVec, smallvec::SmallVec};
 
-use crate::ast::{Decl, Module, ResolvedRef, Type, TypeScheme, TypedRef};
+use crate::ast::{Decl, FuncDefId, Module, ResolvedRef, Type, TypeScheme, TypedRef};
 
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
@@ -61,23 +61,14 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Build a qualified function name from the current module path and function name.
-    pub(crate) fn qualified_func_name(&self, name: Symbol) -> Symbol {
-        if self.module_path.is_empty() {
-            name
-        } else {
-            // Join module path with "::" separator
-            let mut qualified = String::new();
-            for part in &self.module_path {
-                if !qualified.is_empty() {
-                    qualified.push_str("::");
-                }
-                qualified.push_str(&part.to_string());
-            }
-            qualified.push_str("::");
-            qualified.push_str(&name.to_string());
-            Symbol::from_dynamic(&qualified)
-        }
+    /// Get the current module path as a SymbolVec.
+    pub(crate) fn current_module_path(&self) -> SymbolVec {
+        SmallVec::from_slice(&self.module_path)
+    }
+
+    /// Create a FuncDefId from the current module path and function name.
+    pub(crate) fn func_def_id(&self, name: Symbol) -> FuncDefId<'db> {
+        FuncDefId::new(self.db(), self.current_module_path(), name)
     }
 
     /// Get the database.

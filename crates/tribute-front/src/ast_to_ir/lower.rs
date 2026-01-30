@@ -389,7 +389,7 @@ fn lower_expr<'db>(
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = id.name(builder.db());
+                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
                 let func_ty = builder.ctx.convert_type(typed_ref.ty);
                 let op =
                     builder
@@ -440,7 +440,7 @@ fn lower_expr<'db>(
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
-                        let callee_name = id.name(builder.db());
+                        let callee_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op = builder.block.op(func::call(
                             builder.db(),
@@ -1726,6 +1726,7 @@ mod tests {
     use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectOp;
+    use trunk_ir::SymbolVec;
     use trunk_ir::dialect::func;
 
     fn fresh_node_id() -> NodeId {
@@ -3068,7 +3069,7 @@ mod tests {
                 effect,
             },
         );
-        let func_id = FuncDefId::new(db, callee_name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), callee_name);
         let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
         let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
         let call = call_expr(callee, vec![int_lit_expr(arg1), int_lit_expr(arg2)]);
@@ -3097,7 +3098,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
         let ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -3127,7 +3128,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
         let callee_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -3520,7 +3521,7 @@ mod tests {
         let v_id = LocalId::new(1);
 
         // Some(v) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,
@@ -3532,7 +3533,7 @@ mod tests {
         let v_ref = TypedRef::new(ResolvedRef::local(v_id, v_name), int_ty);
 
         // None pattern
-        let none_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let none_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let none_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: none_ctor_id,
@@ -3889,7 +3890,7 @@ mod tests {
                 effect,
             },
         );
-        let func_id = FuncDefId::new(db, Symbol::new("add"));
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("add"));
         let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
         let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
 
@@ -3934,7 +3935,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, Symbol::new("Pair"));
+        let ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Pair"));
         let ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -4122,7 +4123,7 @@ mod tests {
         let scrutinee = var_expr(opt_ref);
 
         // Some(x) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,
@@ -4233,7 +4234,7 @@ mod tests {
         let scrutinee = var_expr(opt_ref);
 
         // Some(x) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,

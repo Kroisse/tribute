@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, FuncDefId, Module, ResolvedRef, StructDecl,
-    Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
+    CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module, ResolvedRef, StructDecl, Type,
+    TypeKind, TypeParam, TypeScheme, is_type_variable,
 };
 
 use super::TypeChecker;
@@ -124,9 +124,8 @@ impl<'db> TypeChecker<'db> {
 
         let scheme = TypeScheme::new(self.db(), type_params, func_ty);
 
-        // Register the function with its FuncDefId (using qualified name)
-        let qualified_name = self.qualified_func_name(func.name);
-        let func_id = FuncDefId::new(self.db(), qualified_name);
+        // Register the function with its FuncDefId
+        let func_id = self.func_def_id(func.name);
         self.env.register_function(func_id, scheme);
     }
 
@@ -168,7 +167,8 @@ impl<'db> TypeChecker<'db> {
 
         let scheme = TypeScheme::new(self.db(), type_params, func_ty);
 
-        let func_id = FuncDefId::new(self.db(), func.name);
+        // Extern functions use an empty module path (they're always at root level)
+        let func_id = self.func_def_id(func.name);
         self.env.register_function(func_id, scheme);
     }
 
@@ -216,7 +216,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-        let ctor_id = crate::ast::CtorId::new(self.db(), name);
+        let ctor_id = CtorId::new(self.db(), self.current_module_path(), name);
         self.env.register_constructor(ctor_id, ctor_scheme);
 
         // Register struct field information for accessor resolution
@@ -279,7 +279,7 @@ impl<'db> TypeChecker<'db> {
             };
 
             let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-            let ctor_id = crate::ast::CtorId::new(self.db(), variant.name);
+            let ctor_id = CtorId::new(self.db(), self.current_module_path(), variant.name);
             self.env.register_constructor(ctor_id, ctor_scheme);
         }
     }

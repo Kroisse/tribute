@@ -27,42 +27,14 @@ pub use fluent_uri::Uri;
 pub use query::{ParsedCst, parse_cst};
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolVec, smallvec::SmallVec};
 
-/// Build a qualified name for a function.
+/// Build a module path for a struct field or ability operation.
 ///
-/// This ensures that FuncDefIds are unique across modules.
-/// For example, `foo::bar::my_func` instead of just `my_func`.
-pub fn build_qualified_func_name(module_path: &[Symbol], func_name: Symbol) -> Symbol {
-    if module_path.is_empty() {
-        func_name
-    } else {
-        let path_str = module_path
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        Symbol::from_dynamic(&format!("{}::{}", path_str, func_name))
-    }
-}
-
-/// Build a qualified name for a struct field or ability operation.
-///
-/// This ensures that FuncDefIds are unique across modules.
-/// For example, `foo::Point::x` instead of just `x` or `Point::x`.
-pub fn build_qualified_field_name(
-    module_path: &[Symbol],
-    type_name: Symbol,
-    field_name: Symbol,
-) -> Symbol {
-    if module_path.is_empty() {
-        Symbol::from_dynamic(&format!("{}::{}", type_name, field_name))
-    } else {
-        let path_str = module_path
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<_>>()
-            .join("::");
-        Symbol::from_dynamic(&format!("{}::{}::{}", path_str, type_name, field_name))
-    }
+/// Appends the type name to the module path, creating a path like ["foo", "Point"]
+/// for a field accessor like `Point::x` in module `foo`.
+pub fn build_field_module_path(module_path: &[Symbol], type_name: Symbol) -> SymbolVec {
+    let mut path: SymbolVec = SmallVec::from_slice(module_path);
+    path.push(type_name);
+    path
 }

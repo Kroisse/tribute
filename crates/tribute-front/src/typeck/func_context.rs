@@ -413,6 +413,7 @@ mod tests {
     use super::*;
     use crate::ast::TypeParam;
     use salsa_test_macros::salsa_test;
+    use trunk_ir::SymbolVec;
 
     /// Create a type parameter with just a name.
     fn type_param(name: Symbol) -> TypeParam {
@@ -464,7 +465,7 @@ mod tests {
 
         // Create a polymorphic function type: forall a. a -> a
         let name = Symbol::new("identity");
-        let func_id = FuncDefId::new(db, name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), name);
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let effect = EffectRow::pure(db);
