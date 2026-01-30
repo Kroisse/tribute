@@ -4,12 +4,11 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::ModulePathExt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core;
-use trunk_ir::{DialectType, Location, Operation, PathId, Symbol, Type, Value};
+use trunk_ir::{DialectType, Location, Operation, PathId, Symbol, SymbolVec, Type, Value};
 
-use crate::ast::{LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
+use crate::ast::{CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
 
 /// Information about a captured variable.
 #[derive(Clone, Debug)]
@@ -34,12 +33,15 @@ pub struct IrLoweringCtx<'db> {
     scopes: Vec<HashMap<LocalId, (Symbol, Value<'db>)>>,
     /// Function type schemes from type checking, keyed by function name.
     function_types: HashMap<Symbol, TypeScheme<'db>>,
-    /// Module path for generating qualified lambda names (e.g., "std::Option").
-    module_path: Symbol,
+    /// Module path as a vector of segments (e.g., ["std", "Option"]).
+    module_path: SymbolVec,
     /// Counter for generating unique lambda names.
     lambda_counter: u64,
     /// Lifted lambda functions to be added at module level.
     lifted_functions: Vec<Operation<'db>>,
+    /// Struct field order: CtorId → [field_names in definition order].
+    /// Used for lowering Record expressions to adt.struct_new.
+    struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -49,7 +51,7 @@ impl<'db> IrLoweringCtx<'db> {
         path: PathId<'db>,
         span_map: SpanMap,
         function_types: HashMap<Symbol, TypeScheme<'db>>,
-        module_path: Symbol,
+        module_path: SymbolVec,
     ) -> Self {
         Self {
             db,
@@ -60,24 +62,23 @@ impl<'db> IrLoweringCtx<'db> {
             module_path,
             lambda_counter: 0,
             lifted_functions: Vec::new(),
+            struct_fields: HashMap::new(),
         }
     }
 
     /// Get the current module path.
-    pub fn module_path(&self) -> Symbol {
-        self.module_path
+    pub fn module_path(&self) -> &SymbolVec {
+        &self.module_path
     }
 
     /// Enter a nested module, updating the module path.
     pub fn enter_module(&mut self, name: Symbol) {
-        self.module_path = self.module_path.join_path(name);
+        self.module_path.push(name);
     }
 
     /// Exit a nested module, restoring the parent module path.
     pub fn exit_module(&mut self) {
-        if let Some(parent) = self.module_path.parent_path() {
-            self.module_path = parent;
-        }
+        self.module_path.pop();
     }
 
     /// Create a location for a node.
@@ -129,11 +130,22 @@ impl<'db> IrLoweringCtx<'db> {
         None
     }
 
-    /// Generate a unique lambda name qualified with module name.
+    /// Generate a unique lambda name qualified with module path.
     pub fn gen_lambda_name(&mut self) -> Symbol {
-        let name = Symbol::from_dynamic(&format!("__lambda_{}", self.lambda_counter));
+        let lambda_name = format!("__lambda_{}", self.lambda_counter);
         self.lambda_counter += 1;
-        self.module_path.join_path(name)
+
+        if self.module_path.is_empty() {
+            Symbol::from_dynamic(&lambda_name)
+        } else {
+            let path_str = self
+                .module_path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            Symbol::from_dynamic(&format!("{}::{}", path_str, lambda_name))
+        }
     }
 
     /// Add a lifted function to be included in the module.
@@ -144,6 +156,16 @@ impl<'db> IrLoweringCtx<'db> {
     /// Take all lifted functions (consumes them).
     pub fn take_lifted_functions(&mut self) -> Vec<Operation<'db>> {
         std::mem::take(&mut self.lifted_functions)
+    }
+
+    /// Register struct field order for lowering Record expressions.
+    pub fn register_struct_fields(&mut self, ctor_id: CtorId<'db>, field_names: Vec<Symbol>) {
+        self.struct_fields.insert(ctor_id, field_names);
+    }
+
+    /// Get struct field order (for lowering Record → adt.struct_new).
+    pub fn get_struct_field_order(&self, ctor_id: CtorId<'db>) -> Option<&Vec<Symbol>> {
+        self.struct_fields.get(&ctor_id)
     }
 
     /// Get all bindings visible in the current scope (for capture analysis).
@@ -228,7 +250,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         let ty = AstType::new(db, TypeKind::BoundVar { index: 0 });
@@ -244,7 +266,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         let int_ty = AstType::new(db, TypeKind::Int);
@@ -267,7 +289,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         let int_ty = AstType::new(db, TypeKind::Int);
@@ -285,7 +307,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         let bound_var = AstType::new(db, TypeKind::BoundVar { index: 0 });
@@ -314,7 +336,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         // Int → I64
@@ -357,7 +379,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             ft,
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
         assert_eq!(ctx.lookup_function_type(name), Some(&scheme));
     }
@@ -370,7 +392,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
         assert_eq!(ctx.lookup_function_type(Symbol::new("missing")), None);
     }

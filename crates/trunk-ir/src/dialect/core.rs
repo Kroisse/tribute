@@ -553,8 +553,8 @@ use std::fmt::{self, Write};
 
 use crate::type_interface::{PrintContext, Printable};
 
-// nil -> "()"
-inventory::submit! { Printable::implement("core", "nil", |_, _, f| f.write_str("()")) }
+// nil -> "Nil"
+inventory::submit! { Printable::implement("core", "nil", |_, _, f| f.write_str("Nil")) }
 
 // never -> "Never"
 inventory::submit! { Printable::implement("core", "never", |_, _, f| f.write_str("Never")) }

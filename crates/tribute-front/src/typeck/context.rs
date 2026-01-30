@@ -1,37 +1,38 @@
 //! Type checking context.
 //!
-//! The context tracks type bindings, function signatures, and other information
-//! needed during type checking.
+//! This module provides `ModuleTypeEnv`, which holds module-level type information
+//! (function/constructor/type definitions). This is populated during collect_declarations
+//! and is read-only afterward.
+//!
+//! For function-level type inference, see `FunctionInferenceContext` in `func_context.rs`.
 
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{
-    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
-    UniVarSource,
-};
+use crate::ast::{CtorId, EffectRow, FuncDefId, Type, TypeKind, TypeParam, TypeScheme};
 
-use super::constraint::ConstraintSet;
+// =========================================================================
+// ModuleTypeEnv: Module-level type information (read-only after collection)
+// =========================================================================
 
-/// Type checking context.
+/// Struct field information: (type_params, fields).
+/// - type_params: The struct's type parameters for field type generalization
+/// - fields: Vec of (field_name, field_type) pairs
+pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
+
+/// Module-level type environment.
 ///
-/// Tracks type information during type checking:
-/// - Local variable types
-/// - Function signatures
-/// - Type definitions (structs, enums)
-/// - Current effect accumulation
-pub struct TypeContext<'db> {
+/// This struct holds type information that is shared across all functions in a module:
+/// - Function type schemes (polymorphic signatures)
+/// - Constructor type schemes (for enum variants)
+/// - Type definitions (struct/enum type schemes)
+/// - Struct field definitions for UFCS/accessor resolution
+///
+/// After `collect_declarations` populates this, it becomes read-only during
+/// function body type checking.
+pub struct ModuleTypeEnv<'db> {
     db: &'db dyn salsa::Database,
-
-    /// Types of local variables.
-    local_types: HashMap<LocalId, Type<'db>>,
-
-    /// Types of local variables by name (temporary workaround until ParamDecl has LocalId).
-    local_types_by_name: HashMap<Symbol, Type<'db>>,
-
-    /// Types of AST nodes (for TypedRef construction).
-    node_types: HashMap<NodeId, Type<'db>>,
 
     /// Function signatures (polymorphic).
     function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
@@ -42,34 +43,24 @@ pub struct TypeContext<'db> {
     /// Type definitions (struct/enum names to their types).
     type_defs: HashMap<Symbol, TypeScheme<'db>>,
 
-    /// Generated constraints.
-    constraints: ConstraintSet<'db>,
+    /// Struct field definitions: struct_name → (type_params, [(field_name, field_type)])
+    struct_fields: HashMap<Symbol, StructFieldInfo<'db>>,
 
-    /// Counter for fresh type variables.
-    next_type_var: u64,
-
-    /// Counter for fresh effect row variables.
-    next_row_var: u64,
-
-    /// Current accumulated effects.
-    current_effect: EffectRow<'db>,
+    /// Enum variant information: enum_name → [variant_names]
+    /// Used for exhaustiveness checking in case expressions.
+    enum_variants: HashMap<Symbol, Vec<Symbol>>,
 }
 
-impl<'db> TypeContext<'db> {
-    /// Create a new type context.
+impl<'db> ModuleTypeEnv<'db> {
+    /// Create a new empty module type environment.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         Self {
             db,
-            local_types: HashMap::new(),
-            local_types_by_name: HashMap::new(),
-            node_types: HashMap::new(),
             function_types: HashMap::new(),
             constructor_types: HashMap::new(),
             type_defs: HashMap::new(),
-            constraints: ConstraintSet::new(),
-            next_type_var: 0,
-            next_row_var: 0,
-            current_effect: EffectRow::pure(db),
+            struct_fields: HashMap::new(),
+            enum_variants: HashMap::new(),
         }
     }
 
@@ -79,79 +70,7 @@ impl<'db> TypeContext<'db> {
     }
 
     // =========================================================================
-    // Fresh variables
-    // =========================================================================
-
-    /// Generate a fresh type variable.
-    ///
-    /// This creates an anonymous type variable for local inference (lambdas, let bindings, etc.).
-    /// For polymorphic instantiation, use `instantiate_function` or `instantiate_constructor`.
-    pub fn fresh_type_var(&mut self) -> Type<'db> {
-        let counter = self.next_type_var;
-        self.next_type_var += 1;
-        let source = UniVarSource::Anonymous(counter);
-        let id = UniVarId::new(self.db, source, 0);
-        Type::new(self.db, TypeKind::UniVar { id })
-    }
-
-    /// Generate a fresh effect row variable.
-    pub fn fresh_row_var(&mut self) -> EffectVar {
-        let id = self.next_row_var;
-        self.next_row_var += 1;
-        EffectVar { id }
-    }
-
-    /// Generate a fresh effect row with only a variable.
-    pub fn fresh_effect_row(&mut self) -> EffectRow<'db> {
-        let var = self.fresh_row_var();
-        EffectRow::open(self.db, var)
-    }
-
-    // =========================================================================
-    // Local variable types
-    // =========================================================================
-
-    /// Bind a local variable to a type.
-    pub fn bind_local(&mut self, local: LocalId, ty: Type<'db>) {
-        self.local_types.insert(local, ty);
-    }
-
-    /// Look up the type of a local variable.
-    pub fn lookup_local(&self, local: LocalId) -> Option<Type<'db>> {
-        self.local_types.get(&local).copied()
-    }
-
-    /// Bind a local variable by name (temporary workaround until ParamDecl has LocalId).
-    ///
-    /// This is used for function parameters where we only have the name available.
-    /// Once ParamDecl includes LocalId, this method should be removed in favor of `bind_local`.
-    pub fn bind_local_by_name(&mut self, name: Symbol, ty: Type<'db>) {
-        self.local_types_by_name.insert(name, ty);
-    }
-
-    /// Look up a local variable by name.
-    ///
-    /// This is used for function parameters where we only have the name available.
-    pub fn lookup_local_by_name(&self, name: Symbol) -> Option<Type<'db>> {
-        self.local_types_by_name.get(&name).copied()
-    }
-
-    // =========================================================================
-    // Node types (for TypedRef)
-    // =========================================================================
-
-    /// Record the type of an AST node.
-    pub fn record_node_type(&mut self, node: NodeId, ty: Type<'db>) {
-        self.node_types.insert(node, ty);
-    }
-
-    /// Get the type of an AST node.
-    pub fn get_node_type(&self, node: NodeId) -> Option<Type<'db>> {
-        self.node_types.get(&node).copied()
-    }
-
-    // =========================================================================
-    // Function signatures
+    // Registration (used during collect_declarations)
     // =========================================================================
 
     /// Register a function's type scheme.
@@ -159,37 +78,39 @@ impl<'db> TypeContext<'db> {
         self.function_types.insert(id, scheme);
     }
 
-    /// Look up a function's type scheme.
-    pub fn lookup_function(&self, id: FuncDefId<'db>) -> Option<TypeScheme<'db>> {
-        self.function_types.get(&id).copied()
-    }
-
-    /// Export function type schemes as a Vec keyed by Symbol (function name).
-    ///
-    /// Used to pass type information from type checking to IR lowering.
-    pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
-        self.function_types
-            .iter()
-            .map(|(id, scheme)| (id.name(self.db), *scheme))
-            .collect()
-    }
-
-    /// Instantiate a function's type scheme with fresh type variables.
-    ///
-    /// Each call generates fresh UniVars so that different call sites of the
-    /// same polymorphic function get independent type variables for unification.
-    pub fn instantiate_function(&mut self, id: FuncDefId<'db>) -> Option<Type<'db>> {
-        let scheme = self.lookup_function(id)?;
-        Some(self.instantiate_scheme(scheme))
-    }
-
-    // =========================================================================
-    // Constructor types
-    // =========================================================================
-
     /// Register a constructor's type scheme.
     pub fn register_constructor(&mut self, id: CtorId<'db>, scheme: TypeScheme<'db>) {
         self.constructor_types.insert(id, scheme);
+    }
+
+    /// Register a type definition.
+    pub fn register_type_def(&mut self, name: Symbol, scheme: TypeScheme<'db>) {
+        self.type_defs.insert(name, scheme);
+    }
+
+    /// Register struct field information.
+    pub fn register_struct_fields(
+        &mut self,
+        struct_name: Symbol,
+        type_params: Vec<TypeParam>,
+        fields: Vec<(Symbol, Type<'db>)>,
+    ) {
+        self.struct_fields
+            .insert(struct_name, (type_params, fields));
+    }
+
+    /// Register enum variant information.
+    pub fn register_enum_variants(&mut self, enum_name: Symbol, variants: Vec<Symbol>) {
+        self.enum_variants.insert(enum_name, variants);
+    }
+
+    // =========================================================================
+    // Lookup (used during type checking)
+    // =========================================================================
+
+    /// Look up a function's type scheme.
+    pub fn lookup_function(&self, id: FuncDefId<'db>) -> Option<TypeScheme<'db>> {
+        self.function_types.get(&id).copied()
     }
 
     /// Look up a constructor's type scheme.
@@ -197,181 +118,156 @@ impl<'db> TypeContext<'db> {
         self.constructor_types.get(&id).copied()
     }
 
-    /// Return the number of registered constructors.
-    pub fn constructor_count(&self) -> usize {
-        self.constructor_types.len()
-    }
-
-    /// Instantiate a constructor's type scheme with fresh type variables.
-    ///
-    /// Each call generates fresh UniVars so that different call sites of the
-    /// same polymorphic constructor get independent type variables for unification.
-    pub fn instantiate_constructor(&mut self, id: CtorId<'db>) -> Option<Type<'db>> {
-        let scheme = self.lookup_constructor(id)?;
-        Some(self.instantiate_scheme(scheme))
-    }
-
-    // =========================================================================
-    // Type definitions
-    // =========================================================================
-
-    /// Register a type definition.
-    pub fn register_type_def(&mut self, name: Symbol, scheme: TypeScheme<'db>) {
-        self.type_defs.insert(name, scheme);
-    }
-
     /// Look up a type definition.
     pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
         self.type_defs.get(&name).copied()
     }
 
+    /// Look up struct field type by struct name and field name.
+    /// Returns (type_params, field_type) if found.
+    pub fn lookup_struct_field(
+        &self,
+        struct_name: Symbol,
+        field_name: Symbol,
+    ) -> Option<(&[TypeParam], Type<'db>)> {
+        let (type_params, fields) = self.struct_fields.get(&struct_name)?;
+        for (name, ty) in fields {
+            if *name == field_name {
+                return Some((type_params.as_slice(), *ty));
+            }
+        }
+        None
+    }
+
+    /// Return the number of registered constructors.
+    pub fn constructor_count(&self) -> usize {
+        self.constructor_types.len()
+    }
+
+    /// Look up enum variants by enum name.
+    pub fn lookup_enum_variants(&self, enum_name: Symbol) -> Option<&[Symbol]> {
+        self.enum_variants.get(&enum_name).map(|v| v.as_slice())
+    }
+
+    /// Debug: print all registered constructors.
+    pub fn debug_print_constructors(&self, db: &'db dyn salsa::Database) {
+        eprintln!(
+            "DEBUG: Registered constructors ({}):",
+            self.constructor_types.len()
+        );
+        for id in self.constructor_types.keys() {
+            eprintln!("  - {:?} (type_name: {:?})", id, id.type_name(db));
+        }
+    }
+
     // =========================================================================
-    // Type scheme instantiation
+    // Prelude injection
     // =========================================================================
 
-    /// Instantiate a type scheme with fresh type variables.
+    /// Inject prelude's resolved type information into this environment.
     ///
-    /// Replaces each `BoundVar { index: i }` with a fresh `UniVar`.
-    /// Each call produces independent type variables, ensuring different
-    /// call sites of polymorphic functions/constructors don't interfere.
-    pub fn instantiate_scheme(&mut self, scheme: TypeScheme<'db>) -> Type<'db> {
-        let params = scheme.type_params(self.db);
-        if params.is_empty() {
-            return scheme.body(self.db);
+    /// This is called before type checking user code to make prelude's
+    /// types available. The injected types contain only BoundVars (no UniVars).
+    pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
+        for (id, scheme) in exports.function_types(self.db) {
+            self.function_types.insert(*id, *scheme);
         }
-
-        // Generate fresh variables for each parameter
-        let fresh_vars: Vec<Type<'db>> = (0..params.len()).map(|_| self.fresh_type_var()).collect();
-
-        // Substitute bound variables with fresh variables
-        self.substitute_bound_vars(scheme.body(self.db), &fresh_vars)
-    }
-
-    /// Substitute bound variables with given types.
-    fn substitute_bound_vars(&self, ty: Type<'db>, subst: &[Type<'db>]) -> Type<'db> {
-        match ty.kind(self.db) {
-            TypeKind::BoundVar { index } => subst.get(*index as usize).copied().unwrap_or(ty),
-            TypeKind::Named { name, args } => {
-                let args = args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::Named { name: *name, args })
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let params = params
-                    .iter()
-                    .map(|p| self.substitute_bound_vars(*p, subst))
-                    .collect();
-                let result = self.substitute_bound_vars(*result, subst);
-                let effect = self.substitute_effect_row(*effect, subst);
-                Type::new(
-                    self.db,
-                    TypeKind::Func {
-                        params,
-                        result,
-                        effect,
-                    },
-                )
-            }
-            TypeKind::Tuple(elements) => {
-                let elements = elements
-                    .iter()
-                    .map(|e| self.substitute_bound_vars(*e, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::Tuple(elements))
-            }
-            TypeKind::App { ctor, args } => {
-                let ctor = self.substitute_bound_vars(*ctor, subst);
-                let args = args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::App { ctor, args })
-            }
-            // Primitive types and other type variables are unchanged
-            _ => ty,
+        for (id, scheme) in exports.constructor_types(self.db) {
+            self.constructor_types.insert(*id, *scheme);
+        }
+        for (name, scheme) in exports.type_defs(self.db) {
+            self.type_defs.insert(*name, *scheme);
+        }
+        for (name, info) in exports.struct_fields(self.db) {
+            self.struct_fields.insert(*name, info.clone());
+        }
+        for (name, variants) in exports.enum_variants(self.db) {
+            self.enum_variants.insert(*name, variants.clone());
         }
     }
 
-    /// Substitute bound variables within an effect row.
-    fn substitute_effect_row(&self, row: EffectRow<'db>, subst: &[Type<'db>]) -> EffectRow<'db> {
-        let effects = row.effects(self.db);
-        let mut changed = false;
+    // =========================================================================
+    // Export methods
+    // =========================================================================
 
-        let new_effects: Vec<_> = effects
+    /// Export function type schemes as a Vec keyed by Symbol (function name).
+    ///
+    /// Results are sorted alphabetically by name for deterministic output.
+    pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+        let mut result: Vec<_> = self
+            .function_types
             .iter()
-            .map(|effect| {
-                let new_args: Vec<_> = effect
-                    .args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                if new_args != effect.args {
-                    changed = true;
-                }
-                crate::ast::Effect {
-                    name: effect.name,
-                    args: new_args,
-                }
-            })
+            .map(|(id, scheme)| (id.name(self.db), *scheme))
             .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
 
-        if changed {
-            EffectRow::new(self.db, new_effects, row.rest(self.db))
-        } else {
-            row
-        }
+    /// Export function types with FuncDefId (for PreludeExports).
+    ///
+    /// Results are sorted alphabetically by function name for deterministic output.
+    pub fn export_function_types_with_ids(&self) -> Vec<(FuncDefId<'db>, TypeScheme<'db>)> {
+        let mut result: Vec<_> = self.function_types.iter().map(|(k, v)| (*k, *v)).collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.name(self.db)
+                .with_str(|a| b.name(self.db).with_str(|b| a.cmp(b)))
+        });
+        result
+    }
+
+    /// Export constructor types for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by type name for deterministic output.
+    pub fn export_constructor_types(&self) -> Vec<(CtorId<'db>, TypeScheme<'db>)> {
+        let mut result: Vec<_> = self
+            .constructor_types
+            .iter()
+            .map(|(k, v)| (*k, *v))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.type_name(self.db)
+                .with_str(|a| b.type_name(self.db).with_str(|b| a.cmp(b)))
+        });
+        result
+    }
+
+    /// Export type definitions for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by name for deterministic output.
+    pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
+        let mut result: Vec<_> = self.type_defs.iter().map(|(k, v)| (*k, *v)).collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
+
+    /// Export struct field definitions for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by struct name for deterministic output.
+    pub fn export_struct_fields(&self) -> Vec<(Symbol, StructFieldInfo<'db>)> {
+        let mut result: Vec<_> = self
+            .struct_fields
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
+
+    /// Export enum variant information for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by enum name for deterministic output.
+    pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
+        let mut result: Vec<_> = self
+            .enum_variants
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
     }
 
     // =========================================================================
-    // Constraints
-    // =========================================================================
-
-    /// Add a type equality constraint.
-    pub fn constrain_eq(&mut self, t1: Type<'db>, t2: Type<'db>) {
-        self.constraints.add_type_eq(t1, t2);
-    }
-
-    /// Add an effect row equality constraint.
-    pub fn constrain_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
-        self.constraints.add_row_eq(r1, r2);
-    }
-
-    /// Take the constraint set.
-    pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
-        std::mem::take(&mut self.constraints)
-    }
-
-    // =========================================================================
-    // Effect tracking
-    // =========================================================================
-
-    /// Get the current effect row.
-    pub fn current_effect(&self) -> EffectRow<'db> {
-        self.current_effect
-    }
-
-    /// Set the current effect row.
-    pub fn set_current_effect(&mut self, effect: EffectRow<'db>) {
-        self.current_effect = effect;
-    }
-
-    /// Merge an effect into the current effect row.
-    pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
-        // TODO: Implement effect row union
-        // For now, just replace
-        if !effect.is_pure(self.db) {
-            self.current_effect = effect;
-        }
-    }
-
-    // =========================================================================
-    // Primitive types
+    // Primitive types (convenience methods)
     // =========================================================================
 
     /// Create the Int type.
@@ -449,359 +345,213 @@ impl<'db> TypeContext<'db> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::ast::{Effect, TypeParam, TypeScheme};
     use salsa_test_macros::salsa_test;
+    use trunk_ir::{Symbol, SymbolVec};
 
-    /// Create a type parameter with just a name.
-    fn type_param(name: Symbol) -> TypeParam {
-        TypeParam {
-            name: Some(name),
-            kind: None,
-        }
-    }
+    use crate::ast::{CtorId, FuncDefId, Type, TypeKind, TypeScheme};
 
-    #[salsa::tracked]
-    fn test_instantiate_function_fresh_per_call_inner<'db>(db: &'db dyn salsa::Database) -> bool {
-        let mut ctx = TypeContext::new(db);
-
-        // Create a polymorphic function type: forall a. a -> a
-        let name = Symbol::new("identity");
-        let func_id = FuncDefId::new(db, name);
-
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let effect = EffectRow::pure(db);
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-            },
-        );
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
-        ctx.register_function(func_id, scheme);
-
-        // Two instantiations of the same function should get different UniVars,
-        // so different call sites can unify independently.
-        let ty1 = ctx.instantiate_function(func_id).unwrap();
-        let ty2 = ctx.instantiate_function(func_id).unwrap();
-
-        if ty1 == ty2 {
-            return false; // Should be different
-        }
-
-        // Both should be function types with UniVar params
-        if let (
-            TypeKind::Func {
-                params: p1,
-                result: r1,
-                ..
-            },
-            TypeKind::Func {
-                params: p2,
-                result: r2,
-                ..
-            },
-        ) = (ty1.kind(db), ty2.kind(db))
-        {
-            p1.len() == 1
-                && p1[0] == *r1
-                && p2[0] == *r2
-                && p1[0] != p2[0] // Different UniVars
-                && matches!(p1[0].kind(db), TypeKind::UniVar { .. })
-        } else {
-            false
-        }
-    }
-
-    #[salsa_test]
-    fn test_instantiate_function_fresh_per_call(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_function_fresh_per_call_inner(db),
-            "Each instantiation should produce fresh type variables"
-        );
-    }
-
-    #[salsa::tracked]
-    fn test_instantiate_constructor_fresh_per_call_inner<'db>(
-        db: &'db dyn salsa::Database,
-    ) -> bool {
-        let mut ctx = TypeContext::new(db);
-
-        // forall a. a -> Option a
-        let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, type_name);
-
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let result_ty = Type::new(
-            db,
-            TypeKind::Named {
-                name: type_name,
-                args: vec![bound_var],
-            },
-        );
-        let effect = EffectRow::pure(db);
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: result_ty,
-                effect,
-            },
-        );
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
-        ctx.register_constructor(ctor_id, scheme);
-
-        let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
-        let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
-
-        ty1 != ty2 // Should be different
-    }
-
-    #[salsa_test]
-    fn test_instantiate_constructor_fresh_per_call(db: &dyn salsa::Database) {
-        assert!(
-            test_instantiate_constructor_fresh_per_call_inner(db),
-            "Each constructor instantiation should produce fresh type variables"
-        );
-    }
-
-    #[salsa::tracked]
-    fn test_different_functions_inner<'db>(db: &'db dyn salsa::Database) -> bool {
-        let mut ctx = TypeContext::new(db);
-
-        let func_id1 = FuncDefId::new(db, Symbol::new("f1"));
-        let func_id2 = FuncDefId::new(db, Symbol::new("f2"));
-
-        // forall a. a -> a
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let effect = EffectRow::pure(db);
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-            },
-        );
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
-        ctx.register_function(func_id1, scheme);
-        ctx.register_function(func_id2, scheme);
-
-        let ty1 = ctx.instantiate_function(func_id1).unwrap();
-        let ty2 = ctx.instantiate_function(func_id2).unwrap();
-
-        // Different functions should have different UniVars
-        if let (
-            TypeKind::Func {
-                params: params1, ..
-            },
-            TypeKind::Func {
-                params: params2, ..
-            },
-        ) = (ty1.kind(db), ty2.kind(db))
-        {
-            params1[0] != params2[0]
-        } else {
-            false
-        }
-    }
-
-    #[salsa_test]
-    fn test_different_functions_get_different_types(db: &dyn salsa::Database) {
-        assert!(
-            test_different_functions_inner(db),
-            "Different functions should get different type variable instantiations"
-        );
-    }
-
-    #[salsa_test]
-    fn test_lookup_local_fallback_to_name(db: &dyn salsa::Database) {
-        let mut ctx = TypeContext::new(db);
-
-        // Bind a local by name only
-        let name = Symbol::new("x");
-        let ty = ctx.int_type();
-        ctx.bind_local_by_name(name, ty);
-
-        // Lookup by LocalId should fail, but by name should succeed
-        let local_id = LocalId::new(1);
-        assert!(ctx.lookup_local(local_id).is_none());
-        assert_eq!(ctx.lookup_local_by_name(name), Some(ty));
-    }
-
-    #[salsa_test]
-    fn test_lookup_local_prefers_local_id(db: &dyn salsa::Database) {
-        let mut ctx = TypeContext::new(db);
-
-        // Bind both by LocalId and by name with different types
-        let name = Symbol::new("x");
-        let local_id = LocalId::new(1);
-        let ty_by_id = ctx.int_type();
-        let ty_by_name = ctx.string_type();
-
-        ctx.bind_local(local_id, ty_by_id);
-        ctx.bind_local_by_name(name, ty_by_name);
-
-        // lookup_local should return the type bound by LocalId
-        assert_eq!(ctx.lookup_local(local_id), Some(ty_by_id));
-        // lookup_local_by_name should return the type bound by name
-        assert_eq!(ctx.lookup_local_by_name(name), Some(ty_by_name));
-    }
+    use super::ModuleTypeEnv;
 
     // =========================================================================
-    // Effect row substitution tests
+    // Export ordering tests - verify deterministic output
     // =========================================================================
 
     #[salsa_test]
-    fn test_substitute_effect_row_with_bound_var(db: &dyn salsa::Database) {
-        // forall a. fn() ->{State(a)} a
-        // After instantiation, the BoundVar(0) inside the effect row should be
-        // replaced with a fresh UniVar, same as the result type.
-        let mut ctx = TypeContext::new(db);
+    fn test_export_function_types_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
 
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        // Insert in non-alphabetical order
+        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
 
-        // Effect row: {State(BoundVar(0))}
-        let effect = EffectRow::new(
-            db,
-            vec![Effect {
-                name: Symbol::new("State"),
-                args: vec![bound_var],
-            }],
-            None,
-        );
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
 
-        // fn() ->{State(a)} a
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![],
-                result: bound_var,
-                effect,
-            },
-        );
+        env.register_function(func_z, scheme);
+        env.register_function(func_a, scheme);
+        env.register_function(func_m, scheme);
 
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
-        let instantiated = ctx.instantiate_scheme(scheme);
+        let exported = env.export_function_types();
 
-        if let TypeKind::Func { result, effect, .. } = instantiated.kind(db) {
-            // result should be a UniVar
-            assert!(
-                matches!(result.kind(db), TypeKind::UniVar { .. }),
-                "Expected UniVar for result, got {:?}",
-                result.kind(db)
-            );
-
-            // The effect row's State arg should be the same UniVar as result
-            let effects = effect.effects(db);
-            assert_eq!(effects.len(), 1);
-            assert_eq!(effects[0].name, Symbol::new("State"));
-            assert_eq!(effects[0].args.len(), 1);
-            assert_eq!(
-                effects[0].args[0], *result,
-                "Effect arg should be the same UniVar as result type"
-            );
-        } else {
-            panic!("Expected Func type, got {:?}", instantiated.kind(db));
-        }
-    }
-
-    // =========================================================================
-    // export_function_types tests
-    // =========================================================================
-
-    #[salsa::tracked]
-    fn test_export_function_types_inner<'db>(db: &'db dyn salsa::Database) -> bool {
-        let mut ctx = TypeContext::new(db);
-
-        let f1_name = Symbol::new("foo");
-        let f2_name = Symbol::new("bar");
-        let f1_id = FuncDefId::new(db, f1_name);
-        let f2_id = FuncDefId::new(db, f2_name);
-
-        let int_ty = ctx.int_type();
-        let scheme1 = TypeScheme::new(db, vec![], int_ty);
-        let scheme2 = TypeScheme::new(db, vec![], ctx.bool_type());
-
-        ctx.register_function(f1_id, scheme1);
-        ctx.register_function(f2_id, scheme2);
-
-        let exported = ctx.export_function_types();
-        if exported.len() != 2 {
-            return false;
-        }
-
-        let has_foo = exported
-            .iter()
-            .any(|(name, s)| *name == f1_name && *s == scheme1);
-        let has_bar = exported
-            .iter()
-            .any(|(name, s)| *name == f2_name && *s == scheme2);
-        has_foo && has_bar
-    }
-
-    #[salsa_test]
-    fn test_export_function_types(db: &dyn salsa::Database) {
-        assert!(
-            test_export_function_types_inner(db),
-            "export_function_types should return all registered functions"
+        // Should be sorted alphabetically by name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("alpha"),
+                Symbol::new("middle"),
+                Symbol::new("zebra")
+            ]
         );
     }
 
     #[salsa_test]
-    fn test_export_function_types_empty(db: &dyn salsa::Database) {
-        let ctx = TypeContext::new(db);
-        let exported = ctx.export_function_types();
-        assert!(exported.is_empty(), "Empty context should export empty Vec");
+    fn test_export_function_types_with_ids_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_function(func_z, scheme);
+        env.register_function(func_a, scheme);
+        env.register_function(func_m, scheme);
+
+        let exported = env.export_function_types_with_ids();
+
+        // Should be sorted alphabetically by function name
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.name(db)).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("alpha"),
+                Symbol::new("middle"),
+                Symbol::new("zebra")
+            ]
+        );
     }
 
-    // =========================================================================
-    // Effect row substitution tests
-    // =========================================================================
+    #[salsa_test]
+    fn test_export_constructor_types_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let ctor_z = CtorId::new(db, SymbolVec::new(), Symbol::new("Zebra"));
+        let ctor_a = CtorId::new(db, SymbolVec::new(), Symbol::new("Alpha"));
+        let ctor_m = CtorId::new(db, SymbolVec::new(), Symbol::new("Middle"));
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        env.register_constructor(ctor_z, scheme);
+        env.register_constructor(ctor_a, scheme);
+        env.register_constructor(ctor_m, scheme);
+
+        let exported = env.export_constructor_types();
+
+        // Should be sorted alphabetically by type name
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.type_name(db)).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
 
     #[salsa_test]
-    fn test_substitute_effect_row_no_bound_vars(db: &dyn salsa::Database) {
-        // forall a. fn(a) ->{IO} a
-        // The effect row has no BoundVars, so it should be unchanged after instantiation.
-        let mut ctx = TypeContext::new(db);
+    fn test_export_type_defs_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
 
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
 
-        let effect = EffectRow::new(
-            db,
-            vec![Effect {
-                name: Symbol::new("IO"),
-                args: vec![],
-            }],
-            None,
+        env.register_type_def(Symbol::new("Zebra"), scheme);
+        env.register_type_def(Symbol::new("Alpha"), scheme);
+        env.register_type_def(Symbol::new("Middle"), scheme);
+
+        let exported = env.export_type_defs();
+
+        // Should be sorted alphabetically by name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
         );
+    }
 
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-            },
+    #[salsa_test]
+    fn test_export_struct_fields_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let fields = vec![(Symbol::new("x"), int_ty)];
+
+        env.register_struct_fields(Symbol::new("Zebra"), vec![], fields.clone());
+        env.register_struct_fields(Symbol::new("Alpha"), vec![], fields.clone());
+        env.register_struct_fields(Symbol::new("Middle"), vec![], fields);
+
+        let exported = env.export_struct_fields();
+
+        // Should be sorted alphabetically by struct name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
         );
+    }
 
-        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
-        let instantiated = ctx.instantiate_scheme(scheme);
+    #[salsa_test]
+    fn test_export_enum_variants_sorted(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
 
-        if let TypeKind::Func {
-            effect: inst_effect,
-            ..
-        } = instantiated.kind(db)
-        {
-            // Effect row should be identical (no substitution needed)
-            assert_eq!(
-                *inst_effect, effect,
-                "Effect row without BoundVars should be unchanged"
-            );
-        } else {
-            panic!("Expected Func type, got {:?}", instantiated.kind(db));
+        let variants = vec![Symbol::new("A"), Symbol::new("B")];
+
+        env.register_enum_variants(Symbol::new("Zebra"), variants.clone());
+        env.register_enum_variants(Symbol::new("Alpha"), variants.clone());
+        env.register_enum_variants(Symbol::new("Middle"), variants);
+
+        let exported = env.export_enum_variants();
+
+        // Should be sorted alphabetically by enum name
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("Alpha"),
+                Symbol::new("Middle"),
+                Symbol::new("Zebra")
+            ]
+        );
+    }
+
+    #[salsa_test]
+    fn test_export_ordering_is_deterministic(db: &dyn salsa::Database) {
+        // Run export multiple times and verify consistent ordering
+        let mut env = ModuleTypeEnv::new(db);
+
+        let int_ty = Type::new(db, TypeKind::Int);
+        let scheme = TypeScheme::mono(db, int_ty);
+
+        // Add items in random order
+        for name in ["d", "b", "e", "a", "c"] {
+            let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new(name));
+            env.register_function(func_id, scheme);
         }
+
+        // Export multiple times and verify same ordering
+        let first = env.export_function_types();
+        let second = env.export_function_types();
+        let third = env.export_function_types();
+
+        let first_names: Vec<_> = first.iter().map(|(n, _)| *n).collect();
+        let second_names: Vec<_> = second.iter().map(|(n, _)| *n).collect();
+        let third_names: Vec<_> = third.iter().map(|(n, _)| *n).collect();
+
+        assert_eq!(first_names, second_names);
+        assert_eq!(second_names, third_names);
+        assert_eq!(
+            first_names,
+            vec![
+                Symbol::new("a"),
+                Symbol::new("b"),
+                Symbol::new("c"),
+                Symbol::new("d"),
+                Symbol::new("e")
+            ]
+        );
     }
 }

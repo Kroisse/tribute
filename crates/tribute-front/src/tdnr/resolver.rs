@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, smallvec::SmallVec};
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
     ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
-use crate::build_qualified_field_name;
+use crate::build_field_module_path;
 
 /// TDNR resolver for AST expressions.
 ///
@@ -79,8 +79,9 @@ impl<'db> TdnrResolver<'db> {
 
                     let func_name = func.name;
 
-                    // Create FuncDefId (Salsa interns by name, so this returns the canonical ID)
-                    let func_id = FuncDefId::new(self.db, func_name);
+                    // Create FuncDefId with module path
+                    let path_vec = SmallVec::from_slice(module_path);
+                    let func_id = FuncDefId::new(self.db, path_vec, func_name);
 
                     // Try to extract the type name from the first parameter's type annotation
                     let first_param = &func.params[0];
@@ -114,10 +115,9 @@ impl<'db> TdnrResolver<'db> {
                         };
 
                         // Create synthetic FuncDefId for the accessor
-                        // Use qualified name to avoid collisions across modules
-                        let qualified_name =
-                            build_qualified_field_name(module_path, struct_name, field_name);
-                        let func_id = FuncDefId::new(self.db, qualified_name);
+                        // Use module_path + struct_name to avoid collisions across modules
+                        let field_path = build_field_module_path(module_path, struct_name);
+                        let func_id = FuncDefId::new(self.db, field_path, field_name);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
                         // Note: Reusing struct's NodeId for synthetic type annotation.
@@ -587,6 +587,17 @@ impl<'db> TdnrResolver<'db> {
             // Block: type is the type of the value expression
             ExprKind::Block { value, .. } => self.get_expr_type(value),
 
+            // Record: get the return type from the constructor's type
+            ExprKind::Record { type_name, .. } => {
+                // type_name.ty is the constructor function type: fn(fields...) -> StructType
+                if let crate::ast::TypeKind::Func { result, .. } = type_name.ty.kind(self.db) {
+                    Some(*result)
+                } else {
+                    // If not a function type, use it directly
+                    Some(type_name.ty)
+                }
+            }
+
             // Lambda: we can't easily determine the type without full analysis
             // For other expressions, we'd need a type map from typechecking
             _ => None,
@@ -717,6 +728,7 @@ mod tests {
     use super::*;
     use crate::ast::{BinOpKind, CtorId, EffectRow, NodeId, ResolvedRef, TypeKind, TypedRef};
     use salsa_test_macros::salsa_test;
+    use trunk_ir::SymbolVec;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -943,7 +955,7 @@ mod tests {
             },
         );
 
-        let ctor_id = CtorId::new(db, option_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), option_name);
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -986,7 +998,7 @@ mod tests {
             },
         );
 
-        let ctor_id = CtorId::new(db, point_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), point_name);
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -1155,7 +1167,7 @@ mod tests {
 
         let type_name = Symbol::new("Foo");
         let method_name = Symbol::new("bar");
-        let func_id = FuncDefId::new(db, method_name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), method_name);
         let func_ty = Type::new(db, TypeKind::Int);
 
         resolver
@@ -1192,9 +1204,9 @@ mod tests {
         let method_name = Symbol::new("bar");
 
         // Two different functions with the same (type_name, method_name) key
-        let func_id_1 = FuncDefId::new(db, Symbol::new("bar"));
+        let func_id_1 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("bar"));
         let func_ty_1 = Type::new(db, TypeKind::Int);
-        let func_id_2 = FuncDefId::new(db, Symbol::new("bar"));
+        let func_id_2 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("bar"));
         let func_ty_2 = Type::new(db, TypeKind::Float);
 
         let candidates = resolver
@@ -1255,7 +1267,7 @@ mod tests {
 
         let type_name = Symbol::new("List");
         let method_name = Symbol::new("map");
-        let func_id = FuncDefId::new(db, method_name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), method_name);
         let func_ty = Type::new(db, TypeKind::Int);
 
         resolver

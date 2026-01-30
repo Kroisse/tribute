@@ -6,7 +6,7 @@ All compilation stages use Salsa for incremental compilation:
 
 ```rust
 #[salsa::tracked]
-pub fn stage_resolve<'db>(
+pub fn insert_boxing<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Module<'db> {
@@ -45,11 +45,11 @@ Function types include effect information:
 let func_ty = func::Fn::new(db, params, return_ty, effect_row);
 ```
 
-Effect rows are managed in `crates/tribute-passes/src/typeck/effect_row.rs`.
+Effect rows are managed in `crates/tribute-front/src/typeck/effect_row.rs`.
 
 ### Bidirectional Type Checking
 
-Two modes in `crates/tribute-passes/src/typeck/checker.rs`:
+Two modes in `crates/tribute-front/src/typeck/checker.rs`:
 - **Infer mode**: Synthesize type from expression
 - **Check mode**: Verify expression against expected type
 
@@ -61,21 +61,23 @@ fn check_expr(&mut self, expr: ..., expected: Type) { ... }
 ### Type Variables and Unification
 
 - Fresh type variables for unknowns
-- Union-find based constraint solver in `typeck/solver.rs`
+- Union-find-based constraint solver in `crates/tribute-front/src/typeck/solver.rs`
 - Substitution applied after solving
 
 ## Name Resolution
 
+Name resolution is performed at the AST level in `tribute-front`.
+
 Two-phase resolution:
 
-1. **Basic resolution** (`resolve.rs`): Resolves names and paths
-   - `src.var` → `func.call` or local reference
-   - `src.path` → qualified reference
-   - Builds `ModuleEnv` with bindings
+1. **Basic resolution** (`crates/tribute-front/src/resolve.rs`): Resolves names and paths
+   - Builds `ModuleEnv` with bindings from definitions
+   - Resolves variable references to their definitions
+   - Handles qualified paths (e.g., `Foo::bar`)
 
-2. **Type-directed (TDNR)** (`tdnr.rs`): Resolves UFCS after type inference
+2. **Type-directed (TDNR)** (`crates/tribute-front/src/tdnr.rs`): Resolves UFCS after type inference
    - `expr.method(args)` → `Type::method(expr, args)`
-   - Requires inferred type information
+   - Requires inferred type information from typecheck phase
 
 ## Dialect Operations
 
@@ -118,7 +120,7 @@ Benefits of typed helpers and wrappers:
 
 ## Bindings
 
-Three kinds of bindings in `resolve.rs`:
+Three kinds of bindings in `crates/tribute-front/src/resolve/env.rs`:
 
 ```rust
 pub enum Binding<'db> {

@@ -5,7 +5,8 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, OpDecl, ParamDecl,
-    StructDecl, TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl, VariantDecl,
+    StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName, UseDecl,
+    VariantDecl,
 };
 
 use super::context::AstLoweringCtx;
@@ -28,6 +29,13 @@ pub fn lower_module(
     let mut cursor = root.walk();
     for child in root.named_children(&mut cursor) {
         if is_comment(child.kind()) {
+            continue;
+        }
+
+        // Emit parse error diagnostic for ERROR nodes
+        if child.kind() == "ERROR" {
+            let span = trunk_ir::Span::new(child.start_byte(), child.end_byte());
+            ctx.parse_error(span, "syntax error: unexpected token");
             continue;
         }
 
@@ -212,7 +220,8 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
 fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
     // Handle various type node kinds
     match node.kind() {
-        "type_identifier" | "type_variable" => {
+        // type_variable in grammar is just identifier, so we need to handle both
+        "type_identifier" | "type_variable" | "identifier" => {
             let id = ctx.fresh_id_with_span(&node);
             let name = ctx.node_symbol(&node);
             Some(TypeAnnotation {
@@ -381,6 +390,28 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnota
     }
 }
 
+/// Lower type parameters from a type_parameters node.
+///
+/// Parses `(a, b, c)` into a list of TypeParamDecl.
+fn lower_type_parameters(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeParamDecl> {
+    let mut params = Vec::new();
+    let mut cursor = node.walk();
+
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "identifier" {
+            let id = ctx.fresh_id_with_span(&child);
+            let name = ctx.node_symbol(&child);
+            params.push(TypeParamDecl {
+                id,
+                name,
+                bounds: vec![],
+            });
+        }
+    }
+
+    params
+}
+
 /// Lower a struct declaration.
 fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
     let name_node = node.child_by_field_name("name")?;
@@ -388,13 +419,19 @@ fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
 
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
+
+    let type_params = node
+        .child_by_field_name("type_params")
+        .map(|n| lower_type_parameters(ctx, n))
+        .unwrap_or_default();
+
     let fields = lower_struct_fields(ctx, body_node);
 
     Some(StructDecl {
         id,
         is_pub: false, // TODO: parse visibility
         name,
-        type_params: Vec::new(), // TODO: parse type params
+        type_params,
         fields,
     })
 }
@@ -456,13 +493,19 @@ fn lower_enum(ctx: &mut AstLoweringCtx, node: Node) -> Option<EnumDecl> {
 
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
+
+    let type_params = node
+        .child_by_field_name("type_params")
+        .map(|n| lower_type_parameters(ctx, n))
+        .unwrap_or_default();
+
     let variants = lower_enum_variants(ctx, body_node);
 
     Some(EnumDecl {
         id,
         is_pub: false, // TODO: parse visibility
         name,
-        type_params: Vec::new(), // TODO: parse type params
+        type_params,
         variants,
     })
 }
@@ -512,11 +555,22 @@ fn lower_enum_variant(ctx: &mut AstLoweringCtx, node: Node) -> Option<VariantDec
 fn lower_variant_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
     let mut fields = Vec::new();
 
-    match node.kind() {
+    // Handle the variant_fields wrapper which contains tuple_fields or struct_fields_block
+    let inner_node = if node.kind() == "variant_fields" {
+        node.named_child(0)
+    } else {
+        Some(node)
+    };
+
+    let Some(inner) = inner_node else {
+        return fields;
+    };
+
+    match inner.kind() {
         // Tuple fields: (Type1, Type2, ...)
         "tuple_fields" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
+            let mut cursor = inner.walk();
+            for child in inner.named_children(&mut cursor) {
                 if is_comment(child.kind()) {
                     continue;
                 }
@@ -534,7 +588,7 @@ fn lower_variant_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> 
         }
         // Struct fields: { name: Type, ... }
         "struct_fields_block" => {
-            fields = lower_struct_fields(ctx, node);
+            fields = lower_struct_fields(ctx, inner);
         }
         _ => {
             // Unknown variant field type - skip
@@ -613,7 +667,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
             let id = ctx.fresh_id_with_span(&node);
             TypeAnnotation {
                 id,
-                kind: TypeAnnotationKind::Named(Symbol::new("()")),
+                kind: TypeAnnotationKind::Named(Symbol::new("Nil")),
             }
         });
 

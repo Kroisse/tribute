@@ -1,0 +1,16 @@
+---
+source: crates/tribute-front/tests/case_type.rs
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        func @to_nat(core.i1) -> core.i64 {
+            body: [
+                "arith.const",
+                "arith.cmp_eq",
+                "scf.if",
+                "func.return",
+            ],
+        },
+    ],
+}

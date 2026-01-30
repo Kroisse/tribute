@@ -28,8 +28,8 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         // === Literal patterns ===
         "nat_literal" => {
             let text = ctx.node_text(&node);
-            match parse_nat_literal(&text).and_then(|v| i64::try_from(v).ok()) {
-                Some(value) => PatternKind::Literal(LiteralPattern::Int(value)),
+            match parse_nat_literal(&text) {
+                Some(value) => PatternKind::Literal(LiteralPattern::Nat(value)),
                 None => PatternKind::Error,
             }
         }
@@ -57,6 +57,9 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
             let text = ctx.node_text(&node);
             PatternKind::Literal(LiteralPattern::Bool(&*text == "true"))
         }
+        // Boolean keywords in patterns: True, False
+        "keyword_true" => PatternKind::Literal(LiteralPattern::Bool(true)),
+        "keyword_false" => PatternKind::Literal(LiteralPattern::Bool(false)),
         "unit_literal" => PatternKind::Literal(LiteralPattern::Unit),
 
         // === Constructor/Variant pattern ===
@@ -534,8 +537,8 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        let PatternKind::Literal(LiteralPattern::Int(42)) = pattern else {
-            panic!("Expected int literal pattern 42, got {:?}", pattern);
+        let PatternKind::Literal(LiteralPattern::Nat(42)) = pattern else {
+            panic!("Expected nat literal pattern 42, got {:?}", pattern);
         };
     }
 
@@ -589,11 +592,11 @@ mod tests {
         assert_eq!(s, "hello");
     }
 
-    // Note: true/false in patterns are parsed as identifiers by tree-sitter,
-    // not as bool literals. This is a grammar limitation - keywords like true/false
-    // need special handling in the pattern context.
+    // Note: In Tribute, `True` and `False` (capitalized) are boolean literals,
+    // while lowercase `true` and `false` are valid identifiers. This is an intentional
+    // design choice similar to some ML-family languages.
     #[test]
-    fn test_keyword_true_in_pattern_becomes_identifier() {
+    fn test_lowercase_true_in_pattern_becomes_identifier() {
         let source = r#"
             fn main() {
                 case x {
@@ -603,11 +606,52 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        // Currently parsed as identifier/bind pattern due to grammar
+        // Lowercase 'true' is parsed as identifier/bind pattern
         let PatternKind::Bind { name, .. } = pattern else {
             panic!("Expected bind pattern for 'true', got {:?}", pattern);
         };
         assert_eq!(name.to_string(), "true");
+    }
+
+    // Capitalized True/False are keywords that become Bool literals in patterns
+    #[test]
+    fn test_keyword_true_in_pattern_becomes_bool_literal() {
+        let source = r#"
+            fn main() {
+                case x {
+                    True -> 1
+                    _ -> 0
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Literal(LiteralPattern::Bool(value)) = pattern else {
+            panic!(
+                "Expected Bool literal pattern for 'True', got {:?}",
+                pattern
+            );
+        };
+        assert!(value);
+    }
+
+    #[test]
+    fn test_keyword_false_in_pattern_becomes_bool_literal() {
+        let source = r#"
+            fn main() {
+                case x {
+                    False -> 0
+                    _ -> 1
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Literal(LiteralPattern::Bool(value)) = pattern else {
+            panic!(
+                "Expected Bool literal pattern for 'False', got {:?}",
+                pattern
+            );
+        };
+        assert!(!value);
     }
 
     // === Constructor/Variant Pattern ===

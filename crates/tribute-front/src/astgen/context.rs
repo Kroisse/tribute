@@ -50,6 +50,16 @@ impl AstLoweringCtx {
         });
     }
 
+    /// Emit a parse error diagnostic for syntax errors.
+    pub fn parse_error(&mut self, span: Span, message: impl Into<String>) {
+        self.diagnostics.push(Diagnostic {
+            message: message.into(),
+            span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Parsing,
+        });
+    }
+
     /// Consume the context and return the span builder and diagnostics.
     pub fn finish(self) -> (SpanMapBuilder, Vec<Diagnostic>) {
         (self.span_builder, self.diagnostics)

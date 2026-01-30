@@ -17,8 +17,8 @@ use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use super::context::CaptureInfo;
 
 use crate::ast::{
-    Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId, Module,
-    Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
+    Arm, CtorId, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId,
+    Module, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
     TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
@@ -94,6 +94,44 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     }
 }
 
+/// Pre-scan declarations to register struct field orders.
+///
+/// This ensures Record expressions can be lowered correctly even when they
+/// appear before the struct definition in source order (forward references).
+///
+/// The `module_path` parameter tracks the current module path for CtorId generation,
+/// matching the logic in `resolve::build_env` (which uses an empty path for top-level
+/// definitions and extends it only for nested modules).
+fn prescan_struct_fields<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    decls: &[Decl<TypedRef<'db>>],
+    module_path: &[Symbol],
+) {
+    let path_vec = trunk_ir::SymbolVec::from_slice(module_path);
+    for decl in decls {
+        match decl {
+            Decl::Struct(s) => {
+                let ctor_id = CtorId::new(ctx.db, path_vec.clone(), s.name);
+                let field_names: Vec<Symbol> = s
+                    .fields
+                    .iter()
+                    .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
+                    .collect();
+                ctx.register_struct_fields(ctor_id, field_names);
+            }
+            Decl::Module(m) => {
+                // Recursively scan nested modules
+                if let Some(body) = &m.body {
+                    let mut nested_path: Vec<Symbol> = module_path.to_vec();
+                    nested_path.push(m.name);
+                    prescan_struct_fields(ctx, body, &nested_path);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Lower a module to TrunkIR.
 pub fn lower_module<'db>(
     db: &'db dyn salsa::Database,
@@ -106,9 +144,15 @@ pub fn lower_module<'db>(
     let module_location = span_map.get_or_default(module.id);
     let location = Location::new(path, module_location);
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
+    let module_path = smallvec::smallvec![module_name];
 
     // Create context outside the build closure so we can access lifted_functions after
-    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_name);
+    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_path);
+
+    // Pre-scan: register all struct field orders before lowering any declarations.
+    // This ensures Record expressions can be lowered regardless of declaration order.
+    // Note: Uses empty module_path to match resolve::build_env behavior.
+    prescan_struct_fields(&mut ctx, &module.decls, &[]);
 
     // Build the module body
     let mut top = BlockBuilder::new(db, location);
@@ -389,7 +433,7 @@ fn lower_expr<'db>(
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = id.name(builder.db());
+                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
                 let func_ty = builder.ctx.convert_type(typed_ref.ty);
                 let op =
                     builder
@@ -440,7 +484,7 @@ fn lower_expr<'db>(
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
-                        let callee_name = id.name(builder.db());
+                        let callee_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op = builder.block.op(func::call(
                             builder.db(),
@@ -535,34 +579,91 @@ fn lower_expr<'db>(
             let db = builder.db();
             let result_ty = tribute_rt::any_type(db);
 
-            // Lower field values, propagating errors properly
-            let field_values: Vec<(Symbol, trunk_ir::Value<'db>)> = fields
-                .iter()
-                .map(|(name, expr)| lower_expr(builder, expr.clone()).map(|val| (*name, val)))
-                .collect::<Option<Vec<_>>>()?;
-
-            // Build fields region with tribute.field_arg ops
-            let mut fields_block = BlockBuilder::new(db, location);
-            for (name, val) in &field_values {
-                fields_block.op(tribute::field_arg(db, location, *val, *name));
+            // Spread syntax is not yet supported
+            if spread.is_some() {
+                return builder.emit_unsupported(location, "record spread syntax");
             }
-            let fields_region = Region::new(db, location, idvec![fields_block.build()]);
 
-            // Spread base (optional)
-            let base: Vec<trunk_ir::Value<'db>> = match &spread {
-                Some(s) => vec![lower_expr(builder, s.clone())?],
-                None => vec![],
-            };
+            // Extract struct type name and CtorId
+            let struct_name = extract_type_name(db, &type_name.resolved);
+            let ctor_id = extract_ctor_id(&type_name.resolved);
+            let struct_ty = adt::typeref(db, struct_name);
 
-            // Extract type name from TypedRef
-            let type_name_sym = extract_type_name(db, &type_name.resolved);
-            let op = builder.block.op(tribute::record(
+            // Get field order from struct definition.
+            // Invariant: struct field order must be registered during prescan_struct_fields.
+            // If missing, the pipeline ordering is broken and IR lowering cannot recover.
+            let field_order = builder
+                .ctx
+                .get_struct_field_order(ctor_id)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "ICE: struct `{}` field order not registered before IR lowering",
+                        struct_name
+                    )
+                });
+            let field_order = field_order.clone();
+
+            // Build a set of valid field names for validation
+            let valid_fields: HashSet<Symbol> = field_order.iter().copied().collect();
+
+            // Lower field values into a map for quick lookup
+            // Also check for duplicate and unknown fields
+            let mut field_map: HashMap<Symbol, trunk_ir::Value<'db>> = HashMap::new();
+            for (name, expr) in fields {
+                // Check for unknown field
+                if !valid_fields.contains(&name) {
+                    Diagnostic {
+                        message: format!("unknown field `{}` for struct `{}`", name, struct_name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    continue;
+                }
+
+                // Check for duplicate field
+                if field_map.contains_key(&name) {
+                    Diagnostic {
+                        message: format!("duplicate field `{}`", name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    continue;
+                }
+
+                let val = lower_expr(builder, expr.clone())?;
+                field_map.insert(name, val);
+            }
+
+            // Collect field values in definition order
+            let mut ordered_values: Vec<trunk_ir::Value<'db>> =
+                Vec::with_capacity(field_order.len());
+            for field_name in &field_order {
+                if let Some(val) = field_map.get(field_name) {
+                    ordered_values.push(*val);
+                } else {
+                    // Missing field - emit diagnostic and return nil
+                    Diagnostic {
+                        message: format!("missing field: {}", field_name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    return Some(builder.emit_nil(location));
+                }
+            }
+
+            // Generate adt.struct_new directly
+            let op = builder.block.op(adt::struct_new(
                 db,
                 location,
-                base,
+                ordered_values,
+                struct_ty,
                 result_ty,
-                type_name_sym,
-                fields_region,
             ));
             Some(op.result(db))
         }
@@ -1042,6 +1143,8 @@ fn lower_struct_decl<'db>(
     let name = decl.name;
     let struct_ty = adt::typeref(db, name);
 
+    // Note: struct field order is already registered in prescan_struct_fields
+
     // 1. Build fields region for struct_def
     let mut fields_block = BlockBuilder::new(db, location);
     for field in &decl.fields {
@@ -1071,13 +1174,29 @@ fn lower_struct_decl<'db>(
         })
         .collect();
 
+    // Build qualified accessor names using module_path
+    // This must match what TDNR generates via build_qualified_field_name
+    let module_path = ctx.module_path();
+
     let accessors_module = core::Module::build(db, location, name, |module_builder| {
         for (idx, (field_name, field_type)) in fields.iter().enumerate() {
-            // Generate getter: fn field_name(self: StructType) -> FieldType
+            // Generate getter: fn qualified_name(self: StructType) -> FieldType
+            // Qualified name: module_path::struct_name::field_name
+            let qualified_name = if module_path.is_empty() {
+                Symbol::from_dynamic(&format!("{}::{}", name, field_name))
+            } else {
+                let module_path_str = module_path
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                Symbol::from_dynamic(&format!("{}::{}::{}", module_path_str, name, field_name))
+            };
+
             let getter = func::Func::build(
                 db,
                 location,
-                *field_name,
+                qualified_name,
                 idvec![struct_ty],
                 *field_type,
                 |entry| {
@@ -1167,6 +1286,17 @@ fn lower_enum_decl<'db>(ctx: &mut IrLoweringCtx<'db>, top: &mut BlockBuilder<'db
 fn extract_type_name<'db>(db: &'db dyn salsa::Database, resolved: &ResolvedRef<'db>) -> Symbol {
     match resolved {
         ResolvedRef::Constructor { id, .. } => id.type_name(db),
+        _ => unreachable!("Record type must be a constructor: {:?}", resolved),
+    }
+}
+
+/// Extract the CtorId from a ResolvedRef.
+///
+/// Used for record construction to get the constructor ID.
+/// Record type_name must always resolve to a Constructor.
+fn extract_ctor_id<'db>(resolved: &ResolvedRef<'db>) -> CtorId<'db> {
+    match resolved {
+        ResolvedRef::Constructor { id, .. } => *id,
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }
@@ -1264,7 +1394,7 @@ fn emit_pattern_check<'db>(
     let bool_ty = builder.ctx.bool_type();
 
     match &*pattern.kind {
-        PatternKind::Wildcard | PatternKind::Bind { .. } => {
+        PatternKind::Wildcard | PatternKind::Bind { .. } | PatternKind::Error => {
             // Always matches
             Some(
                 builder
@@ -1355,6 +1485,24 @@ fn emit_literal_check<'db>(
 ) -> Option<trunk_ir::Value<'db>> {
     let bool_ty = builder.ctx.bool_type();
     match lit {
+        LiteralPattern::Nat(n) => {
+            let const_val = builder
+                .block
+                .op(arith::Const::i64(builder.db(), location, *n as i64))
+                .result(builder.db());
+            Some(
+                builder
+                    .block
+                    .op(arith::cmp_eq(
+                        builder.db(),
+                        location,
+                        scrutinee,
+                        const_val,
+                        bool_ty,
+                    ))
+                    .result(builder.db()),
+            )
+        }
         LiteralPattern::Int(n) => {
             let const_val = builder
                 .block
@@ -1574,7 +1722,7 @@ fn bind_pattern_fields<'db>(
                 bind_pattern_fields(ctx, block, location, field_val, field_pat);
             }
         }
-        PatternKind::Wildcard | PatternKind::Literal(_) => {
+        PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {
             // No bindings needed
         }
         PatternKind::Bind { local_id: None, .. } => {
@@ -1648,7 +1796,7 @@ fn convert_annotation_to_ir_type<'db>(
             } else if *name == "Rune" {
                 // Rune is a Unicode code point, represented as i32
                 core::I32::new(ctx.db).as_type()
-            } else if *name == "()" {
+            } else if *name == "Nil" {
                 ctx.nil_type()
             } else {
                 // Unknown named type - use placeholder
@@ -1678,6 +1826,7 @@ mod tests {
     use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectOp;
+    use trunk_ir::SymbolVec;
     use trunk_ir::dialect::func;
 
     fn fresh_node_id() -> NodeId {
@@ -2418,7 +2567,7 @@ mod tests {
             path,
             span_map,
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         // Test Int annotation
@@ -2455,7 +2604,7 @@ mod tests {
             path,
             span_map,
             HashMap::new(),
-            Symbol::new("test"),
+            smallvec::smallvec![Symbol::new("test")],
         );
 
         // No annotation should default to int
@@ -3020,7 +3169,7 @@ mod tests {
                 effect,
             },
         );
-        let func_id = FuncDefId::new(db, callee_name);
+        let func_id = FuncDefId::new(db, SymbolVec::new(), callee_name);
         let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
         let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
         let call = call_expr(callee, vec![int_lit_expr(arg1), int_lit_expr(arg2)]);
@@ -3049,7 +3198,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
         let ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -3079,7 +3228,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
         let callee_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -3472,7 +3621,7 @@ mod tests {
         let v_id = LocalId::new(1);
 
         // Some(v) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,
@@ -3484,7 +3633,7 @@ mod tests {
         let v_ref = TypedRef::new(ResolvedRef::local(v_id, v_name), int_ty);
 
         // None pattern
-        let none_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let none_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let none_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: none_ctor_id,
@@ -3841,7 +3990,7 @@ mod tests {
                 effect,
             },
         );
-        let func_id = FuncDefId::new(db, Symbol::new("add"));
+        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("add"));
         let typed_ref = TypedRef::new(ResolvedRef::Function { id: func_id }, func_ty);
         let callee = Expr::new(fresh_node_id(), ExprKind::Var(typed_ref));
 
@@ -3886,7 +4035,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let ctor_id = CtorId::new(db, Symbol::new("Pair"));
+        let ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Pair"));
         let ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: ctor_id,
@@ -4074,7 +4223,7 @@ mod tests {
         let scrutinee = var_expr(opt_ref);
 
         // Some(x) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,
@@ -4185,7 +4334,7 @@ mod tests {
         let scrutinee = var_expr(opt_ref);
 
         // Some(x) pattern
-        let some_ctor_id = CtorId::new(db, Symbol::new("Option"));
+        let some_ctor_id = CtorId::new(db, SymbolVec::new(), Symbol::new("Option"));
         let some_ctor_ref = TypedRef::new(
             ResolvedRef::Constructor {
                 id: some_ctor_id,

@@ -178,6 +178,67 @@ impl<'db> TypeSubst<'db> {
         (generalized, type_params)
     }
 
+    /// Generalize a type and return the UniVar → BoundVar index mapping.
+    ///
+    /// This is used when you need to apply the same generalization mapping
+    /// to multiple types (e.g., function signature and function body).
+    pub fn generalize_with_mapping(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
+        // Pass 1: collect unresolved UniVars in appearance order
+        let mut univars: Vec<UniVarId<'db>> = Vec::new();
+        self.collect_unresolved_univars(db, ty, row_subst, &mut univars);
+
+        if univars.is_empty() {
+            return (ty, Vec::new(), HashMap::new());
+        }
+
+        // Build UniVar → BoundVar index mapping
+        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (id, i as u32))
+            .collect();
+
+        // Pass 2: replace UniVars with BoundVars
+        let generalized = self.replace_univars_with_bound(db, ty, row_subst, &var_to_index);
+
+        // Build type params (anonymous — names not tracked through UniVar)
+        let type_params: Vec<TypeParam> = univars.iter().map(|_| TypeParam::anonymous()).collect();
+
+        (generalized, type_params, var_to_index)
+    }
+
+    /// Apply a generalization mapping to a type.
+    ///
+    /// This replaces UniVars in the type with BoundVars according to the given mapping.
+    /// UniVars not in the mapping are left unchanged.
+    pub fn apply_generalization(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        var_to_index: &HashMap<UniVarId<'db>, u32>,
+    ) -> Type<'db> {
+        self.replace_univars_with_bound(db, ty, row_subst, var_to_index)
+    }
+
+    /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
+    ///
+    /// Public wrapper for use by other modules.
+    pub fn collect_univars_from_type(
+        &self,
+        db: &'db dyn salsa::Database,
+        ty: Type<'db>,
+        row_subst: &RowSubst<'db>,
+        out: &mut Vec<UniVarId<'db>>,
+    ) {
+        self.collect_unresolved_univars(db, ty, row_subst, out);
+    }
+
     /// Collect unresolved UniVarIds from a type in appearance (left-to-right) order.
     fn collect_unresolved_univars(
         &self,
@@ -242,10 +303,14 @@ impl<'db> TypeSubst<'db> {
     ) -> Type<'db> {
         match ty.kind(db) {
             TypeKind::UniVar { id } => {
-                if let Some(subst_ty) = self.get(*id) {
-                    self.replace_univars_with_bound(db, subst_ty, row_subst, var_to_index)
-                } else if let Some(&index) = var_to_index.get(id) {
+                // Check mapping first: if this UniVar should become a BoundVar,
+                // do so immediately without following the substitution chain.
+                // This is important because when unification binds UniVar(X) -> UniVar(Y),
+                // we want to generalize X (which is in the mapping), not Y (which may not be).
+                if let Some(&index) = var_to_index.get(id) {
                     Type::new(db, TypeKind::BoundVar { index })
+                } else if let Some(subst_ty) = self.get(*id) {
+                    self.replace_univars_with_bound(db, subst_ty, row_subst, var_to_index)
                 } else {
                     ty
                 }
@@ -421,7 +486,8 @@ impl<'db> TypeSolver<'db> {
 
     /// Solve a set of constraints.
     pub fn solve(&mut self, constraints: ConstraintSet<'db>) -> Result<(), SolveError<'db>> {
-        for constraint in constraints.into_constraints() {
+        let constraints_vec = constraints.into_constraints();
+        for constraint in constraints_vec.into_iter() {
             self.solve_constraint(constraint)?;
         }
         Ok(())

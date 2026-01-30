@@ -1,0 +1,32 @@
+---
+source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 197
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        tribute.struct_def,
+        Module(Point) {
+            operations: [
+                func @test::Point::x(adt.typeref) -> core.i64 {
+                    body: [
+                        "adt.struct_get",
+                        "func.return",
+                    ],
+                },
+                func @test::Point::y(adt.typeref) -> core.i64 {
+                    body: [
+                        "adt.struct_get",
+                        "func.return",
+                    ],
+                },
+            ],
+        },
+        func @make_point() -> tribute_rt.any {
+            body: [
+                "arith.const",
+                "func.return",
+            ],
+        },
+    ],
+}

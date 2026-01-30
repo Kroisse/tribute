@@ -11,7 +11,6 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::helpers::is_comment;
 use super::patterns::lower_pattern;
-use crate::tirgen::parse_rune_literal;
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
@@ -203,7 +202,11 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
 fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let callee_node = node.child_by_field_name("function");
-    let args_node = node.child_by_field_name("arguments");
+    // Note: tree-sitter grammar doesn't define "arguments" field for call_expression,
+    // so we find argument_list by kind instead
+    let args_node = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "argument_list");
 
     let Some(callee_node) = callee_node else {
         return ExprKind::Error;
@@ -241,7 +244,11 @@ fn lower_method_call(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
 fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let name_node = node.child_by_field_name("constructor");
-    let args_node = node.child_by_field_name("arguments");
+
+    // argument_list doesn't have a field name in the grammar, so we find it by kind
+    let args_node = node
+        .named_children(&mut node.walk())
+        .find(|child| child.kind() == "argument_list");
 
     let Some(name_node) = name_node else {
         return ExprKind::Error;
@@ -343,10 +350,18 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
     let mut stmts = Vec::new();
     let mut cursor = node.walk();
 
-    // Collect non-comment, non-error children
+    // Collect non-comment children, emitting diagnostics for ERROR nodes
     let children: Vec<_> = node
         .named_children(&mut cursor)
-        .filter(|c| !is_comment(c.kind()) && c.kind() != "ERROR")
+        .filter(|c| {
+            if c.kind() == "ERROR" {
+                let span = trunk_ir::Span::new(c.start_byte(), c.end_byte());
+                ctx.parse_error(span, "syntax error: unexpected token");
+                false
+            } else {
+                !is_comment(c.kind())
+            }
+        })
         .collect();
 
     // Process all but the last child as statements
@@ -900,5 +915,32 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
             .unwrap_or("")
             .as_bytes()
             .to_vec()
+    }
+}
+
+/// Parse a rune (character) literal.
+fn parse_rune_literal(text: &str) -> Option<char> {
+    // Format: ?c, ?\n, ?\xHH, ?\uHHHH
+    let text = text.strip_prefix('?')?;
+
+    if let Some(escape) = text.strip_prefix('\\') {
+        match escape.chars().next()? {
+            'n' => Some('\n'),
+            'r' => Some('\r'),
+            't' => Some('\t'),
+            '\\' => Some('\\'),
+            '0' => Some('\0'),
+            'x' => {
+                let hex = &escape[1..];
+                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+            }
+            'u' => {
+                let hex = &escape[1..];
+                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
+            }
+            _ => None,
+        }
+    } else {
+        text.chars().next()
     }
 }

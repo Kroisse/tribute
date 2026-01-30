@@ -8,7 +8,7 @@
 //! The AST uses a generic parameter `V` that varies by phase, allowing
 //! the same structure to represent the AST at different compilation stages.
 
-use trunk_ir::Symbol;
+use trunk_ir::{Symbol, SymbolVec};
 
 use super::node_id::NodeId;
 use super::types::Type;
@@ -74,18 +74,66 @@ impl LocalId {
 
 /// A unique identifier for a function definition.
 ///
-/// FuncDefIds are tracked by Salsa for incremental compilation.
-#[salsa::tracked(debug)]
+/// FuncDefId is interned (not tracked) so that the same (module_path, name)
+/// always produces the same FuncDefId, regardless of where it's created.
+#[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
+    /// The module path (e.g., ["foo", "bar"]).
+    #[returns(ref)]
+    pub module_path: SymbolVec,
     /// The function name.
     pub name: Symbol,
 }
 
+impl<'db> FuncDefId<'db> {
+    /// Build a qualified name string for IR generation.
+    ///
+    /// Returns the full qualified name like "foo::bar::func_name".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+        let module_path = self.module_path(db);
+        if module_path.is_empty() {
+            self.name(db).to_string()
+        } else {
+            let path_str = module_path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            format!("{}::{}", path_str, self.name(db))
+        }
+    }
+}
+
 /// A unique identifier for a constructor (enum variant or struct).
-#[salsa::tracked(debug)]
+///
+/// CtorId is interned (not tracked) so that the same (module_path, type_name)
+/// always produces the same CtorId, regardless of where it's created.
+#[salsa::interned(debug)]
 pub struct CtorId<'db> {
+    /// The module path (e.g., ["std", "option"]).
+    #[returns(ref)]
+    pub module_path: SymbolVec,
     /// The type name (enum or struct name).
     pub type_name: Symbol,
+}
+
+impl<'db> CtorId<'db> {
+    /// Build a qualified name string for IR generation.
+    ///
+    /// Returns the full qualified name like "std::option::Option".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+        let module_path = self.module_path(db);
+        if module_path.is_empty() {
+            self.type_name(db).to_string()
+        } else {
+            let path_str = module_path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            format!("{}::{}", path_str, self.type_name(db))
+        }
+    }
 }
 
 /// Reference to a builtin operation or value.

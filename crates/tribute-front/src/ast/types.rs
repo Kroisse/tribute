@@ -11,6 +11,7 @@
 use trunk_ir::Symbol;
 
 use super::NodeId;
+use super::phases::FuncDefId;
 
 /// A monomorphic type.
 ///
@@ -25,10 +26,16 @@ pub struct Type<'db> {
 
 /// Source of a unification variable.
 ///
-/// This identifies where a type variable came from, for debugging purposes.
+/// This identifies where a type variable came from, enabling unique identification
+/// across functions and aiding debugging.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub enum UniVarSource {
-    /// Anonymous type variable (for lambdas, local bindings, polymorphic instantiation, etc.).
+pub enum UniVarSource<'db> {
+    /// Type variable created within a specific function.
+    /// - `func_id`: The function definition ID (provides unique identification)
+    /// - `index`: Local index within that function (0, 1, 2, ...)
+    FunctionLocal { func_id: FuncDefId<'db>, index: u64 },
+
+    /// Anonymous type variable (for tests or contexts without a function name).
     /// The u64 is a unique counter value.
     Anonymous(u64),
 }
@@ -40,7 +47,7 @@ pub enum UniVarSource {
 #[salsa::interned(debug)]
 pub struct UniVarId<'db> {
     /// The source of this type variable.
-    pub source: UniVarSource,
+    pub source: UniVarSource<'db>,
     /// Index within the type scheme's parameters (0, 1, 2, ...).
     pub index: u32,
 }

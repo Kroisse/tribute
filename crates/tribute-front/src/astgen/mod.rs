@@ -17,8 +17,8 @@ mod helpers;
 mod patterns;
 
 use crate::ast::{Module, SpanMap, SpanMapBuilder, UnresolvedName};
+use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
-use crate::tirgen::ParsedCst;
 use ropey::Rope;
 
 pub use context::AstLoweringCtx;
@@ -49,12 +49,33 @@ fn lower_cst_to_ast_internal(
 ) -> LoweringResult {
     let mut ctx = AstLoweringCtx::new(source.clone());
     let root = cst.root_node();
+
+    // Check for ERROR nodes anywhere in the CST
+    collect_error_nodes(&mut ctx, root);
+
     let module = lower_module(&mut ctx, root, module_name);
     let (span_builder, diagnostics) = ctx.finish();
     LoweringResult {
         module,
         span_builder,
         diagnostics,
+    }
+}
+
+/// Recursively collect ERROR nodes from the CST and emit parse error diagnostics.
+fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
+    if node.kind() == "ERROR" {
+        let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
+        ctx.parse_error(span, "syntax error: unexpected token");
+        return; // Don't recurse into ERROR nodes
+    }
+
+    // Only recurse if there might be errors below
+    if node.has_error() {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_error_nodes(ctx, child);
+        }
     }
 }
 
@@ -88,14 +109,28 @@ pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<ParsedAst<'db>> {
-    use crate::tirgen::parse_cst;
+    let module_name = derive_module_name_from_uri(source.uri(db));
+    lower_source_to_parsed_ast_with_module_path(db, source, module_name)
+}
+
+/// Parse and lower a source file to AST with a specific module path.
+///
+/// This variant allows specifying a custom module path for the AST nodes,
+/// which is useful for parsing library modules (like the prelude) where
+/// NodeIds need a different path to avoid collisions with user code.
+#[salsa::tracked]
+pub fn lower_source_to_parsed_ast_with_module_path<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+    module_path: Option<trunk_ir::Symbol>,
+) -> Option<ParsedAst<'db>> {
+    use crate::query::parse_cst;
 
     use salsa::Accumulator;
 
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
-    let module_name = derive_module_name_from_uri(source.uri(db));
-    let result = lower_cst_to_ast_internal(text, &cst, module_name);
+    let result = lower_cst_to_ast_internal(text, &cst, module_path);
     for diag in result.diagnostics {
         diag.accumulate(db);
     }

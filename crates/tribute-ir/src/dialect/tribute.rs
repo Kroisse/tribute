@@ -1,38 +1,24 @@
 //! Tribute language AST/HIR dialect.
 //!
-//! This dialect represents ALL Tribute-specific high-level operations that exist
-//! before lowering to target-independent IR (cont, func, scf, etc.).
+//! This dialect represents Tribute-specific high-level operations.
 //!
 //! ## Dialect Organization
 //!
-//! **Unresolved operations** (eliminated after resolve/TDNR):
-//! - `tribute.call`, `tribute.path`, `tribute.binop`
-//! - `tribute.type` (unresolved type reference)
-//!
 //! **Type definitions** (metadata):
-//! - `tribute.struct_def`, `tribute.enum_def`, `tribute.ability_def`
+//! - `tribute.struct_def`, `tribute.enum_def`
 //! - `tribute.field_def`, `tribute.variant_def` (helpers inside definitions)
 //!
-//! **Effect definitions** (inside ability_def):
-//! - `tribute.op_def` (ability operation declaration)
-//! - `tribute.handle` (handler expression)
+//! **Data construction**:
+//! - `tribute.tuple` (tuple construction)
 //!
-//! **Block and control flow**:
-//! - `tribute.block`, `tribute.yield` (unified src.yield + case.yield)
-//! - `tribute.lambda`, `tribute.tuple`, `tribute.const`, `tribute.use`
-//!
-//! **Pattern matching** (lowered to scf dialect):
-//! - `tribute.case`, `tribute.arm`, `tribute.let`, `tribute.guard`
+//! **Effect system** (handler support, kept for reference):
+//! - `tribute.ability_def`, `tribute.op_def` (ability declarations)
+//! - `tribute.handle`, `tribute.arm` (handler expressions)
 //!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
-//! - (primitive types moved to `tribute_rt` dialect)
 //! - `tribute.type_var`, `tribute.error_type` (type inference)
-//!
-//! ## Pattern Region
-//!
-//! Patterns are represented using the `tribute_pat` dialect operations
-//! within a region of `tribute.arm` or `tribute.let`.
+//! - `tribute.tuple_type` (tuple type cons cell)
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -62,124 +48,11 @@ pub mod block_arg_attrs {
 
 dialect! {
     mod tribute {
-        // === Unresolved operations (eliminated after resolve/TDNR) ===
-
-        /// `tribute.call` operation: unresolved function call.
-        /// The callee name will be resolved to a concrete function reference.
-        #[attr(name: Symbol)]
-        fn call(#[rest] args) -> result;
-
-        /// `tribute.cons` operation: positional constructor application.
-        ///
-        /// Used for positional/tuple-style construction:
-        /// - Enum variants: `Some(42)`, `Ok(value)`
-        /// - Structs with positional fields
-        ///
-        /// For record-style construction with named fields, use `tribute.record`.
-        #[attr(name: Symbol)]
-        fn cons(#[rest] args) -> result;
-
-        /// `tribute.record` operation: record-style construction with named fields.
-        ///
-        /// The fields region contains `tribute.field_arg` operations, each pairing
-        /// a field name with its value. This ensures field names and values stay in sync.
-        ///
-        /// For normal construction (`User { name: "foo", age: 30 }`):
-        /// - `base` operand is empty (no spread)
-        /// - fields region has field_arg for each field
-        ///
-        /// For record spread syntax (`User { ..base, field: value }`):
-        /// - `base` operand contains the spread source value
-        /// - fields region contains only the override fields
-        /// - resolve pass fills in non-overridden fields from base
-        #[attr(name: Symbol)]
-        fn record(#[rest] base) -> result {
-            #[region(fields)] {}
-        };
-
-        /// `tribute.field_arg` operation: a field value within record.
-        ///
-        /// Used inside `tribute.record` fields region to pair field name with its value.
-        /// This ensures the field name and value are always kept together.
-        #[attr(name: Symbol)]
-        fn field_arg(value);
-
-        /// `tribute.path` operation: explicitly qualified path reference.
-        /// Always refers to a module-level or type-level definition, never local.
-        #[attr(path: Symbol)]
-        fn path() -> result;
-
-        /// `tribute.ref` operation: local variable reference.
-        /// Wraps a local binding (block argument) to preserve source location for hover.
-        /// This is a pass-through operation - it simply returns its input value.
-        /// The `name` attribute holds the variable name for debugging purposes.
-        #[attr(name: Symbol)]
-        fn r#ref(value) -> result;
-
-        /// `tribute.binop` operation: unresolved binary operation.
-        /// Used for operators that need type-directed resolution (e.g., `<>` concat).
-        /// The `op` attribute holds the operator name.
-        #[attr(op: Symbol)]
-        fn binop(lhs, rhs) -> result;
-
-        // === Block and control flow ===
-
-        /// `tribute.block` operation: block expression.
-        /// Preserves block structure for source mapping and analysis.
-        /// The body region contains the statements, and the result is the block's value.
-        fn block() -> result {
-            #[region(body)] {}
-        };
-
-        /// `tribute.yield` operation: yields a value from a block or case arm.
-        /// Used to specify the result value of a `tribute.block` or `tribute.arm`.
-        fn r#yield(value);
-
-        /// `tribute.let` operation: let binding with pattern matching.
-        ///
-        /// Returns one result for each binding in the pattern.
-        /// The pattern region uses `tribute_pat.*` operations.
-        /// The downstream pass (tribute_to_scf) extracts values from `value`
-        /// and returns them as the operation's results.
-        ///
-        /// Example:
-        /// ```text
-        /// %x, %y = tribute.let %pair {
-        ///     tribute_pat.variant("Pair") {
-        ///         tribute_pat.bind("x")
-        ///         tribute_pat.bind("y")
-        ///     }
-        /// }
-        /// arith.add %x, %y
-        /// ```
-        fn r#let(value) -> #[rest] results {
-            #[region(pattern)] {}
-        };
-
-        /// `tribute.lambda` operation: lambda expression.
-        /// Represents an anonymous function before capture analysis.
-        /// The `type` attribute holds the function type (params -> result).
-        /// The body region contains the lambda body, ending with `tribute.yield`.
-        #[attr(r#type: Type)]
-        fn lambda() -> result {
-            #[region(body)] {}
-        };
+        // === Data construction ===
 
         /// `tribute.tuple` operation: tuple construction.
         /// Takes variadic operands (tuple elements) and produces a tuple value.
         fn tuple(#[rest] elements) -> result;
-
-        /// `tribute.const` operation: constant definition.
-        /// Represents a named constant value before resolution.
-        /// Unlike functions, constants are evaluated once and their value is inlined at use sites.
-        /// The `value` attribute holds the literal value (IntBits, FloatBits, String, etc.).
-        #[attr(name: Symbol, value: any)]
-        fn r#const() -> result;
-
-        /// `tribute.use` operation: import declaration.
-        /// Carries the fully qualified path and an optional local alias.
-        #[attr(path: Symbol, alias: Symbol, is_pub: bool)]
-        fn r#use();
 
         // === Type declarations (metadata) ===
 
@@ -266,30 +139,12 @@ dialect! {
             #[region(arms)] {}
         };
 
-        // === Pattern matching (lowered to scf dialect) ===
-
-        /// `tribute.case` operation: pattern matching expression.
-        /// Takes a scrutinee and has a body region containing `tribute.arm` operations.
-        /// All arms must yield the same type.
-        fn case(scrutinee) -> result {
-            #[region(body)] {}
-        };
-
-        /// `tribute.arm` operation: a single pattern-matching arm.
+        /// `tribute.arm` operation: a single pattern-matching arm (used in handler arms).
         /// The pattern region contains a tree of `tribute_pat.*` operations.
-        /// The body region contains the arm's expression (ends with `tribute.yield`).
-        /// Guards are represented as nested `tribute.guard` operations within the body.
+        /// The body region contains the arm's expression.
         fn arm() {
             #[region(pattern)] {}
             #[region(body)] {}
-        };
-
-        /// `tribute.guard` operation: conditional guard on a pattern arm.
-        /// Executes the condition; if true, continues with the guarded body.
-        /// The `else` region is for fallthrough to next arm/guard.
-        fn guard(cond) {
-            #[region(then)] {}
-            #[region(r#else)] {}
         };
 
         // === Types ===
@@ -479,7 +334,7 @@ fn print_tuple_type(
 ) -> std::fmt::Result {
     let params = ty.params(db);
     if params.is_empty() {
-        return f.write_str("()");
+        return f.write_str("#()");
     }
 
     // Flatten cons cells into a list

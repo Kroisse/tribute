@@ -10,7 +10,7 @@ use trunk_ir::Symbol;
 use crate::ast::{CtorId, FuncDefId};
 
 /// Information about a resolved name binding.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function { id: FuncDefId<'db> },
@@ -43,7 +43,7 @@ pub enum Binding<'db> {
 /// Module environment for name resolution.
 ///
 /// Tracks all names visible in the current module.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, salsa::Update)]
 pub struct ModuleEnv<'db> {
     /// Names defined in this module (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,
@@ -95,6 +95,30 @@ impl<'db> ModuleEnv<'db> {
         self.imports.insert(name, binding);
     }
 
+    /// Add an import only if no binding exists for that name.
+    ///
+    /// This is used to expose prelude definitions at the top level
+    /// without overriding user-defined names.
+    pub fn add_import_if_absent(&mut self, name: Symbol, binding: Binding<'db>) {
+        if !self.definitions.contains_key(&name) && !self.imports.contains_key(&name) {
+            self.imports.insert(name, binding);
+        }
+    }
+
+    /// Add a qualified name to a namespace only if it doesn't already exist.
+    pub fn add_to_namespace_if_absent(
+        &mut self,
+        namespace: Symbol,
+        name: Symbol,
+        binding: Binding<'db>,
+    ) {
+        self.namespaces
+            .entry(namespace)
+            .or_default()
+            .entry(name)
+            .or_insert(binding);
+    }
+
     /// Look up an unqualified name.
     pub fn lookup(&self, name: Symbol) -> Option<&Binding<'db>> {
         // First check local definitions
@@ -127,5 +151,23 @@ impl<'db> ModuleEnv<'db> {
         self.namespaces
             .iter()
             .map(|(ns, bindings)| (*ns, bindings.iter().map(|(k, v)| (*k, v))))
+    }
+
+    /// Merge another environment into this one.
+    ///
+    /// Self takes precedence: user definitions shadow prelude.
+    /// This is used to inject prelude bindings into user code's environment.
+    pub fn merge(&mut self, other: &ModuleEnv<'db>) {
+        // Add other's definitions as imports (so they don't override user definitions)
+        for (name, binding) in other.iter_definitions() {
+            self.add_import_if_absent(name, binding.clone());
+        }
+
+        // Add other's namespaces
+        for (ns, bindings) in other.iter_namespaces() {
+            for (name, binding) in bindings {
+                self.add_to_namespace_if_absent(ns, name, binding.clone());
+            }
+        }
     }
 }
