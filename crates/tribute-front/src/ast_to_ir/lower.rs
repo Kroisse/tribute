@@ -433,7 +433,7 @@ fn lower_expr<'db>(
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
+                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
                 let func_ty = builder.ctx.convert_type(typed_ref.ty);
                 let op =
                     builder
@@ -486,7 +486,8 @@ fn lower_expr<'db>(
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
-                        let callee_name = Symbol::from_dynamic(&id.qualified_name(builder.db()));
+                        let callee_name =
+                            Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op = builder.block.op(func::call(
                             builder.db(),

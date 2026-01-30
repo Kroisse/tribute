@@ -115,15 +115,14 @@ pub struct FuncDefId<'db> {
 }
 
 impl<'db> FuncDefId<'db> {
-    /// Build a qualified name string for IR generation.
+    /// Build a qualified name for IR generation.
     ///
-    /// Returns the full qualified name like "foo::bar::func_name".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+    /// Returns a displayable qualified name like "foo::bar::func_name".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
         QualifiedName {
             module_path: self.module_path(db),
             name: self.name(db),
         }
-        .to_string()
     }
 }
 
@@ -145,15 +144,14 @@ pub struct TypeDefId<'db> {
 }
 
 impl<'db> TypeDefId<'db> {
-    /// Build a qualified name string for IR generation.
+    /// Build a qualified name for IR generation.
     ///
-    /// Returns the full qualified name like "std::option::Option".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+    /// Returns a displayable qualified name like "std::option::Option".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
         QualifiedName {
             module_path: self.module_path(db),
             name: self.name(db),
         }
-        .to_string()
     }
 }
 
@@ -175,15 +173,14 @@ pub struct CtorId<'db> {
 }
 
 impl<'db> CtorId<'db> {
-    /// Build a qualified name string for IR generation.
+    /// Build a qualified name for IR generation.
     ///
-    /// Returns the full qualified name like "std::option::Some".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> String {
+    /// Returns a displayable qualified name like "std::option::Some".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
         QualifiedName {
             module_path: self.module_path(db),
             name: self.ctor_name(db),
         }
-        .to_string()
     }
 }
 
