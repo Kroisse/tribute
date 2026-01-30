@@ -334,7 +334,7 @@ fn print_tuple_type(
 ) -> std::fmt::Result {
     let params = ty.params(db);
     if params.is_empty() {
-        return f.write_str("()");
+        return f.write_str("#()");
     }
 
     // Flatten cons cells into a list

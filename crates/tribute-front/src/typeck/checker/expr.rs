@@ -1172,7 +1172,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.bytes_type()
                 } else if *name == "Rune" {
                     ctx.rune_type()
-                } else if *name == "()" {
+                } else if *name == "Nil" {
                     ctx.nil_type()
                 } else {
                     ctx.named_type(*name, vec![])

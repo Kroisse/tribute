@@ -449,7 +449,7 @@ impl<'db> TypeChecker<'db> {
             self.env.bytes_type()
         } else if name == "Rune" {
             self.env.rune_type()
-        } else if name == "()" {
+        } else if name == "Nil" {
             self.env.nil_type()
         } else {
             self.env.named_type(name, vec![])

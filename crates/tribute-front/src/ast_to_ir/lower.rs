@@ -1742,7 +1742,7 @@ fn convert_annotation_to_ir_type<'db>(
             } else if *name == "Rune" {
                 // Rune is a Unicode code point, represented as i32
                 core::I32::new(ctx.db).as_type()
-            } else if *name == "()" {
+            } else if *name == "Nil" {
                 ctx.nil_type()
             } else {
                 // Unknown named type - use placeholder

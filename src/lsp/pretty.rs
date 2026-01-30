@@ -215,7 +215,7 @@ mod tests {
 
         // Nil
         let nil_ty = *Nil::new(db);
-        assert_eq!(print_type(db, nil_ty), "()");
+        assert_eq!(print_type(db, nil_ty), "Nil");
     }
 
     #[salsa_test]
@@ -226,10 +226,10 @@ mod tests {
         let func_ty = *Func::new(db, idvec![int_ty, int_ty], int_ty);
         assert_eq!(print_type(db, func_ty), "fn(Int, Int) -> Int");
 
-        // fn() -> ()
+        // fn() -> Nil
         let nil_ty = *Nil::new(db);
         let unit_func = *Func::new(db, IdVec::new(), nil_ty);
-        assert_eq!(print_type(db, unit_func), "fn() -> ()");
+        assert_eq!(print_type(db, unit_func), "fn() -> Nil");
     }
 
     #[salsa_test]
@@ -283,7 +283,7 @@ mod tests {
 
         assert_eq!(result.signatures.len(), 1);
         let sig = &result.signatures[0];
-        assert_eq!(sig.label, "fn hello() -> ()");
+        assert_eq!(sig.label, "fn hello() -> Nil");
         assert!(sig.documentation.is_some());
     }
 
@@ -336,7 +336,7 @@ mod tests {
         let sig = FunctionSignature {
             name: Symbol::new("greet"),
             params: vec![(Symbol::new("name"), Some("Text".to_string()))],
-            return_ty: Some("()".to_string()),
+            return_ty: Some("Nil".to_string()),
             effects: Some("Console".to_string()),
             span: Span::default(),
         };
@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(result.signatures.len(), 1);
         assert_eq!(
             result.signatures[0].label,
-            "fn greet(name: Text) ->{Console} ()"
+            "fn greet(name: Text) ->{Console} Nil"
         );
     }
 
@@ -378,7 +378,7 @@ mod tests {
         let sig = FunctionSignature {
             name: Symbol::new("hello"),
             params: vec![],
-            return_ty: Some("()".to_string()),
+            return_ty: Some("Nil".to_string()),
             effects: None,
             span: Span::default(),
         };

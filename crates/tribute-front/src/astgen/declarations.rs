@@ -667,7 +667,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
             let id = ctx.fresh_id_with_span(&node);
             TypeAnnotation {
                 id,
-                kind: TypeAnnotationKind::Named(Symbol::new("()")),
+                kind: TypeAnnotationKind::Named(Symbol::new("Nil")),
             }
         });
 
