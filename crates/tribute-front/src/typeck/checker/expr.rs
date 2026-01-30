@@ -10,11 +10,12 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
-    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    Arm, BinOpKind, BuiltinRef, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
+    LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
+use super::super::subst;
 use super::{Mode, TypeChecker};
 
 impl<'db> TypeChecker<'db> {
@@ -489,163 +490,20 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Substitute BoundVars in a type with actual types.
+    ///
+    /// Panics if a BoundVar index is out of bounds.
     fn substitute_bound_vars(
         &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        _ctx: &mut FunctionInferenceContext<'_, 'db>,
         ty: Type<'db>,
         args: &[Type<'db>],
     ) -> Type<'db> {
-        match ty.kind(self.db()) {
-            TypeKind::BoundVar { index } => {
-                // Substitute with actual type argument
-                args.get(*index as usize).copied().unwrap_or_else(|| {
-                    // BoundVar index out of range - use fresh type var
-                    ctx.fresh_type_var()
-                })
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let subst_params: Vec<_> = params
-                    .iter()
-                    .map(|p| self.substitute_bound_vars(ctx, *p, args))
-                    .collect();
-                let subst_result = self.substitute_bound_vars(ctx, *result, args);
-                let subst_effect = self.substitute_bound_vars_in_effect(*effect, args);
-                ctx.func_type(subst_params, subst_result, subst_effect)
-            }
-            TypeKind::Named { name, args: targs } => {
-                let subst_args: Vec<_> = targs
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(ctx, *a, args))
-                    .collect();
-                ctx.named_type(*name, subst_args)
-            }
-            TypeKind::App {
-                ctor,
-                args: app_args,
-            } => {
-                let subst_ctor = self.substitute_bound_vars(ctx, *ctor, args);
-                let subst_args: Vec<_> = app_args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(ctx, *a, args))
-                    .collect();
-                Type::new(
-                    self.db(),
-                    TypeKind::App {
-                        ctor: subst_ctor,
-                        args: subst_args,
-                    },
-                )
-            }
-            TypeKind::Tuple(elems) => {
-                let subst_elems: Vec<_> = elems
-                    .iter()
-                    .map(|e| self.substitute_bound_vars(ctx, *e, args))
-                    .collect();
-                Type::new(self.db(), TypeKind::Tuple(subst_elems))
-            }
-            // Other types don't contain BoundVars
-            _ => ty,
-        }
-    }
-
-    /// Substitute BoundVars in an effect row with actual types.
-    fn substitute_bound_vars_in_effect(
-        &self,
-        effect: EffectRow<'db>,
-        args: &[Type<'db>],
-    ) -> EffectRow<'db> {
-        let effects = effect.effects(self.db());
-        if effects.is_empty() {
-            return effect;
-        }
-
-        let subst_effects: Vec<Effect<'db>> = effects
-            .iter()
-            .map(|e| {
-                let subst_args: Vec<Type<'db>> = e
-                    .args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
-                    .collect();
-                Effect {
-                    name: e.name,
-                    args: subst_args,
-                }
-            })
-            .collect();
-
-        EffectRow::new(self.db(), subst_effects, effect.rest(self.db()))
-    }
-
-    /// Substitute BoundVars in a type without needing a FunctionInferenceContext.
-    ///
-    /// This is used for effect row substitution where we don't have access to ctx.
-    fn substitute_bound_vars_in_type(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
-        match ty.kind(self.db()) {
-            TypeKind::BoundVar { index } => args.get(*index as usize).copied().unwrap_or(ty),
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let subst_params: Vec<_> = params
-                    .iter()
-                    .map(|p| self.substitute_bound_vars_in_type(*p, args))
-                    .collect();
-                let subst_result = self.substitute_bound_vars_in_type(*result, args);
-                let subst_effect = self.substitute_bound_vars_in_effect(*effect, args);
-                Type::new(
-                    self.db(),
-                    TypeKind::Func {
-                        params: subst_params,
-                        result: subst_result,
-                        effect: subst_effect,
-                    },
-                )
-            }
-            TypeKind::Named { name, args: targs } => {
-                let subst_args: Vec<_> = targs
-                    .iter()
-                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
-                    .collect();
-                Type::new(
-                    self.db(),
-                    TypeKind::Named {
-                        name: *name,
-                        args: subst_args,
-                    },
-                )
-            }
-            TypeKind::App {
-                ctor,
-                args: app_args,
-            } => {
-                let subst_ctor = self.substitute_bound_vars_in_type(*ctor, args);
-                let subst_args: Vec<_> = app_args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
-                    .collect();
-                Type::new(
-                    self.db(),
-                    TypeKind::App {
-                        ctor: subst_ctor,
-                        args: subst_args,
-                    },
-                )
-            }
-            TypeKind::Tuple(elems) => {
-                let subst_elems: Vec<_> = elems
-                    .iter()
-                    .map(|e| self.substitute_bound_vars_in_type(*e, args))
-                    .collect();
-                Type::new(self.db(), TypeKind::Tuple(subst_elems))
-            }
-            _ => ty,
-        }
+        subst::substitute_bound_vars(self.db(), ty, args).unwrap_or_else(|index, max| {
+            panic!(
+                "BoundVar index out of range: index={}, subst.len()={}",
+                index, max
+            )
+        })
     }
 
     // =========================================================================
@@ -2165,22 +2023,19 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_substitute_out_of_bounds_uses_fresh_var(db: &dyn salsa::Database) {
+    #[should_panic(expected = "BoundVar index out of range")]
+    fn test_substitute_out_of_bounds_panics(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
 
-        // BoundVar(5) + [Int] → fresh type var (out of bounds fallback)
+        // BoundVar(5) + [Int] → should panic (out of bounds)
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 5 });
         let int_ty = Type::new(db, TypeKind::Int);
         let args = vec![int_ty];
 
-        let result = checker.substitute_bound_vars(&mut ctx, bound_var, &args);
-        // Should be a fresh UniVar
-        assert!(
-            matches!(result.kind(db), TypeKind::UniVar { .. }),
-            "Out-of-bounds BoundVar should fall back to fresh UniVar"
-        );
+        // This should panic
+        checker.substitute_bound_vars(&mut ctx, bound_var, &args);
     }
 
     #[salsa_test]

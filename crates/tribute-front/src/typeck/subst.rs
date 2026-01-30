@@ -135,8 +135,7 @@ pub fn substitute_bound_vars<'db>(
 
 /// Substitute BoundVars within an effect row.
 ///
-/// Note: Effect row substitution silently falls back to the original type
-/// if a BoundVar is out of bounds. This matches the existing behavior.
+/// Panics if a BoundVar index is out of bounds.
 pub fn substitute_effect_row<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
@@ -152,7 +151,12 @@ pub fn substitute_effect_row<'db>(
                 .args
                 .iter()
                 .map(|a| {
-                    substitute_bound_vars(db, *a, subst).unwrap_or(*a) // Silent fallback
+                    substitute_bound_vars(db, *a, subst).unwrap_or_else(|index, max| {
+                        panic!(
+                            "BoundVar index out of range in effect row: index={}, subst.len()={}",
+                            index, max
+                        )
+                    })
                 })
                 .collect();
             if new_args != effect.args {

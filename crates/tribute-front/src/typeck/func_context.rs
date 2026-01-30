@@ -14,12 +14,13 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
-    UniVarId, UniVarSource,
+    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
+    UniVarSource,
 };
 
 use super::constraint::ConstraintSet;
 use super::context::ModuleTypeEnv;
+use super::subst;
 
 /// Function-level type inference context.
 ///
@@ -274,84 +275,15 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Substitute bound variables with given types.
-    fn substitute_bound_vars(&self, ty: Type<'db>, subst: &[Type<'db>]) -> Type<'db> {
-        match ty.kind(self.db) {
-            TypeKind::BoundVar { index } => subst.get(*index as usize).copied().unwrap_or(ty),
-            TypeKind::Named { name, args } => {
-                let args = args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::Named { name: *name, args })
-            }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let params = params
-                    .iter()
-                    .map(|p| self.substitute_bound_vars(*p, subst))
-                    .collect();
-                let result = self.substitute_bound_vars(*result, subst);
-                let effect = self.substitute_effect_row(*effect, subst);
-                Type::new(
-                    self.db,
-                    TypeKind::Func {
-                        params,
-                        result,
-                        effect,
-                    },
-                )
-            }
-            TypeKind::Tuple(elements) => {
-                let elements = elements
-                    .iter()
-                    .map(|e| self.substitute_bound_vars(*e, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::Tuple(elements))
-            }
-            TypeKind::App { ctor, args } => {
-                let ctor = self.substitute_bound_vars(*ctor, subst);
-                let args = args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                Type::new(self.db, TypeKind::App { ctor, args })
-            }
-            // Primitive types and other type variables are unchanged
-            _ => ty,
-        }
-    }
-
-    /// Substitute bound variables within an effect row.
-    fn substitute_effect_row(&self, row: EffectRow<'db>, subst: &[Type<'db>]) -> EffectRow<'db> {
-        let effects = row.effects(self.db);
-        let mut changed = false;
-
-        let new_effects: Vec<_> = effects
-            .iter()
-            .map(|effect| {
-                let new_args: Vec<_> = effect
-                    .args
-                    .iter()
-                    .map(|a| self.substitute_bound_vars(*a, subst))
-                    .collect();
-                if new_args != effect.args {
-                    changed = true;
-                }
-                Effect {
-                    name: effect.name,
-                    args: new_args,
-                }
-            })
-            .collect();
-
-        if changed {
-            EffectRow::new(self.db, new_effects, row.rest(self.db))
-        } else {
-            row
-        }
+    ///
+    /// Panics if a BoundVar index is out of bounds.
+    fn substitute_bound_vars(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
+        subst::substitute_bound_vars(self.db, ty, args).unwrap_or_else(|index, max| {
+            panic!(
+                "BoundVar index out of range: index={}, subst.len()={}",
+                index, max
+            )
+        })
     }
 
     // =========================================================================
