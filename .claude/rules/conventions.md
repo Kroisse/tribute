@@ -61,7 +61,7 @@ fn check_expr(&mut self, expr: ..., expected: Type) { ... }
 ### Type Variables and Unification
 
 - Fresh type variables for unknowns
-- Union-find based constraint solver in `crates/tribute-front/src/typeck/solver.rs`
+- Union-find-based constraint solver in `crates/tribute-front/src/typeck/solver.rs`
 - Substitution applied after solving
 
 ## Name Resolution

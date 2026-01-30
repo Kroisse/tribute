@@ -167,7 +167,7 @@ impl<'db> TypeChecker<'db> {
 
         let scheme = TypeScheme::new(self.db(), type_params, func_ty);
 
-        // Extern functions use an empty module path (they're always at root level)
+        // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(func.name);
         self.env.register_function(func_id, scheme);
     }

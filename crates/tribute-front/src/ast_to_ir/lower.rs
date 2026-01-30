@@ -558,9 +558,37 @@ fn lower_expr<'db>(
             };
             let field_order = field_order.clone();
 
+            // Build a set of valid field names for validation
+            let valid_fields: HashSet<Symbol> = field_order.iter().copied().collect();
+
             // Lower field values into a map for quick lookup
+            // Also check for duplicate and unknown fields
             let mut field_map: HashMap<Symbol, trunk_ir::Value<'db>> = HashMap::new();
             for (name, expr) in fields {
+                // Check for unknown field
+                if !valid_fields.contains(&name) {
+                    Diagnostic {
+                        message: format!("unknown field `{}` for struct `{}`", name, struct_name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    continue;
+                }
+
+                // Check for duplicate field
+                if field_map.contains_key(&name) {
+                    Diagnostic {
+                        message: format!("duplicate field `{}`", name),
+                        span: location.span,
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::Lowering,
+                    }
+                    .accumulate(db);
+                    continue;
+                }
+
                 let val = lower_expr(builder, expr.clone())?;
                 field_map.insert(name, val);
             }

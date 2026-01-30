@@ -10,7 +10,7 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
-    Arm, BuiltinRef, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
+    Arm, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
     LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
 };
 
@@ -367,7 +367,8 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.substitute_bound_vars(ctx, *p, args))
                     .collect();
                 let subst_result = self.substitute_bound_vars(ctx, *result, args);
-                ctx.func_type(subst_params, subst_result, *effect)
+                let subst_effect = self.substitute_bound_vars_in_effect(*effect, args);
+                ctx.func_type(subst_params, subst_result, subst_effect)
             }
             TypeKind::Named { name, args: targs } => {
                 let subst_args: Vec<_> = targs
@@ -401,6 +402,102 @@ impl<'db> TypeChecker<'db> {
                 Type::new(self.db(), TypeKind::Tuple(subst_elems))
             }
             // Other types don't contain BoundVars
+            _ => ty,
+        }
+    }
+
+    /// Substitute BoundVars in an effect row with actual types.
+    fn substitute_bound_vars_in_effect(
+        &self,
+        effect: EffectRow<'db>,
+        args: &[Type<'db>],
+    ) -> EffectRow<'db> {
+        let effects = effect.effects(self.db());
+        if effects.is_empty() {
+            return effect;
+        }
+
+        let subst_effects: Vec<Effect<'db>> = effects
+            .iter()
+            .map(|e| {
+                let subst_args: Vec<Type<'db>> = e
+                    .args
+                    .iter()
+                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
+                    .collect();
+                Effect {
+                    name: e.name,
+                    args: subst_args,
+                }
+            })
+            .collect();
+
+        EffectRow::new(self.db(), subst_effects, effect.rest(self.db()))
+    }
+
+    /// Substitute BoundVars in a type without needing a FunctionInferenceContext.
+    ///
+    /// This is used for effect row substitution where we don't have access to ctx.
+    fn substitute_bound_vars_in_type(&self, ty: Type<'db>, args: &[Type<'db>]) -> Type<'db> {
+        match ty.kind(self.db()) {
+            TypeKind::BoundVar { index } => args.get(*index as usize).copied().unwrap_or(ty),
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let subst_params: Vec<_> = params
+                    .iter()
+                    .map(|p| self.substitute_bound_vars_in_type(*p, args))
+                    .collect();
+                let subst_result = self.substitute_bound_vars_in_type(*result, args);
+                let subst_effect = self.substitute_bound_vars_in_effect(*effect, args);
+                Type::new(
+                    self.db(),
+                    TypeKind::Func {
+                        params: subst_params,
+                        result: subst_result,
+                        effect: subst_effect,
+                    },
+                )
+            }
+            TypeKind::Named { name, args: targs } => {
+                let subst_args: Vec<_> = targs
+                    .iter()
+                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
+                    .collect();
+                Type::new(
+                    self.db(),
+                    TypeKind::Named {
+                        name: *name,
+                        args: subst_args,
+                    },
+                )
+            }
+            TypeKind::App {
+                ctor,
+                args: app_args,
+            } => {
+                let subst_ctor = self.substitute_bound_vars_in_type(*ctor, args);
+                let subst_args: Vec<_> = app_args
+                    .iter()
+                    .map(|a| self.substitute_bound_vars_in_type(*a, args))
+                    .collect();
+                Type::new(
+                    self.db(),
+                    TypeKind::App {
+                        ctor: subst_ctor,
+                        args: subst_args,
+                    },
+                )
+            }
+            TypeKind::Tuple(elems) => {
+                let subst_elems: Vec<_> = elems
+                    .iter()
+                    .map(|e| self.substitute_bound_vars_in_type(*e, args))
+                    .collect();
+                Type::new(self.db(), TypeKind::Tuple(subst_elems))
+            }
             _ => ty,
         }
     }
@@ -564,6 +661,10 @@ impl<'db> TypeChecker<'db> {
                 let value_ty = ctx
                     .get_node_type(value.id)
                     .unwrap_or_else(|| ctx.fresh_type_var());
+
+                // Constrain pattern type to match value type
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &pattern);
+                ctx.constrain_eq(pattern_ty, value_ty);
 
                 self.bind_pattern_vars_with_ctx(ctx, &pattern, value_ty);
                 let pattern = self.convert_pattern_with_ctx(ctx, pattern);

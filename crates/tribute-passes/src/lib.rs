@@ -1,7 +1,7 @@
 //! Compiler passes for Tribute.
 //!
 //! This crate contains the various transformation passes used in the Tribute compiler,
-//! including type inference, boxing, closures, and effect handling.
+//! including boxing, closures, and effect handling.
 //!
 //! ## Pipeline
 //!

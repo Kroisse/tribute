@@ -53,8 +53,12 @@ impl ParsedCst {
 
 impl PartialEq for ParsedCst {
     fn eq(&self, other: &Self) -> bool {
-        // Trees from the same parse are equal if they have the same root node id
-        self.0.root_node().id() == other.0.root_node().id()
+        // Trees are equal if they have the same root node id AND byte range.
+        // The byte range helps distinguish different parses that happen to
+        // have the same node id but different source lengths.
+        let self_root = self.0.root_node();
+        let other_root = other.0.root_node();
+        self_root.id() == other_root.id() && self_root.byte_range() == other_root.byte_range()
     }
 }
 
@@ -62,8 +66,11 @@ impl Eq for ParsedCst {}
 
 impl Hash for ParsedCst {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Hash by root node id
-        self.0.root_node().id().hash(state);
+        // Hash by root node id and byte range to reduce collision risk
+        // across different parse sessions.
+        let root = self.0.root_node();
+        root.id().hash(state);
+        root.byte_range().hash(state);
     }
 }
 
@@ -634,5 +641,43 @@ mod tests {
             "Diagnostic should mention unresolved name: {:?}",
             diagnostics
         );
+    }
+
+    #[test]
+    fn test_let_binding_with_tuple_pattern() {
+        // Test that let-binding with tuple pattern correctly infers types
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"
+fn test() -> Int {
+    let #(a, b) = #(1, 2);
+    a + b
+}
+"#,
+        );
+
+        // Type checking should succeed
+        let module = typed_module(&db, source);
+        assert!(module.is_some(), "Type checking should succeed");
+    }
+
+    #[test]
+    fn test_let_binding_simple_pattern() {
+        // Test that let-binding with simple bind pattern works
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(
+            &db,
+            r#"
+fn test() -> Int {
+    let x = 42;
+    x
+}
+"#,
+        );
+
+        // Type checking should succeed
+        let module = typed_module(&db, source);
+        assert!(module.is_some(), "Type checking should succeed");
     }
 }
