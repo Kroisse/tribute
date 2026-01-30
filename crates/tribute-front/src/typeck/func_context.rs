@@ -623,4 +623,93 @@ mod tests {
         let empty = ctx.take_constraints();
         assert!(empty.is_empty());
     }
+
+    #[salsa::tracked]
+    fn test_instantiate_constructor_inner<'db>(db: &'db dyn salsa::Database) -> bool {
+        let mut env = ModuleTypeEnv::new(db);
+
+        // Create a polymorphic constructor: forall a. a -> Option(a)
+        let type_name = Symbol::new("Option");
+        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
+
+        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let result_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![bound_var],
+            },
+        );
+        let effect = EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![bound_var],
+                result: result_ty,
+                effect,
+            },
+        );
+        let scheme = TypeScheme::new(db, vec![type_param(Symbol::new("a"))], func_ty);
+        env.register_constructor(ctor_id, scheme);
+
+        // Create a FunctionInferenceContext and instantiate the constructor
+        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
+
+        let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
+        let ty2 = ctx.instantiate_constructor(ctor_id).unwrap();
+
+        // Two instantiations should get different UniVars
+        if ty1 == ty2 {
+            return false;
+        }
+
+        // Both should be function types with UniVar params
+        if let (
+            TypeKind::Func {
+                params: p1,
+                result: r1,
+                ..
+            },
+            TypeKind::Func {
+                params: p2,
+                result: r2,
+                ..
+            },
+        ) = (ty1.kind(db), ty2.kind(db))
+        {
+            // Verify param is UniVar and same as result's type arg
+            if !matches!(p1[0].kind(db), TypeKind::UniVar { .. }) {
+                return false;
+            }
+            if !matches!(p2[0].kind(db), TypeKind::UniVar { .. }) {
+                return false;
+            }
+
+            // Results should be Named types with the UniVar as argument
+            let r1_ok = if let TypeKind::Named { name, args } = r1.kind(db) {
+                *name == type_name && args.len() == 1 && args[0] == p1[0]
+            } else {
+                false
+            };
+            let r2_ok = if let TypeKind::Named { name, args } = r2.kind(db) {
+                *name == type_name && args.len() == 1 && args[0] == p2[0]
+            } else {
+                false
+            };
+
+            // Different UniVars for different instantiations
+            r1_ok && r2_ok && p1[0] != p2[0]
+        } else {
+            false
+        }
+    }
+
+    #[salsa_test]
+    fn test_instantiate_constructor(db: &dyn salsa::Database) {
+        assert!(
+            test_instantiate_constructor_inner(db),
+            "Each constructor instantiation should produce fresh type variables"
+        );
+    }
 }

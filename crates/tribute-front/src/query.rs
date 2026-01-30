@@ -178,7 +178,7 @@ pub fn type_check_output<'db>(
 ) -> Option<TypeCheckOutput<'db>> {
     let module = resolved_module(db, source)?;
     let sm = span_map(db, source)?;
-    Some(crate::typeck::typecheck_module_full(db, module, sm))
+    Some(crate::typeck::typecheck_module(db, module, sm))
 }
 
 /// Type check a module.

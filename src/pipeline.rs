@@ -576,7 +576,7 @@ pub fn compile_to_wasm_binary<'db>(
 /// 1. Parse user code to AST
 /// 2. Merge prelude bindings into user's ModuleEnv
 /// 3. Resolve names with merged environment
-/// 4. Inject prelude TypeSchemes into user's TypeContext
+/// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types
 /// 6. Run TDNR
 /// 7. Lower to TrunkIR

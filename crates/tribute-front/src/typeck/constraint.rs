@@ -10,30 +10,6 @@
 
 use crate::ast::{EffectRow, Type};
 
-/// A type variable identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TypeVar(pub u64);
-
-impl TypeVar {
-    /// Create a new type variable with the given ID.
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-}
-
-/// An effect row variable identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
-pub struct RowVar(pub u64);
-
-#[allow(dead_code)]
-impl RowVar {
-    /// Create a new row variable with the given ID.
-    pub fn new(id: u64) -> Self {
-        Self(id)
-    }
-}
-
 /// A type inference constraint.
 #[derive(Clone, Debug)]
 pub enum Constraint<'db> {

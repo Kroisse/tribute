@@ -407,6 +407,42 @@ impl<'db> TypeChecker<'db> {
         result_ty
     }
 
+    /// Extract struct name and type arguments from a type.
+    ///
+    /// Returns (Some(struct_name), type_args) if the type is a Named or App type,
+    /// otherwise (None, empty vec).
+    fn extract_struct_info(&self, ty: Type<'db>) -> (Option<Symbol>, Vec<Type<'db>>) {
+        match ty.kind(self.db()) {
+            TypeKind::Named { name, args } => (Some(*name), args.clone()),
+            TypeKind::App { ctor, args } => {
+                if let TypeKind::Named { name, .. } = ctor.kind(self.db()) {
+                    (Some(*name), args.clone())
+                } else {
+                    (None, vec![])
+                }
+            }
+            _ => (None, vec![]),
+        }
+    }
+
+    /// Look up a struct field type by struct name and field name.
+    ///
+    /// Returns the field type with BoundVars substituted by the given type arguments.
+    fn lookup_field_type_from_struct(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        struct_name: Symbol,
+        field_name: Symbol,
+        type_args: &[Type<'db>],
+    ) -> Option<Type<'db>> {
+        let (type_params, field_ty) = self.env.lookup_struct_field(struct_name, field_name)?;
+        if type_params.is_empty() || type_args.is_empty() {
+            Some(field_ty)
+        } else {
+            Some(self.substitute_bound_vars(ctx, field_ty, type_args))
+        }
+    }
+
     /// Look up a struct field type from the receiver type.
     ///
     /// Given a receiver type like `Point` or `Point(Int)`, look up the field `x`
@@ -907,10 +943,20 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Record { fields, .. } => {
+                let (struct_name, type_args) = self.extract_struct_info(ty);
+
                 for field in fields {
+                    let field_ty = struct_name
+                        .and_then(|name| {
+                            self.lookup_field_type_from_struct(ctx, name, field.name, &type_args)
+                        })
+                        .unwrap_or_else(|| ctx.fresh_type_var());
+
                     if let Some(pat) = &field.pattern {
-                        let fresh_ty = ctx.fresh_type_var();
-                        self.bind_pattern_vars_with_ctx(ctx, pat, fresh_ty);
+                        self.bind_pattern_vars_with_ctx(ctx, pat, field_ty);
+                    } else {
+                        // Shorthand { name } - bind the field name directly
+                        ctx.bind_local_by_name(field.name, field_ty);
                     }
                 }
             }
@@ -1029,6 +1075,22 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Convert a field pattern with an expected type.
+    fn convert_field_pattern_with_expected_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        fp: FieldPattern<ResolvedRef<'db>>,
+        expected: Type<'db>,
+    ) -> FieldPattern<TypedRef<'db>> {
+        FieldPattern {
+            id: fp.id,
+            name: fp.name,
+            pattern: fp
+                .pattern
+                .map(|p| self.convert_pattern_with_expected_ctx(ctx, p, expected)),
+        }
+    }
+
     /// Convert a case arm with an expected scrutinee type.
     fn convert_arm_with_scrutinee_ctx(
         &self,
@@ -1097,14 +1159,28 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 rest,
-            } => PatternKind::Record {
-                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
-                fields: fields
+            } => {
+                let (struct_name, type_args) = self.extract_struct_info(expected);
+
+                let converted_fields = fields
                     .into_iter()
-                    .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
-                    .collect(),
-                rest,
-            },
+                    .map(|f| {
+                        let field_expected = struct_name
+                            .and_then(|name| {
+                                self.lookup_field_type_from_struct(ctx, name, f.name, &type_args)
+                            })
+                            .unwrap_or_else(|| ctx.fresh_type_var());
+
+                        self.convert_field_pattern_with_expected_ctx(ctx, f, field_expected)
+                    })
+                    .collect();
+
+                PatternKind::Record {
+                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, t)),
+                    fields: converted_fields,
+                    rest,
+                }
+            }
             PatternKind::Tuple(patterns) => {
                 let elem_expectations: Vec<Type<'db>> =
                     if let TypeKind::Tuple(elems) = expected.kind(self.db()) {
