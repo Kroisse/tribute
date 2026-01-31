@@ -1844,11 +1844,16 @@ fn lower_handle<'db>(
     ));
     let step_result = push_prompt_op.as_operation().result(db, 0);
 
+    // Pop the prompt tag from the active stack immediately after push_prompt.
+    // This ensures that handlers are lowered with the outer prompt active,
+    // so ability ops in handlers target the outer prompt, not the inner one.
+    builder.ctx.pop_prompt_tag();
+
     // 3. Build handler_dispatch body region with multiple blocks
     let handler_dispatch_body =
         build_handler_dispatch_body(builder.ctx, location, handlers, result_ty);
 
-    // 4. Emit cont.handler_dispatch
+    // 4. Emit cont.handler_dispatch (use the saved tag variable)
     let handler_dispatch_op = builder.block.op(cont::handler_dispatch(
         db,
         location,
@@ -1858,9 +1863,6 @@ fn lower_handle<'db>(
         result_ty, // result_type attribute
         handler_dispatch_body,
     ));
-
-    // Pop the prompt tag from the active stack now that we're done with this handler.
-    builder.ctx.pop_prompt_tag();
 
     Some(handler_dispatch_op.as_operation().result(db, 0))
 }
@@ -5075,6 +5077,301 @@ mod tests {
             args.len(),
             4,
             "Lifted lambda with 3 params should have 4 block arguments (env + 3 params)"
+        );
+    }
+
+    // ========================================================================
+    // Handle Expression Prompt Tag Tests
+    // ========================================================================
+
+    use crate::ast::{HandlerArm, HandlerKind};
+    use trunk_ir::dialect::cont;
+
+    /// Create a handle expression.
+    fn handle_expr<'db>(
+        body: Expr<TypedRef<'db>>,
+        handlers: Vec<HandlerArm<TypedRef<'db>>>,
+    ) -> Expr<TypedRef<'db>> {
+        Expr::new(fresh_node_id(), ExprKind::Handle { body, handlers })
+    }
+
+    /// Create an ability operation call expression.
+    fn ability_op_call_state_get<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("get")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create an ability operation call for State.put().
+    fn ability_op_call_state_put<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("put")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create an ability operation call for Log.info().
+    fn ability_op_call_log_info<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("Log"), Symbol::new("info")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create a result handler arm.
+    fn result_handler<'db>(
+        local_id: LocalId,
+        name: Symbol,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Result {
+                binding: Pattern::new(
+                    fresh_node_id(),
+                    PatternKind::Bind {
+                        name,
+                        local_id: Some(local_id),
+                    },
+                ),
+            },
+            body,
+        }
+    }
+
+    /// Create an effect handler arm for State.get.
+    fn effect_handler_state_get<'db>(
+        db: &'db dyn salsa::Database,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        // For the ability field in effect handler, we use a Local reference as a placeholder.
+        // The actual ability matching happens via the op name in lowering.
+        let ability_ref = TypedRef::new(
+            ResolvedRef::local(LocalId::new(999), Symbol::new("State")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Effect {
+                ability: ability_ref,
+                op: Symbol::new("get"),
+                params: vec![],
+                continuation: None,
+                continuation_local_id: None,
+            },
+            body,
+        }
+    }
+
+    /// Create an effect handler arm for Log.info.
+    fn effect_handler_log_info<'db>(
+        db: &'db dyn salsa::Database,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        let ability_ref = TypedRef::new(
+            ResolvedRef::local(LocalId::new(999), Symbol::new("Log")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Effect {
+                ability: ability_ref,
+                op: Symbol::new("info"),
+                params: vec![],
+                continuation: None,
+                continuation_local_id: None,
+            },
+            body,
+        }
+    }
+
+    /// Find all cont.shift operations in a module recursively.
+    fn find_shift_ops<'db>(
+        db: &'db dyn salsa::Database,
+        module: &core::Module<'db>,
+    ) -> Vec<cont::Shift<'db>> {
+        let mut shifts = Vec::new();
+        let body = module.body(db);
+        for block in body.blocks(db).iter() {
+            collect_shift_ops_from_block(db, block, &mut shifts);
+        }
+        shifts
+    }
+
+    fn collect_shift_ops_from_block<'db>(
+        db: &'db dyn salsa::Database,
+        block: &trunk_ir::Block<'db>,
+        shifts: &mut Vec<cont::Shift<'db>>,
+    ) {
+        for op in block.operations(db).iter() {
+            // Check if this is a cont.shift
+            if let Ok(shift) = cont::Shift::from_operation(db, *op) {
+                shifts.push(shift);
+            }
+            // Recurse into regions
+            for region in op.regions(db).iter() {
+                for inner_block in region.blocks(db).iter() {
+                    collect_shift_ops_from_block(db, inner_block, shifts);
+                }
+            }
+        }
+    }
+
+    /// Test that ability ops in handler bodies use the outer prompt tag.
+    ///
+    /// This tests the fix for a bug where the inner prompt tag remained active
+    /// while lowering handler bodies, causing ability ops in handlers to target
+    /// the inner prompt instead of the outer one.
+    #[salsa_test]
+    fn test_handler_body_ability_op_uses_outer_prompt(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Build: handle { State.get() } { { r } -> State.put() }
+        // The body's State.get() should use prompt tag 0
+        // The handler's State.put() should use NO active prompt (tag 0 as placeholder)
+        // because the inner prompt has been popped before lowering the handler body.
+
+        let body_ability_op = ability_op_call_state_get(db);
+        let handler_ability_op = ability_op_call_state_put(db);
+
+        let handlers = vec![
+            result_handler(LocalId::new(0), Symbol::new("r"), handler_ability_op),
+            effect_handler_state_get(db, nil_expr()),
+        ];
+
+        let handle = handle_expr(body_ability_op, handlers);
+        let func_decl = simple_func(Symbol::new("main"), handle);
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+
+        // Find all cont.shift operations
+        let shifts = find_shift_ops(db, &ir_module);
+
+        // We expect exactly 2 shift operations:
+        // 1. From the body's State.get()
+        // 2. From the handler's State.put()
+        assert_eq!(
+            shifts.len(),
+            2,
+            "Should have exactly 2 cont.shift operations"
+        );
+
+        // Both shifts should use prompt tag 0:
+        // - The body's shift uses tag 0 (the handle's prompt)
+        // - The handler's shift uses tag 0 (placeholder, since we popped before lowering handler)
+        // This verifies that pop_prompt_tag was called before building handler body.
+        for shift in &shifts {
+            assert_eq!(
+                shift.tag(db),
+                0,
+                "Both shifts should use tag 0 (body uses handle's tag, handler uses placeholder)"
+            );
+        }
+    }
+
+    /// Test nested handles: inner handler's ability op should use outer prompt.
+    #[salsa_test]
+    fn test_nested_handle_inner_handler_uses_outer_prompt(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Build:
+        // handle {                          // outer handle, prompt tag 0
+        //     handle {                      // inner handle, prompt tag 1
+        //         Log.info()                // should use tag 1
+        //     } {
+        //         { r } -> State.get()      // should use tag 0 (outer), NOT tag 1
+        //         { Log.info() -> k } -> ()
+        //     }
+        // } {
+        //     { r } -> r
+        //     { State.get() -> k } -> ()
+        // }
+
+        // Inner handle body: Log.info()
+        let inner_body = ability_op_call_log_info(db);
+
+        // Inner handler body: State.get() - this should use outer prompt (tag 0)
+        let inner_handler_body = ability_op_call_state_get(db);
+
+        let inner_handlers = vec![
+            result_handler(LocalId::new(0), Symbol::new("r"), inner_handler_body),
+            effect_handler_log_info(db, nil_expr()),
+        ];
+
+        let inner_handle = handle_expr(inner_body, inner_handlers);
+
+        // Outer handlers
+        let outer_handlers = vec![
+            result_handler(
+                LocalId::new(1),
+                Symbol::new("r"),
+                var_expr(local_ref(db, LocalId::new(1), Symbol::new("r"))),
+            ),
+            effect_handler_state_get(db, nil_expr()),
+        ];
+
+        let outer_handle = handle_expr(inner_handle, outer_handlers);
+        let func_decl = simple_func(Symbol::new("main"), outer_handle);
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+
+        // Find all cont.shift operations
+        let shifts = find_shift_ops(db, &ir_module);
+
+        // We expect 2 shift operations:
+        // 1. From inner body's Log.info() - tag 1
+        // 2. From inner handler's State.get() - tag 0 (outer prompt)
+        assert_eq!(
+            shifts.len(),
+            2,
+            "Should have exactly 2 cont.shift operations"
+        );
+
+        // Collect the tags used by each shift
+        let tags: Vec<u32> = shifts.iter().map(|s| s.tag(db)).collect();
+
+        // One shift should use tag 1 (inner body), one should use tag 0 (inner handler)
+        assert!(
+            tags.contains(&0) && tags.contains(&1),
+            "Expected tags [0, 1], got {:?}. Inner handler's ability op should use outer prompt (tag 0), not inner prompt (tag 1)",
+            tags
+        );
+
+        // Specifically verify: the State.get shift should have tag 0
+        let state_get_shift = shifts
+            .iter()
+            .find(|s| s.op_name(db).with_str(|s| s == "get"))
+            .expect("Should find State.get shift");
+        assert_eq!(
+            state_get_shift.tag(db),
+            0,
+            "Inner handler's State.get() should use outer prompt tag 0"
         );
     }
 }
