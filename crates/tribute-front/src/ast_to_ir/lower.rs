@@ -2078,8 +2078,19 @@ fn build_suspend_handler_block<'db>(
     // Extract ability name from resolved reference and construct proper AbilityRefType
     let ability_name = match &ability.resolved {
         crate::ast::ResolvedRef::TypeDef { id } => id.name(db),
-        _ => {
-            // Fallback: try to extract name from type (shouldn't happen for well-resolved code)
+        other => {
+            // Report error: expected ability type definition
+            Diagnostic {
+                message: format!(
+                    "Expected ability type definition, got {:?}",
+                    std::mem::discriminant(other)
+                ),
+                span: location.span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            // Fallback for error recovery
             Symbol::new("__unknown_ability__")
         }
     };

@@ -23,6 +23,12 @@ pub enum SolveError<'db> {
         expected: EffectRow<'db>,
         actual: EffectRow<'db>,
     },
+    /// Effect type argument arity mismatch.
+    EffectArgArityMismatch {
+        effect_name: trunk_ir::Symbol,
+        expected: usize,
+        found: usize,
+    },
 }
 
 /// Type substitution: maps type variable IDs to types.
@@ -915,8 +921,11 @@ impl<'db> TypeSolver<'db> {
         e2: &crate::ast::Effect<'db>,
     ) -> Result<(), SolveError<'db>> {
         if e1.args.len() != e2.args.len() {
-            // This shouldn't happen with well-typed programs, but handle it
-            return Ok(());
+            return Err(SolveError::EffectArgArityMismatch {
+                effect_name: e1.name,
+                expected: e1.args.len(),
+                found: e2.args.len(),
+            });
         }
         for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
             self.unify_types(*a1, *a2)?;
@@ -1908,5 +1917,78 @@ mod tests {
 
         let result = solver.unify_rows(r1, r2);
         assert!(matches!(result, Err(SolveError::RowMismatch { .. })));
+    }
+
+    #[test]
+    fn test_effect_arg_arity_mismatch_returns_error() {
+        // State<Int> and State<> (different arity) should return an error
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // State<Int> - one type argument
+        let state_with_arg = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![int_ty],
+        };
+        // State<> - no type arguments
+        let state_no_arg = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_with_arg], None);
+        let r2 = EffectRow::new(&db, vec![state_no_arg], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            matches!(
+                result,
+                Err(SolveError::EffectArgArityMismatch {
+                    effect_name,
+                    expected: 1,
+                    found: 0,
+                }) if effect_name == trunk_ir::Symbol::new("State")
+            ),
+            "Expected EffectArgArityMismatch error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_effect_arg_arity_mismatch_two_vs_one() {
+        // State<Int, Bool> vs State<Int> should return an error
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        let state_two_args = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![int_ty, bool_ty],
+        };
+        let state_one_arg = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![int_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_two_args], None);
+        let r2 = EffectRow::new(&db, vec![state_one_arg], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            matches!(
+                result,
+                Err(SolveError::EffectArgArityMismatch {
+                    expected: 2,
+                    found: 1,
+                    ..
+                })
+            ),
+            "Expected EffectArgArityMismatch error, got {:?}",
+            result
+        );
     }
 }

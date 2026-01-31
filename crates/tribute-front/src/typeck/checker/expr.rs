@@ -1622,9 +1622,11 @@ impl<'db> TypeChecker<'db> {
 
             // Create Effect entries for each handled ability.
             // These are placeholders with no type args (simple abilities).
-            let handled_effects: Vec<crate::ast::Effect<'db>> = handled_abilities
-                .iter()
-                .map(|&name| crate::ast::Effect {
+            // Deduplicate abilities to avoid constraint issues from duplicate handlers.
+            let unique_abilities: HashSet<_> = handled_abilities.iter().copied().collect();
+            let handled_effects: Vec<crate::ast::Effect<'db>> = unique_abilities
+                .into_iter()
+                .map(|name| crate::ast::Effect {
                     name,
                     args: Vec::new(),
                 })

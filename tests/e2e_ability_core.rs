@@ -663,3 +663,53 @@ fn main() -> Int {
     let result = compile_and_run(code, "handler_direct_result.trb");
     assert_eq!(result, 42, "Expected main to return 42, got {}", result);
 }
+
+// =============================================================================
+// Duplicate Handler Tests (Code Review Fix)
+// =============================================================================
+
+/// Test that duplicate effect handlers for the same ability compile correctly.
+///
+/// When a handler has multiple arms handling the same ability (e.g., State::get
+/// and State::set both from State), the handled_abilities list may contain
+/// duplicates. The deduplication fix ensures constraint generation doesn't fail.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_duplicate_ability_handlers_compile() {
+    // This code has two handlers for the same ability (State)
+    // Previously, this could cause constraint issues due to duplicate entries
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_state() ->{State(Int)} Int {
+    let n = State::get()
+    State::set(n + 1)
+    n
+}
+
+fn main() -> Int {
+    handle use_state() {
+        { result } -> result
+        { State::get() -> k } -> k(42)
+        { State::set(v) -> k } -> k(Nil)
+    }
+}
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "duplicate_handlers.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Duplicate ability handlers should compile without errors, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
