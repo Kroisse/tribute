@@ -21,6 +21,28 @@ use crate::ast::{CtorId, EffectRow, FuncDefId, Type, TypeKind, TypeParam, TypeSc
 /// - fields: Vec of (field_name, field_type) pairs
 pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
 
+/// Information about an ability operation.
+#[derive(Clone, Debug)]
+pub struct AbilityOpInfo<'db> {
+    /// Operation name.
+    pub name: Symbol,
+    /// Parameter types.
+    pub param_types: Vec<Type<'db>>,
+    /// Return type.
+    pub return_type: Type<'db>,
+}
+
+/// Information about an ability declaration.
+#[derive(Clone, Debug)]
+pub struct AbilityInfo<'db> {
+    /// Ability name.
+    pub name: Symbol,
+    /// Type parameters for the ability.
+    pub type_params: Vec<TypeParam>,
+    /// Operations defined by this ability.
+    pub operations: HashMap<Symbol, AbilityOpInfo<'db>>,
+}
+
 /// Module-level type environment.
 ///
 /// This struct holds type information that is shared across all functions in a module:
@@ -49,6 +71,10 @@ pub struct ModuleTypeEnv<'db> {
     /// Enum variant information: enum_name → [variant_names]
     /// Used for exhaustiveness checking in case expressions.
     enum_variants: HashMap<Symbol, Vec<Symbol>>,
+
+    /// Ability definitions: ability_name → AbilityInfo
+    /// Used for handler arm type checking.
+    ability_defs: HashMap<Symbol, AbilityInfo<'db>>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -61,6 +87,7 @@ impl<'db> ModuleTypeEnv<'db> {
             type_defs: HashMap::new(),
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            ability_defs: HashMap::new(),
         }
     }
 
@@ -102,6 +129,11 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Register enum variant information.
     pub fn register_enum_variants(&mut self, enum_name: Symbol, variants: Vec<Symbol>) {
         self.enum_variants.insert(enum_name, variants);
+    }
+
+    /// Register an ability definition.
+    pub fn register_ability(&mut self, name: Symbol, info: AbilityInfo<'db>) {
+        self.ability_defs.insert(name, info);
     }
 
     // =========================================================================
@@ -147,6 +179,18 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Look up enum variants by enum name.
     pub fn lookup_enum_variants(&self, enum_name: Symbol) -> Option<&[Symbol]> {
         self.enum_variants.get(&enum_name).map(|v| v.as_slice())
+    }
+
+    /// Look up an ability definition by name.
+    pub fn lookup_ability(&self, name: Symbol) -> Option<&AbilityInfo<'db>> {
+        self.ability_defs.get(&name)
+    }
+
+    /// Look up an ability operation by ability name and operation name.
+    pub fn lookup_ability_op(&self, ability: Symbol, op: Symbol) -> Option<&AbilityOpInfo<'db>> {
+        self.ability_defs
+            .get(&ability)
+            .and_then(|info| info.operations.get(&op))
     }
 
     /// Debug: print all registered constructors.
@@ -259,6 +303,19 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
         let mut result: Vec<_> = self
             .enum_variants
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
+
+    /// Export ability definitions.
+    ///
+    /// Results are sorted alphabetically by ability name for deterministic output.
+    pub fn export_ability_defs(&self) -> Vec<(Symbol, AbilityInfo<'db>)> {
+        let mut result: Vec<_> = self
+            .ability_defs
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();

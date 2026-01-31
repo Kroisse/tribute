@@ -10,8 +10,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, BuiltinRef, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
-    LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
+    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
@@ -378,6 +378,22 @@ impl<'db> TypeChecker<'db> {
                 ctx.error_type()
             }
             ResolvedRef::Builtin(builtin) => self.infer_builtin_with_ctx(ctx, builtin),
+            ResolvedRef::AbilityOp { ability, op } => {
+                // Look up the ability operation signature from the module type env
+                if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
+                    // Create a function type from the operation signature
+                    // The effect row contains this ability (with a row variable tail for polymorphism)
+                    let ability_effect = Effect {
+                        name: *ability,
+                        args: vec![], // TODO: support parameterized abilities
+                    };
+                    let row_var = ctx.fresh_row_var();
+                    let effect = EffectRow::new(self.db(), vec![ability_effect], Some(row_var));
+                    ctx.func_type(op_info.param_types.clone(), op_info.return_type, effect)
+                } else {
+                    ctx.error_type()
+                }
+            }
         }
     }
 
@@ -1572,6 +1588,7 @@ impl<'db> TypeChecker<'db> {
                 .last()
                 .copied()
                 .unwrap_or(Symbol::new("__module__")),
+            ResolvedRef::AbilityOp { ability, .. } => *ability,
         }
     }
 

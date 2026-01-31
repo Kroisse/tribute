@@ -87,6 +87,8 @@ pub enum ResolvedTarget {
     Type { name: Symbol },
     /// Reference to an ability.
     Ability { name: Symbol },
+    /// Reference to an ability operation.
+    AbilityOp { ability: Symbol, op: Symbol },
     /// Unresolved reference (for error recovery).
     Unresolved { name: Symbol },
     /// Reference to a struct field.
@@ -105,6 +107,7 @@ impl ResolvedTarget {
             ResolvedTarget::Constructor { variant, .. } => *variant,
             ResolvedTarget::Type { name } => *name,
             ResolvedTarget::Ability { name } => *name,
+            ResolvedTarget::AbilityOp { op, .. } => *op,
             ResolvedTarget::Unresolved { name } => *name,
             ResolvedTarget::Field { name, .. } => *name,
             ResolvedTarget::Other { name } => *name,
@@ -120,6 +123,7 @@ impl ResolvedTarget {
             | ResolvedTarget::Constructor { .. }
             | ResolvedTarget::Type { .. }
             | ResolvedTarget::Ability { .. }
+            | ResolvedTarget::AbilityOp { .. }
             | ResolvedTarget::Unresolved { .. }
             | ResolvedTarget::Other { .. } => None,
         }
@@ -767,6 +771,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             },
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
+            },
+            ResolvedRef::AbilityOp { ability, op } => ResolvedTarget::AbilityOp {
+                ability: *ability,
+                op: *op,
             },
         }
     }

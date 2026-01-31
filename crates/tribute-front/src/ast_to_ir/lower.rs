@@ -189,7 +189,8 @@ fn lower_decl<'db>(
         Decl::Struct(s) => lower_struct_decl(ctx, top, s),
         Decl::Enum(e) => lower_enum_decl(ctx, top, e),
         Decl::Ability(_) => {
-            // TODO: Lower ability declarations
+            // Ability declarations are purely type-level metadata.
+            // No IR operation needed - ability info is registered in ModuleTypeEnv.
         }
         Decl::Use(_) => {
             // Use declarations don't generate IR
@@ -449,7 +450,12 @@ fn lower_expr<'db>(
                         .op(func::constant(builder.db(), location, func_ty, *variant));
                 Some(op.result(builder.db()))
             }
-            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } | ResolvedRef::TypeDef { .. } => {
+            ResolvedRef::Builtin(_)
+            | ResolvedRef::Module { .. }
+            | ResolvedRef::TypeDef { .. }
+            | ResolvedRef::AbilityOp { .. } => {
+                // AbilityOp as a value (not called) is not yet supported
+                // TODO: Support passing ability operations as first-class functions
                 None
             }
         },
@@ -521,6 +527,10 @@ fn lower_expr<'db>(
                             *variant,
                         ));
                         Some(op.result(builder.db()))
+                    }
+                    ResolvedRef::AbilityOp { ability, op } => {
+                        // Lower ability operation directly to cont.shift
+                        lower_ability_op_call(builder, location, *ability, *op, arg_values)
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
                 },
@@ -1727,6 +1737,59 @@ static PROMPT_TAG_GEN: std::sync::LazyLock<PromptTagGenerator> =
 
 fn fresh_prompt_tag() -> u32 {
     PROMPT_TAG_GEN.fresh()
+}
+
+/// Lower an ability operation call directly to cont.shift.
+///
+/// This generates:
+/// ```text
+/// // TODO: Evidence-based dispatch (currently uses placeholder tag)
+/// // %marker = func.call @__tribute_evidence_lookup(%ev, ability_id)
+/// // %tag = func.call @__tribute_marker_prompt(%marker)
+/// %result = cont.shift(tag, args...) { ability_ref, op_name }
+/// ```
+fn lower_ability_op_call<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    ability: Symbol,
+    op: Symbol,
+    args: Vec<trunk_ir::Value<'db>>,
+) -> Option<trunk_ir::Value<'db>> {
+    let db = builder.db();
+
+    // TODO: Replace with evidence-based lookup
+    // For now, use a fresh prompt tag (placeholder)
+    let tag = fresh_prompt_tag();
+
+    // Create ability reference type for cont.shift
+    let ability_ref = core::AbilityRefType::simple(db, ability).as_type();
+
+    // Result type - use any_type for now (type-erased)
+    let result_ty = tribute_rt::any_type(db);
+
+    // Create empty handler region (not used for shift generated from ability ops)
+    let empty_block = trunk_ir::Block::new(
+        db,
+        trunk_ir::BlockId::fresh(),
+        location,
+        trunk_ir::IdVec::new(),
+        trunk_ir::IdVec::new(),
+    );
+    let handler_region = Region::new(db, location, idvec![empty_block]);
+
+    // Generate cont.shift
+    let shift_op = builder.block.op(cont::shift(
+        db,
+        location,
+        args,
+        result_ty,
+        tag,
+        ability_ref,
+        op,
+        handler_region,
+    ));
+
+    Some(shift_op.result(db))
 }
 
 /// Lower a handle expression to TrunkIR.

@@ -120,6 +120,7 @@ impl<'db> Resolver<'db> {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }
+            Binding::AbilityOp { ability, op } => ResolvedRef::ability_op(*ability, *op),
         }
     }
 
