@@ -1,24 +1,22 @@
 //! Concretize types in wasm dialect operations.
 //!
-//! This pass resolves placeholder types (`tribute.type_var`) to concrete types
-//! before the emit phase. This allows emit to be a simple 1:1 translation
-//! without runtime type inference.
+//! This pass resolves placeholder types to concrete types before the emit phase.
+//! This allows emit to be a simple 1:1 translation without runtime type inference.
 //!
 //! ## What this pass does
 //!
-//! **Replace `type_var` in operation results** with concrete types:
+//! **Replace placeholder types in operation results** with concrete types:
 //! - `wasm.call`: Use callee's return type from function signature
 //! - `wasm.call_indirect`: Infer from callee's function type
 //! - `wasm.if`/`wasm.block`/`wasm.loop`: Infer from branch result types
 //! - `wasm.struct_get`: Infer from struct field type
 //!
-//! ## Boxing Pass Integration
+//! ## Current Status
 //!
-//! Most polymorphic call sites are handled upstream by the boxing pass
-//! (`tribute-passes/src/boxing.rs`) which inserts explicit `tribute_rt.box_*`
-//! and `tribute_rt.unbox_*` operations. After boxing, call result types are
-//! `tribute_rt.any` (not `type_var`), so the patterns here primarily serve
-//! as a fallback for edge cases.
+//! Type variables are now resolved at the AST level and converted to `tribute_rt.any`
+//! or concrete types in `ast_to_ir`. As a result, the type_var-specific patterns
+//! have been removed. This pass now primarily handles placeholder type resolution
+//! for unresolved type references.
 
 use std::collections::HashMap;
 
@@ -31,10 +29,7 @@ use trunk_ir::dialect::{cont, core, wasm};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
-use trunk_ir::{
-    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
-    ValueDef,
-};
+use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef};
 
 use super::type_converter::wasm_type_converter;
 
@@ -55,11 +50,7 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> co
         .add_pattern(StructGetResultTypePattern)
         .add_pattern(IfResultTypePattern)
         .add_pattern(BlockResultTypePattern)
-        .add_pattern(LoopResultTypePattern)
-        // Concretize function signatures
-        .add_pattern(FuncSignatureTypeVarPattern)
-        // Fallback pattern: convert remaining type_var to anyref
-        .add_pattern(FallbackTypeVarPattern);
+        .add_pattern(LoopResultTypePattern);
     // No specific conversion target - type concretization is an optimization pass
     let target = ConversionTarget::new();
     applicator.apply_partial(db, module, target).module
@@ -113,13 +104,8 @@ fn collect_func_return_types_from_region<'db>(
 
 /// Pattern to concretize result types of wasm.call operations.
 ///
-/// If a call's result type is `tribute.type_var`, replace it with
+/// If a call's result type is a placeholder, replace it with
 /// the callee's declared return type.
-///
-/// Note: Most polymorphic call sites are handled by the boxing pass
-/// (`tribute-passes/src/boxing.rs`) which changes type_var results to
-/// `tribute_rt.any` and inserts explicit unboxing. This pattern serves
-/// as a fallback for any remaining cases.
 struct CallResultTypePattern<'db> {
     /// Map of function name -> return type.
     func_return_types: HashMap<Symbol, Type<'db>>,
@@ -139,7 +125,10 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
 
         // Check if result type needs concretization
         let results = op.results(db);
-        if !results.iter().any(|ty| tribute::is_type_var(db, *ty)) {
+        if !results
+            .iter()
+            .any(|ty| tribute::is_placeholder_type(db, *ty))
+        {
             return RewriteResult::Unchanged;
         }
 
@@ -159,10 +148,9 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
         };
 
         // Skip if the return type is also a placeholder (generic function not yet resolved)
-        // Boxing pass should have handled these cases by inserting explicit boxing/unboxing
         if tribute::is_placeholder_type(db, return_ty) {
             debug!(
-                "wasm_type_concrete: callee {} returns placeholder type, boxing pass should have handled this",
+                "wasm_type_concrete: callee {} returns placeholder type",
                 callee
             );
             return RewriteResult::Unchanged;
@@ -187,13 +175,8 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
 
 /// Pattern to concretize result types of wasm.call_indirect operations.
 ///
-/// If a call_indirect's result type is `tribute.type_var`, try to infer it from
+/// If a call_indirect's result type is a placeholder, try to infer it from
 /// the callee's function type (wasm.ref_func, core.func, continuation, closure).
-///
-/// Note: Most polymorphic indirect call sites are handled by the boxing pass
-/// (`tribute-passes/src/boxing.rs`) which changes type_var results to
-/// `tribute_rt.any` and inserts explicit unboxing. This pattern serves
-/// as a fallback for any remaining cases.
 struct CallIndirectResultTypePattern<'db> {
     /// Map of function name -> return type.
     func_return_types: HashMap<Symbol, Type<'db>>,
@@ -213,7 +196,10 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
 
         // Check if result type needs concretization
         let results = op.results(db);
-        if !results.iter().any(|ty| tribute::is_type_var(db, *ty)) {
+        if !results
+            .iter()
+            .any(|ty| tribute::is_placeholder_type(db, *ty))
+        {
             return RewriteResult::Unchanged;
         }
 
@@ -242,9 +228,7 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
 
         // Skip if inferred type is also a placeholder
         if tribute::is_placeholder_type(db, concrete_ty) {
-            debug!(
-                "wasm_type_concrete: wasm.call_indirect callee returns placeholder type, boxing pass should have handled this"
-            );
+            debug!("wasm_type_concrete: wasm.call_indirect callee returns placeholder type");
             return RewriteResult::Unchanged;
         }
 
@@ -312,7 +296,7 @@ fn infer_type_from_callee<'db>(
 
 /// Pattern to concretize result types of wasm.if operations.
 ///
-/// If an if's result type is `tribute.type_var`, try to infer it from
+/// If an if's result type is a placeholder, try to infer it from
 /// the yield operations in its then/else branches.
 struct IfResultTypePattern;
 
@@ -431,7 +415,7 @@ impl<'db> RewritePattern<'db> for LoopResultTypePattern {
 
 /// Pattern to concretize result types of wasm.struct_get operations.
 ///
-/// If a struct_get's result type is `tribute.type_var`, try to infer it from
+/// If a struct_get's result type is a placeholder, try to infer it from
 /// the operand's struct type and field index.
 struct StructGetResultTypePattern;
 
@@ -449,8 +433,10 @@ impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
 
         // Check if result is already concrete
         let results = op.results(db);
-        let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
-        if !has_type_var {
+        let has_placeholder = results
+            .iter()
+            .any(|ty| tribute::is_placeholder_type(db, *ty));
+        if !has_placeholder {
             return RewriteResult::Unchanged;
         }
 
@@ -491,11 +477,8 @@ impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
             return RewriteResult::Unchanged;
         };
 
-        // Skip if inferred type is also a type_var.
-        // Note: We intentionally use is_type_var here, NOT is_placeholder_type.
-        // Struct fields may have unresolved types (e.g., tribute.type{name: "String"})
-        // which are valid concrete types for struct_get results.
-        if tribute::is_type_var(db, concrete_ty) {
+        // Skip if inferred type is also a placeholder
+        if tribute::is_placeholder_type(db, concrete_ty) {
             return RewriteResult::Unchanged;
         }
 
@@ -569,189 +552,11 @@ fn get_field_type_from_struct<'db>(
     None
 }
 
-/// Pattern to concretize type_var in wasm.func signatures.
-///
-/// This pattern converts `tribute.type_var` in function parameter and return types
-/// to `wasm.anyref` to ensure all functions have concrete signatures.
-///
-/// NOTE: This pattern also updates the entry block arguments to match the new
-/// parameter types. Without this, the function signature would say `anyref` but
-/// the entry block arguments would still have `type_var`, causing a type mismatch.
-struct FuncSignatureTypeVarPattern;
-
-impl<'db> RewritePattern<'db> for FuncSignatureTypeVarPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        // Only handle wasm.func operations
-        let Ok(func_op) = wasm::Func::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
-        };
-
-        let func_ty = func_op.r#type(db);
-        let Some(core_func) = core::Func::from_type(db, func_ty) else {
-            return RewriteResult::Unchanged;
-        };
-
-        let params = core_func.params(db);
-        let result = core_func.result(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-
-        // Check if any param or result is a type_var
-        let has_type_var_in_params = params.iter().any(|ty| tribute::is_type_var(db, *ty));
-        let has_type_var_in_result = tribute::is_type_var(db, result);
-
-        if !has_type_var_in_params && !has_type_var_in_result {
-            return RewriteResult::Unchanged;
-        }
-
-        // Convert type_var to anyref in params
-        let new_params: IdVec<Type<'db>> = params
-            .iter()
-            .map(|ty| {
-                if tribute::is_type_var(db, *ty) {
-                    anyref_ty
-                } else {
-                    *ty
-                }
-            })
-            .collect();
-
-        // Convert type_var to anyref in result
-        let new_result = if tribute::is_type_var(db, result) {
-            anyref_ty
-        } else {
-            result
-        };
-
-        let new_func_ty = core::Func::new(db, new_params.clone(), new_result).as_type();
-
-        // Rebuild entry block with new parameter types
-        let body = func_op.body(db);
-        let new_body = rebuild_entry_block_for_anyref(db, body, &new_params);
-
-        debug!(
-            "wasm_type_concrete: concretizing wasm.func {} signature type_var to anyref",
-            func_op.sym_name(db)
-        );
-
-        let new_op = op
-            .modify(db)
-            .attr("type", Attribute::Type(new_func_ty))
-            .regions(vec![new_body].into_iter().collect())
-            .build();
-        RewriteResult::Replace(new_op)
-    }
-}
-
-/// Helper to rebuild entry block with converted argument types for anyref conversion.
-fn rebuild_entry_block_for_anyref<'db>(
-    db: &'db dyn salsa::Database,
-    body: Region<'db>,
-    new_params: &IdVec<Type<'db>>,
-) -> Region<'db> {
-    let blocks = body.blocks(db);
-
-    let new_blocks: IdVec<Block<'db>> = blocks
-        .iter()
-        .enumerate()
-        .map(|(block_idx, block)| {
-            if block_idx == 0 {
-                // Entry block: update argument types
-                let args = block.args(db);
-                let new_args: IdVec<BlockArg<'db>> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, arg)| {
-                        if i < new_params.len() && new_params[i] != arg.ty(db) {
-                            BlockArg::new(db, new_params[i], arg.attrs(db).clone())
-                        } else {
-                            *arg
-                        }
-                    })
-                    .collect();
-
-                Block::new(
-                    db,
-                    block.id(db),
-                    block.location(db),
-                    new_args,
-                    block.operations(db).clone(),
-                )
-            } else {
-                *block
-            }
-        })
-        .collect();
-
-    Region::new(db, body.location(db), new_blocks)
-}
-
-/// Fallback pattern to convert any remaining type_var results to anyref.
-///
-/// This is a catch-all pattern that runs after all other patterns have been applied.
-/// Any operation with `tribute.type_var` result types that couldn't be concretized
-/// through other means will have its results converted to `wasm.anyref`.
-///
-/// Note: This pattern only converts `tribute.type_var`, NOT `tribute.type`.
-/// Unresolved `tribute.type` references to user-defined types (e.g., `tribute.type(name="Expr")`)
-/// are preserved because they represent valid ADT types that will be resolved by
-/// the GC type collection phase.
-struct FallbackTypeVarPattern;
-
-impl<'db> RewritePattern<'db> for FallbackTypeVarPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let results = op.results(db);
-        if results.is_empty() {
-            return RewriteResult::Unchanged;
-        }
-
-        // Only convert type_var (inference variables), not unresolved type references.
-        // Unresolved tribute.type(name=X) for user-defined types should be preserved
-        // as they will be resolved by gc_types_collection.
-        let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
-        if !has_type_var {
-            return RewriteResult::Unchanged;
-        }
-
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-
-        // Replace only type_var results with anyref
-        let new_results: IdVec<Type<'db>> = results
-            .iter()
-            .map(|ty| {
-                if tribute::is_type_var(db, *ty) {
-                    anyref_ty
-                } else {
-                    *ty
-                }
-            })
-            .collect();
-
-        debug!(
-            "wasm_type_concrete: fallback converting {}.{} type_var result(s) to anyref",
-            op.dialect(db),
-            op.name(db)
-        );
-
-        let new_op = op.modify(db).results(new_results).build();
-        RewriteResult::Replace(new_op)
-    }
-}
-
 // ============================================================================
 // Helper functions
 // ============================================================================
 
-/// Replace all `type_var` results with a concrete type.
+/// Replace all placeholder results with a concrete type.
 ///
 /// Returns the modified results, or None if no changes were needed.
 fn concretize_results<'db>(
@@ -759,17 +564,19 @@ fn concretize_results<'db>(
     results: &IdVec<Type<'db>>,
     concrete_ty: Type<'db>,
 ) -> Option<IdVec<Type<'db>>> {
-    // Check if any result is a type_var
-    let has_type_var = results.iter().any(|ty| tribute::is_type_var(db, *ty));
-    if !has_type_var {
+    // Check if any result is a placeholder
+    let has_placeholder = results
+        .iter()
+        .any(|ty| tribute::is_placeholder_type(db, *ty));
+    if !has_placeholder {
         return None;
     }
 
-    // Replace all type_var results with the concrete type
+    // Replace all placeholder results with the concrete type
     let new_results: IdVec<Type<'db>> = results
         .iter()
         .map(|ty| {
-            if tribute::is_type_var(db, *ty) {
+            if tribute::is_placeholder_type(db, *ty) {
                 concrete_ty
             } else {
                 *ty
@@ -827,7 +634,7 @@ fn infer_type_from_regions<'db>(
             continue;
         };
 
-        // Skip placeholder types (type_var, unresolved type, error_type) - we want concrete types
+        // Skip placeholder types - we want concrete types
         if tribute::is_placeholder_type(db, ty) {
             continue;
         }
@@ -902,65 +709,6 @@ fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_and_lower_module_with_type_var_call(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let type_var = tribute::type_var_with_id(db, 0);
-
-        // Create a function that returns i32
-        let func_ty = core::Func::new(db, idvec![], i32_ty).as_type();
-        let func_body_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![]);
-        let func_body = Region::new(db, location, idvec![func_body_block]);
-        let func_op = wasm::func(db, location, Symbol::new("callee"), func_ty, func_body);
-
-        // Create a call to that function with type_var result
-        let call_op = wasm::call(db, location, None, Some(type_var), Symbol::new("callee"));
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![func_op.as_operation(), call_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = core::Module::create(db, location, "test".into(), region);
-
-        // Lower the module within the tracked function
-        lower(db, module)
-    }
-
-    #[salsa_test]
-    fn test_call_result_type_concretization(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_module_with_type_var_call(db);
-
-        // Find the call operation
-        let block = lowered.body(db).blocks(db).first().unwrap();
-        let call_op = block
-            .operations(db)
-            .iter()
-            .find(|op| op.dialect(db) == wasm::DIALECT_NAME() && op.name(db) == wasm::CALL())
-            .expect("call operation not found");
-
-        // Check that result type is now i32, not type_var
-        let result_ty = call_op.results(db).first().copied().unwrap();
-        assert!(
-            !tribute::is_type_var(db, result_ty),
-            "result type should be concrete, not type_var"
-        );
-        assert!(
-            core::I32::from_type(db, result_ty).is_some(),
-            "result type should be i32"
-        );
-    }
+    // Tests removed as they depended on tribute::type_var_with_id which no longer exists.
+    // Type variables are now resolved at AST level before IR generation.
 }

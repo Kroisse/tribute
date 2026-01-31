@@ -336,13 +336,11 @@ impl<'db> RewritePattern<'db> for NormalizeCallIndirectPattern {
 
         let result_ty = results[0];
 
-        // Convert primitive types, type variables, and tribute_rt.any to their WASM equivalents
+        // Convert primitive types and tribute_rt.any to their WASM equivalents
         let new_result_ty = if let Some(ty) = convert_primitive_type(db, result_ty) {
             ty
-        } else if tribute::is_type_var(db, result_ty)
-            || tribute_rt::Any::from_type(db, result_ty).is_some()
-        {
-            // Type variables and tribute_rt.any normalize to wasm.anyref for call_indirect
+        } else if tribute_rt::Any::from_type(db, result_ty).is_some() {
+            // tribute_rt.any normalizes to wasm.anyref for call_indirect
             // This ensures local allocation uses the same type as the call result
             wasm::Anyref::new(db).as_type()
         } else {
