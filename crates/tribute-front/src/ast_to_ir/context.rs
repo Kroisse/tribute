@@ -37,6 +37,8 @@ pub struct IrLoweringCtx<'db> {
     module_path: SymbolVec,
     /// Counter for generating unique lambda names.
     lambda_counter: u64,
+    /// Counter for generating unique local IDs (for synthetic bindings like continuations).
+    local_id_counter: u32,
     /// Lifted lambda functions to be added at module level.
     lifted_functions: Vec<Operation<'db>>,
     /// Struct field order: CtorId → [field_names in definition order].
@@ -61,6 +63,7 @@ impl<'db> IrLoweringCtx<'db> {
             function_types,
             module_path,
             lambda_counter: 0,
+            local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             lifted_functions: Vec::new(),
             struct_fields: HashMap::new(),
         }
@@ -128,6 +131,13 @@ impl<'db> IrLoweringCtx<'db> {
             }
         }
         None
+    }
+
+    /// Generate a unique LocalId for synthetic bindings (e.g., continuations).
+    pub fn next_local_id(&mut self) -> u32 {
+        let id = self.local_id_counter;
+        self.local_id_counter += 1;
+        id
     }
 
     /// Generate a unique lambda name qualified with module path.
