@@ -1107,6 +1107,24 @@ struct LowerShiftPattern<'db> {
     shift_analysis: ShiftAnalysis<'db>,
 }
 
+/// Information about a shift operation for lowering.
+enum ShiftInfo<'db> {
+    /// Static tag from attribute (cont.shift)
+    Static {
+        tag: u32,
+        ability_ref: Type<'db>,
+        op_name: Symbol,
+        value_operands: Vec<Value<'db>>,
+    },
+    /// Dynamic tag from operand (cont.shift_dynamic)
+    Dynamic {
+        tag_operand: Value<'db>,
+        ability_ref: Type<'db>,
+        op_name: Symbol,
+        value_operands: Vec<Value<'db>>,
+    },
+}
+
 impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
     fn match_and_rewrite(
         &self,
@@ -1115,32 +1133,50 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         // Try to match cont.shift first, then cont.shift_dynamic
-        let (tag, ability_ref_type, op_name_sym, value_operands): (
-            u32,
-            Type<'db>,
-            Symbol,
-            Vec<Value<'db>>,
-        ) = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+        let shift_info = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
             // Static tag from attribute
             let operands: Vec<_> = adaptor.operands().iter().copied().collect();
-            (
-                shift_op.tag(db),
-                shift_op.ability_ref(db),
-                shift_op.op_name(db),
-                operands,
-            )
+            ShiftInfo::Static {
+                tag: shift_op.tag(db),
+                ability_ref: shift_op.ability_ref(db),
+                op_name: shift_op.op_name(db),
+                value_operands: operands,
+            }
         } else if let Ok(shift_dyn) = cont::ShiftDynamic::from_operation(db, *op) {
-            // Dynamic tag from operand - use placeholder for now
-            // TODO: Implement proper dynamic tag support in trampoline
-            let operands: Vec<_> = adaptor.operands().iter().skip(1).copied().collect(); // Skip tag operand
-            (
-                0, // Placeholder tag - dynamic dispatch not yet fully implemented
-                shift_dyn.ability_ref(db),
-                shift_dyn.op_name(db),
-                operands,
-            )
+            // Dynamic tag from first operand
+            let operands: Vec<_> = adaptor.operands().iter().copied().collect();
+            let tag_operand = operands[0]; // First operand is tag
+            let value_operands = operands.into_iter().skip(1).collect(); // Rest are values
+            ShiftInfo::Dynamic {
+                tag_operand,
+                ability_ref: shift_dyn.ability_ref(db),
+                op_name: shift_dyn.op_name(db),
+                value_operands,
+            }
         } else {
             return RewriteResult::Unchanged;
+        };
+
+        // Extract common fields
+        let (ability_ref_type, op_name_sym, value_operands) = match &shift_info {
+            ShiftInfo::Static {
+                ability_ref,
+                op_name,
+                value_operands,
+                ..
+            } => (*ability_ref, *op_name, value_operands.clone()),
+            ShiftInfo::Dynamic {
+                ability_ref,
+                op_name,
+                value_operands,
+                ..
+            } => (*ability_ref, *op_name, value_operands.clone()),
+        };
+
+        // For state naming, use 0 as placeholder tag for dynamic case
+        let tag_for_naming = match &shift_info {
+            ShiftInfo::Static { tag, .. } => *tag,
+            ShiftInfo::Dynamic { .. } => 0,
         };
 
         let location = op.location(db);
@@ -1152,7 +1188,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let op_idx = compute_op_idx(ability_name, op_name);
 
         // Look up shift point analysis - fail fast if missing
-        let shift_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
+        let shift_point_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
             panic!(
                 "missing shift analysis for cont.shift at {:?} (ability: {:?}, op: {:?})",
                 location.span, ability_name, op_name
@@ -1165,20 +1201,21 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let state_name = Symbol::from_dynamic(&state_type_name(
             ability_name,
             op_name,
-            tag,
-            shift_info.index,
+            tag_for_naming,
+            shift_point_info.index,
         ));
 
         // Get live values and their types from analysis
-        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) = shift_info
-            .live_values
-            .iter()
-            .enumerate()
-            .map(|(i, (v, ty))| {
-                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                (*v, (field_name, *ty))
-            })
-            .unzip();
+        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
+            shift_point_info
+                .live_values
+                .iter()
+                .enumerate()
+                .map(|(i, (v, ty))| {
+                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                    (*v, (field_name, *ty))
+                })
+                .unzip();
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -1196,7 +1233,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let resume_name = fresh_resume_name(&self.resume_counter);
 
         // Determine next resume name if not the last shift point
-        let next_resume_name = if shift_info.index + 1 >= shift_info.total_shifts {
+        let next_resume_name = if shift_point_info.index + 1 >= shift_point_info.total_shifts {
             None
         } else {
             // Pre-compute next resume function name
@@ -1211,9 +1248,9 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             state_type: state_adt_ty,
             state_fields,
             original_live_values: state_values.clone(),
-            shift_result_value: shift_info.shift_result_value,
-            shift_result_type: shift_info.shift_result_type,
-            continuation_ops: shift_info.continuation_ops.clone(),
+            shift_result_value: shift_point_info.shift_result_value,
+            shift_result_type: shift_point_info.shift_result_type,
+            continuation_ops: shift_point_info.continuation_ops.clone(),
             next_resume_name,
             location,
             shift_analysis: self.shift_analysis.clone(),
@@ -1230,28 +1267,69 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let shift_value_val = value_operands.first().copied().unwrap_or(state_val);
 
         // === 4. Build Continuation ===
-        let cont_ty = trampoline::Continuation::new(db).as_type();
-        let cont_op = trampoline::build_continuation(
-            db,
-            location,
-            resume_fn_val,
-            state_val,
-            shift_value_val,
-            cont_ty,
-            tag,
-            op_idx,
-        );
-        let cont_val = cont_op.as_operation().result(db, 0);
-        ops.push(cont_op.as_operation());
-
         // === 5. Set Yield State ===
-        let set_yield_op = trampoline::set_yield_state(db, location, cont_val, tag, op_idx);
-        ops.push(set_yield_op.as_operation());
-
         // === 6. Return Step::Shift ===
+        // These operations differ based on static vs dynamic tag
+        let cont_ty = trampoline::Continuation::new(db).as_type();
         let step_ty = trampoline::Step::new(db).as_type();
-        let step_op = trampoline::step_shift(db, location, cont_val, step_ty, tag, op_idx);
-        ops.push(step_op.as_operation());
+
+        match shift_info {
+            ShiftInfo::Static { tag, .. } => {
+                // Static tag: use regular trampoline operations with tag as attribute
+                let cont_op = trampoline::build_continuation(
+                    db,
+                    location,
+                    resume_fn_val,
+                    state_val,
+                    shift_value_val,
+                    cont_ty,
+                    tag,
+                    op_idx,
+                );
+                let cont_val = cont_op.as_operation().result(db, 0);
+                ops.push(cont_op.as_operation());
+
+                let set_yield_op = trampoline::set_yield_state(db, location, cont_val, tag, op_idx);
+                ops.push(set_yield_op.as_operation());
+
+                let step_op = trampoline::step_shift(db, location, cont_val, step_ty, tag, op_idx);
+                ops.push(step_op.as_operation());
+            }
+            ShiftInfo::Dynamic { tag_operand, .. } => {
+                // Dynamic tag: use dynamic trampoline operations with tag as operand
+                let cont_op = trampoline::build_continuation_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    resume_fn_val,
+                    state_val,
+                    shift_value_val,
+                    cont_ty,
+                    op_idx,
+                );
+                let cont_val = cont_op.as_operation().result(db, 0);
+                ops.push(cont_op.as_operation());
+
+                let set_yield_op = trampoline::set_yield_state_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    cont_val,
+                    op_idx,
+                );
+                ops.push(set_yield_op.as_operation());
+
+                let step_op = trampoline::step_shift_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    cont_val,
+                    step_ty,
+                    op_idx,
+                );
+                ops.push(step_op.as_operation());
+            }
+        }
 
         RewriteResult::expand(ops)
     }

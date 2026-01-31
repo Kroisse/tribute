@@ -59,12 +59,15 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(ConvertFuncTypePattern)
         .add_pattern(ConvertTrampolineResultTypePattern)
         .add_pattern(LowerBuildContinuationPattern)
+        .add_pattern(LowerBuildContinuationDynamicPattern)
         .add_pattern(LowerStepDonePattern)
         .add_pattern(LowerStepShiftPattern)
+        .add_pattern(LowerStepShiftDynamicPattern)
         .add_pattern(LowerTrampolineStructGetPattern)
         .add_pattern(LowerBuildStatePattern)
         .add_pattern(LowerBuildResumeWrapperPattern)
         .add_pattern(LowerSetYieldStatePattern)
+        .add_pattern(LowerSetYieldStateDynamicPattern)
         .add_pattern(LowerResetYieldStatePattern)
         .add_pattern(LowerYieldContinuationAccessPattern)
         .add_pattern(LowerYieldGlobalGetPattern);
@@ -527,6 +530,70 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
     }
 }
 
+/// Lower `trampoline.build_continuation_dynamic` → `adt.struct_new`
+///
+/// Same as LowerBuildContinuationPattern but takes tag as first operand instead of attribute.
+struct LowerBuildContinuationDynamicPattern;
+
+impl<'db> RewritePattern<'db> for LowerBuildContinuationDynamicPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let _build_cont = match trampoline::BuildContinuationDynamic::from_operation(db, *op) {
+            Ok(bc) => bc,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let cont_type = continuation_adt_type(db);
+
+        let operands = adaptor.operands();
+        // For dynamic version: operands are (tag, resume_fn, state, shift_value)
+        let tag_operand = operands.first().copied();
+        let resume_fn = operands.get(1).copied();
+        let state = operands.get(2).copied();
+        let shift_value = operands.get(3).copied();
+
+        let mut ops = Vec::new();
+
+        // Tag comes from operand, not attribute
+        let tag_value = tag_operand.expect("build_continuation_dynamic requires tag operand");
+
+        // resume_fn field
+        let resume_fn_field = if let Some(v) = resume_fn {
+            v
+        } else {
+            let null_const = create_i32_const(db, location, -1);
+            ops.push(null_const);
+            null_const.result(db, 0)
+        };
+
+        // state field - cast to any
+        let state_field = if let Some(v) = state {
+            materialize_to_any(db, location, v, adaptor, &mut ops)
+        } else {
+            null_any(db, location, &mut ops)
+        };
+
+        // shift_value field - cast to any
+        let shift_value_field = if let Some(v) = shift_value {
+            materialize_to_any(db, location, v, adaptor, &mut ops)
+        } else {
+            null_any(db, location, &mut ops)
+        };
+
+        let fields = vec![resume_fn_field, state_field, tag_value, shift_value_field];
+
+        let struct_new = adt::struct_new(db, location, fields, cont_type, cont_type);
+        ops.push(struct_new.as_operation());
+
+        RewriteResult::expand(ops)
+    }
+}
+
 /// Lower `trampoline.step_done` → `adt.struct_new` with tag=0
 struct LowerStepDonePattern;
 
@@ -615,6 +682,63 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
         ops.push(op_idx_const);
 
         // Value field - cast continuation to any using TypeConverter materialization
+        let value_field = if let Some(v) = continuation {
+            materialize_to_any(db, location, v, adaptor, &mut ops)
+        } else {
+            null_any(db, location, &mut ops)
+        };
+
+        let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
+        let struct_new = adt::struct_new(db, location, fields, step_type, step_type);
+        ops.push(struct_new.as_operation());
+
+        RewriteResult::expand(ops)
+    }
+}
+
+/// Lower `trampoline.step_shift_dynamic` → `adt.struct_new` with tag=1
+///
+/// Same as LowerStepShiftPattern but takes prompt tag as first operand instead of attribute.
+struct LowerStepShiftDynamicPattern;
+
+impl<'db> RewritePattern<'db> for LowerStepShiftDynamicPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let step_shift_dyn = match trampoline::StepShiftDynamic::from_operation(db, *op) {
+            Ok(ss) => ss,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let step_type = step_adt_type(db);
+
+        let op_idx = step_shift_dyn.op_idx(db);
+
+        let operands = adaptor.operands();
+        // For dynamic version: operands are (prompt, continuation)
+        let prompt_operand = operands.first().copied();
+        let continuation = operands.get(1).copied();
+
+        let mut ops = Vec::new();
+
+        // Create constants for tag
+        let tag_const = create_i32_const(db, location, STEP_TAG_SHIFT);
+        let tag_value = tag_const.result(db, 0);
+        ops.push(tag_const);
+
+        // Prompt comes from operand
+        let prompt_value = prompt_operand.expect("step_shift_dynamic requires prompt operand");
+
+        // op_idx from attribute
+        let op_idx_const = create_i32_const(db, location, op_idx as i32);
+        let op_idx_value = op_idx_const.result(db, 0);
+        ops.push(op_idx_const);
+
+        // Value field - cast continuation to any
         let value_field = if let Some(v) = continuation {
             materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
@@ -871,6 +995,58 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
 
         // Set $yield_tag = tag
         push_set_i32_global(db, location, tag as i32, yield_globals::TAG_IDX, &mut ops);
+
+        // Set $yield_cont = continuation (as anyref)
+        let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
+        ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
+
+        // Set $yield_op_idx = op_idx
+        push_set_i32_global(db, location, op_idx as i32, yield_globals::OP_IDX, &mut ops);
+
+        RewriteResult::expand(ops)
+    }
+}
+
+/// Lower `trampoline.set_yield_state_dynamic` → wasm.global_set (multiple)
+///
+/// Same as LowerSetYieldStatePattern but takes tag as first operand instead of attribute.
+struct LowerSetYieldStateDynamicPattern;
+
+impl<'db> RewritePattern<'db> for LowerSetYieldStateDynamicPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let set_yield_dyn = match trampoline::SetYieldStateDynamic::from_operation(db, *op) {
+            Ok(sy) => sy,
+            Err(_) => return RewriteResult::Unchanged,
+        };
+
+        let location = op.location(db);
+        let op_idx = set_yield_dyn.op_idx(db);
+
+        let operands = adaptor.operands();
+        // For dynamic version: operands are (tag, continuation)
+        let tag_operand = operands
+            .first()
+            .copied()
+            .expect("set_yield_state_dynamic requires tag operand");
+        let cont_val = operands
+            .get(1)
+            .copied()
+            .expect("set_yield_state_dynamic requires continuation operand");
+
+        let mut ops = Vec::new();
+
+        // Set $yield_state = 1 (yielding)
+        push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
+
+        // Set $yield_tag = tag (from operand, needs global_set with value)
+        ops.push(
+            wasm::global_set(db, location, tag_operand, yield_globals::TAG_IDX).as_operation(),
+        );
 
         // Set $yield_cont = continuation (as anyref)
         let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
