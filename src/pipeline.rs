@@ -80,6 +80,7 @@ use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_e
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lower_cont_to_trampoline;
+use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
@@ -366,6 +367,23 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) ->
     insert_evidence(db, module)
 }
 
+/// Resolve Evidence-based Dispatch.
+///
+/// This pass transforms `cont.shift` with static placeholder tags into
+/// evidence-based dispatch using runtime function calls:
+/// - Looks up markers from evidence
+/// - Extracts prompt tags from markers
+/// - Replaces `cont.shift` with `cont.shift_dynamic`
+///
+/// Must run AFTER evidence_calls (Phase 2) so functions have evidence params.
+#[salsa::tracked]
+pub fn stage_resolve_evidence<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    resolve_evidence_dispatch(db, module)
+}
+
 /// Handler Lowering.
 ///
 /// This pass transforms ability dialect operations to continuation dialect operations:
@@ -531,6 +549,10 @@ pub fn run_full_pipeline<'db>(
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
+
+    // Evidence-based dispatch resolution - transforms cont.shift to use dynamic tags
+    let module = stage_resolve_evidence(db, module);
+
     let module = stage_handler_lower(db, module)?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)

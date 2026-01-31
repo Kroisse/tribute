@@ -1114,19 +1114,41 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let shift_op = match cont::Shift::from_operation(db, *op) {
-            Ok(s) => s,
-            Err(_) => return RewriteResult::Unchanged,
+        // Try to match cont.shift first, then cont.shift_dynamic
+        let (tag, ability_ref_type, op_name_sym, value_operands): (
+            u32,
+            Type<'db>,
+            Symbol,
+            Vec<Value<'db>>,
+        ) = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+            // Static tag from attribute
+            let operands: Vec<_> = adaptor.operands().iter().copied().collect();
+            (
+                shift_op.tag(db),
+                shift_op.ability_ref(db),
+                shift_op.op_name(db),
+                operands,
+            )
+        } else if let Ok(shift_dyn) = cont::ShiftDynamic::from_operation(db, *op) {
+            // Dynamic tag from operand - use placeholder for now
+            // TODO: Implement proper dynamic tag support in trampoline
+            let operands: Vec<_> = adaptor.operands().iter().skip(1).copied().collect(); // Skip tag operand
+            (
+                0, // Placeholder tag - dynamic dispatch not yet fully implemented
+                shift_dyn.ability_ref(db),
+                shift_dyn.op_name(db),
+                operands,
+            )
+        } else {
+            return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let tag = shift_op.tag(db);
 
         // Compute op_idx from ability_ref and op_name
-        let ability_ref_type = shift_op.ability_ref(db);
         let ability_name =
             core::AbilityRefType::from_type(db, ability_ref_type).and_then(|ar| ar.name(db));
-        let op_name = Some(shift_op.op_name(db));
+        let op_name = Some(op_name_sym);
         let op_idx = compute_op_idx(ability_name, op_name);
 
         // Look up shift point analysis - fail fast if missing
@@ -1205,7 +1227,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         // === 3. Get shift value (the value passed to the effect operation) ===
         // Note: shift value may be absent if the ability operation has no arguments.
         // In that case, we use state_val as a placeholder (will be ignored by resume).
-        let shift_value_val = adaptor.operands().first().copied().unwrap_or(state_val);
+        let shift_value_val = value_operands.first().copied().unwrap_or(state_val);
 
         // === 4. Build Continuation ===
         let cont_ty = trampoline::Continuation::new(db).as_type();
@@ -1367,8 +1389,29 @@ fn create_resume_function_with_continuation<'db>(
                     continue;
                 }
 
-                // Handle cont.shift - transform to step_shift with next resume function
-                if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                // Handle cont.shift and cont.shift_dynamic - transform to step_shift with next resume function
+                let shift_info_opt = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                    Some((
+                        shift_op.tag(db),
+                        shift_op.ability_ref(db),
+                        shift_op.op_name(db),
+                        op.operands(db).first().copied(),
+                    ))
+                } else if let Ok(shift_dyn) = cont::ShiftDynamic::from_operation(db, *op) {
+                    // For dynamic shift, skip tag operand (index 0) and use placeholder tag
+                    Some((
+                        0u32, // Placeholder tag for dynamic dispatch
+                        shift_dyn.ability_ref(db),
+                        shift_dyn.op_name(db),
+                        op.operands(db).get(1).copied(), // Skip tag, get first value operand
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some((tag, ability_ref_type, op_name_sym, shift_value_operand)) =
+                    shift_info_opt
+                {
                     // Get next resume function name
                     let next_resume_name = spec.next_resume_name.as_ref().expect(
                         "encountered shift in continuation but no next_resume_name specified",
@@ -1379,11 +1422,9 @@ fn create_resume_function_with_continuation<'db>(
                     let next_shift_info = spec.shift_analysis.get(&shift_span);
 
                     // Get shift properties
-                    let tag = shift_op.tag(db);
-                    let ability_ref_type = shift_op.ability_ref(db);
                     let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
                         .and_then(|ar| ar.name(db));
-                    let op_name = Some(shift_op.op_name(db));
+                    let op_name = Some(op_name_sym);
                     let op_idx = compute_op_idx(ability_name, op_name);
 
                     // Build state struct with current live values (remapped)
@@ -1427,10 +1468,8 @@ fn create_resume_function_with_continuation<'db>(
                     let resume_fn_val = const_op.result(db);
 
                     // Get shift value (remap if needed)
-                    let shift_value_val = op
-                        .operands(db)
-                        .first()
-                        .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                    let shift_value_val = shift_value_operand
+                        .map(|v| *value_map.get(&v).unwrap_or(&v))
                         .unwrap_or(state_val);
 
                     // Build continuation
