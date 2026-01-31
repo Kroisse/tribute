@@ -23,6 +23,7 @@
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
 use trunk_ir::dialect::adt;
+use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
@@ -169,6 +170,10 @@ fn create_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
         })
+        // Convert cont.prompt_tag → core.i32 (same representation at runtime)
+        .add_conversion(|db, ty| {
+            cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
         // Materialize: trampoline types to ADT types are no-op conversions
         .add_materialization(|db, _location, _value, from_ty, to_ty| {
             if from_ty == to_ty {
@@ -287,6 +292,17 @@ fn create_type_converter() -> TypeConverter {
                     ref_cast_op.as_operation(),
                     unbox_op.as_operation(),
                 ]);
+            }
+            MaterializeResult::Skip
+        })
+        // Materialize: cont.prompt_tag → i32 (no-op, same representation)
+        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+            let is_from_prompt_tag = cont::PromptTag::from_type(db, from_ty).is_some();
+            let is_to_i32 = core::I32::from_type(db, to_ty).is_some();
+
+            if is_from_prompt_tag && is_to_i32 {
+                // PromptTag is represented as i32 at runtime, no conversion needed
+                return MaterializeResult::NoOp;
             }
             MaterializeResult::Skip
         })
@@ -559,7 +575,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationDynamicPattern {
 
         let mut ops = Vec::new();
 
-        // Tag comes from operand, not attribute
+        // Tag comes from operand (cont.prompt_tag has same representation as i32)
         let tag_value = tag_operand.expect("build_continuation_dynamic requires tag operand");
 
         // resume_fn field
@@ -730,7 +746,7 @@ impl<'db> RewritePattern<'db> for LowerStepShiftDynamicPattern {
         let tag_value = tag_const.result(db, 0);
         ops.push(tag_const);
 
-        // Prompt comes from operand
+        // Prompt comes from operand (cont.prompt_tag has same representation as i32)
         let prompt_value = prompt_operand.expect("step_shift_dynamic requires prompt operand");
 
         // op_idx from attribute
@@ -1043,7 +1059,7 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStateDynamicPattern {
         // Set $yield_state = 1 (yielding)
         push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
 
-        // Set $yield_tag = tag (from operand, needs global_set with value)
+        // Set $yield_tag = tag (cont.prompt_tag has same representation as i32)
         ops.push(
             wasm::global_set(db, location, tag_operand, yield_globals::TAG_IDX).as_operation(),
         );
@@ -1593,5 +1609,111 @@ mod tests {
             indices.contains(&yield_globals::OP_IDX),
             "Should set yield_op_idx global"
         );
+    }
+
+    // ========================================================================
+    // Test: TypeConverter prompt_tag conversion
+    // ========================================================================
+
+    #[salsa::tracked]
+    fn type_converter_converts_prompt_tag(db: &dyn salsa::Database) -> bool {
+        let type_converter = create_type_converter();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+
+        let converted = type_converter.convert_type(db, prompt_tag_ty);
+        converted == Some(i32_ty)
+    }
+
+    #[salsa_test]
+    fn test_type_converter_converts_prompt_tag_to_i32(db: &salsa::DatabaseImpl) {
+        assert!(
+            type_converter_converts_prompt_tag(db),
+            "cont.prompt_tag should convert to core.i32"
+        );
+    }
+
+    #[salsa::tracked]
+    fn type_converter_prompt_tag_materialization(db: &dyn salsa::Database) -> bool {
+        let type_converter = create_type_converter();
+        let location = test_location(db);
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a dummy value with prompt_tag type
+        let dummy_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
+        let dummy_val = dummy_op.as_operation().result(db, 0);
+
+        let result = type_converter.materialize(db, location, dummy_val, prompt_tag_ty, i32_ty);
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_type_converter_prompt_tag_materialization_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(
+            type_converter_prompt_tag_materialization(db),
+            "cont.prompt_tag → i32 materialization should be NoOp"
+        );
+    }
+
+    // ========================================================================
+    // Test: LowerBuildContinuationDynamicPattern with prompt_tag operand
+    // ========================================================================
+
+    /// Test that build_continuation_dynamic correctly handles cont.prompt_tag operand.
+    #[salsa::tracked]
+    fn build_continuation_dynamic_handles_prompt_tag(db: &dyn salsa::Database) -> (Symbol, Symbol) {
+        let location = test_location(db);
+        let cont_ty = trampoline::Continuation::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+
+        // Create operands: tag (prompt_tag), resume_fn (i32), state (anyref), shift_value (anyref)
+        // Use prompt_tag type for tag operand to simulate evidence-based dispatch
+        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 1);
+        let resume_fn_op = create_i32_const(db, location, 0);
+        let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+        let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
+
+        let tag = tag_op.as_operation().result(db, 0);
+        let resume_fn = resume_fn_op.result(db, 0);
+        let state = state_op.as_operation().result(db, 0);
+        let shift_value = shift_value_op.as_operation().result(db, 0);
+
+        // Create trampoline.build_continuation_dynamic
+        let build_cont_op = trampoline::build_continuation_dynamic(
+            db,
+            location,
+            tag,
+            resume_fn,
+            state,
+            shift_value,
+            cont_ty,
+            0,
+        );
+
+        // Apply the pattern with our type converter
+        let pattern = LowerBuildContinuationDynamicPattern;
+        let ctx = RewriteContext::new();
+        let type_converter = create_type_converter();
+        let op = build_cont_op.as_operation();
+        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
+        let result = pattern.match_and_rewrite(db, &op, &adaptor);
+
+        // Extract the final operation (should be adt.struct_new)
+        match result {
+            RewriteResult::Expand(ops) => {
+                let last_op = ops.last().unwrap();
+                (last_op.dialect(db), last_op.name(db))
+            }
+            _ => (Symbol::new("error"), Symbol::new("unexpected")),
+        }
+    }
+
+    #[salsa_test]
+    fn test_build_continuation_dynamic_with_prompt_tag(db: &salsa::DatabaseImpl) {
+        let (dialect, name) = build_continuation_dynamic_handles_prompt_tag(db);
+        assert_eq!(dialect, adt::DIALECT_NAME());
+        assert_eq!(name, adt::STRUCT_NEW());
     }
 }

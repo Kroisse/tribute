@@ -94,13 +94,11 @@ dialect! {
         /// Contains the prompt tag and handler information for a specific ability.
         /// Used for evidence-based handler dispatch.
         type marker;
-
-        /// `ability.prompt_tag` type: prompt tag for delimited control.
-        ///
-        /// A unique identifier that connects `cont.push_prompt` with `cont.shift`.
-        type prompt_tag;
     }
 }
+
+// Re-export cont::PromptTag for backward compatibility
+pub use trunk_ir::dialect::cont::PromptTag;
 
 // === Printable interface registrations ===
 
@@ -112,14 +110,11 @@ inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f: &
 // marker -> "Marker"
 inventory::submit! { Printable::implement("ability", "marker", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("Marker")) }
 
-// prompt_tag -> "PromptTag"
-inventory::submit! { Printable::implement("ability", "prompt_tag", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("PromptTag")) }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::dialect::{arith, cont, core};
     use trunk_ir::type_interface::print_type;
     use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Location, PathId, Span, Symbol};
 
@@ -227,10 +222,11 @@ mod tests {
 
     #[salsa_test]
     fn test_prompt_tag_type(db: &salsa::DatabaseImpl) {
+        // PromptTag is re-exported from cont dialect
         let prompt_tag_ty = PromptTag::new(db);
 
-        assert_eq!(prompt_tag_ty.as_type().dialect(db), DIALECT_NAME());
-        assert_eq!(prompt_tag_ty.as_type().name(db), PROMPT_TAG());
+        assert_eq!(prompt_tag_ty.as_type().dialect(db), cont::DIALECT_NAME());
+        assert_eq!(prompt_tag_ty.as_type().name(db), cont::PROMPT_TAG());
         assert_eq!(print_type(db, prompt_tag_ty.as_type()), "PromptTag");
     }
 

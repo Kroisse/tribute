@@ -130,5 +130,19 @@ dialect! {
         /// - Second param: result type (what resuming returns)
         #[attr(effect: Type)]
         type continuation(arg, result);
+
+        /// `cont.prompt_tag` type: prompt tag for delimited control.
+        ///
+        /// A unique identifier that connects `cont.push_prompt` with `cont.shift`.
+        /// At runtime, this is represented as an i32 value.
+        type prompt_tag;
     }
 }
+
+// === Printable interface registrations ===
+
+use crate::type_interface::{PrintContext, Printable};
+use std::fmt::Write;
+
+// prompt_tag -> "PromptTag"
+inventory::submit! { Printable::implement("cont", "prompt_tag", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("PromptTag")) }
