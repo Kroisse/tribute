@@ -1621,12 +1621,10 @@ impl<'db> TypeChecker<'db> {
             // Constraint: tail_var = {handled effects | result_var}
             // This means the tail can only contain the handled effects plus the result_var
             // In practice, we just propagate the tail as-is since effect removal is semantic
-            let result_row = EffectRow::new(db, remaining_effects, Some(result_var));
-
             // Add a constraint that relates the original tail to the result
             // For now, we use a simplified approach: just use the fresh variable
             // A more complete implementation would decompose the tail
-            result_row
+            EffectRow::new(db, remaining_effects, Some(result_var))
         } else {
             // Closed row: just return the remaining effects
             EffectRow::new(db, remaining_effects, None)

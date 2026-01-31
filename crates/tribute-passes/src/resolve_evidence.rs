@@ -670,17 +670,17 @@ fn collect_handled_abilities<'db>(
 /// shift use the same ID for the same ability.
 fn compute_ability_id(_db: &dyn salsa::Database, ability_ref: Type<'_>) -> u32 {
     // Extract ability name from the type
-    if let Some(ability_type) = core::AbilityRefType::from_type(_db, ability_ref) {
-        if let Some(ability_name) = ability_type.name(_db) {
-            // Use a simple hash of the ability name
-            return ability_name.with_str(|s| {
-                let mut hash: u32 = 0;
-                for byte in s.bytes() {
-                    hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-                }
-                hash
-            });
-        }
+    if let Some(ability_type) = core::AbilityRefType::from_type(_db, ability_ref)
+        && let Some(ability_name) = ability_type.name(_db)
+    {
+        // Use a simple hash of the ability name
+        return ability_name.with_str(|s| {
+            let mut hash: u32 = 0;
+            for byte in s.bytes() {
+                hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+            }
+            hash
+        });
     }
     // Fallback: use 0 for unknown ability types
     0
