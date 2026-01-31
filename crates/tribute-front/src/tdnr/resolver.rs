@@ -705,6 +705,7 @@ impl<'db> TdnrResolver<'db> {
                 op,
                 params,
                 continuation,
+                continuation_local_id,
             } => HandlerKind::Effect {
                 ability,
                 op,
@@ -713,6 +714,7 @@ impl<'db> TdnrResolver<'db> {
                     .map(|p| self.resolve_pattern(p))
                     .collect(),
                 continuation,
+                continuation_local_id,
             },
         };
         HandlerArm {

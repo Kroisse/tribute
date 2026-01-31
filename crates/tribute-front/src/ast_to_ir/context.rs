@@ -44,6 +44,11 @@ pub struct IrLoweringCtx<'db> {
     /// Struct field order: CtorId → [field_names in definition order].
     /// Used for lowering Record expressions to adt.struct_new.
     struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
+    /// Counter for generating unique prompt tags (per-module deterministic).
+    prompt_tag_counter: u32,
+    /// Stack of active prompt tags for nested handlers.
+    /// The top of the stack is the currently active prompt tag.
+    active_prompt_tag_stack: Vec<u32>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -66,6 +71,8 @@ impl<'db> IrLoweringCtx<'db> {
             local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             lifted_functions: Vec::new(),
             struct_fields: HashMap::new(),
+            prompt_tag_counter: 0,
+            active_prompt_tag_stack: Vec::new(),
         }
     }
 
@@ -134,10 +141,49 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Generate a unique LocalId for synthetic bindings (e.g., continuations).
-    pub fn next_local_id(&mut self) -> u32 {
+    ///
+    /// # Panics
+    /// Panics if the counter would overflow into the UNRESOLVED sentinel value.
+    pub fn next_local_id(&mut self) -> LocalId {
         let id = self.local_id_counter;
-        self.local_id_counter += 1;
-        id
+        // Ensure we don't hit LocalId::UNRESOLVED (u32::MAX)
+        if id == u32::MAX {
+            panic!("ICE: local_id_counter overflow - would produce UNRESOLVED sentinel");
+        }
+        self.local_id_counter = self
+            .local_id_counter
+            .checked_add(1)
+            .expect("ICE: local_id_counter overflow");
+        LocalId::new(id)
+    }
+
+    /// Generate a fresh prompt tag and push it onto the active stack.
+    ///
+    /// This should be called when entering a `handle` expression.
+    /// The tag is used by both `cont.push_prompt` and `cont.shift` to ensure
+    /// they reference the same prompt.
+    pub fn push_prompt_tag(&mut self) -> u32 {
+        let tag = self.prompt_tag_counter;
+        self.prompt_tag_counter = self
+            .prompt_tag_counter
+            .checked_add(1)
+            .expect("ICE: prompt_tag_counter overflow");
+        self.active_prompt_tag_stack.push(tag);
+        tag
+    }
+
+    /// Pop the current active prompt tag from the stack.
+    ///
+    /// This should be called when exiting a `handle` expression.
+    pub fn pop_prompt_tag(&mut self) {
+        self.active_prompt_tag_stack.pop();
+    }
+
+    /// Get the currently active prompt tag.
+    ///
+    /// Returns `None` if not inside a handler context.
+    pub fn active_prompt_tag(&self) -> Option<u32> {
+        self.active_prompt_tag_stack.last().copied()
     }
 
     /// Generate a unique lambda name qualified with module path.

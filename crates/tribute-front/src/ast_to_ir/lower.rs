@@ -1713,32 +1713,6 @@ fn bind_pattern_fields<'db>(
 // Handle Expression Lowering
 // =============================================================================
 
-use std::sync::atomic::{AtomicU32, Ordering};
-
-/// Generator for unique prompt tags.
-struct PromptTagGenerator {
-    next_id: AtomicU32,
-}
-
-impl PromptTagGenerator {
-    fn new() -> Self {
-        Self {
-            next_id: AtomicU32::new(0),
-        }
-    }
-
-    fn fresh(&self) -> u32 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
-    }
-}
-
-static PROMPT_TAG_GEN: std::sync::LazyLock<PromptTagGenerator> =
-    std::sync::LazyLock::new(PromptTagGenerator::new);
-
-fn fresh_prompt_tag() -> u32 {
-    PROMPT_TAG_GEN.fresh()
-}
-
 /// Lower an ability operation call directly to cont.shift.
 ///
 /// This generates:
@@ -1757,9 +1731,9 @@ fn lower_ability_op_call<'db>(
 ) -> Option<trunk_ir::Value<'db>> {
     let db = builder.db();
 
-    // TODO: Replace with evidence-based lookup
-    // For now, use a fresh prompt tag (placeholder)
-    let tag = fresh_prompt_tag();
+    // Use the currently active prompt tag from the enclosing handler.
+    // If there's no active handler, use 0 as a placeholder (will be resolved by evidence pass).
+    let tag = builder.ctx.active_prompt_tag().unwrap_or(0);
 
     // Create ability reference type for cont.shift
     let ability_ref = core::AbilityRefType::simple(db, ability).as_type();
@@ -1827,7 +1801,9 @@ fn lower_handle<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
 ) -> Option<trunk_ir::Value<'db>> {
     let db = builder.db();
-    let tag = fresh_prompt_tag();
+    // Generate a fresh prompt tag and push it onto the active stack.
+    // This tag is used by both push_prompt and any cont.shift operations in the body.
+    let tag = builder.ctx.push_prompt_tag();
 
     // Result type is any_type for now (type-erased)
     let result_ty = tribute_rt::any_type(db);
@@ -1882,6 +1858,9 @@ fn lower_handle<'db>(
         result_ty, // result_type attribute
         handler_dispatch_body,
     ));
+
+    // Pop the prompt tag from the active stack now that we're done with this handler.
+    builder.ctx.pop_prompt_tag();
 
     Some(handler_dispatch_op.as_operation().result(db, 0))
 }
@@ -2019,6 +1998,7 @@ fn build_suspend_handler_block<'db>(
         op,
         params,
         continuation,
+        continuation_local_id,
     } = &handler.kind
     else {
         // Should not happen - caller should only pass Effect handlers
@@ -2048,11 +2028,9 @@ fn build_suspend_handler_block<'db>(
 
     ctx.enter_scope();
 
-    // Bind continuation if named
-    if let Some(k_name) = continuation {
-        // Generate a fresh LocalId for the continuation binding
-        let k_local_id = LocalId::new(ctx.next_local_id());
-        ctx.bind(k_local_id, *k_name, cont_value);
+    // Bind continuation if named, using the resolver-assigned LocalId
+    if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
+        ctx.bind(*k_local_id, *k_name, cont_value);
     }
 
     // Bind params patterns
@@ -2097,7 +2075,15 @@ fn build_suspend_handler_block<'db>(
 
     // Create block with marker argument for ability_ref and op_name
     // The marker argument has attributes that identify which effect this block handles
-    let ability_ref_type = ctx.convert_type(ability.ty);
+    // Extract ability name from resolved reference and construct proper AbilityRefType
+    let ability_name = match &ability.resolved {
+        crate::ast::ResolvedRef::TypeDef { id } => id.name(db),
+        _ => {
+            // Fallback: try to extract name from type (shouldn't happen for well-resolved code)
+            Symbol::new("__unknown_ability__")
+        }
+    };
+    let ability_ref_type = core::AbilityRefType::simple(db, ability_name).as_type();
     let mut marker_attrs = std::collections::BTreeMap::new();
     marker_attrs.insert(
         Symbol::new("ability_ref"),

@@ -1276,6 +1276,7 @@ impl<'db> TypeChecker<'db> {
                 op,
                 params,
                 continuation,
+                continuation_local_id,
             } => HandlerKind::Effect {
                 ability: self.convert_ref_with_ctx(ctx, ability),
                 op,
@@ -1284,6 +1285,7 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
                 continuation,
+                continuation_local_id,
             },
         };
         HandlerArm {
@@ -1595,7 +1597,8 @@ impl<'db> TypeChecker<'db> {
     /// Remove handled effects from an effect row.
     ///
     /// Creates a new effect row with the specified abilities removed.
-    /// If the row has a row variable tail, the result will also be open.
+    /// If the row has a row variable tail, we add a constraint to ensure
+    /// the tail cannot contain the handled effects.
     fn remove_handled_effects(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -1612,18 +1615,29 @@ impl<'db> TypeChecker<'db> {
             .cloned()
             .collect();
 
-        // If there's a row variable tail, the result is still open
-        // but we need to add a constraint that the tail doesn't contain handled effects
-        if let Some(_tail_var) = row.rest(db) {
-            // Create a fresh row variable for the result
+        // If there's a row variable tail, we need to constrain it
+        if let Some(tail_var) = row.rest(db) {
+            // Create a fresh row variable for the result (the "unhandled" portion of the tail)
             let result_var = ctx.fresh_row_var();
 
-            // Constraint: tail_var = {handled effects | result_var}
-            // This means the tail can only contain the handled effects plus the result_var
-            // In practice, we just propagate the tail as-is since effect removal is semantic
-            // Add a constraint that relates the original tail to the result
-            // For now, we use a simplified approach: just use the fresh variable
-            // A more complete implementation would decompose the tail
+            // Create Effect entries for each handled ability.
+            // These are placeholders with no type args (simple abilities).
+            let handled_effects: Vec<crate::ast::Effect<'db>> = handled_abilities
+                .iter()
+                .map(|&name| crate::ast::Effect {
+                    name,
+                    args: Vec::new(),
+                })
+                .collect();
+
+            // Add constraint: tail_var = {handled_effects | result_var}
+            // This decomposes the tail into the handled effects plus the result,
+            // ensuring result_var cannot contain any of the handled abilities.
+            let tail_row = EffectRow::open(db, tail_var);
+            let decomposed_row = EffectRow::new(db, handled_effects, Some(result_var));
+            ctx.constrain_row_eq(tail_row, decomposed_row);
+
+            // Return the remaining effects with the fresh result variable
             EffectRow::new(db, remaining_effects, Some(result_var))
         } else {
             // Closed row: just return the remaining effects

@@ -665,25 +665,76 @@ fn collect_handled_abilities<'db>(
 
 /// Compute a stable ability ID from an ability reference type.
 ///
-/// This generates a consistent integer ID from the ability name for use in
-/// evidence lookup. The ID must be deterministic so that push_prompt and
+/// This generates a consistent integer ID from the ability name and type parameters
+/// for use in evidence lookup. The ID must be deterministic so that push_prompt and
 /// shift use the same ID for the same ability.
-fn compute_ability_id(_db: &dyn salsa::Database, ability_ref: Type<'_>) -> u32 {
-    // Extract ability name from the type
-    if let Some(ability_type) = core::AbilityRefType::from_type(_db, ability_ref)
-        && let Some(ability_name) = ability_type.name(_db)
-    {
-        // Use a simple hash of the ability name
-        return ability_name.with_str(|s| {
-            let mut hash: u32 = 0;
-            for byte in s.bytes() {
-                hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
-            }
-            hash
-        });
+///
+/// # Panics
+/// Panics if the type is not a valid ability reference type. This indicates a
+/// compiler internal error (ICE) - ability types should always be well-formed
+/// by the time they reach this pass.
+fn compute_ability_id(db: &dyn salsa::Database, ability_ref: Type<'_>) -> u32 {
+    // Extract ability type - panic if not valid
+    let ability_type = core::AbilityRefType::from_type(db, ability_ref).unwrap_or_else(|| {
+        panic!(
+            "ICE: compute_ability_id called with non-ability type: {:?}",
+            ability_ref
+        )
+    });
+
+    let ability_name = ability_type.name(db).unwrap_or_else(|| {
+        panic!(
+            "ICE: AbilityRefType has no name attribute: {:?}",
+            ability_ref
+        )
+    });
+
+    // Start hash with the ability name
+    let mut hash: u32 = ability_name.with_str(|s| {
+        let mut h: u32 = 0;
+        for byte in s.bytes() {
+            h = h.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+        h
+    });
+
+    // Include type parameters in the hash for parameterized abilities like State(Int)
+    for param in ability_type.params(db) {
+        // Hash the type by including its dialect, name, and recursively its params
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(db, *param));
     }
-    // Fallback: use 0 for unknown ability types
-    0
+
+    hash
+}
+
+/// Helper to hash a type for ability ID computation.
+fn hash_type(db: &dyn salsa::Database, ty: Type<'_>) -> u32 {
+    let mut hash: u32 = 0;
+
+    // Hash dialect
+    let dialect = ty.dialect(db);
+    dialect.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    // Hash name
+    let name = ty.name(db);
+    name.with_str(|s| {
+        for byte in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(byte as u32);
+        }
+    });
+
+    // Recursively hash params
+    for param in ty.params(db) {
+        hash = hash.wrapping_mul(37);
+        hash = hash.wrapping_add(hash_type(db, *param));
+    }
+
+    hash
 }
 
 #[cfg(test)]
