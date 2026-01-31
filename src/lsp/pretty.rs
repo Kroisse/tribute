@@ -203,7 +203,7 @@ pub fn format_ast_signature(
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tribute_ir::dialect::{tribute, tribute_rt};
+    use tribute_ir::dialect::tribute_rt;
     use trunk_ir::dialect::core::{AbilityRefType, EffectRowType, Func, Nil};
     use trunk_ir::{IdVec, Symbol, idvec};
 
@@ -246,18 +246,6 @@ mod tests {
         // Row with tail variable
         let open_row = *EffectRowType::with_tail(db, idvec![console], 4); // 'e' = id 4
         assert_eq!(print_type(db, open_row), "{Console | e}");
-    }
-
-    #[salsa_test]
-    fn test_print_type_var(db: &salsa::DatabaseImpl) {
-        let var_a = tribute::type_var_with_id(db, 0);
-        assert_eq!(print_type(db, var_a), "a");
-
-        let var_z = tribute::type_var_with_id(db, 25);
-        assert_eq!(print_type(db, var_z), "z");
-
-        let var_t0 = tribute::type_var_with_id(db, 26);
-        assert_eq!(print_type(db, var_t0), "t0");
     }
 
     #[salsa_test]

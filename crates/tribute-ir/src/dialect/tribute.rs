@@ -13,18 +13,12 @@
 //!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
-//! - `tribute.type_var`, `tribute.error_type` (type inference)
 //! - `tribute.tuple_type` (tuple type cons cell)
 
-use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use trunk_ir::type_interface::{PrintContext, Printable};
-use trunk_ir::{Attribute, Attrs, IdVec, Location, Symbol, dialect};
-
-trunk_ir::symbols! {
-    VAR_ID_ATTR => "id",
-}
+use trunk_ir::{Attribute, IdVec, Location, Symbol, dialect};
 
 /// Block argument attribute symbols for pattern bindings.
 ///
@@ -107,53 +101,11 @@ dialect! {
 
         // NOTE: Primitive types (int, nat, float, bool) are now in `tribute_rt` dialect.
 
-        /// `tribute.type_var` type: a type variable to be resolved during type inference.
-        /// The `id` attribute holds a unique variable ID.
-        #[attr(id: any)]
-        type type_var;
-
-        /// `tribute.error_type` type: an error type indicating type resolution failed.
-        type error_type;
-
         /// `tribute.tuple_type` type: cons cell (head, tail).
         /// Use `core.nil` as the tail terminator.
         /// Example: `(a, b, c)` → `TupleType(a, TupleType(b, TupleType(c, Nil)))`
         type tuple_type(head, tail);
     }
-}
-
-// === Type variable helper functions ===
-
-/// Create a type variable (`tribute.type_var`) to be resolved during type inference.
-///
-/// The `attrs` can carry metadata such as a unique variable ID or constraints.
-pub fn new_type_var<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> trunk_ir::Type<'db> {
-    trunk_ir::Type::new(db, DIALECT_NAME(), TYPE_VAR(), IdVec::new(), attrs)
-}
-
-/// Create a type variable with a numeric ID.
-pub fn type_var_with_id<'db>(db: &'db dyn salsa::Database, id: u64) -> trunk_ir::Type<'db> {
-    new_type_var(
-        db,
-        BTreeMap::from([(VAR_ID_ATTR(), Attribute::IntBits(id))]),
-    )
-}
-
-/// Create an error type (`tribute.error_type`) indicating type resolution failed.
-///
-/// The `attrs` can carry error information or source location.
-pub fn new_error_type<'db>(db: &'db dyn salsa::Database, attrs: Attrs<'db>) -> trunk_ir::Type<'db> {
-    trunk_ir::Type::new(db, DIALECT_NAME(), ERROR_TYPE(), IdVec::new(), attrs)
-}
-
-/// Check if a type is a type variable (`tribute.type_var`).
-pub fn is_type_var(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
-    ty.is_dialect(db, DIALECT_NAME(), TYPE_VAR())
-}
-
-/// Check if a type is an error type (`tribute.error_type`).
-pub fn is_error_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
-    ty.is_dialect(db, DIALECT_NAME(), ERROR_TYPE())
 }
 
 /// Check if a type is an unresolved type reference (`tribute.type`).
@@ -165,9 +117,9 @@ pub fn is_unresolved_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> b
 
 /// Check if a type is a placeholder that should be resolved before emit.
 ///
-/// This includes `tribute.type_var`, `tribute.type`, and `tribute.error_type`.
+/// This includes `tribute.type` (unresolved type references).
 pub fn is_placeholder_type(db: &dyn salsa::Database, ty: trunk_ir::Type<'_>) -> bool {
-    is_type_var(db, ty) || is_unresolved_type(db, ty) || is_error_type(db, ty)
+    is_unresolved_type(db, ty)
 }
 
 // === Convenience function for creating unresolved types ===
@@ -260,20 +212,6 @@ inventory::submit! {
     })
 }
 
-// tribute.type_var -> "a", "b", ..., "t0", "t1", ...
-inventory::submit! {
-    Printable::implement("tribute", "type_var", |db, ty, f| {
-        if let Some(Attribute::IntBits(id)) = ty.get_attr(db, VAR_ID_ATTR()) {
-            fmt_var_id(f, *id)
-        } else {
-            f.write_char('?')
-        }
-    })
-}
-
-// tribute.error_type -> "<error>"
-inventory::submit! { Printable::implement("tribute", "error_type", |_, _, f| f.write_str("<error>")) }
-
 // tribute.tuple_type -> "(a, b, c)"
 inventory::submit! { Printable::implement("tribute", "tuple_type", print_tuple_type) }
 
@@ -326,15 +264,6 @@ fn print_tuple_type(
 
 // NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 
-/// Convert a variable ID to a readable name (a, b, c, ..., t0, t1, ...).
-fn fmt_var_id(f: &mut PrintContext<'_, '_>, id: u64) -> std::fmt::Result {
-    if id < 26 {
-        f.write_char((b'a' + id as u8) as char)
-    } else {
-        write!(f, "t{}", id - 26)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,55 +273,23 @@ mod tests {
     use trunk_ir::type_interface::print_type;
 
     #[salsa_test]
-    fn test_type_var_with_id(db: &salsa::DatabaseImpl) {
-        let var_a = type_var_with_id(db, 0);
-        assert!(is_type_var(db, var_a));
-        assert_eq!(print_type(db, var_a), "a");
-
-        let var_z = type_var_with_id(db, 25);
-        assert_eq!(print_type(db, var_z), "z");
-
-        let var_t0 = type_var_with_id(db, 26);
-        assert_eq!(print_type(db, var_t0), "t0");
-    }
-
-    #[salsa_test]
-    fn test_new_type_var(db: &salsa::DatabaseImpl) {
-        let var = new_type_var(db, BTreeMap::new());
-        assert!(is_type_var(db, var));
-        assert!(!is_error_type(db, var));
-    }
-
-    #[salsa_test]
-    fn test_new_error_type(db: &salsa::DatabaseImpl) {
-        let err = new_error_type(db, BTreeMap::new());
-        assert!(is_error_type(db, err));
-        assert!(!is_type_var(db, err));
-        assert_eq!(print_type(db, err), "<error>");
-    }
-
-    #[salsa_test]
     fn test_unresolved_type(db: &salsa::DatabaseImpl) {
         let ty = unresolved_type(db, Symbol::new("Int"), IdVec::new());
         assert!(is_unresolved_type(db, ty));
         assert_eq!(print_type(db, ty), "Int");
 
         // With type parameters
-        let inner = type_var_with_id(db, 0);
-        let list_ty = unresolved_type(db, Symbol::new("List"), IdVec::from(vec![inner]));
+        let int_ty = core::I32::new(db).as_type();
+        let list_ty = unresolved_type(db, Symbol::new("List"), IdVec::from(vec![int_ty]));
         assert!(is_unresolved_type(db, list_ty));
-        assert_eq!(print_type(db, list_ty), "List(a)");
+        assert_eq!(print_type(db, list_ty), "List(I32)");
     }
 
     #[salsa_test]
     fn test_is_placeholder_type(db: &salsa::DatabaseImpl) {
-        let type_var = type_var_with_id(db, 0);
-        let error_type = new_error_type(db, BTreeMap::new());
         let unresolved = unresolved_type(db, Symbol::new("Foo"), IdVec::new());
         let concrete = core::I32::new(db).as_type();
 
-        assert!(is_placeholder_type(db, type_var));
-        assert!(is_placeholder_type(db, error_type));
         assert!(is_placeholder_type(db, unresolved));
         assert!(!is_placeholder_type(db, concrete));
     }
