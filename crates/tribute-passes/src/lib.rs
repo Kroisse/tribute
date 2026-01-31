@@ -18,7 +18,6 @@ pub mod cont_to_trampoline;
 pub mod evidence;
 pub mod handler_lower;
 pub mod live_vars;
-pub mod tribute_to_cont;
 pub mod type_converter;
 pub mod wasm;
 
@@ -32,7 +31,6 @@ pub use evidence::{
     transform_evidence_calls,
 };
 pub use handler_lower::lower_handlers;
-pub use tribute_to_cont::lower_tribute_to_cont;
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
 };

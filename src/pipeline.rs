@@ -46,9 +46,6 @@
 //! Module (evidence passed through calls)
 //!     │
 //!     ├─────────────── Final Lowering ────────────────┤
-//!     ▼ tribute_to_cont
-//! Module (tribute.handle → continuation ops)
-//!     │
 //!     ▼ handler_lower
 //! Module (ability.* → cont.*)
 //!     │
@@ -83,7 +80,6 @@ use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_e
 use tribute_passes::generic_type_converter;
 use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lower_cont_to_trampoline;
-use tribute_passes::lower_tribute_to_cont;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
@@ -408,18 +404,6 @@ pub fn stage_cont_to_trampoline<'db>(
     lower_cont_to_trampoline(db, module)
 }
 
-/// Lower tribute.handle to cont dialect operations.
-///
-/// This pass lowers `tribute.handle` expressions to `cont.push_prompt` and
-/// `cont.handler_dispatch` operations.
-#[salsa::tracked]
-pub fn stage_tribute_to_cont<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    lower_tribute_to_cont(db, module)
-}
-
 /// Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
@@ -547,7 +531,6 @@ pub fn run_full_pipeline<'db>(
 
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
     let module = stage_handler_lower(db, module)?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)

@@ -7,9 +7,8 @@
 //! **Data construction**:
 //! - `tribute.tuple` (tuple construction)
 //!
-//! **Effect system** (handler support, kept for reference):
+//! **Effect system** (ability declarations):
 //! - `tribute.ability_def`, `tribute.op_def` (ability declarations)
-//! - `tribute.handle`, `tribute.arm` (handler expressions)
 //!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
@@ -20,26 +19,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use trunk_ir::type_interface::{PrintContext, Printable};
-use trunk_ir::{Attribute, Attrs, IdVec, Location, Symbol, dialect};
+use trunk_ir::{Attribute, Attrs, IdVec, Symbol, dialect};
 
 trunk_ir::symbols! {
     VAR_ID_ATTR => "id",
-}
-
-/// Block argument attribute symbols for pattern bindings.
-///
-/// These attributes are used on block arguments to associate binding names
-/// and source locations with SSA values.
-pub mod block_arg_attrs {
-    trunk_ir::symbols! {
-        /// Attribute key for the binding name associated with a block argument.
-        /// Used in case arm body blocks to name pattern-bound values.
-        BIND_NAME => "bind_name",
-
-        /// Attribute key for the source location of a binding.
-        /// Used for LSP features like Go to Definition.
-        BIND_LOCATION => "bind_location",
-    }
 }
 
 dialect! {
@@ -73,29 +56,6 @@ dialect! {
         /// - `type`: The operation's function type (func.Fn)
         #[attr(sym_name: Symbol, r#type: Type)]
         fn op_def();
-
-        /// `tribute.handle` operation: runs body in a delimited context with handler arms.
-        ///
-        /// Fused handler syntax: `handle expr { handler_arms }`.
-        ///
-        /// Executes the body region until it either:
-        /// - Completes with a value → matches `{ result }` handler pattern
-        /// - Performs an ability operation → matches `{ Op(args) -> k }` handler pattern
-        ///
-        /// The arms region contains `tribute.arm` operations with handler patterns
-        /// (`tribute_pat.handler_done` or `tribute_pat.handler_suspend`).
-        fn handle() -> result {
-            #[region(body)] {}
-            #[region(arms)] {}
-        };
-
-        /// `tribute.arm` operation: a single pattern-matching arm (used in handler arms).
-        /// The pattern region contains a tree of `tribute_pat.*` operations.
-        /// The body region contains the arm's expression.
-        fn arm() {
-            #[region(pattern)] {}
-            #[region(body)] {}
-        };
 
         // === Types ===
 
@@ -182,46 +142,6 @@ pub fn unresolved_type<'db>(
 ) -> trunk_ir::Type<'db> {
     // Use the macro-generated Type struct
     *Type::new(db, params, name)
-}
-
-// === Pattern Region Builders ===
-
-/// Re-export pattern helpers from the `tribute_pat` dialect.
-pub use super::tribute_pat::helpers as pattern;
-
-impl<'db> Arm<'db> {
-    /// Create a wildcard arm that matches anything.
-    pub fn wildcard(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        body: trunk_ir::Region<'db>,
-    ) -> Self {
-        let pattern_region = pattern::wildcard_region(db, location);
-        arm(db, location, pattern_region, body)
-    }
-
-    /// Create an arm that binds the scrutinee to a name.
-    pub fn binding(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        name: Symbol,
-        body: trunk_ir::Region<'db>,
-    ) -> Self {
-        let pattern_region = pattern::bind_region(db, location, name);
-        arm(db, location, pattern_region, body)
-    }
-
-    /// Create an arm matching a unit variant (e.g., `None`).
-    pub fn unit_variant(
-        db: &'db dyn salsa::Database,
-        location: Location<'db>,
-        variant_name: Symbol,
-        body: trunk_ir::Region<'db>,
-    ) -> Self {
-        let fields = pattern::empty_region(db, location);
-        let pattern_region = pattern::variant_region(db, location, variant_name, fields);
-        arm(db, location, pattern_region, body)
-    }
 }
 
 // === Printable interface registrations ===

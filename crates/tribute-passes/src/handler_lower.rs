@@ -4,17 +4,15 @@
 //!
 //! ## Transformations
 //!
-//! 1. `tribute.handle` -> `cont.push_prompt`
-//! 2. `ability.perform` -> `cont.shift` (with evidence lookup)
-//! 3. `ability.resume` -> `cont.resume`
-//! 4. `ability.abort` -> `cont.drop`
+//! 1. `ability.perform` -> `cont.shift` (with evidence lookup)
+//! 2. `ability.resume` -> `cont.resume`
+//! 3. `ability.abort` -> `cont.drop`
 //!
 //! ## Design
 //!
 //! Per `new-plans/implementation.md`:
 //!
 //! ```text
-//! tribute.handle  → push_prompt(tag, body)
 //! ability.perform → shift(tag, |k| handler(k))
 //! ```
 //!
@@ -23,7 +21,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use tribute_ir::dialect::{ability, tribute, tribute_rt};
+use tribute_ir::dialect::{ability, tribute_rt};
 #[cfg(test)]
 use trunk_ir::Attribute;
 use trunk_ir::DialectType;
@@ -118,97 +116,6 @@ static PROMPT_TAG_GEN: std::sync::LazyLock<PromptTagGenerator> =
 
 fn fresh_prompt_tag() -> u32 {
     PROMPT_TAG_GEN.fresh()
-}
-
-// === Pattern: Lower tribute.handle to cont.push_prompt ===
-
-#[allow(dead_code)]
-struct LowerPromptPattern;
-
-#[allow(dead_code)]
-impl LowerPromptPattern {
-    fn new() -> Self {
-        Self
-    }
-}
-
-impl<'db> RewritePattern<'db> for LowerPromptPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        // Match: tribute.handle (has body and arms regions)
-        let handle_op = match tribute::Handle::from_operation(db, *op) {
-            Ok(h) => h,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        // Generate fresh prompt tag
-        let tag = fresh_prompt_tag();
-
-        // Get the body region
-        let body = handle_op.body(db);
-
-        // Get the arms region and convert to handlers region
-        let arms = handle_op.arms(db);
-        let handlers = lower_handler_arms(db, arms);
-
-        // Create cont.push_prompt with body and handlers
-        // Note: The body may contain ability.perform ops that will be
-        // transformed by LowerPerformPattern in a subsequent pass iteration
-        let location = op.location(db);
-        let result_ty = op
-            .results(db)
-            .first()
-            .copied()
-            .unwrap_or_else(|| *core::Nil::new(db));
-
-        let new_op = cont::push_prompt(db, location, result_ty, tag, body, handlers);
-
-        RewriteResult::Replace(new_op.as_operation())
-    }
-}
-
-/// Lower tribute.arm operations from arms region to handlers region.
-///
-/// Each tribute.arm in the arms region becomes a block in the handlers region.
-/// The pattern region determines whether it's a "done" or "suspend" handler:
-/// - handler_done pattern -> first handler (done handler)
-/// - handler_suspend pattern -> subsequent handlers (suspend handlers)
-///
-/// Handler arm bodies may contain references to pattern variables (result, args, k).
-/// These are transformed to use cont.get_continuation and cont.get_shift_value.
-#[allow(dead_code)]
-fn lower_handler_arms<'db>(db: &'db dyn salsa::Database, arms: Region<'db>) -> Region<'db> {
-    let location = arms.location(db);
-
-    // Collect handler blocks from tribute.arm operations
-    let mut handler_blocks = Vec::new();
-
-    for block in arms.blocks(db).iter() {
-        for arm_op in block.operations(db).iter() {
-            if let Ok(arm) = tribute::Arm::from_operation(db, *arm_op) {
-                // Get the arm's body region - this becomes a handler block
-                let arm_body = arm.body(db);
-
-                // Copy the body blocks to handlers
-                // The body contains the handler code with tribute.yield at the end
-                for body_block in arm_body.blocks(db).iter() {
-                    handler_blocks.push(*body_block);
-                }
-            }
-        }
-    }
-
-    // If no handlers found, create empty region
-    if handler_blocks.is_empty() {
-        let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
-        return Region::new(db, location, IdVec::from(vec![empty_block]));
-    }
-
-    Region::new(db, location, IdVec::from(handler_blocks))
 }
 
 // === Pattern: Lower ability.perform to cont.shift ===
@@ -414,47 +321,11 @@ impl<'db> RewritePattern<'db> for LowerContinuationCallPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Location, PathId, Span, Symbol, Value, ValueDef, idvec};
+    use trunk_ir::{Location, PathId, Span, Symbol, Value, ValueDef};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
         Location::new(path, Span::new(0, 0))
-    }
-
-    /// Test helper: builds prompt op and applies the lowering pattern.
-    /// Returns (dialect, name) of the result.
-    #[salsa::tracked]
-    fn lower_prompt_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        let location = test_location(db);
-
-        // Create empty body region
-        let body_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
-        let body = Region::new(db, location, idvec![body_block]);
-
-        // Create empty arms region (fused handler syntax)
-        let arms_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![]);
-        let arms = Region::new(db, location, idvec![arms_block]);
-
-        let result_ty = *core::Nil::new(db);
-        let handle_op = tribute::handle(db, location, result_ty, body, arms).as_operation();
-
-        // Apply the pattern
-        let pattern = LowerPromptPattern::new();
-        let ctx = RewriteContext::new();
-        let type_converter = TypeConverter::new();
-        let adaptor = OpAdaptor::new(
-            handle_op,
-            handle_op.operands(db).clone(),
-            vec![],
-            &ctx,
-            &type_converter,
-        );
-        let result = pattern.match_and_rewrite(db, &handle_op, &adaptor);
-
-        match result {
-            RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
-            _ => panic!("Expected Replace result"),
-        }
     }
 
     /// Test helper: builds resume op and applies the lowering pattern.
@@ -554,13 +425,6 @@ mod tests {
             RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
             _ => panic!("Expected Replace result"),
         }
-    }
-
-    #[salsa_test]
-    fn test_lower_prompt(db: &salsa::DatabaseImpl) {
-        let (dialect, name) = lower_prompt_test(db);
-        assert_eq!(dialect, Symbol::new("cont"));
-        assert_eq!(name, Symbol::new("push_prompt"));
     }
 
     #[salsa_test]
