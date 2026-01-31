@@ -118,9 +118,15 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 /// Parse the prelude source.
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
-fn parse_prelude(db: &dyn salsa::Database) -> Option<ParsedAst<'_>> {
+/// Returns both the parsed AST and the SourceCst to avoid redundant creation.
+fn parse_prelude(db: &dyn salsa::Database) -> Option<(ParsedAst<'_>, crate::SourceCst)> {
     let prelude_source = create_prelude_source(db)?;
-    ast_query::parsed_ast_with_module_path(db, prelude_source, trunk_ir::Symbol::new("prelude"))
+    let parsed = ast_query::parsed_ast_with_module_path(
+        db,
+        prelude_source,
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+    Some((parsed, prelude_source))
 }
 
 /// Type alias for resolved AST module.
@@ -128,16 +134,18 @@ type ResolvedModule<'db> = tribute_front::ast::Module<ResolvedRef<'db>>;
 
 /// Parse and resolve names in the prelude.
 ///
-/// Returns the resolved AST and span map, ready for type checking.
-fn resolve_prelude(db: &dyn salsa::Database) -> Option<(ResolvedModule<'_>, SpanMap)> {
-    let parsed = parse_prelude(db)?;
+/// Returns the resolved AST, span map, and SourceCst, ready for type checking.
+fn resolve_prelude(
+    db: &dyn salsa::Database,
+) -> Option<(ResolvedModule<'_>, SpanMap, crate::SourceCst)> {
+    let (parsed, prelude_source) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db).clone();
     let span_map = parsed.span_map(db).clone();
 
     let prelude_env = ast_resolve::build_env(db, &prelude_ast);
     let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
-    Some((resolved, span_map))
+    Some((resolved, span_map, prelude_source))
 }
 
 /// Load and cache the prelude module using the AST pipeline.
@@ -151,7 +159,7 @@ fn resolve_prelude(db: &dyn salsa::Database) -> Option<(ResolvedModule<'_>, Span
 /// that tirgen doesn't support.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let (resolved, span_map) = resolve_prelude(db)?;
+    let (resolved, span_map, prelude_source) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -162,7 +170,6 @@ pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> 
 
     // AST → TrunkIR
     let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
-    let prelude_source = create_prelude_source(db)?;
     let source_uri = prelude_source.uri(db).as_str();
     Some(ast_to_ir::lower_ast_to_ir(
         db,
@@ -192,7 +199,7 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
-    let parsed = parse_prelude(db)?;
+    let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     Some(ast_resolve::build_env(db, &prelude_ast))
 }
@@ -200,14 +207,14 @@ pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> 
 /// Process prelude through AST pipeline and extract type exports.
 ///
 /// This function:
-/// 1. Uses `resolved_prelude` for parsing and name resolution (cached)
+/// 1. Uses `resolve_prelude` for parsing and name resolution (cached)
 /// 2. Type checks prelude with independent TypeContext (all UniVars resolved)
 /// 3. Extracts PreludeExports (TypeSchemes only, no UniVars)
 ///
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
-    let (resolved, span_map) = resolve_prelude(db)?;
+    let (resolved, span_map, _) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
@@ -558,7 +565,19 @@ pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    let module = run_full_pipeline(db, source).ok()?;
+    let module = match run_full_pipeline(db, source) {
+        Ok(m) => m,
+        Err(e) => {
+            Diagnostic {
+                message: format!("Pipeline failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            return None;
+        }
+    };
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
