@@ -324,7 +324,7 @@ fn main() ->{} Int {
 #[test]
 fn test_generic_indirect_call() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -341,10 +341,11 @@ fn main() ->{} Int {
             SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
 
         // Run typecheck stage - this should succeed with generic instantiation
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -366,7 +367,7 @@ fn main() ->{} Int {
 #[test]
 fn test_function_type_parameter() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -389,10 +390,11 @@ fn main() ->{} Int {
         let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -411,7 +413,7 @@ fn main() ->{} Int {
 #[test]
 fn test_nested_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -434,10 +436,11 @@ fn main() ->{} Int {
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -456,7 +459,7 @@ fn main() ->{} Int {
 #[test]
 fn test_generic_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -480,10 +483,11 @@ fn main() ->{} Float {
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 
         // Run typecheck stage
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
         // Check for type errors
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -944,7 +948,7 @@ fn main() ->{} Int {
 #[test]
 fn test_binop_type_mismatch_int_nat() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     // +1 is Int (explicit sign), 2 is Nat (no sign)
     let source_code = Rope::from_str(
@@ -960,9 +964,10 @@ fn main() ->{} Int {
         let source_file =
             SourceCst::from_path(db, "binop_type_mismatch.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             !diagnostics.is_empty(),
@@ -976,7 +981,7 @@ fn main() ->{} Int {
 #[test]
 fn test_binop_comparison_type_mismatch() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -995,9 +1000,10 @@ fn main() ->{} Bool {
             tree,
         );
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             !diagnostics.is_empty(),
@@ -1011,7 +1017,7 @@ fn main() ->{} Bool {
 #[test]
 fn test_binop_boolean_requires_bool() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -1026,9 +1032,10 @@ fn main() ->{} Bool {
         let source_file =
             SourceCst::from_path(db, "boolean_requires_bool.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             !diagnostics.is_empty(),
@@ -1042,7 +1049,7 @@ fn main() ->{} Bool {
 #[test]
 fn test_binop_matching_types_succeed() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -1056,9 +1063,10 @@ fn main() ->{} Int {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "matching_types.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -1076,7 +1084,7 @@ fn main() ->{} Int {
 #[test]
 fn test_binop_nat_plus_nat_succeeds() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -1090,9 +1098,10 @@ fn main() ->{} Nat {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "nat_plus_nat.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -1110,7 +1119,7 @@ fn main() ->{} Nat {
 #[test]
 fn test_binop_float_plus_float_succeeds() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -1125,9 +1134,10 @@ fn main() ->{} Float {
         let source_file =
             SourceCst::from_path(db, "float_plus_float.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -1147,7 +1157,7 @@ fn main() ->{} Float {
 #[test]
 fn test_binop_bool_and_bool_succeeds() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_tdnr_ast;
+    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -1161,9 +1171,10 @@ fn main() ->{} Bool {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "bool_and_bool.trb", source_code.clone(), tree);
 
-        let _module = run_tdnr_ast(db, source_file);
+        let _module = parse_and_lower_ast(db, source_file);
 
-        let diagnostics: Vec<_> = run_tdnr_ast::accumulated::<tribute::Diagnostic>(db, source_file);
+        let diagnostics: Vec<_> =
+            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);

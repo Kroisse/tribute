@@ -504,13 +504,13 @@ pub fn stage_lower_to_wasm<'db>(
 
 /// Compile for LSP: minimal pipeline preserving source structure.
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    run_tdnr_ast(db, source)
+    parse_and_lower_ast(db, source)
 }
 
 /// Run pipeline up to evidence params stage (lambdas are now lowered directly in ast_to_ir).
 #[salsa::tracked]
 pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_tdnr_ast(db, source);
+    let module = parse_and_lower_ast(db, source);
     let module = stage_boxing(db, module);
     stage_evidence_params(db, module)
 }
@@ -526,6 +526,30 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 // Full Pipeline (Orchestration)
 // =============================================================================
 
+/// Run the full middle-end pipeline (backend-independent).
+///
+/// This function runs all the transformation passes from the closure-lowered
+/// module through to the final resolved module. It is shared by all backends.
+#[salsa::tracked]
+pub fn run_full_pipeline<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    // Frontend + closure processing
+    let module = run_closure_lower(db, source);
+
+    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    let module = stage_evidence_calls(db, module);
+    let module = stage_tribute_to_cont(db, module);
+    let module = stage_handler_lower(db, module)?;
+
+    // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_cont_to_trampoline(db, module)?;
+
+    let module = stage_dce(db, module);
+    Ok(stage_resolve_casts(db, module))
+}
+
 /// Compile to WebAssembly binary.
 ///
 /// Runs the full pipeline and then lowers to WebAssembly.
@@ -534,20 +558,7 @@ pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    // Frontend + closure processing
-    let module = run_closure_lower(db, source);
-
-    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
-    let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
-
-    let module = stage_handler_lower(db, module).ok()?;
-
-    // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module).ok()?;
-
-    let module = stage_dce(db, module);
-    let module = stage_resolve_casts(db, module);
+    let module = run_full_pipeline(db, source).ok()?;
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
@@ -619,15 +630,6 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     merge_with_prelude(db, user_module)
 }
 
-/// Run the AST-based pipeline up to TDNR stage.
-///
-/// This is the AST-based alternative to `run_tdnr`.
-/// Includes: parse → AST → resolve → typecheck → tdnr → ast_to_ir
-#[salsa::tracked]
-pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    parse_and_lower_ast(db, source)
-}
-
 /// Compile using the AST-based pipeline.
 ///
 /// The AST pipeline provides better type safety and separation of concerns.
@@ -638,24 +640,7 @@ pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    // AST pipeline: parse → resolve → typecheck → TDNR → ast_to_ir
-    let module = parse_and_lower_ast(db, source);
-
-    // TrunkIR transformation passes
-    let module = stage_boxing(db, module);
-    let module = stage_evidence_params(db, module);
-    let module = stage_closure_lower(db, module);
-
-    // Evidence call transformation - AFTER closure lowering
-    let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
-    let module = stage_handler_lower(db, module)?;
-
-    // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module)?;
-
-    let module = stage_dce(db, module);
-    Ok(stage_resolve_casts(db, module))
+    run_full_pipeline(db, source)
 }
 
 /// Run compilation and return detailed results including diagnostics.
@@ -1009,15 +994,6 @@ mod tests {
         );
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "test");
-    }
-
-    #[salsa_test]
-    fn test_ast_pipeline_run_tdnr(db: &salsa::DatabaseImpl) {
-        // Test run_tdnr_ast produces a valid TrunkIR module
-        let source = source_from_str("test.trb", "fn identity(x: Int) -> Int { x }");
-
-        let module = run_tdnr_ast(db, source);
         assert_eq!(module.name(db), "test");
     }
 }
