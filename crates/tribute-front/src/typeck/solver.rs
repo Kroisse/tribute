@@ -804,6 +804,19 @@ impl<'db> TypeSolver<'db> {
 
             // r1 is closed, r2 is open: var2 = r1's effects minus r2's effects
             (None, Some(var2)) => {
+                // Pure subsumption: if r1 is pure (closed empty) and r2 has existing effects,
+                // it means a pure function is being called from an effectful context.
+                // This is always valid, and the caller's effect row should remain unchanged.
+                //
+                // Example: calling `identity: fn(Int) -> Int` (effect: {}) from a context
+                // with effect `{State(Int) | var}` should not modify the caller's effect row.
+                //
+                // However, if r2 has no effects (just a bare variable `{|var}`), we should
+                // bind the variable to the closed row as normal instantiation behavior.
+                if r1.is_pure(self.db) && !effects2.is_empty() {
+                    return Ok(());
+                }
+
                 // Row occurs check
                 if self.row_occurs_in(var2, r1) {
                     return Err(SolveError::RowMismatch {
@@ -994,6 +1007,7 @@ fn compute_effect_split<'db, 'a>(
 mod tests {
     use super::*;
     use crate::ast::{Effect, EffectRow, UniVarSource};
+    use trunk_ir::Symbol;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -1261,6 +1275,39 @@ mod tests {
         assert!(
             resolved.unwrap().is_pure(&db),
             "Row variable should be bound to empty"
+        );
+    }
+
+    #[test]
+    fn test_pure_callee_in_effectful_context() {
+        // Test that calling a pure function from an effectful context succeeds
+        // without modifying the caller's effect row.
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        // Create a pure effect row (callee's effect)
+        let pure_effect = EffectRow::new(&db, vec![], None);
+
+        // Create an effectful row with State effect (caller's context)
+        let row_var = EffectVar { id: 100 };
+        let state_effect = Effect {
+            name: Symbol::new("State"),
+            args: vec![Type::new(&db, TypeKind::Int)],
+        };
+        let effectful_row = EffectRow::new(&db, vec![state_effect], Some(row_var));
+
+        // Unifying pure with effectful should succeed
+        let result = solver.unify_rows(pure_effect, effectful_row);
+        assert!(
+            result.is_ok(),
+            "Pure callee should be callable from effectful context"
+        );
+
+        // The row variable should NOT be bound - caller's effect stays unchanged
+        let resolved = solver.row_subst.get(row_var.id);
+        assert!(
+            resolved.is_none(),
+            "Caller's row variable should not be modified when calling pure function"
         );
     }
 

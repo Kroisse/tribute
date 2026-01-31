@@ -60,8 +60,9 @@ pub fn lower_handlers<'db>(
             tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
         });
 
-    // Note: tribute.handle → cont.push_prompt is now handled by tribute_to_scf.
-    // This pass only handles ability.* → cont.* transformations.
+    // Note: tribute.handle → cont.push_prompt is now handled during AST-to-IR lowering
+    // in ast_to_ir/lower.rs (lower_handle function). This pass only handles
+    // ability.* → cont.* transformations.
     // Verify all ability.* ops are converted after the pass
     let target = ConversionTarget::new().illegal_dialect("ability");
 
