@@ -17,7 +17,7 @@
 use std::fmt::Write;
 
 use trunk_ir::type_interface::{PrintContext, Printable};
-use trunk_ir::{Attribute, IdVec, Location, Symbol, dialect};
+use trunk_ir::{Attribute, IdVec, Symbol, dialect};
 
 dialect! {
     mod tribute {
