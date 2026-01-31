@@ -54,7 +54,8 @@ pub fn resolve_evidence_dispatch<'db>(
 ///
 /// These functions are:
 /// - `__tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker`
-/// - `__tribute_marker_prompt(marker: Marker) -> i32`
+/// - `__tribute_marker_prompt(marker: Marker) -> PromptTag`
+/// - `__tribute_evidence_extend(ev: Evidence, ability_id: i32, tag: PromptTag) -> Evidence`
 fn ensure_runtime_functions<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
@@ -69,6 +70,7 @@ fn ensure_runtime_functions<'db>(
     // Check if functions already exist
     let mut has_evidence_lookup = false;
     let mut has_marker_prompt = false;
+    let mut has_evidence_extend = false;
 
     for op in entry_block.operations(db).iter() {
         if let Ok(func_op) = func::Func::from_operation(db, *op) {
@@ -77,11 +79,13 @@ fn ensure_runtime_functions<'db>(
                 has_evidence_lookup = true;
             } else if name == Symbol::new("__tribute_marker_prompt") {
                 has_marker_prompt = true;
+            } else if name == Symbol::new("__tribute_evidence_extend") {
+                has_evidence_extend = true;
             }
         }
     }
 
-    if has_evidence_lookup && has_marker_prompt {
+    if has_evidence_lookup && has_marker_prompt && has_evidence_extend {
         return module;
     }
 
@@ -143,6 +147,43 @@ fn ensure_runtime_functions<'db>(
             db,
             location,
             Symbol::new("__tribute_marker_prompt"),
+            *func_ty,
+            body,
+        );
+        new_ops.insert(0, func_op.as_operation());
+    }
+
+    if !has_evidence_extend {
+        let evidence_ty = ability::EvidencePtr::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+        let prompt_tag_ty = ability::PromptTag::new(db).as_type();
+
+        // fn __tribute_evidence_extend(ev: Evidence, ability_id: i32, tag: PromptTag) -> Evidence
+        let func_ty = core::Func::new(
+            db,
+            IdVec::from(vec![evidence_ty, i32_ty, prompt_tag_ty]),
+            evidence_ty,
+        );
+
+        // Empty body with unreachable
+        let unreachable_op = func::unreachable(db, location);
+        let body_block = Block::new(
+            db,
+            trunk_ir::BlockId::fresh(),
+            location,
+            IdVec::from(vec![
+                BlockArg::of_type(db, evidence_ty),
+                BlockArg::of_type(db, i32_ty),
+                BlockArg::of_type(db, prompt_tag_ty),
+            ]),
+            IdVec::from(vec![unreachable_op.as_operation()]),
+        );
+        let body = Region::new(db, location, IdVec::from(vec![body_block]));
+
+        let func_op = func::func(
+            db,
+            location,
+            Symbol::new("__tribute_evidence_extend"),
             *func_ty,
             body,
         );
@@ -301,6 +342,109 @@ fn transform_shifts_in_block<'db>(
             .iter()
             .map(|v| *value_map.get(v).unwrap_or(v))
             .collect();
+
+        // Check if this is a cont.push_prompt - transform to use evidence_extend
+        if let Ok(push_prompt_op) = cont::PushPrompt::from_operation(db, *op) {
+            let location = op.location(db);
+            let tag = push_prompt_op.tag(db);
+
+            // Find abilities handled by this handler by scanning forward for handler_dispatch
+            let abilities = collect_handled_abilities(db, block, tag);
+
+            // If no abilities found, just recurse into regions without evidence_extend
+            if abilities.is_empty() {
+                let body_region = push_prompt_op.body(db);
+                let handlers_region = push_prompt_op.handlers(db);
+                let (new_body, body_changed) =
+                    transform_shifts_in_region(db, &body_region, ev_value);
+                let (new_handlers, handlers_changed) =
+                    transform_shifts_in_region(db, &handlers_region, ev_value);
+
+                if body_changed || handlers_changed {
+                    changed = true;
+                    let result_ty = op
+                        .results(db)
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| *core::Nil::new(db));
+                    let new_push_prompt =
+                        cont::push_prompt(db, location, result_ty, tag, new_body, new_handlers);
+                    let new_op = new_push_prompt.as_operation();
+                    if !op.results(db).is_empty() {
+                        value_map.insert(op.result(db, 0), new_op.result(db, 0));
+                    }
+                    new_ops.push(new_op);
+                } else {
+                    new_ops.push(*op);
+                }
+                continue;
+            }
+
+            // Generate evidence_extend calls for each ability
+            let i32_ty = core::I32::new(db).as_type();
+            let prompt_tag_ty = ability::PromptTag::new(db).as_type();
+            let evidence_ty = ability::EvidencePtr::new(db).as_type();
+
+            // Create tag constant
+            let tag_const = trunk_ir::dialect::arith::r#const(
+                db,
+                location,
+                prompt_tag_ty,
+                Attribute::IntBits(tag as u64),
+            );
+            let tag_val = tag_const.result(db);
+            new_ops.push(tag_const.as_operation());
+
+            // Extend evidence for each ability
+            let mut current_ev = ev_value;
+            for ability_ref in &abilities {
+                let ability_id = compute_ability_id(db, *ability_ref);
+
+                // Create ability_id constant
+                let ability_id_const = trunk_ir::dialect::arith::r#const(
+                    db,
+                    location,
+                    i32_ty,
+                    Attribute::IntBits(ability_id as u64),
+                );
+                let ability_id_val = ability_id_const.result(db);
+                new_ops.push(ability_id_const.as_operation());
+
+                // Call __tribute_evidence_extend
+                let extend_call = func::call(
+                    db,
+                    location,
+                    vec![current_ev, ability_id_val, tag_val],
+                    evidence_ty,
+                    Symbol::new("__tribute_evidence_extend"),
+                );
+                current_ev = extend_call.result(db);
+                new_ops.push(extend_call.as_operation());
+            }
+
+            // Transform body region with new evidence
+            let body_region = push_prompt_op.body(db);
+            let handlers_region = push_prompt_op.handlers(db);
+            let (new_body, _) = transform_shifts_in_region(db, &body_region, current_ev);
+            let (new_handlers, _) = transform_shifts_in_region(db, &handlers_region, current_ev);
+
+            // Create new push_prompt with transformed regions
+            let result_ty = op
+                .results(db)
+                .first()
+                .copied()
+                .unwrap_or_else(|| *core::Nil::new(db));
+            let new_push_prompt =
+                cont::push_prompt(db, location, result_ty, tag, new_body, new_handlers);
+            let new_op = new_push_prompt.as_operation();
+
+            if !op.results(db).is_empty() {
+                value_map.insert(op.result(db, 0), new_op.result(db, 0));
+            }
+            new_ops.push(new_op);
+            changed = true;
+            continue;
+        }
 
         // Check if this is a cont.shift
         if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
@@ -473,6 +617,50 @@ fn transform_shifts_in_region<'db>(
 
     let new_region = Region::new(db, region.location(db), new_blocks);
     (new_region, changed)
+}
+
+/// Collect abilities handled by a push_prompt by finding the associated handler_dispatch.
+///
+/// Scans the block for a handler_dispatch with the same tag and extracts ability_ref
+/// attributes from its body blocks.
+fn collect_handled_abilities<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    tag: u32,
+) -> Vec<Type<'db>> {
+    let mut abilities = Vec::new();
+
+    for op in block.operations(db).iter() {
+        // Look for handler_dispatch with matching tag
+        if let Ok(dispatch_op) = cont::HandlerDispatch::from_operation(db, *op) {
+            if dispatch_op.tag(db) != tag {
+                continue;
+            }
+
+            // Extract ability_ref from body blocks (skip block 0 which is the "done" case)
+            let body = dispatch_op.body(db);
+            for (i, body_block) in body.blocks(db).iter().enumerate() {
+                if i == 0 {
+                    continue; // Skip "done" block
+                }
+
+                // Check block arguments for ability_ref attribute
+                for arg in body_block.args(db).iter() {
+                    if let Some(Attribute::Type(ability_ref)) =
+                        arg.get_attr(db, Symbol::new("ability_ref"))
+                    {
+                        // Avoid duplicates
+                        if !abilities.contains(ability_ref) {
+                            abilities.push(*ability_ref);
+                        }
+                    }
+                }
+            }
+            break; // Found the matching handler_dispatch
+        }
+    }
+
+    abilities
 }
 
 /// Compute a stable ability ID from an ability reference type.
