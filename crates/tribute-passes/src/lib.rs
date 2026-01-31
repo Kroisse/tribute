@@ -18,7 +18,6 @@ pub mod cont_to_trampoline;
 pub mod evidence;
 pub mod handler_lower;
 pub mod live_vars;
-pub mod resolve_type_references;
 pub mod tribute_to_cont;
 pub mod type_converter;
 pub mod wasm;

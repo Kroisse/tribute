@@ -647,7 +647,6 @@ impl<'db> WasmLowerer<'db> {
         if dialect == tribute::DIALECT_NAME() {
             // These are all metadata/definition ops that don't produce wasm code:
             // - ability_def: ability type definitions
-            // - enum_def, variant_def, field_def, struct_def: type definitions
             return;
         }
 

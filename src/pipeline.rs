@@ -94,7 +94,10 @@ use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region};
 
 // AST-based pipeline imports
+use tribute_front::ast::ResolvedRef;
+use tribute_front::ast::SpanMap;
 use tribute_front::ast_to_ir;
+use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
 use tribute_front::resolve as ast_resolve;
 use tribute_front::resolve::ModuleEnv;
@@ -112,6 +115,39 @@ use trunk_ir_wasm_backend::{
 /// The prelude source code, embedded at compile time.
 const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
+/// Parse the prelude source.
+///
+/// This is the first stage of prelude processing, shared by all prelude-related functions.
+/// Returns both the parsed AST and the SourceCst to avoid redundant creation.
+fn parse_prelude(db: &dyn salsa::Database) -> Option<(ParsedAst<'_>, crate::SourceCst)> {
+    let prelude_source = create_prelude_source(db)?;
+    let parsed = ast_query::parsed_ast_with_module_path(
+        db,
+        prelude_source,
+        trunk_ir::Symbol::new("prelude"),
+    )?;
+    Some((parsed, prelude_source))
+}
+
+/// Type alias for resolved AST module.
+type ResolvedModule<'db> = tribute_front::ast::Module<ResolvedRef<'db>>;
+
+/// Parse and resolve names in the prelude.
+///
+/// Returns the resolved AST, span map, and SourceCst, ready for type checking.
+fn resolve_prelude(
+    db: &dyn salsa::Database,
+) -> Option<(ResolvedModule<'_>, SpanMap, crate::SourceCst)> {
+    let (parsed, prelude_source) = parse_prelude(db)?;
+    let prelude_ast = parsed.module(db).clone();
+    let span_map = parsed.span_map(db).clone();
+
+    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+
+    Some((resolved, span_map, prelude_source))
+}
+
 /// Load and cache the prelude module using the AST pipeline.
 ///
 /// This is a Salsa tracked function, so the prelude is parsed only once
@@ -123,19 +159,7 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 /// that tirgen doesn't support.
 #[salsa::tracked]
 pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
-
-    let prelude_ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    // Build prelude ModuleEnv and resolve
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+    let (resolved, span_map, prelude_source) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -175,12 +199,7 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
+    let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     Some(ast_resolve::build_env(db, &prelude_ast))
 }
@@ -188,28 +207,14 @@ pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> 
 /// Process prelude through AST pipeline and extract type exports.
 ///
 /// This function:
-/// 1. Parses prelude to AST
-/// 2. Builds prelude's ModuleEnv
-/// 3. Resolves names in prelude
-/// 4. Type checks prelude with independent TypeContext (all UniVars resolved)
-/// 5. Extracts PreludeExports (TypeSchemes only, no UniVars)
+/// 1. Uses `resolve_prelude` for parsing and name resolution (cached)
+/// 2. Type checks prelude with independent TypeContext (all UniVars resolved)
+/// 3. Extracts PreludeExports (TypeSchemes only, no UniVars)
 ///
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
 pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
-    let prelude_source = create_prelude_source(db)?;
-    let parsed = ast_query::parsed_ast_with_module_path(
-        db,
-        prelude_source,
-        trunk_ir::Symbol::new("prelude"),
-    )?;
-
-    let prelude_ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    // Build prelude ModuleEnv and resolve
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+    let (resolved, span_map, _) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
@@ -506,13 +511,13 @@ pub fn stage_lower_to_wasm<'db>(
 
 /// Compile for LSP: minimal pipeline preserving source structure.
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    run_tdnr_ast(db, source)
+    parse_and_lower_ast(db, source)
 }
 
 /// Run pipeline up to evidence params stage (lambdas are now lowered directly in ast_to_ir).
 #[salsa::tracked]
 pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_tdnr_ast(db, source);
+    let module = parse_and_lower_ast(db, source);
     let module = stage_boxing(db, module);
     stage_evidence_params(db, module)
 }
@@ -528,6 +533,30 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 // Full Pipeline (Orchestration)
 // =============================================================================
 
+/// Run the full middle-end pipeline (backend-independent).
+///
+/// This function runs all the transformation passes from the closure-lowered
+/// module through to the final resolved module. It is shared by all backends.
+#[salsa::tracked]
+pub fn run_full_pipeline<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    // Frontend + closure processing
+    let module = run_closure_lower(db, source);
+
+    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
+    let module = stage_evidence_calls(db, module);
+    let module = stage_tribute_to_cont(db, module);
+    let module = stage_handler_lower(db, module)?;
+
+    // Continuation lowering (backend-agnostic trampoline implementation)
+    let module = stage_cont_to_trampoline(db, module)?;
+
+    let module = stage_dce(db, module);
+    Ok(stage_resolve_casts(db, module))
+}
+
 /// Compile to WebAssembly binary.
 ///
 /// Runs the full pipeline and then lowers to WebAssembly.
@@ -536,23 +565,19 @@ pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    // Frontend + closure processing
-    let module = run_closure_lower(db, source);
-
-    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
-    let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
-
-    // Resolve tribute.type references to ADT types
-    let module = tribute_passes::resolve_type_references::lower(db, module);
-
-    let module = stage_handler_lower(db, module).ok()?;
-
-    // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module).ok()?;
-
-    let module = stage_dce(db, module);
-    let module = stage_resolve_casts(db, module);
+    let module = match run_full_pipeline(db, source) {
+        Ok(m) => m,
+        Err(e) => {
+            Diagnostic {
+                message: format!("Pipeline failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            return None;
+        }
+    };
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
@@ -624,15 +649,6 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     merge_with_prelude(db, user_module)
 }
 
-/// Run the AST-based pipeline up to TDNR stage.
-///
-/// This is the AST-based alternative to `run_tdnr`.
-/// Includes: parse → AST → resolve → typecheck → tdnr → ast_to_ir
-#[salsa::tracked]
-pub fn run_tdnr_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    parse_and_lower_ast(db, source)
-}
-
 /// Compile using the AST-based pipeline.
 ///
 /// The AST pipeline provides better type safety and separation of concerns.
@@ -643,24 +659,7 @@ pub fn compile_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    // AST pipeline: parse → resolve → typecheck → TDNR → ast_to_ir
-    let module = parse_and_lower_ast(db, source);
-
-    // TrunkIR transformation passes
-    let module = stage_boxing(db, module);
-    let module = stage_evidence_params(db, module);
-    let module = stage_closure_lower(db, module);
-
-    // Evidence call transformation - AFTER closure lowering
-    let module = stage_evidence_calls(db, module);
-    let module = stage_tribute_to_cont(db, module);
-    let module = stage_handler_lower(db, module)?;
-
-    // Continuation lowering (backend-agnostic trampoline implementation)
-    let module = stage_cont_to_trampoline(db, module)?;
-
-    let module = stage_dce(db, module);
-    Ok(stage_resolve_casts(db, module))
+    run_full_pipeline(db, source)
 }
 
 /// Run compilation and return detailed results including diagnostics.
@@ -1014,15 +1013,6 @@ mod tests {
         );
 
         let module = parse_and_lower_ast(db, source);
-        assert_eq!(module.name(db), "test");
-    }
-
-    #[salsa_test]
-    fn test_ast_pipeline_run_tdnr(db: &salsa::DatabaseImpl) {
-        // Test run_tdnr_ast produces a valid TrunkIR module
-        let source = source_from_str("test.trb", "fn identity(x: Int) -> Int { x }");
-
-        let module = run_tdnr_ast(db, source);
         assert_eq!(module.name(db), "test");
     }
 }
