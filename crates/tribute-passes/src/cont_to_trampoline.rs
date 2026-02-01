@@ -76,6 +76,8 @@ struct ResumeFuncSpec<'db> {
     location: Location<'db>,
     /// Shift analysis for handling nested shifts in continuation
     shift_analysis: ShiftAnalysis<'db>,
+    /// Module name for generating unique state type names (for dynamic shifts)
+    module_name: Symbol,
 }
 
 /// Shared storage for resume function specs during pattern matching.
@@ -143,6 +145,7 @@ pub fn lower_cont_to_trampoline<'db>(
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
             shift_analysis: Rc::clone(&shift_analysis),
+            module_name: module.name(db),
         })
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerGetContinuationPattern)
@@ -1073,7 +1076,7 @@ fn fresh_resume_name(counter: &ResumeCounter) -> String {
 }
 
 /// Information used for generating unique state type names.
-enum StateTypeKey<'db> {
+enum StateTypeKey {
     /// Static tag from attribute (cont.shift)
     Static {
         ability_name: Option<Symbol>,
@@ -1081,11 +1084,11 @@ enum StateTypeKey<'db> {
         tag: u32,
         shift_index: usize,
     },
-    /// Dynamic tag from operand (cont.shift_dynamic) - uses source span and path for uniqueness
+    /// Dynamic tag from operand (cont.shift_dynamic) - uses module name and span for uniqueness
     Dynamic {
         ability_name: Option<Symbol>,
         op_name: Option<Symbol>,
-        path: trunk_ir::PathId<'db>,
+        module_name: Symbol,
         span: Span,
         shift_index: usize,
     },
@@ -1093,8 +1096,8 @@ enum StateTypeKey<'db> {
 
 /// Generate a unique state type name based on ability, operation info, and shift info.
 /// For static shifts, uses the tag attribute.
-/// For dynamic shifts, uses the source path and span to ensure uniqueness since the tag is runtime-determined.
-fn state_type_name(db: &dyn salsa::Database, key: StateTypeKey<'_>) -> String {
+/// For dynamic shifts, uses module name and span to ensure uniqueness since the tag is runtime-determined.
+fn state_type_name(key: StateTypeKey) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
@@ -1119,7 +1122,7 @@ fn state_type_name(db: &dyn salsa::Database, key: StateTypeKey<'_>) -> String {
         StateTypeKey::Dynamic {
             ability_name,
             op_name,
-            path,
+            module_name,
             span,
             shift_index,
         } => {
@@ -1131,8 +1134,8 @@ fn state_type_name(db: &dyn salsa::Database, key: StateTypeKey<'_>) -> String {
             if let Some(name) = op_name {
                 name.to_string().hash(&mut hasher);
             }
-            // Include file path for cross-file uniqueness
-            path.uri(db).hash(&mut hasher);
+            // Include module name for cross-module uniqueness
+            module_name.to_string().hash(&mut hasher);
             // Use span (start, end) for uniqueness instead of placeholder tag
             span.start.hash(&mut hasher);
             span.end.hash(&mut hasher);
@@ -1152,6 +1155,7 @@ struct LowerShiftPattern<'db> {
     resume_specs: ResumeSpecs<'db>,
     resume_counter: ResumeCounter,
     shift_analysis: ShiftAnalysis<'db>,
+    module_name: Symbol,
 }
 
 /// Information about a shift operation for lowering.
@@ -1250,12 +1254,12 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             ShiftInfo::Dynamic { .. } => StateTypeKey::Dynamic {
                 ability_name,
                 op_name,
-                path: location.path,
+                module_name: self.module_name,
                 span: location.span,
                 shift_index: shift_point_info.index,
             },
         };
-        let state_name = Symbol::from_dynamic(&state_type_name(db, state_type_key));
+        let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
 
         // Get live values and their types from analysis
         let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
@@ -1306,6 +1310,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             next_resume_name,
             location,
             shift_analysis: self.shift_analysis.clone(),
+            module_name: self.module_name,
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
@@ -1556,9 +1561,15 @@ fn create_resume_function_with_continuation<'db>(
                         "encountered shift in continuation but no next_resume_name specified",
                     );
 
-                    // Look up shift analysis for this shift point
+                    // Look up shift analysis for this shift point - fail fast if missing
                     let shift_span = op.location(db).span;
-                    let next_shift_info = spec.shift_analysis.get(&shift_span);
+                    let next_shift_info =
+                        spec.shift_analysis.get(&shift_span).unwrap_or_else(|| {
+                            panic!(
+                                "missing shift analysis for nested shift at {:?}",
+                                shift_span
+                            )
+                        });
 
                     // Get shift properties
                     let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
@@ -1567,8 +1578,7 @@ fn create_resume_function_with_continuation<'db>(
                     let op_idx = compute_op_idx(ability_name, op_name);
 
                     // Build state struct with current live values (remapped)
-                    let shift_span = op.location(db).span;
-                    let shift_index = next_shift_info.map(|info| info.index).unwrap_or(0);
+                    let shift_index = next_shift_info.index;
                     let state_type_key = match &tag_info {
                         ResumeShiftTag::Static(tag) => StateTypeKey::Static {
                             ability_name,
@@ -1579,26 +1589,23 @@ fn create_resume_function_with_continuation<'db>(
                         ResumeShiftTag::Dynamic(_) => StateTypeKey::Dynamic {
                             ability_name,
                             op_name,
-                            path: op.location(db).path,
+                            module_name: spec.module_name,
                             span: shift_span,
                             shift_index,
                         },
                     };
-                    let state_name = Symbol::from_dynamic(&state_type_name(db, state_type_key));
+                    let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
                     let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-                        if let Some(info) = next_shift_info {
-                            info.live_values
-                                .iter()
-                                .enumerate()
-                                .map(|(i, (v, ty))| {
-                                    let remapped_v = *value_map.get(v).unwrap_or(v);
-                                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                    (remapped_v, (field_name, *ty))
-                                })
-                                .unzip()
-                        } else {
-                            (vec![], vec![])
-                        };
+                        next_shift_info
+                            .live_values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (v, ty))| {
+                                let remapped_v = *value_map.get(v).unwrap_or(v);
+                                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                                (remapped_v, (field_name, *ty))
+                            })
+                            .unzip();
 
                     let state_adt_ty = adt::struct_type(db, state_name, state_fields);
                     let state_op = builder.op(trampoline::build_state(
@@ -3858,27 +3865,21 @@ mod tests {
         );
     }
 
-    #[salsa_test]
-    fn test_state_type_name_deterministic(db: &dyn salsa::Database) {
+    #[test]
+    fn test_state_type_name_deterministic() {
         // Same inputs should produce same output (static case)
-        let name1 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
-        let name2 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
+        let name1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name2 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
         assert_eq!(name1, name2, "Same inputs should produce same name");
 
         // Name should start with __State_ prefix
@@ -3888,181 +3889,139 @@ mod tests {
         );
 
         // Different tags should produce different names (static case)
-        let name_tag0 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
-        let name_tag1 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 1,
-                shift_index: 0,
-            },
-        );
+        let name_tag0 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_tag1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 1,
+            shift_index: 0,
+        });
         assert_ne!(
             name_tag0, name_tag1,
             "Different tags should produce different names"
         );
 
         // Different ops should produce different names
-        let name_get = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
-        let name_set = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("set")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
+        let name_get = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_set = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("set")),
+            tag: 0,
+            shift_index: 0,
+        });
         assert_ne!(
             name_get, name_set,
             "Different ops should produce different names"
         );
 
         // Different shift indices should produce different names
-        let name_idx0 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 0,
-            },
-        );
-        let name_idx1 = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 0,
-                shift_index: 1,
-            },
-        );
+        let name_idx0 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_idx1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 1,
+        });
         assert_ne!(
             name_idx0, name_idx1,
             "Different shift indices should produce different names"
         );
     }
 
-    #[salsa_test]
-    fn test_state_type_name_dynamic(db: &dyn salsa::Database) {
-        let path1 = PathId::new(db, "test1.trb".to_owned());
-        let path2 = PathId::new(db, "test2.trb".to_owned());
+    #[test]
+    fn test_state_type_name_dynamic() {
+        let module1 = Symbol::new("test_module1");
+        let module2 = Symbol::new("test_module2");
 
-        // Dynamic shifts use path and span for uniqueness instead of tag
-        let name_span1 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
-        let name_span2 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(30, 40),
-                shift_index: 0,
-            },
-        );
+        // Dynamic shifts use module_name and span for uniqueness instead of tag
+        let name_span1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_span2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(30, 40),
+            shift_index: 0,
+        });
         assert_ne!(
             name_span1, name_span2,
             "Different spans should produce different names for dynamic shifts"
         );
 
-        // Same path and span should produce same name
-        let name_same1 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
-        let name_same2 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
+        // Same module_name and span should produce same name
+        let name_same1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_same2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
         assert_eq!(
             name_same1, name_same2,
-            "Same path and span should produce same name"
+            "Same module_name and span should produce same name"
         );
 
-        // Different paths with same span should produce different names
-        let name_path1 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
-        let name_path2 = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path2,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
+        // Different module_names with same span should produce different names
+        let name_mod1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_mod2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module2,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
         assert_ne!(
-            name_path1, name_path2,
-            "Different paths should produce different names for dynamic shifts"
+            name_mod1, name_mod2,
+            "Different module_names should produce different names for dynamic shifts"
         );
 
         // Static and dynamic with similar params should differ (due to "dyn" marker)
-        let name_static = state_type_name(
-            db,
-            StateTypeKey::Static {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                tag: 10, // Same as span.start
-                shift_index: 0,
-            },
-        );
-        let name_dynamic = state_type_name(
-            db,
-            StateTypeKey::Dynamic {
-                ability_name: Some(Symbol::new("State")),
-                op_name: Some(Symbol::new("get")),
-                path: path1,
-                span: Span::new(10, 20),
-                shift_index: 0,
-            },
-        );
+        let name_static = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 10, // Same as span.start
+            shift_index: 0,
+        });
+        let name_dynamic = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
         assert_ne!(
             name_static, name_dynamic,
             "Static and dynamic should produce different names"
