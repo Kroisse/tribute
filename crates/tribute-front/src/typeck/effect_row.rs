@@ -474,4 +474,124 @@ mod tests {
         assert!(matches!(result, RemoveResult::NotFound));
         assert_eq!(counter, 0);
     }
+
+    // =========================================================================
+    // AbilityId module path tests
+    // =========================================================================
+
+    /// Helper to create an AbilityId with a specific module path
+    fn ability_id_with_path<'db>(
+        db: &'db dyn salsa::Database,
+        module_path: &[&str],
+        name: &str,
+    ) -> AbilityId<'db> {
+        let path: SymbolVec = module_path
+            .iter()
+            .map(|s| Symbol::from_dynamic(s))
+            .collect();
+        AbilityId::new(db, path, Symbol::from_dynamic(name))
+    }
+
+    #[test]
+    fn test_same_name_different_module_are_distinct() {
+        // mod1::State and mod2::State should be different abilities
+        let db = test_db();
+
+        let mod1_state = ability_id_with_path(&db, &["mod1"], "State");
+        let mod2_state = ability_id_with_path(&db, &["mod2"], "State");
+
+        // AbilityIds should be different
+        assert_ne!(mod1_state, mod2_state);
+
+        // Effects with these AbilityIds should be different
+        let effect1 = simple_effect(&db, mod1_state);
+        let effect2 = simple_effect(&db, mod2_state);
+        assert_ne!(effect1, effect2);
+    }
+
+    #[test]
+    fn test_effect_row_with_abilities_from_different_modules() {
+        // An effect row can contain State from mod1 and State from mod2
+        // They should not be considered duplicates
+        let db = test_db();
+
+        let mod1_state = ability_id_with_path(&db, &["mod1"], "State");
+        let mod2_state = ability_id_with_path(&db, &["mod2"], "State");
+
+        let effect1 = simple_effect(&db, mod1_state);
+        let effect2 = simple_effect(&db, mod2_state);
+
+        let row = EffectRow::new(&db, vec![effect1.clone(), effect2.clone()], None);
+
+        // Both effects should be in the row
+        assert!(contains(&db, row, &effect1));
+        assert!(contains(&db, row, &effect2));
+        assert_eq!(row.effects(&db).len(), 2);
+
+        // Should NOT be considered conflicting (different abilities despite same name)
+        assert!(find_conflicting_effects(&db, row).is_none());
+    }
+
+    #[test]
+    fn test_parameterized_effects_from_same_ability_are_distinct() {
+        // State(Int) and State(Bool) from the same module are different effects
+        let db = test_db();
+
+        let state_id = test_ability_id(&db, "State");
+        let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
+        let bool_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Bool);
+
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
+        let state_bool = parameterized_effect(&db, state_id, vec![bool_ty]);
+
+        // They are different effects
+        assert_ne!(state_int, state_bool);
+
+        // Both can exist in the same effect row without conflict
+        let row = EffectRow::new(&db, vec![state_int.clone(), state_bool.clone()], None);
+        assert_eq!(row.effects(&db).len(), 2);
+        assert!(find_conflicting_effects(&db, row).is_none());
+    }
+
+    #[test]
+    fn test_remove_only_matching_parameterized_effect() {
+        // When removing State(Int), State(Bool) should remain
+        let db = test_db();
+
+        let state_id = test_ability_id(&db, "State");
+        let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
+        let bool_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Bool);
+
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
+        let state_bool = parameterized_effect(&db, state_id, vec![bool_ty]);
+
+        let row = EffectRow::new(&db, vec![state_int.clone(), state_bool.clone()], None);
+
+        // Remove State(Int)
+        let result = remove_effect(&db, row, &state_int);
+        assert!(result.is_some());
+
+        let new_row = result.unwrap();
+        // State(Int) should be gone
+        assert!(!contains(&db, new_row, &state_int));
+        // State(Bool) should remain
+        assert!(contains(&db, new_row, &state_bool));
+        assert_eq!(new_row.effects(&db).len(), 1);
+    }
+
+    #[test]
+    fn test_qualified_name_display() {
+        let db = test_db();
+
+        // Test simple ability name
+        let simple = test_ability_id(&db, "Console");
+        assert_eq!(format!("{}", simple.qualified_name(&db)), "Console");
+
+        // Test ability with module path
+        let qualified = ability_id_with_path(&db, &["std", "io"], "Console");
+        assert_eq!(
+            format!("{}", qualified.qualified_name(&db)),
+            "std::io::Console"
+        );
+    }
 }
