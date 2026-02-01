@@ -1,26 +1,18 @@
 //! Ability dialect operations and types.
 //!
-//! This dialect represents ability (algebraic effect) operations that get
-//! lowered to the `cont` dialect for continuation-based control flow.
+//! This dialect provides evidence-based handler dispatch operations and types
+//! for the ability (algebraic effect) system.
 //!
 //! ## Design
 //!
 //! Ability declarations (`tribute.ability_def`, `tribute.op_def`) are in the tribute dialect.
-//! This dialect contains the runtime operations:
-//! - `ability.perform`: invoke an ability operation
-//! - `ability.resume`: resume a captured continuation
-//! - `ability.abort`: discard a continuation
+//! This dialect contains the evidence operations for dynamic handler dispatch:
+//! - `ability.evidence_lookup`: look up a marker in the evidence
+//! - `ability.evidence_extend`: extend evidence with a new marker
+//! - `ability.marker_prompt`: extract prompt tag from a marker
 //!
-//! Handler pattern matching uses fused `tribute.handle`:
-//!
-//! ```text
-//! // Source: handle expr { ... }
-//! // Lowers to:
-//! tribute.handle { expr } {
-//!     tribute.arm("{result}") { ... }
-//!     tribute.arm("{State::get() -> k}") { ... }
-//! }
-//! ```
+//! Handler pattern matching uses fused `tribute.handle` which lowers directly
+//! to the `cont` dialect.
 
 use std::fmt::Write;
 
@@ -28,31 +20,6 @@ use trunk_ir::dialect;
 
 dialect! {
     mod ability {
-        // === Operations ===
-
-        /// `ability.perform` operation: performs an ability operation.
-        ///
-        /// Invokes an operation from an ability, capturing the current continuation
-        /// until a handler is found. Returns when resumed by a handler.
-        ///
-        /// The `ability_ref` attribute is a `Type` (specifically `core.ability_ref`)
-        /// to support parameterized abilities like `State(Int)`.
-        #[attr(ability_ref: Type, op: Symbol)]
-        fn perform(#[rest] args) -> result;
-
-        /// `ability.resume` operation: resumes a captured continuation.
-        ///
-        /// Continues execution from where `perform` was called, providing a value.
-        /// The continuation is consumed (linear type).
-        fn resume(continuation, value) -> result;
-
-        /// `ability.abort` operation: discards a continuation without resuming.
-        ///
-        /// Satisfies the linear type requirement for continuations by explicitly
-        /// dropping them. Used when a handler doesn't want to continue execution
-        /// (e.g., `Fail::fail` handler returning `None`).
-        fn abort(continuation);
-
         // === Evidence operations ===
 
         /// `ability.evidence_lookup` operation: looks up a marker in the evidence.
@@ -116,7 +83,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, cont, core};
     use trunk_ir::type_interface::print_type;
-    use trunk_ir::{Attribute, DialectOp, DialectType, IdVec, Location, PathId, Span, Symbol};
+    use trunk_ir::{Attribute, DialectOp, DialectType, Location, PathId, Span, Symbol};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
@@ -137,78 +104,6 @@ mod tests {
 
         let printed = print_type(db, evidence_ty.as_type());
         assert_eq!(printed, "Evidence");
-    }
-
-    #[salsa::tracked]
-    fn perform_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        let location = test_location(db);
-        let int_ty = core::I32::new(db).as_type();
-        let ability_ref = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
-
-        let arg = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
-        let op = perform(
-            db,
-            location,
-            IdVec::from(vec![arg]),
-            int_ty,
-            ability_ref,
-            Symbol::new("get"),
-        );
-
-        let adapted = Perform::from_operation(db, op.as_operation()).unwrap();
-        (adapted.ability_ref(db).dialect(db), adapted.op(db))
-    }
-
-    #[salsa_test]
-    fn test_perform_operation(db: &salsa::DatabaseImpl) {
-        let (dialect, op_name) = perform_test(db);
-        assert_eq!(dialect, Symbol::new("core"));
-        assert_eq!(op_name, Symbol::new("get"));
-    }
-
-    #[salsa::tracked]
-    fn resume_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        let location = test_location(db);
-        let int_ty = core::I32::new(db).as_type();
-
-        let cont = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
-        let value = arith::r#const(db, location, int_ty, Attribute::IntBits(42)).result(db);
-
-        let op = resume(db, location, cont, value, int_ty);
-        let adapted = Resume::from_operation(db, op.as_operation()).unwrap();
-        (
-            adapted.as_operation().dialect(db),
-            adapted.as_operation().name(db),
-        )
-    }
-
-    #[salsa_test]
-    fn test_resume_operation(db: &salsa::DatabaseImpl) {
-        let (dialect, name) = resume_test(db);
-        assert_eq!(dialect, DIALECT_NAME());
-        assert_eq!(name, RESUME());
-    }
-
-    #[salsa::tracked]
-    fn abort_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        let location = test_location(db);
-        let int_ty = core::I32::new(db).as_type();
-
-        let cont = arith::r#const(db, location, int_ty, Attribute::IntBits(0)).result(db);
-        let op = abort(db, location, cont);
-
-        let adapted = Abort::from_operation(db, op.as_operation()).unwrap();
-        (
-            adapted.as_operation().dialect(db),
-            adapted.as_operation().name(db),
-        )
-    }
-
-    #[salsa_test]
-    fn test_abort_operation(db: &salsa::DatabaseImpl) {
-        let (dialect, name) = abort_test(db);
-        assert_eq!(dialect, DIALECT_NAME());
-        assert_eq!(name, ABORT());
     }
 
     #[salsa_test]

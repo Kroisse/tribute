@@ -16,7 +16,6 @@ pub mod boxing;
 pub mod closure_lower;
 pub mod cont_to_trampoline;
 pub mod evidence;
-pub mod handler_lower;
 pub mod live_vars;
 pub mod resolve_evidence;
 pub mod type_converter;
@@ -31,7 +30,6 @@ pub use evidence::{
     add_evidence_params, collect_effectful_functions, insert_evidence, is_effectful_type,
     transform_evidence_calls,
 };
-pub use handler_lower::lower_handlers;
 pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,

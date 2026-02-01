@@ -46,9 +46,6 @@
 //! Module (evidence passed through calls)
 //!     │
 //!     ├─────────────── Final Lowering ────────────────┤
-//!     ▼ handler_lower
-//! Module (ability.* → cont.*)
-//!     │
 //!     ▼ cont_to_trampoline
 //! Module (cont.* → trampoline)
 //!     │
@@ -78,7 +75,6 @@ use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
-use tribute_passes::handler_lower::lower_handlers;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
@@ -384,23 +380,6 @@ pub fn stage_resolve_evidence<'db>(
     resolve_evidence_dispatch(db, module)
 }
 
-/// Handler Lowering.
-///
-/// This pass transforms ability dialect operations to continuation dialect operations:
-/// - `ability.prompt` → `cont.push_prompt`
-/// - `ability.perform` → `cont.shift` (with evidence lookup)
-/// - `ability.resume` → `cont.resume`
-/// - `ability.abort` → `cont.drop`
-///
-/// Returns an error if any `ability.*` operations remain after conversion.
-#[salsa::tracked]
-pub fn stage_handler_lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Result<Module<'db>, ConversionError> {
-    lower_handlers(db, module)
-}
-
 /// Continuation to Trampoline Lowering.
 ///
 /// This pass transforms continuation operations to trampoline operations:
@@ -552,8 +531,6 @@ pub fn run_full_pipeline<'db>(
 
     // Evidence-based dispatch resolution - transforms cont.shift to use dynamic tags
     let module = stage_resolve_evidence(db, module);
-
-    let module = stage_handler_lower(db, module)?;
 
     // Continuation lowering (backend-agnostic trampoline implementation)
     let module = stage_cont_to_trampoline(db, module)?;

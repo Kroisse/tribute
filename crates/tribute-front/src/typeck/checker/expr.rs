@@ -405,12 +405,22 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|ty| {
                             subst::substitute_bound_vars(self.db(), *ty, &ability_args)
-                                .unwrap_or(*ty)
+                                .unwrap_or_else(|index, max| {
+                                    panic!(
+                                        "AbilityOp param BoundVar index out of range: index={}, subst.len()={}",
+                                        index, max
+                                    )
+                                })
                         })
                         .collect();
                     let return_type =
                         subst::substitute_bound_vars(self.db(), op_info.return_type, &ability_args)
-                            .unwrap_or(op_info.return_type);
+                            .unwrap_or_else(|index, max| {
+                                panic!(
+                                    "AbilityOp return BoundVar index out of range: index={}, subst.len()={}",
+                                    index, max
+                                )
+                            });
 
                     let ability_effect = Effect {
                         ability_id: *ability,
@@ -526,9 +536,9 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
 
-        // Effect subsumption: the callee's effect must be a subset of the current
-        // function's effect. This is represented as a row constraint that allows
-        // the callee's effect row variable to unify with the current effect.
+        // Effect constraint: the callee's effect must be compatible with the current
+        // function's effect. We use constrain_row_eq here, but the solver's unify_rows
+        // handles subsumption semantics, allowing pure callees in effectful contexts.
         //
         // For example, if calling State::get() which has effect {State | e},
         // the constraint ensures this is compatible with the caller's effect row.
