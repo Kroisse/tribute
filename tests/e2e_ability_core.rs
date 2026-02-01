@@ -877,3 +877,85 @@ fn main() -> Int { 0 }
         );
     });
 }
+
+// =============================================================================
+// Parameterized Ability Type Argument Preservation Tests
+// =============================================================================
+
+/// Test that handle expressions preserve parameterized ability type arguments.
+///
+/// When handling State(Int), the type argument Int should be preserved in the
+/// effect row constraint, not lost by creating Effect entries with empty args.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_handle_preserves_parameterized_ability_type_args() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_state() ->{State(Int)} Int {
+    State::set(10);
+    State::get()
+}
+
+fn main() -> Int {
+    handle use_state() {
+        { result } -> result
+        { State::get() -> k } -> k(42)
+        { State::set(v) -> k } -> k(Nil)
+    }
+}
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "handle_param_ability.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Handle should preserve parameterized ability type args, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test that ability operations substitute type parameters into their signature.
+///
+/// When calling State::get() with State(Int), the return type should be Int,
+/// not the unsubstituted type parameter `s`.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_ability_op_substitutes_type_params() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_state() ->{State(Int)} Int {
+    let x: Int = State::get();
+    x + 1
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "ability_op_subst.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Ability op should substitute type params into signature, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}

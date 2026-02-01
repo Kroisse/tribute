@@ -385,16 +385,31 @@ impl<'db> TypeChecker<'db> {
                     // The effect row contains this ability (with a row variable tail for polymorphism)
 
                     // Generate fresh type vars for parameterized abilities
-                    let ability_args = if let Some(ability_info) = self.env.lookup_ability(*ability)
-                    {
-                        ability_info
-                            .type_params
-                            .iter()
-                            .map(|_| ctx.fresh_type_var())
-                            .collect()
-                    } else {
-                        vec![]
-                    };
+                    let ability_args: Vec<Type<'db>> =
+                        if let Some(ability_info) = self.env.lookup_ability(*ability) {
+                            ability_info
+                                .type_params
+                                .iter()
+                                .map(|_| ctx.fresh_type_var())
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                    // Substitute ability type params into the operation signature.
+                    // The operation's types may contain BoundVars that refer to the ability's
+                    // type parameters.
+                    let param_types: Vec<Type<'db>> = op_info
+                        .param_types
+                        .iter()
+                        .map(|ty| {
+                            subst::substitute_bound_vars(self.db(), *ty, &ability_args)
+                                .unwrap_or(*ty)
+                        })
+                        .collect();
+                    let return_type =
+                        subst::substitute_bound_vars(self.db(), op_info.return_type, &ability_args)
+                            .unwrap_or(op_info.return_type);
 
                     let ability_effect = Effect {
                         name: *ability,
@@ -402,7 +417,7 @@ impl<'db> TypeChecker<'db> {
                     };
                     let row_var = ctx.fresh_row_var();
                     let effect = EffectRow::new(self.db(), vec![ability_effect], Some(row_var));
-                    ctx.func_type(op_info.param_types.clone(), op_info.return_type, effect)
+                    ctx.func_type(param_types, return_type, effect)
                 } else {
                     ctx.error_type()
                 }
@@ -1633,16 +1648,14 @@ impl<'db> TypeChecker<'db> {
             // Create a fresh row variable for the result (the "unhandled" portion of the tail)
             let result_var = ctx.fresh_row_var();
 
-            // Create Effect entries for each handled ability.
-            // These are placeholders with no type args (simple abilities).
-            // Deduplicate abilities to avoid constraint issues from duplicate handlers.
-            let unique_abilities: HashSet<_> = handled_abilities.iter().copied().collect();
-            let handled_effects: Vec<crate::ast::Effect<'db>> = unique_abilities
-                .into_iter()
-                .map(|name| crate::ast::Effect {
-                    name,
-                    args: Vec::new(),
-                })
+            // Collect Effect entries from the original effects list, preserving type args.
+            // Deduplicate by ability name (keeping the first occurrence).
+            let mut seen_abilities = HashSet::new();
+            let handled_effects: Vec<crate::ast::Effect<'db>> = effects
+                .iter()
+                .filter(|effect| handled_abilities.contains(&effect.name))
+                .filter(|effect| seen_abilities.insert(effect.name))
+                .cloned()
                 .collect();
 
             // Add constraint: tail_var = {handled_effects | result_var}

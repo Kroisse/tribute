@@ -47,14 +47,16 @@ pub fn resolve_evidence_dispatch<'db>(
     // Collect functions with evidence parameters
     let fns_with_evidence = collect_functions_with_evidence(db, &module);
 
-    if fns_with_evidence.is_empty() {
-        return module;
-    }
+    // Transform shifts in functions with evidence (if any)
+    let module = if fns_with_evidence.is_empty() {
+        module
+    } else {
+        transform_shifts_in_module(db, module, &fns_with_evidence)
+    };
 
-    // Transform shifts in functions with evidence
-    let module = transform_shifts_in_module(db, module, &fns_with_evidence);
-
-    // Validate that all shifts have been resolved (no sentinel tags remain)
+    // Validate that all shifts have been resolved (no sentinel tags remain).
+    // This must run regardless of whether evidence functions exist, to catch
+    // any unresolved shifts that may have been introduced incorrectly.
     validate_no_unresolved_shifts(db, &module);
 
     module

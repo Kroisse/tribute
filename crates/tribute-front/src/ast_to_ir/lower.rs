@@ -450,12 +450,22 @@ fn lower_expr<'db>(
                         .op(func::constant(builder.db(), location, func_ty, *variant));
                 Some(op.result(builder.db()))
             }
-            ResolvedRef::Builtin(_)
-            | ResolvedRef::Module { .. }
-            | ResolvedRef::TypeDef { .. }
-            | ResolvedRef::AbilityOp { .. } => {
+            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } | ResolvedRef::TypeDef { .. } => {
+                None
+            }
+            ResolvedRef::AbilityOp { ability, op } => {
                 // AbilityOp as a value (not called) is not yet supported
                 // TODO: Support passing ability operations as first-class functions
+                Diagnostic {
+                    message: format!(
+                        "ability operation `{}::{}` cannot be used as a value; it must be called directly",
+                        ability, op
+                    ),
+                    span: location.span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::Lowering,
+                }
+                .accumulate(builder.db());
                 None
             }
         },
@@ -2024,19 +2034,7 @@ fn build_suspend_handler_block<'db>(
         continuation_local_id,
     } = &handler.kind
     else {
-        // Should not happen - caller should only pass Effect handlers
-        let nil_ty = core::Nil::new(db).as_type();
-        let nil_val = block_builder
-            .op(arith::r#const(db, location, nil_ty, Attribute::Unit))
-            .result(db);
-        block_builder.op(scf::r#yield(db, location, vec![nil_val]));
-        return trunk_ir::Block::new(
-            db,
-            block_id,
-            location,
-            idvec![],
-            block_builder.build().operations(db).clone(),
-        );
+        unreachable!("build_suspend_handler_block called with non-effect handler");
     };
 
     // Get the continuation

@@ -1000,6 +1000,33 @@ impl<'db> TypeSolver<'db> {
                         .zip(elems2.iter())
                         .all(|(x, y)| self.types_unifiable(*x, *y))
             }
+            (
+                TypeKind::Func {
+                    params: p1,
+                    result: r1,
+                    ..
+                },
+                TypeKind::Func {
+                    params: p2,
+                    result: r2,
+                    ..
+                },
+            ) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+                    && self.types_unifiable(*r1, *r2)
+            }
+            (TypeKind::App { ctor: c1, args: a1 }, TypeKind::App { ctor: c2, args: a2 }) => {
+                self.types_unifiable(*c1, *c2)
+                    && a1.len() == a2.len()
+                    && a1
+                        .iter()
+                        .zip(a2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
             _ => false,
         }
     }
@@ -2246,6 +2273,140 @@ mod tests {
         // Two type variables are unifiable
         let var_ty2 = fresh_var(&db, 1);
         assert!(solver.types_unifiable(var_ty, var_ty2));
+    }
+
+    #[test]
+    fn test_types_unifiable_func() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let effect = EffectRow::new(&db, vec![], None);
+
+        // Same function types are unifiable
+        let func1 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let func2 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(solver.types_unifiable(func1, func2));
+
+        // Different param types are not unifiable
+        let func3 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![bool_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(!solver.types_unifiable(func1, func3));
+
+        // Different result types are not unifiable
+        let func4 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: bool_ty,
+                effect,
+            },
+        );
+        assert!(!solver.types_unifiable(func1, func4));
+
+        // Function type with type variable in params is unifiable
+        let var_ty = fresh_var(&db, 0);
+        let func_with_var = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(solver.types_unifiable(func1, func_with_var));
+    }
+
+    #[test]
+    fn test_types_unifiable_app() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let list_ctor = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let option_ctor = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![],
+            },
+        );
+
+        // Same App types are unifiable
+        let app1 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+        let app2 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+        assert!(solver.types_unifiable(app1, app2));
+
+        // Different constructor is not unifiable
+        let app3 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: option_ctor,
+                args: vec![int_ty],
+            },
+        );
+        assert!(!solver.types_unifiable(app1, app3));
+
+        // Different arg types are not unifiable
+        let app4 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![bool_ty],
+            },
+        );
+        assert!(!solver.types_unifiable(app1, app4));
+
+        // App with type variable in args is unifiable
+        let var_ty = fresh_var(&db, 0);
+        let app_with_var = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![var_ty],
+            },
+        );
+        assert!(solver.types_unifiable(app1, app_with_var));
     }
 
     // =========================================================================
