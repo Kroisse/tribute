@@ -5290,12 +5290,11 @@ mod tests {
     ) -> Option<u32> {
         let tag_operand = shift.tag(db);
         // Check if the tag operand is defined by an arith.const
-        if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db) {
-            if let Ok(const_op) = trunk_ir::dialect::arith::Const::from_operation(db, def_op) {
-                if let trunk_ir::Attribute::IntBits(value) = const_op.value(db) {
-                    return Some(value as u32);
-                }
-            }
+        if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db)
+            && let Ok(const_op) = trunk_ir::dialect::arith::Const::from_operation(db, def_op)
+            && let trunk_ir::Attribute::IntBits(value) = const_op.value(db)
+        {
+            return Some(value as u32);
         }
         None
     }

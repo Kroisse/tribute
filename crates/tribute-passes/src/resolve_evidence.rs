@@ -707,25 +707,21 @@ fn validate_no_unresolved_shifts_in_region(db: &dyn salsa::Database, region: &Re
 
                 // Check if the tag operand is a constant with the sentinel value
                 // ValueDef::OpResult contains the defining operation; index is checked separately
-                if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db) {
-                    if tag_operand.index(db) == 0 {
-                        if let Ok(const_op) =
-                            trunk_ir::dialect::arith::Const::from_operation(db, def_op)
-                        {
-                            if let Attribute::IntBits(value) = const_op.value(db) {
-                                if value == UNRESOLVED_SHIFT_TAG as u64 {
-                                    let ability_ref = shift_op.ability_ref(db);
-                                    let op_name = shift_op.op_name(db);
-                                    panic!(
-                                        "ICE: Unresolved cont.shift found after evidence pass.\n\
-                                         Ability: {:?}, Op: {:?}\n\
-                                         This indicates the shift was not inside a function with evidence parameter.",
-                                        ability_ref, op_name
-                                    );
-                                }
-                            }
-                        }
-                    }
+                if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db)
+                    && tag_operand.index(db) == 0
+                    && let Ok(const_op) =
+                        trunk_ir::dialect::arith::Const::from_operation(db, def_op)
+                    && let Attribute::IntBits(value) = const_op.value(db)
+                    && value == UNRESOLVED_SHIFT_TAG as u64
+                {
+                    let ability_ref = shift_op.ability_ref(db);
+                    let op_name = shift_op.op_name(db);
+                    panic!(
+                        "ICE: Unresolved cont.shift found after evidence pass.\n\
+                         Ability: {:?}, Op: {:?}\n\
+                         This indicates the shift was not inside a function with evidence parameter.",
+                        ability_ref, op_name
+                    );
                 }
             }
 
