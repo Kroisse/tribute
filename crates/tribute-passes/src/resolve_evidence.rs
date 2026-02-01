@@ -7,12 +7,12 @@
 //!
 //! ```text
 //! // Before (static placeholder tag)
-//! %result = cont.shift(args...) { tag: 0, ability_ref, op_name }
+//! %result = cont.shift(%placeholder_tag, args...) { ability_ref, op_name }
 //!
 //! // After (dynamic evidence-based tag)
 //! %marker = func.call @__tribute_evidence_lookup(%ev, ability_id)
 //! %tag = func.call @__tribute_marker_prompt(%marker)
-//! %result = cont.shift_dynamic(%tag, args...) { ability_ref, op_name }
+//! %result = cont.shift(%tag, args...) { ability_ref, op_name }
 //! ```
 //!
 //! This pass must run AFTER `add_evidence_params` so that effectful functions
@@ -34,8 +34,9 @@ pub const UNRESOLVED_SHIFT_TAG: u32 = u32::MAX;
 
 /// Resolve evidence-based dispatch for `cont.shift` operations.
 ///
-/// Transforms `cont.shift` with static tags into `cont.shift_dynamic` with
-/// evidence lookup. This enables proper handler dispatch at runtime.
+/// Transforms `cont.shift` with placeholder tags into `cont.shift` with
+/// dynamically resolved tags via evidence lookup. This enables proper
+/// handler dispatch at runtime.
 #[salsa::tracked]
 pub fn resolve_evidence_dispatch<'db>(
     db: &'db dyn salsa::Database,

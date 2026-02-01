@@ -365,11 +365,11 @@ pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) ->
 
 /// Resolve Evidence-based Dispatch.
 ///
-/// This pass transforms `cont.shift` with static placeholder tags into
+/// This pass transforms `cont.shift` with placeholder tags into
 /// evidence-based dispatch using runtime function calls:
 /// - Looks up markers from evidence
 /// - Extracts prompt tags from markers
-/// - Replaces `cont.shift` with `cont.shift_dynamic`
+/// - Replaces placeholder tags with dynamically resolved tags
 ///
 /// Must run AFTER evidence_calls (Phase 2) so functions have evidence params.
 #[salsa::tracked]
