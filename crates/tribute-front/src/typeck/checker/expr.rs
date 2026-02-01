@@ -383,9 +383,22 @@ impl<'db> TypeChecker<'db> {
                 if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
                     // Create a function type from the operation signature
                     // The effect row contains this ability (with a row variable tail for polymorphism)
+
+                    // Generate fresh type vars for parameterized abilities
+                    let ability_args = if let Some(ability_info) = self.env.lookup_ability(*ability)
+                    {
+                        ability_info
+                            .type_params
+                            .iter()
+                            .map(|_| ctx.fresh_type_var())
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+
                     let ability_effect = Effect {
                         name: *ability,
-                        args: vec![], // TODO: support parameterized abilities
+                        args: ability_args,
                     };
                     let row_var = ctx.fresh_row_var();
                     let effect = EffectRow::new(self.db(), vec![ability_effect], Some(row_var));

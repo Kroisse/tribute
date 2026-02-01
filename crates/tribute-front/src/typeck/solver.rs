@@ -703,7 +703,11 @@ impl<'db> TypeSolver<'db> {
     /// Check if a row variable occurs in a type.
     fn row_occurs_in_type(&self, var: EffectVar, ty: Type<'db>) -> bool {
         match ty.kind(self.db) {
-            TypeKind::Func { effect, .. } => {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
                 let row = self.row_subst.apply(self.db, *effect);
                 if row.rest(self.db) == Some(var) {
                     return true;
@@ -715,6 +719,13 @@ impl<'db> TypeSolver<'db> {
                             return true;
                         }
                     }
+                }
+                // Recursively check params and result
+                if params.iter().any(|p| self.row_occurs_in_type(var, *p)) {
+                    return true;
+                }
+                if self.row_occurs_in_type(var, *result) {
+                    return true;
                 }
                 false
             }
@@ -768,17 +779,7 @@ impl<'db> TypeSolver<'db> {
 
         match (rest1, rest2) {
             // Both closed: effects must match as sets
-            (None, None) => {
-                if !effects_equal_as_sets(effects1, effects2) {
-                    return Err(SolveError::RowMismatch {
-                        expected: r1,
-                        actual: r2,
-                    });
-                }
-                // Unify effect type arguments
-                self.unify_effect_args(effects1, effects2)?;
-                Ok(())
-            }
+            (None, None) => self.unify_effects_as_sets(effects1, effects2, r1, r2),
 
             // r1 is open, r2 is closed: var1 = r2's effects minus r1's effects
             (Some(var1), None) => {
@@ -790,18 +791,19 @@ impl<'db> TypeSolver<'db> {
                     });
                 }
                 // Compute difference: effects in r2 but not in r1
-                let (common, only_r2) = compute_effect_difference(self.db, effects1, effects2);
+                // First check that all effects in r1 have matches in r2
+                let only_r2 = self.compute_effect_difference_with_unify(effects1, effects2)?;
+
                 // r1's effects must all be in r2
-                if common.len() != effects1.len() {
+                // (if any effect from r1 is in only_r2, it means no match was found)
+                let matched_count = effects2.len() - only_r2.len();
+                if matched_count != effects1.len() {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
                         actual: r2,
                     });
                 }
-                // Unify type arguments of common effects
-                for (e1, e2) in common {
-                    self.unify_effect_type_args(e1, e2)?;
-                }
+
                 // Bind var1 to remaining effects (closed)
                 let remainder = EffectRow::new(self.db, only_r2, None);
                 self.row_subst.insert(var1.id, remainder);
@@ -831,17 +833,15 @@ impl<'db> TypeSolver<'db> {
                     });
                 }
                 // Compute difference: effects in r1 but not in r2
-                let (common, only_r1) = compute_effect_difference(self.db, effects2, effects1);
+                let only_r1 = self.compute_effect_difference_with_unify(effects2, effects1)?;
+
                 // r2's effects must all be in r1
-                if common.len() != effects2.len() {
+                let matched_count = effects1.len() - only_r1.len();
+                if matched_count != effects2.len() {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
                         actual: r2,
                     });
-                }
-                // Unify type arguments of common effects
-                for (e1, e2) in common {
-                    self.unify_effect_type_args(e1, e2)?;
                 }
                 // Bind var2 to remaining effects (closed)
                 let remainder = EffectRow::new(self.db, only_r1, None);
@@ -851,14 +851,7 @@ impl<'db> TypeSolver<'db> {
 
             // Both open with the same variable: just unify the effect lists
             (Some(v1), Some(v2)) if v1 == v2 => {
-                if !effects_equal_as_sets(effects1, effects2) {
-                    return Err(SolveError::RowMismatch {
-                        expected: r1,
-                        actual: r2,
-                    });
-                }
-                self.unify_effect_args(effects1, effects2)?;
-                Ok(())
+                self.unify_effects_as_sets(effects1, effects2, r1, r2)
             }
 
             // Both open with different variables: create a fresh variable for the common tail
@@ -873,12 +866,8 @@ impl<'db> TypeSolver<'db> {
                     });
                 }
 
-                let (common, only_r1, only_r2) = compute_effect_split(self.db, effects1, effects2);
-
-                // Unify type arguments of common effects
-                for (e1, e2) in common {
-                    self.unify_effect_type_args(e1, e2)?;
-                }
+                let (only_r1, only_r2) =
+                    self.compute_effect_split_with_unify(effects1, effects2)?;
 
                 // Create a fresh row variable for the common tail
                 let v3 = self.fresh_row_var();
@@ -896,120 +885,236 @@ impl<'db> TypeSolver<'db> {
         }
     }
 
-    /// Unify type arguments of two effect lists (assuming they have the same names).
-    fn unify_effect_args(
+    /// Check if two effect lists are equal as sets, unifying type arguments.
+    ///
+    /// Effects are matched by name first, then by arity, then args are unified.
+    /// - Same name, different arity → EffectArgArityMismatch
+    /// - Same name, same arity, args unify → matched
+    /// - Same name, same arity, args don't unify → different abilities (RowMismatch)
+    fn unify_effects_as_sets(
         &mut self,
         effects1: &[crate::ast::Effect<'db>],
         effects2: &[crate::ast::Effect<'db>],
+        r1: EffectRow<'db>,
+        r2: EffectRow<'db>,
     ) -> Result<(), SolveError<'db>> {
-        // Match effects by name and unify their type arguments
+        if effects1.len() != effects2.len() {
+            return Err(SolveError::RowMismatch {
+                expected: r1,
+                actual: r2,
+            });
+        }
+
+        // For each effect in effects1, find a matching effect in effects2
         for e1 in effects1 {
-            for e2 in effects2 {
-                if e1.name == e2.name {
-                    self.unify_effect_type_args(e1, e2)?;
+            // Find effects with the same name
+            let same_name: Vec<_> = effects2.iter().filter(|e2| e1.name == e2.name).collect();
+
+            if same_name.is_empty() {
+                return Err(SolveError::RowMismatch {
+                    expected: r1,
+                    actual: r2,
+                });
+            }
+
+            // Check for arity mismatch
+            for e2 in &same_name {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.name,
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
+
+            // Try to find a matching effect (args unify successfully)
+            let mut found_match = false;
+            for e2 in &same_name {
+                // Try unifying args - if successful, we found a match
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
+
+                if args_match {
+                    // Actually perform the unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    found_match = true;
                     break;
                 }
             }
+
+            if !found_match {
+                // Same name and arity, but args don't unify → different abilities
+                return Err(SolveError::RowMismatch {
+                    expected: r1,
+                    actual: r2,
+                });
+            }
         }
+
         Ok(())
     }
 
-    /// Unify type arguments of two effects with the same name.
-    fn unify_effect_type_args(
+    /// Check if two types can be unified without modifying substitution.
+    ///
+    /// This is a quick check that doesn't perform actual unification.
+    fn types_unifiable(&self, t1: Type<'db>, t2: Type<'db>) -> bool {
+        let t1 = self.type_subst.apply(self.db, t1);
+        let t2 = self.type_subst.apply(self.db, t2);
+
+        if t1 == t2 {
+            return true;
+        }
+
+        match (t1.kind(self.db), t2.kind(self.db)) {
+            // Type variables can unify with anything
+            (TypeKind::UniVar { .. }, _) | (_, TypeKind::UniVar { .. }) => true,
+            // Error type unifies with anything
+            (TypeKind::Error, _) | (_, TypeKind::Error) => true,
+            // Same kind, check recursively
+            (TypeKind::Int, TypeKind::Int)
+            | (TypeKind::Nat, TypeKind::Nat)
+            | (TypeKind::Float, TypeKind::Float)
+            | (TypeKind::Bool, TypeKind::Bool)
+            | (TypeKind::String, TypeKind::String)
+            | (TypeKind::Bytes, TypeKind::Bytes)
+            | (TypeKind::Rune, TypeKind::Rune)
+            | (TypeKind::Nil, TypeKind::Nil) => true,
+            (TypeKind::Named { name: n1, args: a1 }, TypeKind::Named { name: n2, args: a2 }) => {
+                n1 == n2
+                    && a1.len() == a2.len()
+                    && a1
+                        .iter()
+                        .zip(a2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
+            (TypeKind::Tuple(elems1), TypeKind::Tuple(elems2)) => {
+                elems1.len() == elems2.len()
+                    && elems1
+                        .iter()
+                        .zip(elems2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Compute effect difference with unification support.
+    ///
+    /// Returns matched effects and unmatched effects from list2.
+    fn compute_effect_difference_with_unify(
         &mut self,
-        e1: &crate::ast::Effect<'db>,
-        e2: &crate::ast::Effect<'db>,
-    ) -> Result<(), SolveError<'db>> {
-        if e1.args.len() != e2.args.len() {
-            return Err(SolveError::EffectArgArityMismatch {
-                effect_name: e1.name,
-                expected: e1.args.len(),
-                found: e2.args.len(),
-            });
-        }
-        for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
-            self.unify_types(*a1, *a2)?;
-        }
-        Ok(())
-    }
-}
+        list1: &[crate::ast::Effect<'db>],
+        list2: &[crate::ast::Effect<'db>],
+    ) -> Result<Vec<crate::ast::Effect<'db>>, SolveError<'db>> {
+        let mut only_list2 = Vec::new();
 
-/// Check if two effect lists are equal as sets (ignoring order).
-fn effects_equal_as_sets(
-    effects1: &[crate::ast::Effect<'_>],
-    effects2: &[crate::ast::Effect<'_>],
-) -> bool {
-    if effects1.len() != effects2.len() {
-        return false;
-    }
-    // For each effect in effects1, there must be a matching effect in effects2
-    for e1 in effects1 {
-        if !effects2.iter().any(|e2| e1.name == e2.name) {
-            return false;
-        }
-    }
-    true
-}
+        for e2 in list2 {
+            // Check for arity mismatch with same-named effects
+            for e1 in list1.iter().filter(|e1| e1.name == e2.name) {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.name,
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
 
-/// Compute the difference between two effect lists.
-///
-/// Returns (common effects as pairs, effects only in list2).
-/// `list1` is the "base" list and `list2` is being compared against it.
-fn compute_effect_difference<'db, 'a>(
-    _db: &'db dyn salsa::Database,
-    list1: &'a [crate::ast::Effect<'db>],
-    list2: &'a [crate::ast::Effect<'db>],
-) -> (
-    Vec<(&'a crate::ast::Effect<'db>, &'a crate::ast::Effect<'db>)>,
-    Vec<crate::ast::Effect<'db>>,
-) {
-    let mut common = Vec::new();
-    let mut only_list2 = Vec::new();
+            // Try to find a matching effect
+            let mut found_match = false;
+            for e1 in list1.iter().filter(|e1| e1.name == e2.name) {
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
 
-    for e2 in list2 {
-        if let Some(e1) = list1.iter().find(|e1| e1.name == e2.name) {
-            common.push((e1, e2));
-        } else {
-            only_list2.push(e2.clone());
+                if args_match {
+                    // Perform unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                only_list2.push(e2.clone());
+            }
         }
+
+        Ok(only_list2)
     }
 
-    (common, only_list2)
-}
+    /// Compute effect split with unification support.
+    ///
+    /// Returns (only_list1, only_list2) after matching and unifying.
+    fn compute_effect_split_with_unify(
+        &mut self,
+        list1: &[crate::ast::Effect<'db>],
+        list2: &[crate::ast::Effect<'db>],
+    ) -> Result<(Vec<crate::ast::Effect<'db>>, Vec<crate::ast::Effect<'db>>), SolveError<'db>> {
+        let mut only_list1 = Vec::new();
+        let mut only_list2 = Vec::new();
+        let mut matched_in_list2 = vec![false; list2.len()];
 
-/// Compute a three-way split between two effect lists.
-///
-/// Returns (common effects as pairs, effects only in list1, effects only in list2).
-fn compute_effect_split<'db, 'a>(
-    _db: &'db dyn salsa::Database,
-    list1: &'a [crate::ast::Effect<'db>],
-    list2: &'a [crate::ast::Effect<'db>],
-) -> (
-    Vec<(&'a crate::ast::Effect<'db>, &'a crate::ast::Effect<'db>)>,
-    Vec<crate::ast::Effect<'db>>,
-    Vec<crate::ast::Effect<'db>>,
-) {
-    let mut common = Vec::new();
-    let mut only_list1 = Vec::new();
-    let mut only_list2 = Vec::new();
+        // Find matches from list1's perspective
+        for e1 in list1 {
+            // Check for arity mismatch
+            for e2 in list2.iter().filter(|e2| e2.name == e1.name) {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.name,
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
 
-    // Find common and only_list1
-    for e1 in list1 {
-        if let Some(e2) = list2.iter().find(|e2| e2.name == e1.name) {
-            common.push((e1, e2));
-        } else {
-            only_list1.push(e1.clone());
+            let mut found_match = false;
+            for (i, e2) in list2.iter().enumerate() {
+                if e1.name != e2.name || matched_in_list2[i] {
+                    continue;
+                }
+
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
+
+                if args_match {
+                    // Perform unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    matched_in_list2[i] = true;
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                only_list1.push(e1.clone());
+            }
         }
-    }
 
-    // Find only_list2
-    for e2 in list2 {
-        if !list1.iter().any(|e1| e1.name == e2.name) {
-            only_list2.push(e2.clone());
+        // Collect unmatched from list2
+        for (i, e2) in list2.iter().enumerate() {
+            if !matched_in_list2[i] {
+                only_list2.push(e2.clone());
+            }
         }
-    }
 
-    (common, only_list1, only_list2)
+        Ok((only_list1, only_list2))
+    }
 }
 
 #[cfg(test)]
@@ -1920,19 +2025,17 @@ mod tests {
     }
 
     #[test]
-    fn test_effect_arg_arity_mismatch_returns_error() {
-        // State<Int> and State<> (different arity) should return an error
+    fn test_different_effect_arity_returns_arity_mismatch() {
+        // State(Int) and State() have different arity - this is an arity mismatch error
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
         let int_ty = Type::new(&db, TypeKind::Int);
 
-        // State<Int> - one type argument
         let state_with_arg = Effect {
             name: trunk_ir::Symbol::new("State"),
             args: vec![int_ty],
         };
-        // State<> - no type arguments
         let state_no_arg = Effect {
             name: trunk_ir::Symbol::new("State"),
             args: vec![],
@@ -1942,6 +2045,7 @@ mod tests {
         let r2 = EffectRow::new(&db, vec![state_no_arg], None);
 
         let result = solver.unify_rows(r1, r2);
+        // Same ability name but different arity is an arity mismatch error
         assert!(
             matches!(
                 result,
@@ -1957,37 +2061,59 @@ mod tests {
     }
 
     #[test]
-    fn test_effect_arg_arity_mismatch_two_vs_one() {
-        // State<Int, Bool> vs State<Int> should return an error
+    fn test_different_effect_arg_types_returns_row_mismatch() {
+        // State(Int) and State(Bool) are different parameterized abilities
         let db = test_db();
         let mut solver = TypeSolver::new(&db);
 
         let int_ty = Type::new(&db, TypeKind::Int);
         let bool_ty = Type::new(&db, TypeKind::Bool);
 
-        let state_two_args = Effect {
+        let state_int = Effect {
             name: trunk_ir::Symbol::new("State"),
-            args: vec![int_ty, bool_ty],
+            args: vec![int_ty],
         };
-        let state_one_arg = Effect {
+        let state_bool = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![bool_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_int], None);
+        let r2 = EffectRow::new(&db, vec![state_bool], None);
+
+        let result = solver.unify_rows(r1, r2);
+        // State(Int) and State(Bool) are distinct abilities, so this is a row mismatch
+        assert!(
+            matches!(result, Err(SolveError::RowMismatch { .. })),
+            "Expected RowMismatch error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_same_effect_args_unifies_successfully() {
+        // State(Int) and State(Int) are the same ability - should unify
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_int1 = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![int_ty],
+        };
+        let state_int2 = Effect {
             name: trunk_ir::Symbol::new("State"),
             args: vec![int_ty],
         };
 
-        let r1 = EffectRow::new(&db, vec![state_two_args], None);
-        let r2 = EffectRow::new(&db, vec![state_one_arg], None);
+        let r1 = EffectRow::new(&db, vec![state_int1], None);
+        let r2 = EffectRow::new(&db, vec![state_int2], None);
 
         let result = solver.unify_rows(r1, r2);
         assert!(
-            matches!(
-                result,
-                Err(SolveError::EffectArgArityMismatch {
-                    expected: 2,
-                    found: 1,
-                    ..
-                })
-            ),
-            "Expected EffectArgArityMismatch error, got {:?}",
+            result.is_ok(),
+            "Same effects should unify, got {:?}",
             result
         );
     }

@@ -27,6 +27,11 @@ use trunk_ir::{
     Value,
 };
 
+/// Sentinel value used for unresolved cont.shift tags.
+/// When a shift is generated without an enclosing handler, this value is used
+/// as a placeholder. The evidence pass should transform all such shifts.
+pub const UNRESOLVED_SHIFT_TAG: u32 = u32::MAX;
+
 /// Resolve evidence-based dispatch for `cont.shift` operations.
 ///
 /// Transforms `cont.shift` with static tags into `cont.shift_dynamic` with
@@ -47,7 +52,12 @@ pub fn resolve_evidence_dispatch<'db>(
     }
 
     // Transform shifts in functions with evidence
-    transform_shifts_in_module(db, module, &fns_with_evidence)
+    let module = transform_shifts_in_module(db, module, &fns_with_evidence);
+
+    // Validate that all shifts have been resolved (no sentinel tags remain)
+    validate_no_unresolved_shifts(db, &module);
+
+    module
 }
 
 /// Ensure runtime helper functions are declared in the module.
@@ -661,6 +671,49 @@ fn collect_handled_abilities<'db>(
     }
 
     abilities
+}
+
+/// Validate that no unresolved cont.shift operations remain in the module.
+///
+/// This function scans all cont.shift operations in the module and panics if any
+/// have the sentinel tag value (u32::MAX), indicating they were not transformed
+/// by the evidence pass.
+fn validate_no_unresolved_shifts(db: &dyn salsa::Database, module: &core::Module<'_>) {
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func_op) = func::Func::from_operation(db, *op) {
+                validate_no_unresolved_shifts_in_region(db, &func_op.body(db));
+            }
+        }
+    }
+}
+
+/// Recursively validate a region for unresolved shifts.
+fn validate_no_unresolved_shifts_in_region(db: &dyn salsa::Database, region: &Region<'_>) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            // Check if this is a cont.shift with the sentinel tag
+            if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                let tag = shift_op.tag(db);
+                if tag == UNRESOLVED_SHIFT_TAG {
+                    let ability_ref = shift_op.ability_ref(db);
+                    let op_name = shift_op.op_name(db);
+                    panic!(
+                        "ICE: Unresolved cont.shift found after evidence pass.\n\
+                         Ability: {:?}, Op: {:?}\n\
+                         This indicates the shift was not inside a function with evidence parameter.",
+                        ability_ref, op_name
+                    );
+                }
+            }
+
+            // Recursively check nested regions
+            for region in op.regions(db).iter() {
+                validate_no_unresolved_shifts_in_region(db, region);
+            }
+        }
+    }
 }
 
 /// Compute a stable ability ID from an ability reference type.

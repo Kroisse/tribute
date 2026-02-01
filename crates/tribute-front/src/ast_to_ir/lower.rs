@@ -1732,8 +1732,9 @@ fn lower_ability_op_call<'db>(
     let db = builder.db();
 
     // Use the currently active prompt tag from the enclosing handler.
-    // If there's no active handler, use 0 as a placeholder (will be resolved by evidence pass).
-    let tag = builder.ctx.active_prompt_tag().unwrap_or(0);
+    // If there's no active handler, use u32::MAX as a sentinel (will be resolved by evidence pass).
+    // The sentinel value allows detection of unresolved shifts during validation.
+    let tag = builder.ctx.active_prompt_tag().unwrap_or(u32::MAX);
 
     // Create ability reference type for cont.shift
     let ability_ref = core::AbilityRefType::simple(db, ability).as_type();
@@ -1751,11 +1752,31 @@ fn lower_ability_op_call<'db>(
     );
     let handler_region = Region::new(db, location, idvec![empty_block]);
 
+    // Pack multiple arguments into a tuple if needed.
+    // cont_to_trampoline only uses the first argument, so multi-arg ability ops
+    // need to be packed into a single tuple value.
+    let shift_args = if args.len() > 1 {
+        // Build tuple type as cons cells: TupleType(a, TupleType(b, TupleType(c, Nil)))
+        let any_ty = tribute_rt::any_type(db);
+        let nil_ty = core::Nil::new(db).as_type();
+        let tuple_ty = args.iter().rev().fold(nil_ty, |tail, _| {
+            tribute::TupleType::new(db, any_ty, tail).as_type()
+        });
+
+        // Create tuple value
+        let tuple_op = builder
+            .block
+            .op(tribute::tuple(db, location, args, tuple_ty));
+        vec![tuple_op.result(db)]
+    } else {
+        args
+    };
+
     // Generate cont.shift
     let shift_op = builder.block.op(cont::shift(
         db,
         location,
-        args,
+        shift_args,
         result_ty,
         tag,
         ability_ref,
@@ -5251,7 +5272,7 @@ mod tests {
 
         // Build: handle { State.get() } { { r } -> State.put() }
         // The body's State.get() should use prompt tag 0
-        // The handler's State.put() should use NO active prompt (tag 0 as placeholder)
+        // The handler's State.put() should use NO active prompt (sentinel u32::MAX as placeholder)
         // because the inner prompt has been popped before lowering the handler body.
 
         let body_ability_op = ability_op_call_state_get(db);
@@ -5280,17 +5301,21 @@ mod tests {
             "Should have exactly 2 cont.shift operations"
         );
 
-        // Both shifts should use prompt tag 0:
+        // Separate by tag:
         // - The body's shift uses tag 0 (the handle's prompt)
-        // - The handler's shift uses tag 0 (placeholder, since we popped before lowering handler)
+        // - The handler's shift uses sentinel (u32::MAX, since we popped before lowering handler)
         // This verifies that pop_prompt_tag was called before building handler body.
-        for shift in &shifts {
-            assert_eq!(
-                shift.tag(db),
-                0,
-                "Both shifts should use tag 0 (body uses handle's tag, handler uses placeholder)"
-            );
-        }
+        let body_shift = shifts.iter().find(|s| s.tag(db) == 0);
+        let handler_shift = shifts.iter().find(|s| s.tag(db) == u32::MAX);
+
+        assert!(
+            body_shift.is_some(),
+            "Body's shift should use tag 0 (the handle's prompt)"
+        );
+        assert!(
+            handler_shift.is_some(),
+            "Handler's shift should use sentinel tag (u32::MAX) since no active prompt"
+        );
     }
 
     /// Test nested handles: inner handler's ability op should use outer prompt.
