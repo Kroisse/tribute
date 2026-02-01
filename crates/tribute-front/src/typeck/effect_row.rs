@@ -10,7 +10,7 @@
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Effect, EffectRow, EffectVar, Type};
+use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, Type};
 
 /// Result of attempting to remove an effect from an effect row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,7 +48,9 @@ pub fn contains_by_name<'db>(
     row: EffectRow<'db>,
     name: Symbol,
 ) -> bool {
-    row.effects(db).iter().any(|e| e.name == name)
+    row.effects(db)
+        .iter()
+        .any(|e| e.ability_id.name(db) == name)
 }
 
 /// Find all effects matching a given name (ignoring type parameters).
@@ -62,7 +64,7 @@ pub fn find_by_name<'db>(
 ) -> Vec<Effect<'db>> {
     row.effects(db)
         .iter()
-        .filter(|e| e.name == name)
+        .filter(|e| e.ability_id.name(db) == name)
         .cloned()
         .collect()
 }
@@ -156,11 +158,11 @@ pub fn union<'db>(
 /// - `State(Int) + State(Text)` = OK (different effects)
 /// - `State(Int) + State(Int)` = conflict (duplicate)
 ///
-/// Returns `Some((name, effects))` if duplicates are found.
+/// Returns `Some((ability_id, effects))` if duplicates are found.
 pub fn find_conflicting_effects<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
-) -> Option<(Symbol, Vec<Effect<'db>>)> {
+) -> Option<(AbilityId<'db>, Vec<Effect<'db>>)> {
     use std::collections::HashSet;
 
     let effects = row.effects(db);
@@ -171,7 +173,7 @@ pub fn find_conflicting_effects<'db>(
             // Found a duplicate - return all instances of this effect
             let duplicates: Vec<Effect<'db>> =
                 effects.iter().filter(|e| *e == effect).cloned().collect();
-            return Some((effect.name, duplicates));
+            return Some((effect.ability_id, duplicates));
         }
     }
 
@@ -179,30 +181,46 @@ pub fn find_conflicting_effects<'db>(
 }
 
 /// Create a simple effect with no type arguments.
-pub fn simple_effect<'db>(name: Symbol) -> Effect<'db> {
+pub fn simple_effect<'db>(
+    _db: &'db dyn salsa::Database,
+    ability_id: AbilityId<'db>,
+) -> Effect<'db> {
     Effect {
-        name,
+        ability_id,
         args: Vec::new(),
     }
 }
 
 /// Create an effect with type arguments.
-pub fn parameterized_effect<'db>(name: Symbol, args: Vec<Type<'db>>) -> Effect<'db> {
-    Effect { name, args }
+pub fn parameterized_effect<'db>(
+    db: &'db dyn salsa::Database,
+    ability_id: AbilityId<'db>,
+    args: Vec<Type<'db>>,
+) -> Effect<'db> {
+    let _ = db; // db is needed for AbilityId but may not be used here
+    Effect { ability_id, args }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::SymbolVec;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
     }
 
+    /// Helper to create a simple AbilityId with empty module path
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+    }
+
     #[test]
     fn test_simple_effect_equality() {
-        let console1 = simple_effect(Symbol::new("Console"));
-        let console2 = simple_effect(Symbol::new("Console"));
+        let db = test_db();
+        let console_id = test_ability_id(&db, "Console");
+        let console1 = simple_effect(&db, console_id);
+        let console2 = simple_effect(&db, console_id);
         assert_eq!(console1, console2);
     }
 
@@ -211,9 +229,10 @@ mod tests {
         let db = test_db();
         let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
         let float_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Float);
+        let state_id = test_ability_id(&db, "State");
 
-        let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
-        let state_float = parameterized_effect(Symbol::new("State"), vec![float_ty]);
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
+        let state_float = parameterized_effect(&db, state_id, vec![float_ty]);
 
         assert_ne!(state_int, state_float);
     }
@@ -221,8 +240,10 @@ mod tests {
     #[test]
     fn test_effect_row_contains() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row = EffectRow::new(&db, vec![console.clone()], None);
 
@@ -233,8 +254,10 @@ mod tests {
     #[test]
     fn test_effect_row_add() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row = EffectRow::new(&db, vec![console.clone()], None);
         let new_row = add_effect(&db, row, io.clone());
@@ -246,8 +269,10 @@ mod tests {
     #[test]
     fn test_effect_row_remove() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row = EffectRow::new(&db, vec![console.clone(), io.clone()], None);
         let new_row = remove_effect(&db, row, &console).unwrap();
@@ -261,10 +286,12 @@ mod tests {
         let db = test_db();
         let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
         let float_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Float);
+        let state_id = test_ability_id(&db, "State");
+        let console_id = test_ability_id(&db, "Console");
 
-        let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
-        let state_float = parameterized_effect(Symbol::new("State"), vec![float_ty]);
-        let console = simple_effect(Symbol::new("Console"));
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
+        let state_float = parameterized_effect(&db, state_id, vec![float_ty]);
+        let console = simple_effect(&db, console_id);
 
         let row = EffectRow::new(
             &db,
@@ -286,16 +313,18 @@ mod tests {
         let db = test_db();
         let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
         let float_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Float);
+        let state_id = test_ability_id(&db, "State");
+        let console_id = test_ability_id(&db, "Console");
 
-        let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
-        let state_float = parameterized_effect(Symbol::new("State"), vec![float_ty]);
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
+        let state_float = parameterized_effect(&db, state_id, vec![float_ty]);
 
         // State(Int) + State(Float) = OK (different effects, not a conflict)
         let row = EffectRow::new(&db, vec![state_int.clone(), state_float.clone()], None);
         assert!(find_conflicting_effects(&db, row).is_none());
 
         // State(Int) + Console = OK
-        let console = simple_effect(Symbol::new("Console"));
+        let console = simple_effect(&db, console_id);
         let row_ok = EffectRow::new(&db, vec![state_int.clone(), console], None);
         assert!(find_conflicting_effects(&db, row_ok).is_none());
     }
@@ -304,19 +333,21 @@ mod tests {
     fn test_find_conflicting_effects_with_duplicates() {
         let db = test_db();
         let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
+        let state_id = test_ability_id(&db, "State");
+        let console_id = test_ability_id(&db, "Console");
 
-        let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
+        let state_int = parameterized_effect(&db, state_id, vec![int_ty]);
 
         // State(Int) + State(Int) = conflict (duplicate)
         let row_conflict = EffectRow::new(&db, vec![state_int.clone(), state_int.clone()], None);
         let conflict = find_conflicting_effects(&db, row_conflict);
         assert!(conflict.is_some());
-        let (name, effects) = conflict.unwrap();
-        assert_eq!(name, Symbol::new("State"));
+        let (ability_id, effects) = conflict.unwrap();
+        assert_eq!(ability_id.name(&db), Symbol::new("State"));
         assert_eq!(effects.len(), 2);
 
         // Console + Console = conflict (duplicate)
-        let console = simple_effect(Symbol::new("Console"));
+        let console = simple_effect(&db, console_id);
         let row_console = EffectRow::new(&db, vec![console.clone(), console.clone()], None);
         let console_conflict = find_conflicting_effects(&db, row_console);
         assert!(console_conflict.is_some());
@@ -325,8 +356,10 @@ mod tests {
     #[test]
     fn test_union_closed_rows() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row1 = EffectRow::new(&db, vec![console.clone()], None);
         let row2 = EffectRow::new(&db, vec![io.clone()], None);
@@ -346,8 +379,10 @@ mod tests {
     #[test]
     fn test_union_open_rows() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row1 = EffectRow::new(&db, vec![console.clone()], Some(EffectVar { id: 1 }));
         let row2 = EffectRow::new(&db, vec![io.clone()], Some(EffectVar { id: 2 }));
@@ -366,8 +401,10 @@ mod tests {
     #[test]
     fn test_remove_with_constraint_direct() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row = EffectRow::new(&db, vec![console.clone(), io.clone()], None);
 
@@ -390,8 +427,10 @@ mod tests {
     #[test]
     fn test_remove_with_constraint_needs_constraint() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let tail = EffectVar { id: 42 };
         let row = EffectRow::new(&db, vec![console.clone()], Some(tail));
@@ -419,8 +458,10 @@ mod tests {
     #[test]
     fn test_remove_with_constraint_not_found() {
         let db = test_db();
-        let console = simple_effect(Symbol::new("Console"));
-        let io = simple_effect(Symbol::new("IO"));
+        let console_id = test_ability_id(&db, "Console");
+        let io_id = test_ability_id(&db, "IO");
+        let console = simple_effect(&db, console_id);
+        let io = simple_effect(&db, io_id);
 
         let row = EffectRow::new(&db, vec![console.clone()], None);
 

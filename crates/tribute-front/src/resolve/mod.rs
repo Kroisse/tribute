@@ -23,7 +23,7 @@ pub use resolver::Resolver;
 use trunk_ir::{Symbol, smallvec::SmallVec};
 
 use crate::ast::{
-    CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+    AbilityId, CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
 };
 use crate::build_field_module_path;
 
@@ -147,10 +147,12 @@ fn collect_definition<'db>(
         }
 
         Decl::Ability(a) => {
+            // Create AbilityId for this ability
+            let ability_id = AbilityId::new(db, path_vec.clone(), a.name);
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
                 let binding = Binding::AbilityOp {
-                    ability: a.name,
+                    ability: ability_id,
                     op: op.name,
                 };
                 env.add_to_namespace(a.name, op.name, binding);

@@ -108,7 +108,7 @@ impl<'db> TypeSubst<'db> {
                             .map(|a| self.apply_with_rows(db, *a, row_subst))
                             .collect();
                         crate::ast::Effect {
-                            name: e.name,
+                            ability_id: e.ability_id,
                             args: new_args,
                         }
                     })
@@ -359,7 +359,7 @@ impl<'db> TypeSubst<'db> {
                             })
                             .collect();
                         crate::ast::Effect {
-                            name: e.name,
+                            ability_id: e.ability_id,
                             args: new_args,
                         }
                     })
@@ -908,7 +908,10 @@ impl<'db> TypeSolver<'db> {
         // For each effect in effects1, find a matching effect in effects2
         for e1 in effects1 {
             // Find effects with the same name
-            let same_name: Vec<_> = effects2.iter().filter(|e2| e1.name == e2.name).collect();
+            let same_name: Vec<_> = effects2
+                .iter()
+                .filter(|e2| e1.ability_id == e2.ability_id)
+                .collect();
 
             if same_name.is_empty() {
                 return Err(SolveError::RowMismatch {
@@ -921,7 +924,7 @@ impl<'db> TypeSolver<'db> {
             for e2 in &same_name {
                 if e1.args.len() != e2.args.len() {
                     return Err(SolveError::EffectArgArityMismatch {
-                        effect_name: e1.name,
+                        effect_name: e1.ability_id.name(self.db),
                         expected: e1.args.len(),
                         found: e2.args.len(),
                     });
@@ -1043,10 +1046,10 @@ impl<'db> TypeSolver<'db> {
 
         for e2 in list2 {
             // Check for arity mismatch with same-named effects
-            for e1 in list1.iter().filter(|e1| e1.name == e2.name) {
+            for e1 in list1.iter().filter(|e1| e1.ability_id == e2.ability_id) {
                 if e1.args.len() != e2.args.len() {
                     return Err(SolveError::EffectArgArityMismatch {
-                        effect_name: e1.name,
+                        effect_name: e1.ability_id.name(self.db),
                         expected: e1.args.len(),
                         found: e2.args.len(),
                     });
@@ -1055,7 +1058,7 @@ impl<'db> TypeSolver<'db> {
 
             // Try to find a matching effect
             let mut found_match = false;
-            for e1 in list1.iter().filter(|e1| e1.name == e2.name) {
+            for e1 in list1.iter().filter(|e1| e1.ability_id == e2.ability_id) {
                 let args_match = e1
                     .args
                     .iter()
@@ -1095,10 +1098,10 @@ impl<'db> TypeSolver<'db> {
         // Find matches from list1's perspective
         for e1 in list1 {
             // Check for arity mismatch
-            for e2 in list2.iter().filter(|e2| e2.name == e1.name) {
+            for e2 in list2.iter().filter(|e2| e2.ability_id == e1.ability_id) {
                 if e1.args.len() != e2.args.len() {
                     return Err(SolveError::EffectArgArityMismatch {
-                        effect_name: e1.name,
+                        effect_name: e1.ability_id.name(self.db),
                         expected: e1.args.len(),
                         found: e2.args.len(),
                     });
@@ -1107,7 +1110,7 @@ impl<'db> TypeSolver<'db> {
 
             let mut found_match = false;
             for (i, e2) in list2.iter().enumerate() {
-                if e1.name != e2.name || matched_in_list2[i] {
+                if e1.ability_id != e2.ability_id || matched_in_list2[i] {
                     continue;
                 }
 
@@ -1147,11 +1150,16 @@ impl<'db> TypeSolver<'db> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Effect, EffectRow, UniVarSource};
-    use trunk_ir::Symbol;
+    use crate::ast::{AbilityId, Effect, EffectRow, UniVarSource};
+    use trunk_ir::{Symbol, SymbolVec};
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    /// Create an AbilityId for testing (with empty module path).
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
     }
 
     /// Create a fresh type variable for testing.
@@ -1230,7 +1238,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_ty],
             }],
             None,
@@ -1267,7 +1275,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_b],
             }],
             None,
@@ -1432,7 +1440,7 @@ mod tests {
         // Create an effectful row with State effect (caller's context)
         let row_var = EffectVar { id: 100 };
         let state_effect = Effect {
-            name: Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![Type::new(&db, TypeKind::Int)],
         };
         let effectful_row = EffectRow::new(&db, vec![state_effect], Some(row_var));
@@ -1661,7 +1669,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_ty],
             }],
             None,
@@ -1681,7 +1689,10 @@ mod tests {
         if let TypeKind::Func { effect, .. } = result.kind(&db) {
             let effects = effect.effects(&db);
             assert_eq!(effects.len(), 1);
-            assert_eq!(effects[0].name, trunk_ir::Symbol::new("State"));
+            assert_eq!(
+                effects[0].ability_id.name(&db),
+                trunk_ir::Symbol::new("State")
+            );
             assert_eq!(effects[0].args.len(), 1);
             assert_eq!(
                 effects[0].args[0], int_ty,
@@ -1702,7 +1713,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![int_ty],
             }],
             None,
@@ -1892,7 +1903,7 @@ mod tests {
         let mut solver = TypeSolver::new(&db);
 
         let console = Effect {
-            name: trunk_ir::Symbol::new("Console"),
+            ability_id: test_ability_id(&db, "Console"),
             args: vec![],
         };
         let r1 = EffectRow::new(&db, vec![console.clone()], None);
@@ -1909,11 +1920,11 @@ mod tests {
         let mut solver = TypeSolver::new(&db);
 
         let console = Effect {
-            name: trunk_ir::Symbol::new("Console"),
+            ability_id: test_ability_id(&db, "Console"),
             args: vec![],
         };
         let io = Effect {
-            name: trunk_ir::Symbol::new("IO"),
+            ability_id: test_ability_id(&db, "IO"),
             args: vec![],
         };
         let r1 = EffectRow::new(&db, vec![console], None);
@@ -1931,11 +1942,11 @@ mod tests {
         let mut solver = TypeSolver::new(&db);
 
         let console = Effect {
-            name: trunk_ir::Symbol::new("Console"),
+            ability_id: test_ability_id(&db, "Console"),
             args: vec![],
         };
         let io = Effect {
-            name: trunk_ir::Symbol::new("IO"),
+            ability_id: test_ability_id(&db, "IO"),
             args: vec![],
         };
         let row_var = EffectVar { id: 50 };
@@ -1950,7 +1961,7 @@ mod tests {
         let resolved = solver.row_subst.get(row_var.id).unwrap();
         let effects = resolved.effects(&db);
         assert_eq!(effects.len(), 1);
-        assert_eq!(effects[0].name, trunk_ir::Symbol::new("IO"));
+        assert_eq!(effects[0].ability_id.name(&db), trunk_ir::Symbol::new("IO"));
         assert!(resolved.rest(&db).is_none()); // Closed
     }
 
@@ -1964,11 +1975,11 @@ mod tests {
         let mut solver = TypeSolver::new(&db);
 
         let console = Effect {
-            name: trunk_ir::Symbol::new("Console"),
+            ability_id: test_ability_id(&db, "Console"),
             args: vec![],
         };
         let io = Effect {
-            name: trunk_ir::Symbol::new("IO"),
+            ability_id: test_ability_id(&db, "IO"),
             args: vec![],
         };
         let e1 = EffectVar { id: 100 };
@@ -1984,14 +1995,20 @@ mod tests {
         let e1_resolved = solver.row_subst.get(e1.id).unwrap();
         let e1_effects = e1_resolved.effects(&db);
         assert_eq!(e1_effects.len(), 1);
-        assert_eq!(e1_effects[0].name, trunk_ir::Symbol::new("IO"));
+        assert_eq!(
+            e1_effects[0].ability_id.name(&db),
+            trunk_ir::Symbol::new("IO")
+        );
         assert!(e1_resolved.rest(&db).is_some()); // Open with e3
 
         // e2 should be bound to {Console | e3}
         let e2_resolved = solver.row_subst.get(e2.id).unwrap();
         let e2_effects = e2_resolved.effects(&db);
         assert_eq!(e2_effects.len(), 1);
-        assert_eq!(e2_effects[0].name, trunk_ir::Symbol::new("Console"));
+        assert_eq!(
+            e2_effects[0].ability_id.name(&db),
+            trunk_ir::Symbol::new("Console")
+        );
         assert!(e2_resolved.rest(&db).is_some()); // Open with e3
 
         // Both should have the same fresh variable
@@ -2009,11 +2026,11 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
 
         let state_var = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![var_ty],
         };
         let state_int = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
 
@@ -2035,11 +2052,11 @@ mod tests {
         let mut solver = TypeSolver::new(&db);
 
         let console = Effect {
-            name: trunk_ir::Symbol::new("Console"),
+            ability_id: test_ability_id(&db, "Console"),
             args: vec![],
         };
         let io = Effect {
-            name: trunk_ir::Symbol::new("IO"),
+            ability_id: test_ability_id(&db, "IO"),
             args: vec![],
         };
         let row_var = EffectVar { id: 42 };
@@ -2060,11 +2077,11 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
 
         let state_with_arg = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
         let state_no_arg = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![],
         };
 
@@ -2097,11 +2114,11 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
 
         let state_int = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
         let state_bool = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![bool_ty],
         };
 
@@ -2126,11 +2143,11 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
 
         let state_int1 = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
         let state_int2 = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
 
@@ -2159,11 +2176,11 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
 
         let state_var = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![var_ty],
         };
         let state_int = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![int_ty],
         };
 
@@ -2192,11 +2209,11 @@ mod tests {
         let var_b = fresh_var(&db, 1);
 
         let state_a = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![var_a],
         };
         let state_b = Effect {
-            name: trunk_ir::Symbol::new("State"),
+            ability_id: test_ability_id(&db, "State"),
             args: vec![var_b],
         };
 
@@ -2228,11 +2245,11 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
 
         let pair1 = Effect {
-            name: trunk_ir::Symbol::new("Pair"),
+            ability_id: test_ability_id(&db, "Pair"),
             args: vec![var_a, int_ty],
         };
         let pair2 = Effect {
-            name: trunk_ir::Symbol::new("Pair"),
+            ability_id: test_ability_id(&db, "Pair"),
             args: vec![bool_ty, var_b],
         };
 
@@ -2348,14 +2365,14 @@ mod tests {
         let list_ctor = Type::new(
             &db,
             TypeKind::Named {
-                name: Symbol::new("List"),
+                name: trunk_ir::Symbol::new("List"),
                 args: vec![],
             },
         );
         let option_ctor = Type::new(
             &db,
             TypeKind::Named {
-                name: Symbol::new("Option"),
+                name: trunk_ir::Symbol::new("Option"),
                 args: vec![],
             },
         );

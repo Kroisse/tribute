@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, FuncDefId, TypeDefId};
+use crate::ast::{AbilityId, CtorId, FuncDefId, TypeDefId};
 
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
@@ -42,8 +42,8 @@ pub enum Binding<'db> {
     /// Unlike regular functions, ability operations are lowered to `cont.shift`
     /// with runtime evidence lookup.
     AbilityOp {
-        /// The ability name (e.g., "State").
-        ability: Symbol,
+        /// The ability identifier (e.g., AbilityId for "State").
+        ability: AbilityId<'db>,
         /// The operation name (e.g., "get").
         op: Symbol,
     },

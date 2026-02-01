@@ -234,9 +234,12 @@ impl<'db> TdnrResolver<'db> {
 
         // TDNR builds closed rows only (no fresh row variables).
         // Lowercase names and Infer annotations are filtered out by the shared helper.
+        // We use an empty module path since TDNR works after resolution phase.
+        let empty_path = trunk_ir::SymbolVec::new();
         crate::ast::abilities_to_effect_row(
             self.db,
             anns,
+            &empty_path,
             &mut |ann| self.annotation_to_type(&Some(ann.clone())),
             || unreachable!("TDNR does not support open effect rows"),
         )

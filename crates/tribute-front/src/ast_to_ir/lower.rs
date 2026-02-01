@@ -459,7 +459,7 @@ fn lower_expr<'db>(
                 Diagnostic {
                     message: format!(
                         "ability operation `{}::{}` cannot be used as a value; it must be called directly",
-                        ability, op
+                        ability.qualified_name(builder.db()), op
                     ),
                     span: location.span,
                     severity: DiagnosticSeverity::Error,
@@ -540,7 +540,10 @@ fn lower_expr<'db>(
                     }
                     ResolvedRef::AbilityOp { ability, op } => {
                         // Lower ability operation directly to cont.shift
-                        lower_ability_op_call(builder, location, *ability, *op, arg_values)
+                        // Convert AbilityId to Symbol using the ability name
+                        // (IR uses simple names; qualified names would be used for disambiguation)
+                        let ability_name = ability.name(builder.db());
+                        lower_ability_op_call(builder, location, ability_name, *op, arg_values)
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
                 },
@@ -2207,9 +2210,9 @@ fn convert_annotation_to_ir_type<'db>(
 mod tests {
     use super::*;
     use crate::ast::{
-        BinOpKind, CtorId, Decl, Expr, ExprKind, FloatBits, FuncDecl, FuncDefId, LocalId, Module,
-        NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type as AstType, TypeKind,
-        TypedRef,
+        AbilityId, BinOpKind, CtorId, Decl, Expr, ExprKind, FloatBits, FuncDecl, FuncDefId,
+        LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt,
+        Type as AstType, TypeKind, TypedRef,
     };
     use insta::assert_debug_snapshot;
     use salsa_test_macros::salsa_test;
@@ -2219,6 +2222,11 @@ mod tests {
 
     fn fresh_node_id() -> NodeId {
         NodeId::from_raw(0)
+    }
+
+    /// Helper to create a simple AbilityId with empty module path
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
     }
 
     /// Tracked wrapper for lower_module to establish Salsa context.
@@ -5116,8 +5124,9 @@ mod tests {
 
     /// Create an ability operation call expression.
     fn ability_op_call_state_get<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let state_id = test_ability_id(db, "State");
         let ref_ = TypedRef::new(
-            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("get")),
+            ResolvedRef::ability_op(state_id, Symbol::new("get")),
             AstType::new(db, TypeKind::Nil),
         );
         Expr::new(
@@ -5131,8 +5140,9 @@ mod tests {
 
     /// Create an ability operation call for State.put().
     fn ability_op_call_state_put<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let state_id = test_ability_id(db, "State");
         let ref_ = TypedRef::new(
-            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("put")),
+            ResolvedRef::ability_op(state_id, Symbol::new("put")),
             AstType::new(db, TypeKind::Nil),
         );
         Expr::new(
@@ -5146,8 +5156,9 @@ mod tests {
 
     /// Create an ability operation call for Log.info().
     fn ability_op_call_log_info<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let log_id = test_ability_id(db, "Log");
         let ref_ = TypedRef::new(
-            ResolvedRef::ability_op(Symbol::new("Log"), Symbol::new("info")),
+            ResolvedRef::ability_op(log_id, Symbol::new("info")),
             AstType::new(db, TypeKind::Nil),
         );
         Expr::new(

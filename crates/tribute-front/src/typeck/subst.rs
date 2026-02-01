@@ -163,7 +163,7 @@ pub fn substitute_effect_row<'db>(
                 changed = true;
             }
             Effect {
-                name: effect.name,
+                ability_id: effect.ability_id,
                 args: new_args,
             }
         })
@@ -179,9 +179,14 @@ pub fn substitute_effect_row<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::EffectRow;
+    use crate::ast::{AbilityId, EffectRow};
     use salsa_test_macros::salsa_test;
-    use trunk_ir::Symbol;
+    use trunk_ir::{Symbol, SymbolVec};
+
+    /// Helper to create a simple AbilityId with empty module path
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+    }
 
     // =========================================================================
     // Basic substitution tests
@@ -342,10 +347,11 @@ mod tests {
     fn test_substitute_effect_row_with_bound_var(db: &dyn salsa::Database) {
         // {State(BoundVar(0))} + [Int] → {State(Int)}
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
+        let state_id = test_ability_id(db, "State");
         let effect = EffectRow::new(
             db,
             vec![Effect {
-                name: Symbol::new("State"),
+                ability_id: state_id,
                 args: vec![bound_var],
             }],
             None,
@@ -358,7 +364,7 @@ mod tests {
         let expected = EffectRow::new(
             db,
             vec![Effect {
-                name: Symbol::new("State"),
+                ability_id: state_id,
                 args: vec![int_ty],
             }],
             None,
@@ -369,10 +375,11 @@ mod tests {
     #[salsa_test]
     fn test_substitute_effect_row_no_change(db: &dyn salsa::Database) {
         // {IO} + [Int] → {IO} (no BoundVars in effect)
+        let io_id = test_ability_id(db, "IO");
         let effect = EffectRow::new(
             db,
             vec![Effect {
-                name: Symbol::new("IO"),
+                ability_id: io_id,
                 args: vec![],
             }],
             None,

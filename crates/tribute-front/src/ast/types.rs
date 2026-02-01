@@ -263,8 +263,8 @@ impl<'db> EffectRow<'db> {
 /// An individual effect (ability).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct Effect<'db> {
-    /// The ability name.
-    pub name: Symbol,
+    /// The ability identifier (module path + name).
+    pub ability_id: super::AbilityId<'db>,
     /// Type arguments for parameterized abilities.
     pub args: Vec<Type<'db>>,
 }
@@ -288,39 +288,53 @@ pub fn is_type_variable(name: &Symbol) -> bool {
 ///
 /// Returns `None` for annotations that represent row variables (lowercase names, `Infer`)
 /// rather than concrete abilities.
+///
+/// The `module_path` parameter is used to construct the AbilityId. If the ability
+/// is referenced without a qualified path, it uses the current module's path.
 pub fn annotation_to_effect<'db>(
     db: &'db dyn salsa::Database,
     annotation: &TypeAnnotation,
+    module_path: &trunk_ir::SymbolVec,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
-        TypeAnnotationKind::Named(name) if !is_type_variable(name) => Some(Effect {
-            name: *name,
-            args: vec![],
-        }),
+        TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
+            let ability_id = super::AbilityId::new(db, module_path.clone(), *name);
+            Some(Effect {
+                ability_id,
+                args: vec![],
+            })
+        }
         TypeAnnotationKind::Path(path) if !path.is_empty() => {
             let name = *path.last()?;
             if is_type_variable(&name) {
                 return None;
             }
-            Some(Effect { name, args: vec![] })
+            // For paths like foo::bar::State, use the prefix as module path
+            let ability_module_path: trunk_ir::SymbolVec = path[..path.len() - 1].into();
+            let ability_id = super::AbilityId::new(db, ability_module_path, name);
+            Some(Effect {
+                ability_id,
+                args: vec![],
+            })
         }
         TypeAnnotationKind::App { ctor, args } => {
-            let name = match &ctor.kind {
-                TypeAnnotationKind::Named(n) if !is_type_variable(n) => *n,
+            let (ability_module_path, name) = match &ctor.kind {
+                TypeAnnotationKind::Named(n) if !is_type_variable(n) => (module_path.clone(), *n),
                 TypeAnnotationKind::Path(path) => {
                     let n = *path.last()?;
                     if is_type_variable(&n) {
                         return None;
                     }
-                    n
+                    let prefix: trunk_ir::SymbolVec = path[..path.len() - 1].into();
+                    (prefix, n)
                 }
                 _ => return None,
             };
             let type_args: Vec<Type<'db>> = args.iter().map(&mut *convert_type).collect();
-            let _ = db; // used by callers via convert_type
+            let ability_id = super::AbilityId::new(db, ability_module_path, name);
             Some(Effect {
-                name,
+                ability_id,
                 args: type_args,
             })
         }
@@ -333,9 +347,12 @@ pub fn annotation_to_effect<'db>(
 ///
 /// - Uppercase names / `App` → concrete effects
 /// - Lowercase names / `Infer` → open row variable (via `fresh_row_var`)
+///
+/// The `module_path` parameter is used to construct AbilityIds for unqualified ability names.
 pub fn abilities_to_effect_row<'db>(
     db: &'db dyn salsa::Database,
     abilities: &[TypeAnnotation],
+    module_path: &trunk_ir::SymbolVec,
     convert_type: &mut impl FnMut(&TypeAnnotation) -> Type<'db>,
     fresh_row_var: impl FnOnce() -> EffectVar,
 ) -> EffectRow<'db> {
@@ -351,7 +368,7 @@ pub fn abilities_to_effect_row<'db>(
                 has_row_var = true;
             }
             _ => {
-                if let Some(effect) = annotation_to_effect(db, ann, convert_type) {
+                if let Some(effect) = annotation_to_effect(db, ann, module_path, convert_type) {
                     effects.push(effect);
                 }
             }

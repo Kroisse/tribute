@@ -10,8 +10,9 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
-    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    AbilityId, Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern,
+    HandlerArm, HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type,
+    TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
@@ -221,13 +222,13 @@ impl<'db> TypeChecker<'db> {
                 // Infer the body's type
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
 
-                // Extract handled ability names from effect handlers
-                let handled_abilities: Vec<Symbol> = handlers
+                // Extract handled ability IDs from effect handlers
+                let handled_ability_ids: Vec<AbilityId<'db>> = handlers
                     .iter()
                     .filter_map(|h| match &h.kind {
                         HandlerKind::Effect { ability, .. } => {
-                            // Get the ability name from the ResolvedRef
-                            Some(self.extract_ability_name_from_ref(ability))
+                            // Get the ability ID from the ResolvedRef
+                            self.extract_ability_id_from_ref(ability)
                         }
                         HandlerKind::Result { .. } => None,
                     })
@@ -238,12 +239,12 @@ impl<'db> TypeChecker<'db> {
 
                 // Create a result effect row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
-                let result_effect = if handled_abilities.is_empty() {
+                let result_effect = if handled_ability_ids.is_empty() {
                     // No effect handlers, body's effect propagates as-is
                     body_effect_after
                 } else {
                     // Remove handled effects from the body's effect row
-                    self.remove_handled_effects(ctx, body_effect_after, &handled_abilities)
+                    self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
                 };
 
                 // Merge the result effect with the effect before body
@@ -412,7 +413,7 @@ impl<'db> TypeChecker<'db> {
                             .unwrap_or(op_info.return_type);
 
                     let ability_effect = Effect {
-                        name: *ability,
+                        ability_id: *ability,
                         args: ability_args,
                     };
                     let row_var = ctx.fresh_row_var();
@@ -1389,9 +1390,11 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 let result_ty = self.annotation_to_type_with_ctx(ctx, result);
                 let row_var = ctx.fresh_row_var();
+                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
+                    &module_path,
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || row_var,
                 );
@@ -1601,24 +1604,24 @@ impl<'db> TypeChecker<'db> {
     // Handle expression support
     // =========================================================================
 
-    /// Extract the ability name from a ResolvedRef.
+    /// Extract the ability ID from a ResolvedRef.
     ///
     /// Used by handle expression to determine which abilities are being handled.
-    fn extract_ability_name_from_ref(&self, resolved: &ResolvedRef<'db>) -> Symbol {
-        // ResolvedRef can be a type definition, function, or constructor
-        // For ability references, we expect it to be a type definition
+    /// Returns None for references that don't represent abilities.
+    fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
         match resolved {
-            ResolvedRef::TypeDef { id } => id.name(self.db()),
-            ResolvedRef::Function { id } => id.name(self.db()),
-            ResolvedRef::Constructor { variant, .. } => *variant,
-            ResolvedRef::Local { name, .. } => *name,
-            ResolvedRef::Builtin(_) => Symbol::new("__builtin__"),
-            ResolvedRef::Module { path } => path
-                .segments(self.db())
-                .last()
-                .copied()
-                .unwrap_or(Symbol::new("__module__")),
-            ResolvedRef::AbilityOp { ability, .. } => *ability,
+            ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
+            ResolvedRef::TypeDef { id } => {
+                // TypeDef might be an ability reference in handler context
+                // Create an AbilityId with the same module path and name
+                Some(AbilityId::new(
+                    self.db(),
+                    id.module_path(self.db()).clone(),
+                    id.name(self.db()),
+                ))
+            }
+            // Other reference types are not abilities
+            _ => None,
         }
     }
 
@@ -1627,19 +1630,22 @@ impl<'db> TypeChecker<'db> {
     /// Creates a new effect row with the specified abilities removed.
     /// If the row has a row variable tail, we add a constraint to ensure
     /// the tail cannot contain the handled effects.
+    ///
+    /// This version uses AbilityId for proper handling of parameterized abilities:
+    /// `State(Int)` and `State(Bool)` are now correctly distinguished.
     fn remove_handled_effects(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         row: EffectRow<'db>,
-        handled_abilities: &[Symbol],
+        handled_ability_ids: &[AbilityId<'db>],
     ) -> EffectRow<'db> {
         let db = ctx.db();
         let effects = row.effects(db);
 
-        // Filter out effects whose ability is in the handled list
+        // Filter out effects whose ability_id is in the handled list
         let remaining_effects: Vec<_> = effects
             .iter()
-            .filter(|effect| !handled_abilities.contains(&effect.name))
+            .filter(|effect| !handled_ability_ids.contains(&effect.ability_id))
             .cloned()
             .collect();
 
@@ -1649,12 +1655,13 @@ impl<'db> TypeChecker<'db> {
             let result_var = ctx.fresh_row_var();
 
             // Collect Effect entries from the original effects list, preserving type args.
-            // Deduplicate by ability name (keeping the first occurrence).
-            let mut seen_abilities = HashSet::new();
+            // Use full Effect equality (including args) for proper deduplication of
+            // parameterized abilities like State(Int) vs State(Bool).
+            let mut seen_effects: HashSet<Effect<'db>> = HashSet::new();
             let handled_effects: Vec<crate::ast::Effect<'db>> = effects
                 .iter()
-                .filter(|effect| handled_abilities.contains(&effect.name))
-                .filter(|effect| seen_abilities.insert(effect.name))
+                .filter(|effect| handled_ability_ids.contains(&effect.ability_id))
+                .filter(|effect| seen_effects.insert((*effect).clone()))
                 .cloned()
                 .collect();
 
@@ -2176,7 +2183,7 @@ mod tests {
             // Should have IO effect
             let effects = effect.effects(db);
             assert_eq!(effects.len(), 1);
-            assert_eq!(effects[0].name, Symbol::new("IO"));
+            assert_eq!(effects[0].ability_id.name(db), Symbol::new("IO"));
         } else {
             panic!("Func annotation should be Func type");
         }

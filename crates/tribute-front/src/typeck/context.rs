@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, EffectRow, FuncDefId, Type, TypeKind, TypeParam, TypeScheme};
+use crate::ast::{AbilityId, CtorId, EffectRow, FuncDefId, Type, TypeKind, TypeParam, TypeScheme};
 
 // =========================================================================
 // ModuleTypeEnv: Module-level type information (read-only after collection)
@@ -35,8 +35,8 @@ pub struct AbilityOpInfo<'db> {
 /// Information about an ability declaration.
 #[derive(Clone, Debug)]
 pub struct AbilityInfo<'db> {
-    /// Ability name.
-    pub name: Symbol,
+    /// Ability identifier (module path + name).
+    pub id: AbilityId<'db>,
     /// Type parameters for the ability.
     pub type_params: Vec<TypeParam>,
     /// Operations defined by this ability.
@@ -72,9 +72,9 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for exhaustiveness checking in case expressions.
     enum_variants: HashMap<Symbol, Vec<Symbol>>,
 
-    /// Ability definitions: ability_name → AbilityInfo
+    /// Ability definitions: AbilityId → AbilityInfo
     /// Used for handler arm type checking.
-    ability_defs: HashMap<Symbol, AbilityInfo<'db>>,
+    ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -132,8 +132,8 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Register an ability definition.
-    pub fn register_ability(&mut self, name: Symbol, info: AbilityInfo<'db>) {
-        self.ability_defs.insert(name, info);
+    pub fn register_ability(&mut self, id: AbilityId<'db>, info: AbilityInfo<'db>) {
+        self.ability_defs.insert(id, info);
     }
 
     // =========================================================================
@@ -181,13 +181,17 @@ impl<'db> ModuleTypeEnv<'db> {
         self.enum_variants.get(&enum_name).map(|v| v.as_slice())
     }
 
-    /// Look up an ability definition by name.
-    pub fn lookup_ability(&self, name: Symbol) -> Option<&AbilityInfo<'db>> {
-        self.ability_defs.get(&name)
+    /// Look up an ability definition by ID.
+    pub fn lookup_ability(&self, id: AbilityId<'db>) -> Option<&AbilityInfo<'db>> {
+        self.ability_defs.get(&id)
     }
 
-    /// Look up an ability operation by ability name and operation name.
-    pub fn lookup_ability_op(&self, ability: Symbol, op: Symbol) -> Option<&AbilityOpInfo<'db>> {
+    /// Look up an ability operation by ability ID and operation name.
+    pub fn lookup_ability_op(
+        &self,
+        ability: AbilityId<'db>,
+        op: Symbol,
+    ) -> Option<&AbilityOpInfo<'db>> {
         self.ability_defs
             .get(&ability)
             .and_then(|info| info.operations.get(&op))
@@ -313,13 +317,16 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Export ability definitions.
     ///
     /// Results are sorted alphabetically by ability name for deterministic output.
-    pub fn export_ability_defs(&self) -> Vec<(Symbol, AbilityInfo<'db>)> {
+    pub fn export_ability_defs(&self) -> Vec<(AbilityId<'db>, AbilityInfo<'db>)> {
         let mut result: Vec<_> = self
             .ability_defs
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
-        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result.sort_by(|(a, _), (b, _)| {
+            a.name(self.db)
+                .with_str(|a_str| b.name(self.db).with_str(|b_str| a_str.cmp(b_str)))
+        });
         result
     }
 

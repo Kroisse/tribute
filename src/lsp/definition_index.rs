@@ -816,7 +816,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 name: Symbol::new("module"),
             },
             ResolvedRef::AbilityOp { ability, op } => ResolvedTarget::AbilityOp {
-                ability: *ability,
+                ability: ability.name(self.db),
                 op: *op,
             },
         }

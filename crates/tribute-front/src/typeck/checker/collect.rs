@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module, ResolvedRef,
-    StructDecl, Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
+    AbilityDecl, AbilityId, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module,
+    ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
 };
 use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
 
@@ -106,9 +106,11 @@ impl<'db> TypeChecker<'db> {
         let effect = match &func.effects {
             Some(anns) => {
                 // For effects, we use a closed row during collection
+                let module_path = self.current_module_path();
                 crate::ast::abilities_to_effect_row(
                     self.db(),
                     anns,
+                    &module_path,
                     &mut |ann| {
                         self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
                     },
@@ -293,7 +295,8 @@ impl<'db> TypeChecker<'db> {
     /// Registers the ability's operations so they can be looked up during
     /// handler arm type checking.
     fn collect_ability_def(&mut self, a: &AbilityDecl) {
-        let name = a.name;
+        // Create AbilityId for this ability
+        let ability_id = AbilityId::new(self.db(), self.current_module_path(), a.name);
 
         // Build type parameter info
         let type_params: Vec<TypeParam> = a
@@ -336,9 +339,9 @@ impl<'db> TypeChecker<'db> {
         }
 
         self.env.register_ability(
-            name,
+            ability_id,
             AbilityInfo {
-                name,
+                id: ability_id,
                 type_params,
                 operations,
             },
@@ -403,9 +406,11 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 let result_ty =
                     self.annotation_to_type_for_sig(result, type_var_map, next_bound_var);
+                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
+                    &module_path,
                     &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
                     || EffectVar { id: 0 },
                 );
@@ -466,9 +471,11 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_for_ctor(p, type_param_indices))
                     .collect();
                 let result_ty = self.annotation_to_type_for_ctor(result, type_param_indices);
+                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
+                    &module_path,
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
                     || EffectVar { id: 0 },
                 );
