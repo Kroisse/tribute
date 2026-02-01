@@ -76,6 +76,8 @@ struct ResumeFuncSpec<'db> {
     location: Location<'db>,
     /// Shift analysis for handling nested shifts in continuation
     shift_analysis: ShiftAnalysis<'db>,
+    /// Module name for generating unique state type names (for dynamic shifts)
+    module_name: Symbol,
 }
 
 /// Shared storage for resume function specs during pattern matching.
@@ -143,6 +145,7 @@ pub fn lower_cont_to_trampoline<'db>(
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
             shift_analysis: Rc::clone(&shift_analysis),
+            module_name: module.name(db),
         })
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerGetContinuationPattern)
@@ -1072,26 +1075,73 @@ fn fresh_resume_name(counter: &ResumeCounter) -> String {
     format!("__resume_{}", id)
 }
 
-/// Generate a unique state type name based on ability, operation info, and shift index.
-/// The shift_index ensures different shift points for the same ability/op have distinct state types.
-fn state_type_name(
-    ability_name: Option<Symbol>,
-    op_name: Option<Symbol>,
-    tag: u32,
-    shift_index: usize,
-) -> String {
+/// Information used for generating unique state type names.
+enum StateTypeKey {
+    /// Static tag from attribute (cont.shift)
+    Static {
+        ability_name: Option<Symbol>,
+        op_name: Option<Symbol>,
+        tag: u32,
+        shift_index: usize,
+    },
+    /// Dynamic tag from operand (cont.shift_dynamic) - uses module name and span for uniqueness
+    Dynamic {
+        ability_name: Option<Symbol>,
+        op_name: Option<Symbol>,
+        module_name: Symbol,
+        span: Span,
+        shift_index: usize,
+    },
+}
+
+/// Generate a unique state type name based on ability, operation info, and shift info.
+/// For static shifts, uses the tag attribute.
+/// For dynamic shifts, uses module name and span to ensure uniqueness since the tag is runtime-determined.
+fn state_type_name(key: StateTypeKey) -> String {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    if let Some(ability) = ability_name {
-        ability.to_string().hash(&mut hasher);
+
+    match key {
+        StateTypeKey::Static {
+            ability_name,
+            op_name,
+            tag,
+            shift_index,
+        } => {
+            if let Some(ability) = ability_name {
+                ability.to_string().hash(&mut hasher);
+            }
+            if let Some(name) = op_name {
+                name.to_string().hash(&mut hasher);
+            }
+            tag.hash(&mut hasher);
+            shift_index.hash(&mut hasher);
+        }
+        StateTypeKey::Dynamic {
+            ability_name,
+            op_name,
+            module_name,
+            span,
+            shift_index,
+        } => {
+            // Use "dyn" marker to distinguish from static
+            "dyn".hash(&mut hasher);
+            if let Some(ability) = ability_name {
+                ability.to_string().hash(&mut hasher);
+            }
+            if let Some(name) = op_name {
+                name.to_string().hash(&mut hasher);
+            }
+            // Include module name for cross-module uniqueness
+            module_name.to_string().hash(&mut hasher);
+            // Use span (start, end) for uniqueness instead of placeholder tag
+            span.start.hash(&mut hasher);
+            span.end.hash(&mut hasher);
+            shift_index.hash(&mut hasher);
+        }
     }
-    if let Some(name) = op_name {
-        name.to_string().hash(&mut hasher);
-    }
-    tag.hash(&mut hasher);
-    shift_index.hash(&mut hasher);
 
     let hash = hasher.finish();
     format!("__State_{:x}", hash & 0xFFFFFF)
@@ -1105,6 +1155,25 @@ struct LowerShiftPattern<'db> {
     resume_specs: ResumeSpecs<'db>,
     resume_counter: ResumeCounter,
     shift_analysis: ShiftAnalysis<'db>,
+    module_name: Symbol,
+}
+
+/// Information about a shift operation for lowering.
+enum ShiftInfo<'db> {
+    /// Static tag from attribute (cont.shift)
+    Static {
+        tag: u32,
+        ability_ref: Type<'db>,
+        op_name: Symbol,
+        value_operands: Vec<Value<'db>>,
+    },
+    /// Dynamic tag from operand (cont.shift_dynamic)
+    Dynamic {
+        tag_operand: Value<'db>,
+        ability_ref: Type<'db>,
+        op_name: Symbol,
+        value_operands: Vec<Value<'db>>,
+    },
 }
 
 impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
@@ -1114,23 +1183,57 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let shift_op = match cont::Shift::from_operation(db, *op) {
-            Ok(s) => s,
-            Err(_) => return RewriteResult::Unchanged,
+        // Try to match cont.shift first, then cont.shift_dynamic
+        let shift_info = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+            // Static tag from attribute
+            let operands: Vec<_> = adaptor.operands().iter().copied().collect();
+            ShiftInfo::Static {
+                tag: shift_op.tag(db),
+                ability_ref: shift_op.ability_ref(db),
+                op_name: shift_op.op_name(db),
+                value_operands: operands,
+            }
+        } else if let Ok(shift_dyn) = cont::ShiftDynamic::from_operation(db, *op) {
+            // Dynamic tag from first operand
+            let operands: Vec<_> = adaptor.operands().iter().copied().collect();
+            let tag_operand = operands[0]; // First operand is tag
+            let value_operands = operands.into_iter().skip(1).collect(); // Rest are values
+            ShiftInfo::Dynamic {
+                tag_operand,
+                ability_ref: shift_dyn.ability_ref(db),
+                op_name: shift_dyn.op_name(db),
+                value_operands,
+            }
+        } else {
+            return RewriteResult::Unchanged;
+        };
+
+        // Extract common fields
+        let (ability_ref_type, op_name_sym, value_operands) = match &shift_info {
+            ShiftInfo::Static {
+                ability_ref,
+                op_name,
+                value_operands,
+                ..
+            } => (*ability_ref, *op_name, value_operands.clone()),
+            ShiftInfo::Dynamic {
+                ability_ref,
+                op_name,
+                value_operands,
+                ..
+            } => (*ability_ref, *op_name, value_operands.clone()),
         };
 
         let location = op.location(db);
-        let tag = shift_op.tag(db);
 
         // Compute op_idx from ability_ref and op_name
-        let ability_ref_type = shift_op.ability_ref(db);
         let ability_name =
             core::AbilityRefType::from_type(db, ability_ref_type).and_then(|ar| ar.name(db));
-        let op_name = Some(shift_op.op_name(db));
+        let op_name = Some(op_name_sym);
         let op_idx = compute_op_idx(ability_name, op_name);
 
         // Look up shift point analysis - fail fast if missing
-        let shift_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
+        let shift_point_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
             panic!(
                 "missing shift analysis for cont.shift at {:?} (ability: {:?}, op: {:?})",
                 location.span, ability_name, op_name
@@ -1140,23 +1243,35 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let mut ops = Vec::new();
 
         // === 1. Build State Struct with live values ===
-        let state_name = Symbol::from_dynamic(&state_type_name(
-            ability_name,
-            op_name,
-            tag,
-            shift_info.index,
-        ));
+        // For state naming, use tag for static shifts, span for dynamic shifts
+        let state_type_key = match &shift_info {
+            ShiftInfo::Static { tag, .. } => StateTypeKey::Static {
+                ability_name,
+                op_name,
+                tag: *tag,
+                shift_index: shift_point_info.index,
+            },
+            ShiftInfo::Dynamic { .. } => StateTypeKey::Dynamic {
+                ability_name,
+                op_name,
+                module_name: self.module_name,
+                span: location.span,
+                shift_index: shift_point_info.index,
+            },
+        };
+        let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
 
         // Get live values and their types from analysis
-        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) = shift_info
-            .live_values
-            .iter()
-            .enumerate()
-            .map(|(i, (v, ty))| {
-                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                (*v, (field_name, *ty))
-            })
-            .unzip();
+        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
+            shift_point_info
+                .live_values
+                .iter()
+                .enumerate()
+                .map(|(i, (v, ty))| {
+                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                    (*v, (field_name, *ty))
+                })
+                .unzip();
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -1174,7 +1289,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let resume_name = fresh_resume_name(&self.resume_counter);
 
         // Determine next resume name if not the last shift point
-        let next_resume_name = if shift_info.index + 1 >= shift_info.total_shifts {
+        let next_resume_name = if shift_point_info.index + 1 >= shift_point_info.total_shifts {
             None
         } else {
             // Pre-compute next resume function name
@@ -1189,12 +1304,13 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             state_type: state_adt_ty,
             state_fields,
             original_live_values: state_values.clone(),
-            shift_result_value: shift_info.shift_result_value,
-            shift_result_type: shift_info.shift_result_type,
-            continuation_ops: shift_info.continuation_ops.clone(),
+            shift_result_value: shift_point_info.shift_result_value,
+            shift_result_type: shift_point_info.shift_result_type,
+            continuation_ops: shift_point_info.continuation_ops.clone(),
             next_resume_name,
             location,
             shift_analysis: self.shift_analysis.clone(),
+            module_name: self.module_name,
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
@@ -1205,31 +1321,72 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         // === 3. Get shift value (the value passed to the effect operation) ===
         // Note: shift value may be absent if the ability operation has no arguments.
         // In that case, we use state_val as a placeholder (will be ignored by resume).
-        let shift_value_val = adaptor.operands().first().copied().unwrap_or(state_val);
+        let shift_value_val = value_operands.first().copied().unwrap_or(state_val);
 
         // === 4. Build Continuation ===
-        let cont_ty = trampoline::Continuation::new(db).as_type();
-        let cont_op = trampoline::build_continuation(
-            db,
-            location,
-            resume_fn_val,
-            state_val,
-            shift_value_val,
-            cont_ty,
-            tag,
-            op_idx,
-        );
-        let cont_val = cont_op.as_operation().result(db, 0);
-        ops.push(cont_op.as_operation());
-
         // === 5. Set Yield State ===
-        let set_yield_op = trampoline::set_yield_state(db, location, cont_val, tag, op_idx);
-        ops.push(set_yield_op.as_operation());
-
         // === 6. Return Step::Shift ===
+        // These operations differ based on static vs dynamic tag
+        let cont_ty = trampoline::Continuation::new(db).as_type();
         let step_ty = trampoline::Step::new(db).as_type();
-        let step_op = trampoline::step_shift(db, location, cont_val, step_ty, tag, op_idx);
-        ops.push(step_op.as_operation());
+
+        match shift_info {
+            ShiftInfo::Static { tag, .. } => {
+                // Static tag: use regular trampoline operations with tag as attribute
+                let cont_op = trampoline::build_continuation(
+                    db,
+                    location,
+                    resume_fn_val,
+                    state_val,
+                    shift_value_val,
+                    cont_ty,
+                    tag,
+                    op_idx,
+                );
+                let cont_val = cont_op.as_operation().result(db, 0);
+                ops.push(cont_op.as_operation());
+
+                let set_yield_op = trampoline::set_yield_state(db, location, cont_val, tag, op_idx);
+                ops.push(set_yield_op.as_operation());
+
+                let step_op = trampoline::step_shift(db, location, cont_val, step_ty, tag, op_idx);
+                ops.push(step_op.as_operation());
+            }
+            ShiftInfo::Dynamic { tag_operand, .. } => {
+                // Dynamic tag: use dynamic trampoline operations with tag as operand
+                let cont_op = trampoline::build_continuation_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    resume_fn_val,
+                    state_val,
+                    shift_value_val,
+                    cont_ty,
+                    op_idx,
+                );
+                let cont_val = cont_op.as_operation().result(db, 0);
+                ops.push(cont_op.as_operation());
+
+                let set_yield_op = trampoline::set_yield_state_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    cont_val,
+                    op_idx,
+                );
+                ops.push(set_yield_op.as_operation());
+
+                let step_op = trampoline::step_shift_dynamic(
+                    db,
+                    location,
+                    tag_operand,
+                    cont_val,
+                    step_ty,
+                    op_idx,
+                );
+                ops.push(step_op.as_operation());
+            }
+        }
 
         RewriteResult::expand(ops)
     }
@@ -1367,47 +1524,88 @@ fn create_resume_function_with_continuation<'db>(
                     continue;
                 }
 
-                // Handle cont.shift - transform to step_shift with next resume function
-                if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                // Handle cont.shift and cont.shift_dynamic - transform to step_shift with next resume function
+                // ResumeShiftInfo: tag_or_operand distinguishes static (tag attr) from dynamic (tag operand)
+                enum ResumeShiftTag<'db> {
+                    Static(u32),
+                    Dynamic(Value<'db>),
+                }
+                let shift_info_opt = if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                    Some((
+                        ResumeShiftTag::Static(shift_op.tag(db)),
+                        shift_op.ability_ref(db),
+                        shift_op.op_name(db),
+                        op.operands(db).first().copied(),
+                    ))
+                } else if let Ok(shift_dyn) = cont::ShiftDynamic::from_operation(db, *op) {
+                    let operands = op.operands(db);
+                    let tag_operand = operands
+                        .first()
+                        .copied()
+                        .expect("dynamic shift missing tag operand");
+                    Some((
+                        ResumeShiftTag::Dynamic(tag_operand),
+                        shift_dyn.ability_ref(db),
+                        shift_dyn.op_name(db),
+                        operands.get(1).copied(), // Skip tag, get first value operand
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some((tag_info, ability_ref_type, op_name_sym, shift_value_operand)) =
+                    shift_info_opt
+                {
                     // Get next resume function name
                     let next_resume_name = spec.next_resume_name.as_ref().expect(
                         "encountered shift in continuation but no next_resume_name specified",
                     );
 
-                    // Look up shift analysis for this shift point
+                    // Look up shift analysis for this shift point - fail fast if missing
                     let shift_span = op.location(db).span;
-                    let next_shift_info = spec.shift_analysis.get(&shift_span);
+                    let next_shift_info =
+                        spec.shift_analysis.get(&shift_span).unwrap_or_else(|| {
+                            panic!(
+                                "missing shift analysis for nested shift at {:?}",
+                                shift_span
+                            )
+                        });
 
                     // Get shift properties
-                    let tag = shift_op.tag(db);
-                    let ability_ref_type = shift_op.ability_ref(db);
                     let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
                         .and_then(|ar| ar.name(db));
-                    let op_name = Some(shift_op.op_name(db));
+                    let op_name = Some(op_name_sym);
                     let op_idx = compute_op_idx(ability_name, op_name);
 
                     // Build state struct with current live values (remapped)
-                    let shift_index = next_shift_info.map(|info| info.index).unwrap_or(0);
-                    let state_name = Symbol::from_dynamic(&state_type_name(
-                        ability_name,
-                        op_name,
-                        tag,
-                        shift_index,
-                    ));
+                    let shift_index = next_shift_info.index;
+                    let state_type_key = match &tag_info {
+                        ResumeShiftTag::Static(tag) => StateTypeKey::Static {
+                            ability_name,
+                            op_name,
+                            tag: *tag,
+                            shift_index,
+                        },
+                        ResumeShiftTag::Dynamic(_) => StateTypeKey::Dynamic {
+                            ability_name,
+                            op_name,
+                            module_name: spec.module_name,
+                            span: shift_span,
+                            shift_index,
+                        },
+                    };
+                    let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
                     let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-                        if let Some(info) = next_shift_info {
-                            info.live_values
-                                .iter()
-                                .enumerate()
-                                .map(|(i, (v, ty))| {
-                                    let remapped_v = *value_map.get(v).unwrap_or(v);
-                                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                    (remapped_v, (field_name, *ty))
-                                })
-                                .unzip()
-                        } else {
-                            (vec![], vec![])
-                        };
+                        next_shift_info
+                            .live_values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (v, ty))| {
+                                let remapped_v = *value_map.get(v).unwrap_or(v);
+                                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                                (remapped_v, (field_name, *ty))
+                            })
+                            .unzip();
 
                     let state_adt_ty = adt::struct_type(db, state_name, state_fields);
                     let state_op = builder.op(trampoline::build_state(
@@ -1427,34 +1625,60 @@ fn create_resume_function_with_continuation<'db>(
                     let resume_fn_val = const_op.result(db);
 
                     // Get shift value (remap if needed)
-                    let shift_value_val = op
-                        .operands(db)
-                        .first()
-                        .map(|&v| *value_map.get(&v).unwrap_or(&v))
+                    let shift_value_val = shift_value_operand
+                        .map(|v| *value_map.get(&v).unwrap_or(&v))
                         .unwrap_or(state_val);
 
-                    // Build continuation
+                    // Build continuation and set yield state based on static/dynamic tag
                     let cont_ty = trampoline::Continuation::new(db).as_type();
-                    let cont_op = builder.op(trampoline::build_continuation(
-                        db,
-                        location,
-                        resume_fn_val,
-                        state_val,
-                        shift_value_val,
-                        cont_ty,
-                        tag,
-                        op_idx,
-                    ));
-                    let cont_val = cont_op.result(db);
+                    let step_shift_val = match &tag_info {
+                        ResumeShiftTag::Static(tag) => {
+                            let cont_op = builder.op(trampoline::build_continuation(
+                                db,
+                                location,
+                                resume_fn_val,
+                                state_val,
+                                shift_value_val,
+                                cont_ty,
+                                *tag,
+                                op_idx,
+                            ));
+                            let cont_val = cont_op.result(db);
 
-                    // Set yield state and return step_shift
-                    builder.op(trampoline::set_yield_state(
-                        db, location, cont_val, tag, op_idx,
-                    ));
-                    let step_shift = builder.op(trampoline::step_shift(
-                        db, location, cont_val, step_ty, tag, op_idx,
-                    ));
-                    builder.op(func::r#return(db, location, Some(step_shift.result(db))));
+                            builder.op(trampoline::set_yield_state(
+                                db, location, cont_val, *tag, op_idx,
+                            ));
+                            let step_shift = builder.op(trampoline::step_shift(
+                                db, location, cont_val, step_ty, *tag, op_idx,
+                            ));
+                            step_shift.result(db)
+                        }
+                        ResumeShiftTag::Dynamic(tag_operand) => {
+                            // Remap tag operand
+                            let tag_val = *value_map.get(tag_operand).unwrap_or(tag_operand);
+
+                            let cont_op = builder.op(trampoline::build_continuation_dynamic(
+                                db,
+                                location,
+                                tag_val,
+                                resume_fn_val,
+                                state_val,
+                                shift_value_val,
+                                cont_ty,
+                                op_idx,
+                            ));
+                            let cont_val = cont_op.result(db);
+
+                            builder.op(trampoline::set_yield_state_dynamic(
+                                db, location, tag_val, cont_val, op_idx,
+                            ));
+                            let step_shift = builder.op(trampoline::step_shift_dynamic(
+                                db, location, tag_val, cont_val, step_ty, op_idx,
+                            ));
+                            step_shift.result(db)
+                        }
+                    };
+                    builder.op(func::r#return(db, location, Some(step_shift_val)));
 
                     encountered_shift = true;
                     break; // Stop processing further ops
@@ -3643,9 +3867,19 @@ mod tests {
 
     #[test]
     fn test_state_type_name_deterministic() {
-        // Same inputs should produce same output
-        let name1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
-        let name2 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
+        // Same inputs should produce same output (static case)
+        let name1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name2 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
         assert_eq!(name1, name2, "Same inputs should produce same name");
 
         // Name should start with __State_ prefix
@@ -3654,28 +3888,143 @@ mod tests {
             "State type name should have __State_ prefix"
         );
 
-        // Different tags should produce different names
-        let name_tag0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
-        let name_tag1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 1, 0);
+        // Different tags should produce different names (static case)
+        let name_tag0 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_tag1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 1,
+            shift_index: 0,
+        });
         assert_ne!(
             name_tag0, name_tag1,
             "Different tags should produce different names"
         );
 
         // Different ops should produce different names
-        let name_get = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
-        let name_set = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("set")), 0, 0);
+        let name_get = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_set = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("set")),
+            tag: 0,
+            shift_index: 0,
+        });
         assert_ne!(
             name_get, name_set,
             "Different ops should produce different names"
         );
 
         // Different shift indices should produce different names
-        let name_idx0 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 0);
-        let name_idx1 = state_type_name(Some(Symbol::new("State")), Some(Symbol::new("get")), 0, 1);
+        let name_idx0 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 0,
+        });
+        let name_idx1 = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 0,
+            shift_index: 1,
+        });
         assert_ne!(
             name_idx0, name_idx1,
             "Different shift indices should produce different names"
+        );
+    }
+
+    #[test]
+    fn test_state_type_name_dynamic() {
+        let module1 = Symbol::new("test_module1");
+        let module2 = Symbol::new("test_module2");
+
+        // Dynamic shifts use module_name and span for uniqueness instead of tag
+        let name_span1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_span2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(30, 40),
+            shift_index: 0,
+        });
+        assert_ne!(
+            name_span1, name_span2,
+            "Different spans should produce different names for dynamic shifts"
+        );
+
+        // Same module_name and span should produce same name
+        let name_same1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_same2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        assert_eq!(
+            name_same1, name_same2,
+            "Same module_name and span should produce same name"
+        );
+
+        // Different module_names with same span should produce different names
+        let name_mod1 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        let name_mod2 = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module2,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        assert_ne!(
+            name_mod1, name_mod2,
+            "Different module_names should produce different names for dynamic shifts"
+        );
+
+        // Static and dynamic with similar params should differ (due to "dyn" marker)
+        let name_static = state_type_name(StateTypeKey::Static {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            tag: 10, // Same as span.start
+            shift_index: 0,
+        });
+        let name_dynamic = state_type_name(StateTypeKey::Dynamic {
+            ability_name: Some(Symbol::new("State")),
+            op_name: Some(Symbol::new("get")),
+            module_name: module1,
+            span: Span::new(10, 20),
+            shift_index: 0,
+        });
+        assert_ne!(
+            name_static, name_dynamic,
+            "Static and dynamic should produce different names"
         );
     }
 }

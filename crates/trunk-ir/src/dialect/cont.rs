@@ -41,6 +41,28 @@ dialect! {
             #[region(handler)] {}
         };
 
+        /// `cont.shift_dynamic` operation: captures continuation with dynamic tag.
+        ///
+        /// Similar to `cont.shift` but takes the prompt tag as an operand instead of
+        /// an attribute. This enables evidence-based handler dispatch where the tag
+        /// is looked up at runtime from the evidence structure.
+        ///
+        /// The first operand is the prompt tag value, followed by optional value operands.
+        ///
+        /// - `ability_ref`: ability reference type (semantic information)
+        /// - `op_name`: operation name symbol (semantic information)
+        ///
+        /// Used for evidence-based dispatch:
+        /// ```text
+        /// %marker = call @__tribute_evidence_lookup(%ev, ability_id)
+        /// %tag = call @__tribute_marker_prompt(%marker)
+        /// %result = cont.shift_dynamic(%tag, %args...) { ability_ref, op_name }
+        /// ```
+        #[attr(ability_ref: Type, op_name: Symbol)]
+        fn shift_dynamic(tag, #[rest] value) -> result {
+            #[region(handler)] {}
+        };
+
         /// `cont.resume` operation: resumes a captured continuation.
         fn resume(continuation, value) -> result;
 
@@ -108,5 +130,19 @@ dialect! {
         /// - Second param: result type (what resuming returns)
         #[attr(effect: Type)]
         type continuation(arg, result);
+
+        /// `cont.prompt_tag` type: prompt tag for delimited control.
+        ///
+        /// A unique identifier that connects `cont.push_prompt` with `cont.shift`.
+        /// At runtime, this is represented as an i32 value.
+        type prompt_tag;
     }
 }
+
+// === Printable interface registrations ===
+
+use crate::type_interface::{PrintContext, Printable};
+use std::fmt::Write;
+
+// prompt_tag -> "PromptTag"
+inventory::submit! { Printable::implement("cont", "prompt_tag", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("PromptTag")) }

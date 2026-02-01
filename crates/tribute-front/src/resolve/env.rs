@@ -36,6 +36,17 @@ pub enum Binding<'db> {
         /// The namespace path.
         path: Vec<Symbol>,
     },
+
+    /// An ability operation.
+    ///
+    /// Unlike regular functions, ability operations are lowered to `cont.shift`
+    /// with runtime evidence lookup.
+    AbilityOp {
+        /// The ability name (e.g., "State").
+        ability: Symbol,
+        /// The operation name (e.g., "get").
+        op: Symbol,
+    },
 }
 
 /// Module environment for name resolution.

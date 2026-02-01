@@ -269,6 +269,17 @@ pub enum ResolvedRef<'db> {
 
     /// Reference to a module (for qualified paths).
     Module { path: ModulePath<'db> },
+
+    /// Reference to an ability operation.
+    ///
+    /// Ability operations like `State::get()` are resolved to this variant,
+    /// which is lowered directly to `cont.shift` + runtime calls.
+    AbilityOp {
+        /// The ability name (e.g., "State").
+        ability: Symbol,
+        /// The operation name (e.g., "get").
+        op: Symbol,
+    },
 }
 
 impl<'db> ResolvedRef<'db> {
@@ -295,6 +306,11 @@ impl<'db> ResolvedRef<'db> {
     /// Create a builtin reference.
     pub fn builtin(builtin: BuiltinRef) -> Self {
         Self::Builtin(builtin)
+    }
+
+    /// Create an ability operation reference.
+    pub fn ability_op(ability: Symbol, op: Symbol) -> Self {
+        Self::AbilityOp { ability, op }
     }
 }
 

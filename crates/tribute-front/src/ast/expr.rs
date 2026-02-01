@@ -10,6 +10,7 @@ use trunk_ir::Symbol;
 
 use super::node_id::NodeId;
 use super::pattern::Pattern;
+use super::phases::LocalId;
 use super::types::TypeAnnotation;
 
 /// An expression in the AST, parameterized by phase type `V`.
@@ -207,6 +208,8 @@ where
         op: Symbol,
         params: Vec<Pattern<V>>,
         continuation: Option<Symbol>,
+        /// LocalId for the continuation binding (assigned during name resolution).
+        continuation_local_id: Option<LocalId>,
     },
 }
 

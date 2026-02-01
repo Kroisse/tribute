@@ -700,6 +700,7 @@ fn lower_handler_pattern(
             op,
             params,
             continuation,
+            continuation_local_id: None, // Set during name resolution
         });
     }
 

@@ -149,11 +149,10 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
-                // Build qualified path to avoid FuncDefId collisions across modules
-                // e.g., ["foo", "MyAbility"] for operation "op"
-                let op_path = build_field_module_path(module_path, a.name);
-                let func_id = FuncDefId::new(db, op_path, op.name);
-                let binding = Binding::Function { id: func_id };
+                let binding = Binding::AbilityOp {
+                    ability: a.name,
+                    op: op.name,
+                };
                 env.add_to_namespace(a.name, op.name, binding);
             }
         }

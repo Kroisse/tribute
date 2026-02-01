@@ -149,23 +149,29 @@ pub fn union<'db>(
     EffectRow::new(db, effects, rest)
 }
 
-/// Check for conflicting effects (same name with different type parameters).
+/// Check for duplicate effects in an effect row.
 ///
-/// Returns `Some((name, effects))` if a conflict is found.
+/// Effects are considered duplicates only if they have both the same name
+/// AND the same type arguments. For example:
+/// - `State(Int) + State(Text)` = OK (different effects)
+/// - `State(Int) + State(Int)` = conflict (duplicate)
+///
+/// Returns `Some((name, effects))` if duplicates are found.
 pub fn find_conflicting_effects<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
 ) -> Option<(Symbol, Vec<Effect<'db>>)> {
-    use std::collections::HashMap;
+    use std::collections::HashSet;
 
-    let mut by_name: HashMap<Symbol, Vec<Effect<'db>>> = HashMap::new();
-    for effect in row.effects(db) {
-        by_name.entry(effect.name).or_default().push(effect.clone());
-    }
+    let effects = row.effects(db);
+    let mut seen: HashSet<&Effect<'db>> = HashSet::new();
 
-    for (name, effects) in by_name {
-        if effects.len() > 1 {
-            return Some((name, effects));
+    for effect in effects.iter() {
+        if !seen.insert(effect) {
+            // Found a duplicate - return all instances of this effect
+            let duplicates: Vec<Effect<'db>> =
+                effects.iter().filter(|e| *e == effect).cloned().collect();
+            return Some((effect.name, duplicates));
         }
     }
 
@@ -276,7 +282,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_conflicting_effects() {
+    fn test_find_conflicting_effects_with_different_type_args() {
         let db = test_db();
         let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
         let float_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Float);
@@ -284,18 +290,36 @@ mod tests {
         let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
         let state_float = parameterized_effect(Symbol::new("State"), vec![float_ty]);
 
-        // Row with conflict
-        let row_conflict = EffectRow::new(&db, vec![state_int.clone(), state_float.clone()], None);
+        // State(Int) + State(Float) = OK (different effects, not a conflict)
+        let row = EffectRow::new(&db, vec![state_int.clone(), state_float.clone()], None);
+        assert!(find_conflicting_effects(&db, row).is_none());
+
+        // State(Int) + Console = OK
+        let console = simple_effect(Symbol::new("Console"));
+        let row_ok = EffectRow::new(&db, vec![state_int.clone(), console], None);
+        assert!(find_conflicting_effects(&db, row_ok).is_none());
+    }
+
+    #[test]
+    fn test_find_conflicting_effects_with_duplicates() {
+        let db = test_db();
+        let int_ty = crate::ast::Type::new(&db, crate::ast::TypeKind::Int);
+
+        let state_int = parameterized_effect(Symbol::new("State"), vec![int_ty]);
+
+        // State(Int) + State(Int) = conflict (duplicate)
+        let row_conflict = EffectRow::new(&db, vec![state_int.clone(), state_int.clone()], None);
         let conflict = find_conflicting_effects(&db, row_conflict);
         assert!(conflict.is_some());
         let (name, effects) = conflict.unwrap();
         assert_eq!(name, Symbol::new("State"));
         assert_eq!(effects.len(), 2);
 
-        // Row without conflict
+        // Console + Console = conflict (duplicate)
         let console = simple_effect(Symbol::new("Console"));
-        let row_ok = EffectRow::new(&db, vec![state_int.clone(), console], None);
-        assert!(find_conflicting_effects(&db, row_ok).is_none());
+        let row_console = EffectRow::new(&db, vec![console.clone(), console.clone()], None);
+        let console_conflict = find_conflicting_effects(&db, row_console);
+        assert!(console_conflict.is_some());
     }
 
     #[test]

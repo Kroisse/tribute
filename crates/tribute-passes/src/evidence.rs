@@ -43,9 +43,8 @@
 use std::collections::HashSet;
 
 use crate::type_converter::generic_type_converter;
-use tribute_ir::dialect::{ability, tribute};
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::{core, func, wasm};
+use tribute_ir::dialect::ability;
+use trunk_ir::dialect::{core, func};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
 };
@@ -88,8 +87,7 @@ pub fn add_evidence_params<'db>(
 /// Phase 2: Transform calls to pass evidence through.
 ///
 /// This pass transforms call sites to pass evidence:
-/// 1. Calls inside effectful functions pass the evidence parameter
-/// 2. Calls inside tribute.handle bodies pass null evidence
+/// - Calls inside effectful functions pass the evidence parameter
 ///
 /// This must run AFTER lambda lifting and closure lowering so that:
 /// 1. Lifted lambdas already have evidence parameters
@@ -123,8 +121,7 @@ pub fn transform_evidence_calls<'db>(
     let converter = generic_type_converter();
     let target = ConversionTarget::new();
     PatternApplicator::new(converter)
-        .add_pattern(TransformCallsPattern::new(all_effectful.clone()))
-        .add_pattern(TransformHandlerCallsPattern::new(all_effectful))
+        .add_pattern(TransformCallsPattern::new(all_effectful))
         .apply_partial(db, module, target)
         .module
 }
@@ -561,68 +558,6 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
         let new_func = func::func(db, location, func_name, func_ty, new_body);
 
         RewriteResult::Replace(new_func.as_operation())
-    }
-}
-
-/// Pattern: Transform calls to effectful functions inside tribute.handle bodies.
-///
-/// This pattern matches `tribute.handle` operations and transforms all calls to
-/// effectful functions within their body regions to pass a null evidence pointer.
-/// The handler will provide the actual evidence at runtime via evidence lookup.
-struct TransformHandlerCallsPattern {
-    effectful_fns: HashSet<Symbol>,
-}
-
-impl TransformHandlerCallsPattern {
-    fn new(effectful_fns: HashSet<Symbol>) -> Self {
-        Self { effectful_fns }
-    }
-}
-
-impl<'db> RewritePattern<'db> for TransformHandlerCallsPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        // Match: tribute.handle
-        let handle_op = match tribute::Handle::from_operation(db, *op) {
-            Ok(h) => h,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let body_region = handle_op.body(db);
-        let arms_region = handle_op.arms(db);
-        let result_type = op
-            .results(db)
-            .first()
-            .copied()
-            .unwrap_or_else(|| core::Nil::new(db).as_type());
-
-        // Create null evidence pointer for handler body calls
-        let ev_ty = ability::EvidencePtr::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let null_ev_op = adt::ref_null(db, location, ev_ty, anyref_ty);
-        let null_ev_value = null_ev_op.as_operation().result(db, 0);
-
-        // Transform calls in body region
-        let (new_body, body_changed) =
-            transform_calls_in_region(db, &body_region, null_ev_value, &self.effectful_fns);
-
-        if !body_changed {
-            return RewriteResult::Unchanged;
-        }
-
-        // Rebuild tribute.handle with transformed body
-        // We need to prepend the null_ev_op to the operations
-        let mut result_ops = vec![null_ev_op.as_operation()];
-
-        let new_handle = tribute::handle(db, location, result_type, new_body, arms_region);
-        result_ops.push(new_handle.as_operation());
-
-        RewriteResult::expand(result_ops)
     }
 }
 

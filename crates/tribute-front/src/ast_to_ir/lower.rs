@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use trunk_ir::dialect::{adt, arith, core, func, scf};
+use trunk_ir::dialect::{adt, arith, cont, core, func, scf};
 use trunk_ir::{
     Attribute, BlockBuilder, DialectOp, DialectType, Location, PathId, Region, Symbol, idvec,
 };
@@ -17,9 +17,9 @@ use tribute_ir::dialect::{closure, tribute, tribute_rt};
 use super::context::CaptureInfo;
 
 use crate::ast::{
-    Arm, CtorId, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LiteralPattern, LocalId,
-    Module, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, StructDecl, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
+    Arm, CtorId, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm, HandlerKind,
+    LiteralPattern, LocalId, Module, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
+    StructDecl, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -189,7 +189,8 @@ fn lower_decl<'db>(
         Decl::Struct(s) => lower_struct_decl(ctx, top, s),
         Decl::Enum(e) => lower_enum_decl(ctx, top, e),
         Decl::Ability(_) => {
-            // TODO: Lower ability declarations
+            // Ability declarations are purely type-level metadata.
+            // No IR operation needed - ability info is registered in ModuleTypeEnv.
         }
         Decl::Use(_) => {
             // Use declarations don't generate IR
@@ -449,7 +450,12 @@ fn lower_expr<'db>(
                         .op(func::constant(builder.db(), location, func_ty, *variant));
                 Some(op.result(builder.db()))
             }
-            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } | ResolvedRef::TypeDef { .. } => {
+            ResolvedRef::Builtin(_)
+            | ResolvedRef::Module { .. }
+            | ResolvedRef::TypeDef { .. }
+            | ResolvedRef::AbilityOp { .. } => {
+                // AbilityOp as a value (not called) is not yet supported
+                // TODO: Support passing ability operations as first-class functions
                 None
             }
         },
@@ -521,6 +527,10 @@ fn lower_expr<'db>(
                             *variant,
                         ));
                         Some(op.result(builder.db()))
+                    }
+                    ResolvedRef::AbilityOp { ability, op } => {
+                        // Lower ability operation directly to cont.shift
+                        lower_ability_op_call(builder, location, *ability, *op, arg_values)
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
                 },
@@ -689,7 +699,7 @@ fn lower_expr<'db>(
             )
         }
         ExprKind::Lambda { params, body } => lower_lambda(builder, location, &params, &body),
-        ExprKind::Handle { .. } => builder.emit_unsupported(location, "handle expression"),
+        ExprKind::Handle { body, handlers } => lower_handle(builder, location, &body, &handlers),
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => {
@@ -774,9 +784,12 @@ fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<Lo
             // within that lambda, so they won't be in our outer scope anyway
             collect_free_vars(body, free_vars);
         }
-        ExprKind::Handle { body, .. } => {
+        ExprKind::Handle { body, handlers } => {
             collect_free_vars(body, free_vars);
-            // TODO: traverse handler arms as well
+            // Traverse handler arm bodies (patterns create new bindings, not references)
+            for handler in handlers {
+                collect_free_vars(&handler.body, free_vars);
+            }
         }
         ExprKind::List(elements) => {
             for elem in elements {
@@ -1694,6 +1707,436 @@ fn bind_pattern_fields<'db>(
             )
         }
     }
+}
+
+// =============================================================================
+// Handle Expression Lowering
+// =============================================================================
+
+/// Lower an ability operation call directly to cont.shift.
+///
+/// This generates:
+/// ```text
+/// // TODO: Evidence-based dispatch (currently uses placeholder tag)
+/// // %marker = func.call @__tribute_evidence_lookup(%ev, ability_id)
+/// // %tag = func.call @__tribute_marker_prompt(%marker)
+/// %result = cont.shift(tag, args...) { ability_ref, op_name }
+/// ```
+fn lower_ability_op_call<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    ability: Symbol,
+    op: Symbol,
+    args: Vec<trunk_ir::Value<'db>>,
+) -> Option<trunk_ir::Value<'db>> {
+    let db = builder.db();
+
+    // Use the currently active prompt tag from the enclosing handler.
+    // If there's no active handler, use u32::MAX as a sentinel (will be resolved by evidence pass).
+    // The sentinel value allows detection of unresolved shifts during validation.
+    let tag = builder.ctx.active_prompt_tag().unwrap_or(u32::MAX);
+
+    // Create ability reference type for cont.shift
+    let ability_ref = core::AbilityRefType::simple(db, ability).as_type();
+
+    // Result type - use any_type for now (type-erased)
+    let result_ty = tribute_rt::any_type(db);
+
+    // Create empty handler region (not used for shift generated from ability ops)
+    let empty_block = trunk_ir::Block::new(
+        db,
+        trunk_ir::BlockId::fresh(),
+        location,
+        trunk_ir::IdVec::new(),
+        trunk_ir::IdVec::new(),
+    );
+    let handler_region = Region::new(db, location, idvec![empty_block]);
+
+    // Pack multiple arguments into a tuple if needed.
+    // cont_to_trampoline only uses the first argument, so multi-arg ability ops
+    // need to be packed into a single tuple value.
+    let shift_args = if args.len() > 1 {
+        // Build tuple type as cons cells: TupleType(a, TupleType(b, TupleType(c, Nil)))
+        let any_ty = tribute_rt::any_type(db);
+        let nil_ty = core::Nil::new(db).as_type();
+        let tuple_ty = args.iter().rev().fold(nil_ty, |tail, _| {
+            tribute::TupleType::new(db, any_ty, tail).as_type()
+        });
+
+        // Create tuple value
+        let tuple_op = builder
+            .block
+            .op(tribute::tuple(db, location, args, tuple_ty));
+        vec![tuple_op.result(db)]
+    } else {
+        args
+    };
+
+    // Generate cont.shift
+    let shift_op = builder.block.op(cont::shift(
+        db,
+        location,
+        shift_args,
+        result_ty,
+        tag,
+        ability_ref,
+        op,
+        handler_region,
+    ));
+
+    Some(shift_op.result(db))
+}
+
+/// Lower a handle expression to TrunkIR.
+///
+/// Transforms:
+/// ```text
+/// handle body {
+///     { result } -> result_handler
+///     { Ability::op(args) -> k } -> effect_handler
+/// }
+/// ```
+///
+/// Into:
+/// ```text
+/// %step = cont.push_prompt(tag) {
+///     body { ... lowered body ... }
+///     handlers {}
+/// }
+/// cont.handler_dispatch(%step, tag, result_type) {
+///     body {
+///         Block 0 (done):
+///             %value = cont.get_done_value(%step)
+///             ... result_handler ...
+///         Block 1+ (suspend):
+///             %k = cont.get_continuation()
+///             %arg = cont.get_shift_value()
+///             ... effect_handler ...
+///     }
+/// }
+/// ```
+fn lower_handle<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location<'db>,
+    body: &Expr<TypedRef<'db>>,
+    handlers: &[HandlerArm<TypedRef<'db>>],
+) -> Option<trunk_ir::Value<'db>> {
+    let db = builder.db();
+    // Generate a fresh prompt tag and push it onto the active stack.
+    // This tag is used by both push_prompt and any cont.shift operations in the body.
+    let tag = builder.ctx.push_prompt_tag();
+
+    // Result type is any_type for now (type-erased)
+    let result_ty = tribute_rt::any_type(db);
+    let step_ty = tribute_rt::any_type(db); // Step is also opaque at this level
+
+    // 1. Build the push_prompt body region
+    let push_prompt_body = {
+        let mut body_block = BlockBuilder::new(db, location);
+        builder.ctx.enter_scope();
+        let body_result = {
+            let mut body_builder = IrBuilder::new(builder.ctx, &mut body_block);
+            lower_expr(&mut body_builder, body.clone())
+        };
+        builder.ctx.exit_scope();
+
+        // Yield the body result (or nil if none)
+        let yield_val = body_result.unwrap_or_else(|| {
+            let nil_ty = core::Nil::new(db).as_type();
+            body_block
+                .op(arith::r#const(db, location, nil_ty, Attribute::Unit))
+                .result(db)
+        });
+        body_block.op(scf::r#yield(db, location, vec![yield_val]));
+        Region::new(db, location, idvec![body_block.build()])
+    };
+
+    // Empty handlers region for push_prompt (dispatch happens via handler_dispatch)
+    let empty_handlers = Region::new(db, location, idvec![]);
+
+    // 2. Emit cont.push_prompt
+    let push_prompt_op = builder.block.op(cont::push_prompt(
+        db,
+        location,
+        step_ty,
+        tag,
+        push_prompt_body,
+        empty_handlers,
+    ));
+    let step_result = push_prompt_op.as_operation().result(db, 0);
+
+    // Pop the prompt tag from the active stack immediately after push_prompt.
+    // This ensures that handlers are lowered with the outer prompt active,
+    // so ability ops in handlers target the outer prompt, not the inner one.
+    builder.ctx.pop_prompt_tag();
+
+    // 3. Build handler_dispatch body region with multiple blocks
+    let handler_dispatch_body =
+        build_handler_dispatch_body(builder.ctx, location, handlers, result_ty);
+
+    // 4. Emit cont.handler_dispatch (use the saved tag variable)
+    let handler_dispatch_op = builder.block.op(cont::handler_dispatch(
+        db,
+        location,
+        step_result,
+        result_ty,
+        tag,
+        result_ty, // result_type attribute
+        handler_dispatch_body,
+    ));
+
+    Some(handler_dispatch_op.as_operation().result(db, 0))
+}
+
+/// Build the body region for handler_dispatch.
+///
+/// Creates multiple blocks:
+/// - Block 0: "done" case for when the body completes normally
+/// - Block 1+: "suspend" cases for each effect handler
+fn build_handler_dispatch_body<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    handlers: &[HandlerArm<TypedRef<'db>>],
+    result_ty: trunk_ir::Type<'db>,
+) -> Region<'db> {
+    let db = ctx.db;
+    let mut blocks = Vec::new();
+
+    // Separate result handlers from effect handlers
+    let mut result_handler: Option<&HandlerArm<TypedRef<'db>>> = None;
+    let mut effect_handlers: Vec<&HandlerArm<TypedRef<'db>>> = Vec::new();
+
+    for handler in handlers {
+        match &handler.kind {
+            HandlerKind::Result { .. } => {
+                result_handler = Some(handler);
+            }
+            HandlerKind::Effect { .. } => {
+                effect_handlers.push(handler);
+            }
+        }
+    }
+
+    // Block 0: Done case
+    let done_block = build_done_handler_block(ctx, location, result_handler, result_ty);
+    blocks.push(done_block);
+
+    // Block 1+: Suspend cases
+    for effect_handler in &effect_handlers {
+        let suspend_block = build_suspend_handler_block(ctx, location, effect_handler, result_ty);
+        blocks.push(suspend_block);
+    }
+
+    Region::new(db, location, trunk_ir::IdVec::from(blocks))
+}
+
+/// Build the "done" handler block (block 0).
+///
+/// This block:
+/// 1. Receives the step as a block argument
+/// 2. Gets the done value from the step
+/// 3. Binds the result pattern
+/// 4. Evaluates the result handler body
+/// 5. Yields the result
+///
+/// Note: The step is passed as a block argument and will be provided
+/// by the cont_to_trampoline pass when it transforms handler_dispatch.
+fn build_done_handler_block<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    result_handler: Option<&HandlerArm<TypedRef<'db>>>,
+    result_ty: trunk_ir::Type<'db>,
+) -> trunk_ir::Block<'db> {
+    let db = ctx.db;
+    let block_id = trunk_ir::BlockId::fresh();
+    let mut block_builder = BlockBuilder::new(db, location);
+
+    // The step is the first block argument
+    let step_ty = tribute_rt::any_type(db);
+    let step_arg = trunk_ir::BlockArg::of_type(db, step_ty);
+    let step_value = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+
+    // Get the done value from the step
+    let get_done_op = block_builder.op(cont::get_done_value(db, location, step_value, result_ty));
+    let done_value = get_done_op.as_operation().result(db, 0);
+
+    let result = if let Some(handler) = result_handler {
+        // Bind the result pattern and evaluate the body
+        ctx.enter_scope();
+
+        if let HandlerKind::Result { binding } = &handler.kind {
+            bind_pattern_fields(ctx, &mut block_builder, location, done_value, binding);
+        }
+
+        let body_result = {
+            let mut builder = IrBuilder::new(ctx, &mut block_builder);
+            lower_expr(&mut builder, handler.body.clone())
+        };
+
+        ctx.exit_scope();
+        body_result
+    } else {
+        // No result handler - just return the done value
+        Some(done_value)
+    };
+
+    // Yield the result
+    let yield_val = result.unwrap_or_else(|| {
+        let nil_ty = core::Nil::new(db).as_type();
+        block_builder
+            .op(arith::r#const(db, location, nil_ty, Attribute::Unit))
+            .result(db)
+    });
+    block_builder.op(scf::r#yield(db, location, vec![yield_val]));
+
+    trunk_ir::Block::new(
+        db,
+        block_id,
+        location,
+        idvec![step_arg], // Step is the block argument
+        block_builder.build().operations(db).clone(),
+    )
+}
+
+/// Build a "suspend" handler block (block 1+).
+///
+/// This block:
+/// 1. Gets the continuation from yield state
+/// 2. Gets the shift value (effect arguments)
+/// 3. Binds the continuation and params patterns
+/// 4. Evaluates the effect handler body
+/// 5. Yields the result
+fn build_suspend_handler_block<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    location: Location<'db>,
+    handler: &HandlerArm<TypedRef<'db>>,
+    _result_ty: trunk_ir::Type<'db>,
+) -> trunk_ir::Block<'db> {
+    let db = ctx.db;
+    let block_id = trunk_ir::BlockId::fresh();
+    let mut block_builder = BlockBuilder::new(db, location);
+
+    let HandlerKind::Effect {
+        ability,
+        op,
+        params,
+        continuation,
+        continuation_local_id,
+    } = &handler.kind
+    else {
+        // Should not happen - caller should only pass Effect handlers
+        let nil_ty = core::Nil::new(db).as_type();
+        let nil_val = block_builder
+            .op(arith::r#const(db, location, nil_ty, Attribute::Unit))
+            .result(db);
+        block_builder.op(scf::r#yield(db, location, vec![nil_val]));
+        return trunk_ir::Block::new(
+            db,
+            block_id,
+            location,
+            idvec![],
+            block_builder.build().operations(db).clone(),
+        );
+    };
+
+    // Get the continuation
+    let cont_ty = tribute_rt::any_type(db); // Continuation is opaque at this level
+    let get_cont_op = block_builder.op(cont::get_continuation(db, location, cont_ty));
+    let cont_value = get_cont_op.as_operation().result(db, 0);
+
+    // Get the shift value (effect arguments)
+    let shift_val_ty = tribute_rt::any_type(db);
+    let get_shift_val_op = block_builder.op(cont::get_shift_value(db, location, shift_val_ty));
+    let shift_value = get_shift_val_op.as_operation().result(db, 0);
+
+    ctx.enter_scope();
+
+    // Bind continuation if named, using the resolver-assigned LocalId
+    if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
+        ctx.bind(*k_local_id, *k_name, cont_value);
+    }
+
+    // Bind params patterns
+    // For now, if there's a single param, bind it to the shift value
+    // For multiple params, we'd need to destructure a tuple
+    if params.len() == 1 {
+        bind_pattern_fields(ctx, &mut block_builder, location, shift_value, &params[0]);
+    } else if params.len() > 1 {
+        // Multiple params - destructure as tuple
+        for (i, param) in params.iter().enumerate() {
+            let field_ty = tribute_rt::any_type(db);
+            let field_val = block_builder
+                .op(adt::struct_get(
+                    db,
+                    location,
+                    shift_value,
+                    field_ty,
+                    field_ty,
+                    i as u64,
+                ))
+                .result(db);
+            bind_pattern_fields(ctx, &mut block_builder, location, field_val, param);
+        }
+    }
+
+    // Evaluate the handler body
+    let body_result = {
+        let mut builder = IrBuilder::new(ctx, &mut block_builder);
+        lower_expr(&mut builder, handler.body.clone())
+    };
+
+    ctx.exit_scope();
+
+    // Yield the result
+    let yield_val = body_result.unwrap_or_else(|| {
+        let nil_ty = core::Nil::new(db).as_type();
+        block_builder
+            .op(arith::r#const(db, location, nil_ty, Attribute::Unit))
+            .result(db)
+    });
+    block_builder.op(scf::r#yield(db, location, vec![yield_val]));
+
+    // Create block with marker argument for ability_ref and op_name
+    // The marker argument has attributes that identify which effect this block handles
+    // Extract ability name from resolved reference and construct proper AbilityRefType
+    let ability_name = match &ability.resolved {
+        crate::ast::ResolvedRef::TypeDef { id } => id.name(db),
+        other => {
+            // Report error: expected ability type definition
+            Diagnostic {
+                message: format!(
+                    "Expected ability type definition, got {:?}",
+                    std::mem::discriminant(other)
+                ),
+                span: location.span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            // Fallback for error recovery
+            Symbol::new("__unknown_ability__")
+        }
+    };
+    let ability_ref_type = core::AbilityRefType::simple(db, ability_name).as_type();
+    let mut marker_attrs = std::collections::BTreeMap::new();
+    marker_attrs.insert(
+        Symbol::new("ability_ref"),
+        Attribute::Type(ability_ref_type),
+    );
+    marker_attrs.insert(Symbol::new("op_name"), Attribute::Symbol(*op));
+    let marker_arg = trunk_ir::BlockArg::new(
+        db,
+        core::Nil::new(db).as_type(), // Marker type is nil
+        marker_attrs,
+    );
+
+    trunk_ir::Block::new(
+        db,
+        block_id,
+        location,
+        idvec![marker_arg],
+        block_builder.build().operations(db).clone(),
+    )
 }
 
 /// Fallback: derive parameter and return types from annotations when TypeScheme is unavailable.
@@ -4655,6 +5098,305 @@ mod tests {
             args.len(),
             4,
             "Lifted lambda with 3 params should have 4 block arguments (env + 3 params)"
+        );
+    }
+
+    // ========================================================================
+    // Handle Expression Prompt Tag Tests
+    // ========================================================================
+
+    use crate::ast::{HandlerArm, HandlerKind};
+    use trunk_ir::dialect::cont;
+
+    /// Create a handle expression.
+    fn handle_expr<'db>(
+        body: Expr<TypedRef<'db>>,
+        handlers: Vec<HandlerArm<TypedRef<'db>>>,
+    ) -> Expr<TypedRef<'db>> {
+        Expr::new(fresh_node_id(), ExprKind::Handle { body, handlers })
+    }
+
+    /// Create an ability operation call expression.
+    fn ability_op_call_state_get<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("get")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create an ability operation call for State.put().
+    fn ability_op_call_state_put<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("State"), Symbol::new("put")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create an ability operation call for Log.info().
+    fn ability_op_call_log_info<'db>(db: &'db dyn salsa::Database) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(Symbol::new("Log"), Symbol::new("info")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Create a result handler arm.
+    fn result_handler<'db>(
+        local_id: LocalId,
+        name: Symbol,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Result {
+                binding: Pattern::new(
+                    fresh_node_id(),
+                    PatternKind::Bind {
+                        name,
+                        local_id: Some(local_id),
+                    },
+                ),
+            },
+            body,
+        }
+    }
+
+    /// Create an effect handler arm for State.get.
+    fn effect_handler_state_get<'db>(
+        db: &'db dyn salsa::Database,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        // For the ability field in effect handler, we use a Local reference as a placeholder.
+        // The actual ability matching happens via the op name in lowering.
+        let ability_ref = TypedRef::new(
+            ResolvedRef::local(LocalId::new(999), Symbol::new("State")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Effect {
+                ability: ability_ref,
+                op: Symbol::new("get"),
+                params: vec![],
+                continuation: None,
+                continuation_local_id: None,
+            },
+            body,
+        }
+    }
+
+    /// Create an effect handler arm for Log.info.
+    fn effect_handler_log_info<'db>(
+        db: &'db dyn salsa::Database,
+        body: Expr<TypedRef<'db>>,
+    ) -> HandlerArm<TypedRef<'db>> {
+        let ability_ref = TypedRef::new(
+            ResolvedRef::local(LocalId::new(999), Symbol::new("Log")),
+            AstType::new(db, TypeKind::Nil),
+        );
+        HandlerArm {
+            id: fresh_node_id(),
+            kind: HandlerKind::Effect {
+                ability: ability_ref,
+                op: Symbol::new("info"),
+                params: vec![],
+                continuation: None,
+                continuation_local_id: None,
+            },
+            body,
+        }
+    }
+
+    /// Find all cont.shift operations in a module recursively.
+    fn find_shift_ops<'db>(
+        db: &'db dyn salsa::Database,
+        module: &core::Module<'db>,
+    ) -> Vec<cont::Shift<'db>> {
+        let mut shifts = Vec::new();
+        let body = module.body(db);
+        for block in body.blocks(db).iter() {
+            collect_shift_ops_from_block(db, block, &mut shifts);
+        }
+        shifts
+    }
+
+    fn collect_shift_ops_from_block<'db>(
+        db: &'db dyn salsa::Database,
+        block: &trunk_ir::Block<'db>,
+        shifts: &mut Vec<cont::Shift<'db>>,
+    ) {
+        for op in block.operations(db).iter() {
+            // Check if this is a cont.shift
+            if let Ok(shift) = cont::Shift::from_operation(db, *op) {
+                shifts.push(shift);
+            }
+            // Recurse into regions
+            for region in op.regions(db).iter() {
+                for inner_block in region.blocks(db).iter() {
+                    collect_shift_ops_from_block(db, inner_block, shifts);
+                }
+            }
+        }
+    }
+
+    /// Test that ability ops in handler bodies use the outer prompt tag.
+    ///
+    /// This tests the fix for a bug where the inner prompt tag remained active
+    /// while lowering handler bodies, causing ability ops in handlers to target
+    /// the inner prompt instead of the outer one.
+    #[salsa_test]
+    fn test_handler_body_ability_op_uses_outer_prompt(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Build: handle { State.get() } { { r } -> State.put() }
+        // The body's State.get() should use prompt tag 0
+        // The handler's State.put() should use NO active prompt (sentinel u32::MAX as placeholder)
+        // because the inner prompt has been popped before lowering the handler body.
+
+        let body_ability_op = ability_op_call_state_get(db);
+        let handler_ability_op = ability_op_call_state_put(db);
+
+        let handlers = vec![
+            result_handler(LocalId::new(0), Symbol::new("r"), handler_ability_op),
+            effect_handler_state_get(db, nil_expr()),
+        ];
+
+        let handle = handle_expr(body_ability_op, handlers);
+        let func_decl = simple_func(Symbol::new("main"), handle);
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+
+        // Find all cont.shift operations
+        let shifts = find_shift_ops(db, &ir_module);
+
+        // We expect exactly 2 shift operations:
+        // 1. From the body's State.get()
+        // 2. From the handler's State.put()
+        assert_eq!(
+            shifts.len(),
+            2,
+            "Should have exactly 2 cont.shift operations"
+        );
+
+        // Separate by tag:
+        // - The body's shift uses tag 0 (the handle's prompt)
+        // - The handler's shift uses sentinel (u32::MAX, since we popped before lowering handler)
+        // This verifies that pop_prompt_tag was called before building handler body.
+        let body_shift = shifts.iter().find(|s| s.tag(db) == 0);
+        let handler_shift = shifts.iter().find(|s| s.tag(db) == u32::MAX);
+
+        assert!(
+            body_shift.is_some(),
+            "Body's shift should use tag 0 (the handle's prompt)"
+        );
+        assert!(
+            handler_shift.is_some(),
+            "Handler's shift should use sentinel tag (u32::MAX) since no active prompt"
+        );
+    }
+
+    /// Test nested handles: inner handler's ability op should use outer prompt.
+    #[salsa_test]
+    fn test_nested_handle_inner_handler_uses_outer_prompt(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let span_map = SpanMap::default();
+
+        // Build:
+        // handle {                          // outer handle, prompt tag 0
+        //     handle {                      // inner handle, prompt tag 1
+        //         Log.info()                // should use tag 1
+        //     } {
+        //         { r } -> State.get()      // should use tag 0 (outer), NOT tag 1
+        //         { Log.info() -> k } -> ()
+        //     }
+        // } {
+        //     { r } -> r
+        //     { State.get() -> k } -> ()
+        // }
+
+        // Inner handle body: Log.info()
+        let inner_body = ability_op_call_log_info(db);
+
+        // Inner handler body: State.get() - this should use outer prompt (tag 0)
+        let inner_handler_body = ability_op_call_state_get(db);
+
+        let inner_handlers = vec![
+            result_handler(LocalId::new(0), Symbol::new("r"), inner_handler_body),
+            effect_handler_log_info(db, nil_expr()),
+        ];
+
+        let inner_handle = handle_expr(inner_body, inner_handlers);
+
+        // Outer handlers
+        let outer_handlers = vec![
+            result_handler(
+                LocalId::new(1),
+                Symbol::new("r"),
+                var_expr(local_ref(db, LocalId::new(1), Symbol::new("r"))),
+            ),
+            effect_handler_state_get(db, nil_expr()),
+        ];
+
+        let outer_handle = handle_expr(inner_handle, outer_handlers);
+        let func_decl = simple_func(Symbol::new("main"), outer_handle);
+        let module = simple_module(vec![Decl::Function(func_decl)]);
+
+        let ir_module = test_lower(db, path, span_map, module);
+
+        // Find all cont.shift operations
+        let shifts = find_shift_ops(db, &ir_module);
+
+        // We expect 2 shift operations:
+        // 1. From inner body's Log.info() - tag 1
+        // 2. From inner handler's State.get() - tag 0 (outer prompt)
+        assert_eq!(
+            shifts.len(),
+            2,
+            "Should have exactly 2 cont.shift operations"
+        );
+
+        // Collect the tags used by each shift
+        let tags: Vec<u32> = shifts.iter().map(|s| s.tag(db)).collect();
+
+        // One shift should use tag 1 (inner body), one should use tag 0 (inner handler)
+        assert!(
+            tags.contains(&0) && tags.contains(&1),
+            "Expected tags [0, 1], got {:?}. Inner handler's ability op should use outer prompt (tag 0), not inner prompt (tag 1)",
+            tags
+        );
+
+        // Specifically verify: the State.get shift should have tag 0
+        let state_get_shift = shifts
+            .iter()
+            .find(|s| s.op_name(db).with_str(|s| s == "get"))
+            .expect("Should find State.get shift");
+        assert_eq!(
+            state_get_shift.tag(db),
+            0,
+            "Inner handler's State.get() should use outer prompt tag 0"
         );
     }
 }
