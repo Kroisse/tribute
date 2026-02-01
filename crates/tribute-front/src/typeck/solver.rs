@@ -2117,4 +2117,235 @@ mod tests {
             result
         );
     }
+
+    // =========================================================================
+    // Parameterized ability unification with type variables
+    // =========================================================================
+
+    #[test]
+    fn test_effect_with_type_var_unifies_with_concrete() {
+        // State(?a) and State(Int) should unify with ?a = Int
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = fresh_var(&db, 0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_var = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![var_ty],
+        };
+        let state_int = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![int_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_var], None);
+        let r2 = EffectRow::new(&db, vec![state_int], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "State(?a) should unify with State(Int), got {:?}",
+            result
+        );
+
+        // Check that ?a was unified to Int
+        let resolved = solver.type_subst.apply(&db, var_ty);
+        assert_eq!(resolved, int_ty, "Type variable should be unified to Int");
+    }
+
+    #[test]
+    fn test_effect_with_two_type_vars_unifies() {
+        // State(?a) and State(?b) should unify with ?a = ?b
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+
+        let state_a = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![var_a],
+        };
+        let state_b = Effect {
+            name: trunk_ir::Symbol::new("State"),
+            args: vec![var_b],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_a], None);
+        let r2 = EffectRow::new(&db, vec![state_b], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "State(?a) should unify with State(?b), got {:?}",
+            result
+        );
+
+        // Check that they are unified (both resolve to the same type)
+        let resolved_a = solver.type_subst.apply(&db, var_a);
+        let resolved_b = solver.type_subst.apply(&db, var_b);
+        assert_eq!(resolved_a, resolved_b, "Type variables should be unified");
+    }
+
+    #[test]
+    fn test_effect_mixed_type_var_and_concrete_unifies() {
+        // Pair(?a, Int) and Pair(Bool, ?b) should unify with ?a = Bool, ?b = Int
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        let pair1 = Effect {
+            name: trunk_ir::Symbol::new("Pair"),
+            args: vec![var_a, int_ty],
+        };
+        let pair2 = Effect {
+            name: trunk_ir::Symbol::new("Pair"),
+            args: vec![bool_ty, var_b],
+        };
+
+        let r1 = EffectRow::new(&db, vec![pair1], None);
+        let r2 = EffectRow::new(&db, vec![pair2], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "Pair(?a, Int) should unify with Pair(Bool, ?b), got {:?}",
+            result
+        );
+
+        // Check that ?a = Bool and ?b = Int
+        assert_eq!(solver.type_subst.apply(&db, var_a), bool_ty);
+        assert_eq!(solver.type_subst.apply(&db, var_b), int_ty);
+    }
+
+    #[test]
+    fn test_types_unifiable_simple() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let var_ty = fresh_var(&db, 0);
+
+        // Same types are unifiable
+        assert!(solver.types_unifiable(int_ty, int_ty));
+
+        // Different concrete types are not unifiable
+        assert!(!solver.types_unifiable(int_ty, bool_ty));
+
+        // Type variable is unifiable with any type
+        assert!(solver.types_unifiable(var_ty, int_ty));
+        assert!(solver.types_unifiable(int_ty, var_ty));
+
+        // Two type variables are unifiable
+        let var_ty2 = fresh_var(&db, 1);
+        assert!(solver.types_unifiable(var_ty, var_ty2));
+    }
+
+    // =========================================================================
+    // row_occurs_in_type tests for params/result recursion
+    // =========================================================================
+
+    #[test]
+    fn test_row_occurs_in_func_params() {
+        // row var in function parameter should be detected
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn(fn() ->{e} Int) -> Int where we check for e in outer func
+        let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let inner_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect: inner_effect,
+            },
+        );
+        let outer_effect = EffectRow::new(&db, vec![], None);
+        let outer_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![inner_func],
+                result: int_ty,
+                effect: outer_effect,
+            },
+        );
+
+        assert!(
+            solver.row_occurs_in_type(row_var, outer_func),
+            "Row variable in param's effect should be detected"
+        );
+    }
+
+    #[test]
+    fn test_row_occurs_in_func_result() {
+        // row var in function result should be detected
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn() -> fn() ->{e} Int where we check for e in outer func
+        let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let inner_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect: inner_effect,
+            },
+        );
+        let outer_effect = EffectRow::new(&db, vec![], None);
+        let outer_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: inner_func,
+                effect: outer_effect,
+            },
+        );
+
+        assert!(
+            solver.row_occurs_in_type(row_var, outer_func),
+            "Row variable in result's effect should be detected"
+        );
+    }
+
+    #[test]
+    fn test_row_not_in_func_if_absent() {
+        // row var not present should return false
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let other_var = EffectVar { id: 99 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn() -> Int with empty effect
+        let effect = EffectRow::new(&db, vec![], Some(other_var));
+        let func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        assert!(
+            !solver.row_occurs_in_type(row_var, func),
+            "Row variable not present should not be detected"
+        );
+    }
 }

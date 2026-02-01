@@ -713,3 +713,167 @@ fn main() -> Int {
         );
     });
 }
+
+// =============================================================================
+// Parameterized Ability Type Distinction Tests
+// =============================================================================
+
+/// Test that State(Int) and State(Bool) are treated as distinct abilities.
+/// A function with State(Int) effect cannot be called where State(Bool) is expected.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_parameterized_ability_distinct_types() {
+    // This should produce a type error: State(Int) is not State(Bool)
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_int_state() ->{State(Int)} Int {
+    State::get()
+}
+
+// This should fail: use_int_state has State(Int), but we're in State(Bool) context
+fn wrapper() ->{State(Bool)} Int {
+    use_int_state()
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "param_ability_distinct.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        // Should have a type error due to State(Int) != State(Bool)
+        assert!(
+            !result.diagnostics.is_empty(),
+            "Expected type error for State(Int) vs State(Bool) mismatch"
+        );
+
+        // Verify it's a row mismatch or type mismatch error
+        let has_type_error = result.diagnostics.iter().any(|d| {
+            let msg = format!("{:?}", d);
+            msg.contains("Mismatch") || msg.contains("mismatch")
+        });
+        assert!(
+            has_type_error,
+            "Expected row/type mismatch error, got: {:?}",
+            result.diagnostics
+        );
+    });
+}
+
+/// Test that State(Int) and State(Int) are the same ability and unify correctly.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_parameterized_ability_same_type_unifies() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_state_int() ->{State(Int)} Int {
+    State::get()
+}
+
+fn wrapper() ->{State(Int)} Int {
+    use_state_int()
+}
+
+fn main() -> Int {
+    handle wrapper() {
+        { result } -> result
+        { State::get() -> k } -> k(42)
+        { State::set(v) -> k } -> k(Nil)
+    }
+}
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "param_ability_same.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Same parameterized abilities should unify without errors, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test type variable unification in ability args: State(?a) unifies with State(Int).
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_parameterized_ability_type_var_unification() {
+    // Generic function with State(s) should unify with concrete State(Int)
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn use_state_generic() ->{State(s)} s {
+    State::get()
+}
+
+fn use_state_int() ->{State(Int)} Int {
+    use_state_generic()
+}
+
+fn main() -> Int {
+    handle use_state_int() {
+        { result } -> result
+        { State::get() -> k } -> k(100)
+        { State::set(v) -> k } -> k(Nil)
+    }
+}
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "param_ability_typevar.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        for diag in &result.diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "Type variable in ability arg should unify, got {} diagnostics",
+            result.diagnostics.len()
+        );
+    });
+}
+
+/// Test arity mismatch: State(Int) vs State() should be an error.
+#[test]
+#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+fn test_parameterized_ability_arity_mismatch() {
+    // This is invalid: ability State(s) requires one type argument
+    let code = r#"ability State(s) {
+    fn get() -> s
+}
+
+// Missing type argument - should be State(Int) or similar
+fn bad_func() ->{State()} Int {
+    State::get()
+}
+
+fn main() -> Int { 0 }
+"#;
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let source = parse_source(db, "param_ability_arity.trb", code);
+        let result = compile_with_diagnostics(db, source);
+
+        // Should have an arity mismatch error
+        assert!(
+            !result.diagnostics.is_empty(),
+            "Expected arity mismatch error for State() vs State(s)"
+        );
+    });
+}
