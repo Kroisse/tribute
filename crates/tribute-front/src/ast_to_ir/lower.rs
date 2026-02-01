@@ -2113,8 +2113,11 @@ fn build_suspend_handler_block<'db>(
     // Create block with marker argument for ability_ref and op_name
     // The marker argument has attributes that identify which effect this block handles
     // Extract ability name from resolved reference and construct proper AbilityRefType
+    // Use qualified name to match the name used in cont.shift generation (line 545-546)
     let ability_name = match &ability.resolved {
-        crate::ast::ResolvedRef::TypeDef { id } => id.name(db),
+        crate::ast::ResolvedRef::TypeDef { id } => {
+            Symbol::from_dynamic(&id.qualified_name(db).to_string())
+        }
         other => {
             // Report error: expected ability type definition
             Diagnostic {

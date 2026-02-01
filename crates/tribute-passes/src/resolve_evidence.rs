@@ -75,6 +75,13 @@ fn ensure_runtime_functions<'db>(
     let body = module.body(db);
     let blocks = body.blocks(db);
 
+    // Module body should always have exactly one block
+    assert!(
+        blocks.len() <= 1,
+        "ICE: Module body should have at most one block, found {}",
+        blocks.len()
+    );
+
     let Some(entry_block) = blocks.first() else {
         return module;
     };
@@ -251,6 +258,13 @@ fn transform_shifts_in_module<'db>(
     let body = module.body(db);
     let blocks = body.blocks(db);
 
+    // Module body should always have exactly one block
+    assert!(
+        blocks.len() <= 1,
+        "ICE: Module body should have at most one block, found {}",
+        blocks.len()
+    );
+
     let Some(entry_block) = blocks.first() else {
         return module;
     };
@@ -314,7 +328,10 @@ fn transform_shifts_in_function<'db>(
     let new_blocks: IdVec<Block<'db>> = blocks
         .iter()
         .map(|block| {
-            let (new_block, block_changed) = transform_shifts_in_block(db, block, ev_value);
+            // Precompute handled abilities for all prompt tags in this block
+            let handled_by_tag = collect_handled_abilities_by_tag(db, block);
+            let (new_block, block_changed) =
+                transform_shifts_in_block(db, block, ev_value, &handled_by_tag);
             if block_changed {
                 changed = true;
             }
@@ -342,6 +359,7 @@ fn transform_shifts_in_block<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
     ev_value: Value<'db>,
+    handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
 ) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut changed = false;
@@ -360,8 +378,8 @@ fn transform_shifts_in_block<'db>(
             let location = op.location(db);
             let tag = push_prompt_op.tag(db);
 
-            // Find abilities handled by this handler by scanning forward for handler_dispatch
-            let abilities = collect_handled_abilities(db, block, tag);
+            // Look up abilities handled by this handler from the precomputed map
+            let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
 
             // If no abilities found, just recurse into regions without evidence_extend
             if abilities.is_empty() {
@@ -624,7 +642,10 @@ fn transform_shifts_in_region<'db>(
         .blocks(db)
         .iter()
         .map(|block| {
-            let (new_block, block_changed) = transform_shifts_in_block(db, block, ev_value);
+            // Precompute handled abilities for each block in the region
+            let handled_by_tag = collect_handled_abilities_by_tag(db, block);
+            let (new_block, block_changed) =
+                transform_shifts_in_block(db, block, ev_value, &handled_by_tag);
             if block_changed {
                 changed = true;
             }
@@ -636,23 +657,21 @@ fn transform_shifts_in_region<'db>(
     (new_region, changed)
 }
 
-/// Collect abilities handled by a push_prompt by finding the associated handler_dispatch.
+/// Precompute handled abilities for all prompt tags in a block.
 ///
-/// Scans the block for a handler_dispatch with the same tag and extracts ability_ref
-/// attributes from its body blocks.
-fn collect_handled_abilities<'db>(
+/// Scans the block once for all handler_dispatch operations and builds a map
+/// from tag to the list of abilities handled by that handler. This avoids
+/// O(n²) scanning when processing multiple push_prompt operations in the same block.
+fn collect_handled_abilities_by_tag<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
-    tag: u32,
-) -> Vec<Type<'db>> {
-    let mut abilities = Vec::new();
+) -> HashMap<u32, Vec<Type<'db>>> {
+    let mut map: HashMap<u32, Vec<Type<'db>>> = HashMap::new();
 
     for op in block.operations(db).iter() {
-        // Look for handler_dispatch with matching tag
         if let Ok(dispatch_op) = cont::HandlerDispatch::from_operation(db, *op) {
-            if dispatch_op.tag(db) != tag {
-                continue;
-            }
+            let tag = dispatch_op.tag(db);
+            let mut abilities = Vec::new();
 
             // Extract ability_ref from body blocks (skip block 0 which is the "done" case)
             let body = dispatch_op.body(db);
@@ -673,11 +692,12 @@ fn collect_handled_abilities<'db>(
                     }
                 }
             }
-            break; // Found the matching handler_dispatch
+
+            map.insert(tag, abilities);
         }
     }
 
-    abilities
+    map
 }
 
 /// Validate that no unresolved cont.shift operations remain in the module.
