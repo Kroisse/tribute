@@ -22,10 +22,8 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use tribute_ir::dialect::{ability, tribute_rt};
-#[cfg(test)]
 use trunk_ir::Attribute;
 use trunk_ir::DialectType;
-#[cfg(test)]
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::trampoline;
 use trunk_ir::dialect::{cont, core, func};
@@ -149,17 +147,24 @@ impl<'db> RewritePattern<'db> for LowerPerformPattern {
         // Get args from adaptor (remapped values)
         let args: Vec<_> = adaptor.operands().iter().copied().collect();
 
-        // For now, we create a cont.shift with a placeholder tag.
+        // For now, we create a cont.shift with a placeholder tag as an operand.
         // In the full implementation, the tag would come from evidence lookup:
         //   let marker = ev.get(ABILITY_ID)
         //   let tag = marker.prompt()
         //
         // For the initial implementation, we use a static tag based on
         // the ability reference. The handler matching will be resolved
-        // at the push_prompt level.
+        // at the push_prompt level. The resolve_evidence pass will replace
+        // this constant with an actual evidence lookup.
         let tag = fresh_prompt_tag();
 
         let location = op.location(db);
+
+        // Create tag constant as operand
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+        let tag_const_op =
+            arith::r#const(db, location, prompt_tag_ty, Attribute::IntBits(tag as u64));
+        let tag_val = tag_const_op.as_operation().result(db, 0);
 
         // Get the result type from ability.perform to pass to cont.shift.
         // This is the type that will be returned when the continuation is resumed.
@@ -177,21 +182,21 @@ impl<'db> RewritePattern<'db> for LowerPerformPattern {
         let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
         let handler_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
-        // Create cont.shift with all attributes
+        // Create cont.shift with tag as first operand
         // Note: op_idx is not stored in IR; it will be computed from op_name
         // during WASM lowering.
         let shift_op = cont::shift(
             db,
             location,
+            tag_val,
             args,
             result_ty,
-            tag,
             ability_ref,
             op_name,
             handler_region,
         );
 
-        RewriteResult::Replace(shift_op.as_operation())
+        RewriteResult::expand(vec![tag_const_op.as_operation(), shift_op.as_operation()])
     }
 }
 
@@ -390,7 +395,7 @@ mod tests {
     }
 
     /// Test helper: builds perform op and applies the lowering pattern.
-    /// Returns (dialect, name) of the result.
+    /// Returns (dialect, name) of the last operation (should be cont.shift).
     #[salsa::tracked]
     fn lower_perform_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
         let location = test_location(db);
@@ -423,8 +428,13 @@ mod tests {
         let result = pattern.match_and_rewrite(db, &perform_op, &adaptor);
 
         match result {
-            RewriteResult::Replace(new_op) => (new_op.dialect(db), new_op.name(db)),
-            _ => panic!("Expected Replace result"),
+            // The pattern now returns Expand with [tag_const, shift_op]
+            RewriteResult::Expand(ops) => {
+                // The last operation should be cont.shift
+                let shift_op = ops.last().expect("Should have at least one operation");
+                (shift_op.dialect(db), shift_op.name(db))
+            }
+            _ => panic!("Expected Expand result"),
         }
     }
 

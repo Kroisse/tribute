@@ -60,15 +60,12 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(ConvertFuncTypePattern)
         .add_pattern(ConvertTrampolineResultTypePattern)
         .add_pattern(LowerBuildContinuationPattern)
-        .add_pattern(LowerBuildContinuationDynamicPattern)
         .add_pattern(LowerStepDonePattern)
         .add_pattern(LowerStepShiftPattern)
-        .add_pattern(LowerStepShiftDynamicPattern)
         .add_pattern(LowerTrampolineStructGetPattern)
         .add_pattern(LowerBuildStatePattern)
         .add_pattern(LowerBuildResumeWrapperPattern)
         .add_pattern(LowerSetYieldStatePattern)
-        .add_pattern(LowerSetYieldStateDynamicPattern)
         .add_pattern(LowerResetYieldStatePattern)
         .add_pattern(LowerYieldContinuationAccessPattern)
         .add_pattern(LowerYieldGlobalGetPattern);
@@ -481,6 +478,8 @@ fn null_any<'db>(
 // ============================================================================
 
 /// Lower `trampoline.build_continuation` → `adt.struct_new`
+///
+/// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerBuildContinuationPattern;
 
 impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
@@ -490,75 +489,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let build_cont = match trampoline::BuildContinuation::from_operation(db, *op) {
-            Ok(bc) => bc,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let cont_type = continuation_adt_type(db);
-
-        let tag = build_cont.tag(db);
-
-        let operands = adaptor.operands();
-        let resume_fn = operands.first().copied();
-        let state = operands.get(1).copied();
-        let shift_value = operands.get(2).copied();
-
-        let mut ops = Vec::new();
-
-        // Create tag constant
-        let tag_const = create_i32_const(db, location, tag as i32);
-        let tag_value = tag_const.result(db, 0);
-        ops.push(tag_const);
-
-        // resume_fn field (i32 table index, no casting needed since func.constant
-        // is lowered to wasm.i32_const)
-        let resume_fn_field = if let Some(v) = resume_fn {
-            v
-        } else {
-            // Use -1 as null index (invalid table index sentinel)
-            let null_const = create_i32_const(db, location, -1);
-            ops.push(null_const);
-            null_const.result(db, 0)
-        };
-
-        // state field - cast to any using TypeConverter materialization
-        let state_field = if let Some(v) = state {
-            materialize_to_any(db, location, v, adaptor, &mut ops)
-        } else {
-            null_any(db, location, &mut ops)
-        };
-
-        // shift_value field - cast to any using TypeConverter materialization
-        let shift_value_field = if let Some(v) = shift_value {
-            materialize_to_any(db, location, v, adaptor, &mut ops)
-        } else {
-            null_any(db, location, &mut ops)
-        };
-
-        let fields = vec![resume_fn_field, state_field, tag_value, shift_value_field];
-
-        let struct_new = adt::struct_new(db, location, fields, cont_type, cont_type);
-        ops.push(struct_new.as_operation());
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.build_continuation_dynamic` → `adt.struct_new`
-///
-/// Same as LowerBuildContinuationPattern but takes tag as first operand instead of attribute.
-struct LowerBuildContinuationDynamicPattern;
-
-impl<'db> RewritePattern<'db> for LowerBuildContinuationDynamicPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let _build_cont = match trampoline::BuildContinuationDynamic::from_operation(db, *op) {
+        let _build_cont = match trampoline::BuildContinuation::from_operation(db, *op) {
             Ok(bc) => bc,
             Err(_) => return RewriteResult::Unchanged,
         };
@@ -567,7 +498,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationDynamicPattern {
         let cont_type = continuation_adt_type(db);
 
         let operands = adaptor.operands();
-        // For dynamic version: operands are (tag, resume_fn, state, shift_value)
+        // Operands are (tag, resume_fn, state, shift_value)
         let tag_operand = operands.first().copied();
         let resume_fn = operands.get(1).copied();
         let state = operands.get(2).copied();
@@ -576,7 +507,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationDynamicPattern {
         let mut ops = Vec::new();
 
         // Tag comes from operand (cont.prompt_tag has same representation as i32)
-        let tag_value = tag_operand.expect("build_continuation_dynamic requires tag operand");
+        let tag_value = tag_operand.expect("build_continuation requires tag operand");
 
         // resume_fn field
         let resume_fn_field = if let Some(v) = resume_fn {
@@ -660,6 +591,8 @@ impl<'db> RewritePattern<'db> for LowerStepDonePattern {
 }
 
 /// Lower `trampoline.step_shift` → `adt.struct_new` with tag=1
+///
+/// Takes prompt tag as first operand (dynamic tag from evidence lookup).
 struct LowerStepShiftPattern;
 
 impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
@@ -677,65 +610,10 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
         let location = op.location(db);
         let step_type = step_adt_type(db);
 
-        let prompt = step_shift.prompt(db);
         let op_idx = step_shift.op_idx(db);
 
-        let continuation = adaptor.operands().first().copied();
-
-        let mut ops = Vec::new();
-
-        // Create constants
-        let tag_const = create_i32_const(db, location, STEP_TAG_SHIFT);
-        let prompt_const = create_i32_const(db, location, prompt as i32);
-        let op_idx_const = create_i32_const(db, location, op_idx as i32);
-
-        let tag_value = tag_const.result(db, 0);
-        let prompt_value = prompt_const.result(db, 0);
-        let op_idx_value = op_idx_const.result(db, 0);
-
-        ops.push(tag_const);
-        ops.push(prompt_const);
-        ops.push(op_idx_const);
-
-        // Value field - cast continuation to any using TypeConverter materialization
-        let value_field = if let Some(v) = continuation {
-            materialize_to_any(db, location, v, adaptor, &mut ops)
-        } else {
-            null_any(db, location, &mut ops)
-        };
-
-        let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
-        let struct_new = adt::struct_new(db, location, fields, step_type, step_type);
-        ops.push(struct_new.as_operation());
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.step_shift_dynamic` → `adt.struct_new` with tag=1
-///
-/// Same as LowerStepShiftPattern but takes prompt tag as first operand instead of attribute.
-struct LowerStepShiftDynamicPattern;
-
-impl<'db> RewritePattern<'db> for LowerStepShiftDynamicPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let step_shift_dyn = match trampoline::StepShiftDynamic::from_operation(db, *op) {
-            Ok(ss) => ss,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let step_type = step_adt_type(db);
-
-        let op_idx = step_shift_dyn.op_idx(db);
-
         let operands = adaptor.operands();
-        // For dynamic version: operands are (prompt, continuation)
+        // Operands are (prompt, continuation)
         let prompt_operand = operands.first().copied();
         let continuation = operands.get(1).copied();
 
@@ -747,7 +625,7 @@ impl<'db> RewritePattern<'db> for LowerStepShiftDynamicPattern {
         ops.push(tag_const);
 
         // Prompt comes from operand (cont.prompt_tag has same representation as i32)
-        let prompt_value = prompt_operand.expect("step_shift_dynamic requires prompt operand");
+        let prompt_value = prompt_operand.expect("step_shift requires prompt operand");
 
         // op_idx from attribute
         let op_idx_const = create_i32_const(db, location, op_idx as i32);
@@ -980,6 +858,8 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
 // ============================================================================
 
 /// Lower `trampoline.set_yield_state` → wasm.global_set (multiple)
+///
+/// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerSetYieldStatePattern;
 
 impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
@@ -995,64 +875,18 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         };
 
         let location = op.location(db);
-        let tag = set_yield.tag(db);
         let op_idx = set_yield.op_idx(db);
 
-        let cont_val = adaptor
-            .operands()
-            .first()
-            .copied()
-            .expect("set_yield_state requires continuation operand");
-
-        let mut ops = Vec::new();
-
-        // Set $yield_state = 1 (yielding)
-        push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
-
-        // Set $yield_tag = tag
-        push_set_i32_global(db, location, tag as i32, yield_globals::TAG_IDX, &mut ops);
-
-        // Set $yield_cont = continuation (as anyref)
-        let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
-        ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
-
-        // Set $yield_op_idx = op_idx
-        push_set_i32_global(db, location, op_idx as i32, yield_globals::OP_IDX, &mut ops);
-
-        RewriteResult::expand(ops)
-    }
-}
-
-/// Lower `trampoline.set_yield_state_dynamic` → wasm.global_set (multiple)
-///
-/// Same as LowerSetYieldStatePattern but takes tag as first operand instead of attribute.
-struct LowerSetYieldStateDynamicPattern;
-
-impl<'db> RewritePattern<'db> for LowerSetYieldStateDynamicPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
-        let set_yield_dyn = match trampoline::SetYieldStateDynamic::from_operation(db, *op) {
-            Ok(sy) => sy,
-            Err(_) => return RewriteResult::Unchanged,
-        };
-
-        let location = op.location(db);
-        let op_idx = set_yield_dyn.op_idx(db);
-
         let operands = adaptor.operands();
-        // For dynamic version: operands are (tag, continuation)
+        // Operands are (tag, continuation)
         let tag_operand = operands
             .first()
             .copied()
-            .expect("set_yield_state_dynamic requires tag operand");
+            .expect("set_yield_state requires tag operand");
         let cont_val = operands
             .get(1)
             .copied()
-            .expect("set_yield_state_dynamic requires continuation operand");
+            .expect("set_yield_state requires continuation operand");
 
         let mut ops = Vec::new();
 
@@ -1436,32 +1270,35 @@ mod tests {
         let location = test_location(db);
         let cont_ty = trampoline::Continuation::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
 
-        // Create operands: resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        // Create operands: tag (prompt_tag), resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 1);
         let resume_fn_op = create_i32_const(db, location, -1);
         let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
 
-        let resume_fn = resume_fn_op.as_operation().result(db, 0);
+        let tag = tag_op.as_operation().result(db, 0);
+        let resume_fn = resume_fn_op.result(db, 0);
         let state = state_op.as_operation().result(db, 0);
         let shift_value = shift_value_op.as_operation().result(db, 0);
 
-        // Create trampoline.build_continuation
+        // Create trampoline.build_continuation with tag operand
         let build_cont_op = trampoline::build_continuation(
             db,
             location,
+            tag,
             resume_fn,
             state,
             shift_value,
             cont_ty,
-            1,
             0,
         );
 
         // Apply the pattern
         let pattern = LowerBuildContinuationPattern;
         let ctx = RewriteContext::new();
-        let type_converter = TypeConverter::new();
+        let type_converter = create_type_converter();
         let op = build_cont_op.as_operation();
         let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
@@ -1556,18 +1393,21 @@ mod tests {
     fn set_yield_state_uses_correct_globals(db: &dyn salsa::Database) -> Vec<u32> {
         let location = test_location(db);
         let anyref_ty = wasm::Anyref::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
 
-        // Create a dummy continuation value
+        // Create operands: tag, continuation
+        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
+        let tag_val = tag_op.as_operation().result(db, 0);
         let cont_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let cont_val = cont_op.as_operation().result(db, 0);
 
-        // Create trampoline.set_yield_state
-        let set_yield_op = trampoline::set_yield_state(db, location, cont_val, 42, 7);
+        // Create trampoline.set_yield_state with tag operand
+        let set_yield_op = trampoline::set_yield_state(db, location, tag_val, cont_val, 7);
 
         // Apply the pattern
         let pattern = LowerSetYieldStatePattern;
         let ctx = RewriteContext::new();
-        let type_converter = TypeConverter::new();
+        let type_converter = create_type_converter();
         let op = set_yield_op.as_operation();
         let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
@@ -1654,66 +1494,5 @@ mod tests {
             type_converter_prompt_tag_materialization(db),
             "cont.prompt_tag → i32 materialization should be NoOp"
         );
-    }
-
-    // ========================================================================
-    // Test: LowerBuildContinuationDynamicPattern with prompt_tag operand
-    // ========================================================================
-
-    /// Test that build_continuation_dynamic correctly handles cont.prompt_tag operand.
-    #[salsa::tracked]
-    fn build_continuation_dynamic_handles_prompt_tag(db: &dyn salsa::Database) -> (Symbol, Symbol) {
-        let location = test_location(db);
-        let cont_ty = trampoline::Continuation::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-
-        // Create operands: tag (prompt_tag), resume_fn (i32), state (anyref), shift_value (anyref)
-        // Use prompt_tag type for tag operand to simulate evidence-based dispatch
-        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 1);
-        let resume_fn_op = create_i32_const(db, location, 0);
-        let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-        let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-
-        let tag = tag_op.as_operation().result(db, 0);
-        let resume_fn = resume_fn_op.result(db, 0);
-        let state = state_op.as_operation().result(db, 0);
-        let shift_value = shift_value_op.as_operation().result(db, 0);
-
-        // Create trampoline.build_continuation_dynamic
-        let build_cont_op = trampoline::build_continuation_dynamic(
-            db,
-            location,
-            tag,
-            resume_fn,
-            state,
-            shift_value,
-            cont_ty,
-            0,
-        );
-
-        // Apply the pattern with our type converter
-        let pattern = LowerBuildContinuationDynamicPattern;
-        let ctx = RewriteContext::new();
-        let type_converter = create_type_converter();
-        let op = build_cont_op.as_operation();
-        let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
-        let result = pattern.match_and_rewrite(db, &op, &adaptor);
-
-        // Extract the final operation (should be adt.struct_new)
-        match result {
-            RewriteResult::Expand(ops) => {
-                let last_op = ops.last().unwrap();
-                (last_op.dialect(db), last_op.name(db))
-            }
-            _ => (Symbol::new("error"), Symbol::new("unexpected")),
-        }
-    }
-
-    #[salsa_test]
-    fn test_build_continuation_dynamic_with_prompt_tag(db: &salsa::DatabaseImpl) {
-        let (dialect, name) = build_continuation_dynamic_handles_prompt_tag(db);
-        assert_eq!(dialect, adt::DIALECT_NAME());
-        assert_eq!(name, adt::STRUCT_NEW());
     }
 }

@@ -458,7 +458,8 @@ fn transform_shifts_in_block<'db>(
             continue;
         }
 
-        // Check if this is a cont.shift
+        // Check if this is a cont.shift that needs tag resolution
+        // cont.shift now takes tag as first operand - we replace it with evidence lookup
         if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
             let location = op.location(db);
             let ability_ref = shift_op.ability_ref(db);
@@ -515,12 +516,16 @@ fn transform_shifts_in_block<'db>(
             let handler_region = shift_op.handler(db);
             let (new_handler_region, _) = transform_shifts_in_region(db, &handler_region, ev_value);
 
-            // Create cont.shift_dynamic
-            let shift_dynamic = cont::shift_dynamic(
+            // Get value operands (skip the old tag operand at index 0)
+            let value_operands: Vec<Value<'db>> =
+                remapped_operands.iter().skip(1).copied().collect();
+
+            // Create new cont.shift with the resolved tag
+            let new_shift = cont::shift(
                 db,
                 location,
                 tag_val,
-                remapped_operands,
+                value_operands,
                 result_ty,
                 ability_ref,
                 op_name,
@@ -530,11 +535,11 @@ fn transform_shifts_in_block<'db>(
             // Map old result to new result
             if !op.results(db).is_empty() {
                 let old_result = op.result(db, 0);
-                let new_result = shift_dynamic.as_operation().result(db, 0);
+                let new_result = new_shift.as_operation().result(db, 0);
                 value_map.insert(old_result, new_result);
             }
 
-            new_ops.push(shift_dynamic.as_operation());
+            new_ops.push(new_shift.as_operation());
             changed = true;
             continue;
         }
@@ -695,18 +700,32 @@ fn validate_no_unresolved_shifts(db: &dyn salsa::Database, module: &core::Module
 fn validate_no_unresolved_shifts_in_region(db: &dyn salsa::Database, region: &Region<'_>) {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
-            // Check if this is a cont.shift with the sentinel tag
+            // Check if this is a cont.shift with the sentinel tag in its first operand
             if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
-                let tag = shift_op.tag(db);
-                if tag == UNRESOLVED_SHIFT_TAG {
-                    let ability_ref = shift_op.ability_ref(db);
-                    let op_name = shift_op.op_name(db);
-                    panic!(
-                        "ICE: Unresolved cont.shift found after evidence pass.\n\
-                         Ability: {:?}, Op: {:?}\n\
-                         This indicates the shift was not inside a function with evidence parameter.",
-                        ability_ref, op_name
-                    );
+                // Get the tag operand (first operand)
+                let tag_operand = shift_op.tag(db);
+
+                // Check if the tag operand is a constant with the sentinel value
+                // ValueDef::OpResult contains the defining operation; index is checked separately
+                if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db) {
+                    if tag_operand.index(db) == 0 {
+                        if let Ok(const_op) =
+                            trunk_ir::dialect::arith::Const::from_operation(db, def_op)
+                        {
+                            if let Attribute::IntBits(value) = const_op.value(db) {
+                                if value == UNRESOLVED_SHIFT_TAG as u64 {
+                                    let ability_ref = shift_op.ability_ref(db);
+                                    let op_name = shift_op.op_name(db);
+                                    panic!(
+                                        "ICE: Unresolved cont.shift found after evidence pass.\n\
+                                         Ability: {:?}, Op: {:?}\n\
+                                         This indicates the shift was not inside a function with evidence parameter.",
+                                        ability_ref, op_name
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

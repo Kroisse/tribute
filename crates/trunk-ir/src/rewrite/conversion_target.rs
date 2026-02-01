@@ -412,18 +412,23 @@ mod tests {
     fn make_illegal_module(db: &dyn salsa::Database) -> Module<'_> {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
         let ability_ref_ty =
             core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
                 .as_type();
+
+        // Create a tag constant
+        let tag_const = arith::r#const(db, location, prompt_tag_ty, crate::Attribute::IntBits(0));
+        let tag_val = tag_const.result(db);
 
         // Create cont.shift which should be illegal
         let handler_region = Region::new(db, location, IdVec::new());
         let shift_op = cont::shift(
             db,
             location,
+            tag_val,
             vec![],
             i32_ty,
-            0,
             ability_ref_ty,
             Symbol::new("get"),
             handler_region,
@@ -435,7 +440,7 @@ mod tests {
             BlockId::fresh(),
             location,
             IdVec::new(),
-            IdVec::from(vec![shift_op]),
+            IdVec::from(vec![tag_const.as_operation(), shift_op]),
         );
         let region = Region::new(db, location, IdVec::from(vec![block]));
         Module::create(db, location, Symbol::new("test"), region)

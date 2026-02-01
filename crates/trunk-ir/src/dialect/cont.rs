@@ -22,44 +22,33 @@ dialect! {
             #[region(handlers)] {}
         };
 
-        /// `cont.shift` operation: captures continuation and jumps to handler.
+        /// `cont.shift` operation: captures continuation with dynamic tag.
         ///
+        /// Takes the prompt tag as an operand (runtime value) to enable
+        /// evidence-based handler dispatch where the tag is looked up at runtime
+        /// from the evidence structure.
+        ///
+        /// The first operand is the prompt tag value, followed by optional value operands.
         /// The optional `value` operands are passed to the handler along with
         /// the captured continuation. Currently only the first value is used.
         ///
         /// The result is the value passed when the continuation is resumed.
         /// This corresponds to the value returned by `ability.perform`.
         ///
-        /// - `tag`: prompt tag for matching handler instance (runtime identifier)
         /// - `ability_ref`: ability reference type (semantic information)
         /// - `op_name`: operation name symbol (semantic information)
         ///
         /// Note: Operation index (op_idx) is computed deterministically from op_name
         /// during WASM lowering and is not stored in the IR.
-        #[attr(tag: u32, ability_ref: Type, op_name: Symbol)]
-        fn shift(#[rest] value) -> result {
-            #[region(handler)] {}
-        };
-
-        /// `cont.shift_dynamic` operation: captures continuation with dynamic tag.
-        ///
-        /// Similar to `cont.shift` but takes the prompt tag as an operand instead of
-        /// an attribute. This enables evidence-based handler dispatch where the tag
-        /// is looked up at runtime from the evidence structure.
-        ///
-        /// The first operand is the prompt tag value, followed by optional value operands.
-        ///
-        /// - `ability_ref`: ability reference type (semantic information)
-        /// - `op_name`: operation name symbol (semantic information)
         ///
         /// Used for evidence-based dispatch:
         /// ```text
         /// %marker = call @__tribute_evidence_lookup(%ev, ability_id)
         /// %tag = call @__tribute_marker_prompt(%marker)
-        /// %result = cont.shift_dynamic(%tag, %args...) { ability_ref, op_name }
+        /// %result = cont.shift(%tag, %args...) { ability_ref, op_name }
         /// ```
         #[attr(ability_ref: Type, op_name: Symbol)]
-        fn shift_dynamic(tag, #[rest] value) -> result {
+        fn shift(tag, #[rest] value) -> result {
             #[region(handler)] {}
         };
 

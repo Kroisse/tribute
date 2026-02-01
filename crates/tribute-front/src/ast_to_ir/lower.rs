@@ -540,9 +540,10 @@ fn lower_expr<'db>(
                     }
                     ResolvedRef::AbilityOp { ability, op } => {
                         // Lower ability operation directly to cont.shift
-                        // Convert AbilityId to Symbol using the ability name
-                        // (IR uses simple names; qualified names would be used for disambiguation)
-                        let ability_name = ability.name(builder.db());
+                        // Convert AbilityId to Symbol using the qualified name for proper
+                        // disambiguation across modules (consistent with function handling)
+                        let qualified_name = ability.qualified_name(builder.db()).to_string();
+                        let ability_name = Symbol::from_dynamic(&qualified_name);
                         lower_ability_op_call(builder, location, ability_name, *op, arg_values)
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
@@ -1785,13 +1786,25 @@ fn lower_ability_op_call<'db>(
         args
     };
 
-    // Generate cont.shift
+    // Create tag constant as operand for cont.shift
+    // The sentinel value (u32::MAX) is used for unresolved shifts and will be
+    // transformed by resolve_evidence pass to a runtime evidence lookup.
+    let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+    let tag_const = builder.block.op(arith::r#const(
+        db,
+        location,
+        prompt_tag_ty,
+        Attribute::IntBits(tag as u64),
+    ));
+    let tag_value = tag_const.result(db);
+
+    // Generate cont.shift with dynamic tag operand
     let shift_op = builder.block.op(cont::shift(
         db,
         location,
+        tag_value,
         shift_args,
         result_ty,
-        tag,
         ability_ref,
         op,
         handler_region,
@@ -5269,6 +5282,24 @@ mod tests {
         }
     }
 
+    /// Extract the tag value from a cont.shift operation.
+    /// Returns the integer value if the tag operand is a constant, None otherwise.
+    fn get_shift_tag_value<'db>(
+        db: &'db dyn salsa::Database,
+        shift: &cont::Shift<'db>,
+    ) -> Option<u32> {
+        let tag_operand = shift.tag(db);
+        // Check if the tag operand is defined by an arith.const
+        if let trunk_ir::ValueDef::OpResult(def_op) = tag_operand.def(db) {
+            if let Ok(const_op) = trunk_ir::dialect::arith::Const::from_operation(db, def_op) {
+                if let trunk_ir::Attribute::IntBits(value) = const_op.value(db) {
+                    return Some(value as u32);
+                }
+            }
+        }
+        None
+    }
+
     /// Test that ability ops in handler bodies use the outer prompt tag.
     ///
     /// This tests the fix for a bug where the inner prompt tag remained active
@@ -5314,8 +5345,12 @@ mod tests {
         // - The body's shift uses tag 0 (the handle's prompt)
         // - The handler's shift uses sentinel (u32::MAX, since we popped before lowering handler)
         // This verifies that pop_prompt_tag was called before building handler body.
-        let body_shift = shifts.iter().find(|s| s.tag(db) == 0);
-        let handler_shift = shifts.iter().find(|s| s.tag(db) == u32::MAX);
+        let body_shift = shifts
+            .iter()
+            .find(|s| get_shift_tag_value(db, s) == Some(0));
+        let handler_shift = shifts
+            .iter()
+            .find(|s| get_shift_tag_value(db, s) == Some(u32::MAX));
 
         assert!(
             body_shift.is_some(),
@@ -5388,7 +5423,10 @@ mod tests {
         );
 
         // Collect the tags used by each shift
-        let tags: Vec<u32> = shifts.iter().map(|s| s.tag(db)).collect();
+        let tags: Vec<u32> = shifts
+            .iter()
+            .filter_map(|s| get_shift_tag_value(db, s))
+            .collect();
 
         // One shift should use tag 1 (inner body), one should use tag 0 (inner handler)
         assert!(
@@ -5403,9 +5441,130 @@ mod tests {
             .find(|s| s.op_name(db).with_str(|s| s == "get"))
             .expect("Should find State.get shift");
         assert_eq!(
-            state_get_shift.tag(db),
-            0,
+            get_shift_tag_value(db, state_get_shift),
+            Some(0),
             "Inner handler's State.get() should use outer prompt tag 0"
         );
+    }
+
+    // =========================================================================
+    // AbilityOp qualified name tests
+    // =========================================================================
+
+    /// Helper to create an AbilityId with a module path.
+    fn test_ability_id_with_path<'db>(
+        db: &'db dyn salsa::Database,
+        path: &[&str],
+        name: &str,
+    ) -> AbilityId<'db> {
+        let module_path = SymbolVec::from_iter(path.iter().map(|s| Symbol::from_dynamic(s)));
+        AbilityId::new(db, module_path, Symbol::from_dynamic(name))
+    }
+
+    /// Create an ability operation call with a custom AbilityId.
+    fn ability_op_call_with_id<'db>(
+        db: &'db dyn salsa::Database,
+        ability_id: AbilityId<'db>,
+        op_name: &str,
+    ) -> Expr<TypedRef<'db>> {
+        let ref_ = TypedRef::new(
+            ResolvedRef::ability_op(ability_id, Symbol::from_dynamic(op_name)),
+            AstType::new(db, TypeKind::Nil),
+        );
+        Expr::new(
+            fresh_node_id(),
+            ExprKind::Call {
+                callee: Expr::new(fresh_node_id(), ExprKind::Var(ref_)),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Test that ability operations use qualified names (including module path) in IR.
+    ///
+    /// When an ability is defined in a module (e.g., `std::state::State`),
+    /// the generated `cont.shift` should use the full qualified name for
+    /// proper disambiguation across modules.
+    #[salsa_test]
+    fn test_ability_op_uses_qualified_name(db: &salsa::DatabaseImpl) {
+        // Create AbilityId with module path: std::state::State
+        let ability_id = test_ability_id_with_path(db, &["std", "state"], "State");
+
+        // Create ability op call expression
+        let ability_op_call = ability_op_call_with_id(db, ability_id, "get");
+
+        // Create a function that calls this ability op
+        let func = simple_func(Symbol::new("test_fn"), ability_op_call);
+
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        // Lower to IR
+        let path_id = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower(db, path_id, SpanMap::default(), module);
+
+        // Find the shift operation
+        let shifts = find_shift_ops(db, &ir_module);
+        assert_eq!(
+            shifts.len(),
+            1,
+            "Should have exactly 1 cont.shift operation"
+        );
+
+        // Check that the ability_ref uses the qualified name
+        let shift = &shifts[0];
+        let ability_ref_ty = shift.ability_ref(db);
+        let ability_ref = core::AbilityRefType::from_type(db, ability_ref_ty)
+            .expect("ability_ref should be AbilityRefType");
+        let name = ability_ref.name(db).expect("should have ability name");
+
+        // The name should be the qualified name: "std::state::State"
+        name.with_str(|s| {
+            assert_eq!(
+                s, "std::state::State",
+                "AbilityOp should use qualified name in IR"
+            );
+        });
+    }
+
+    /// Test that ability operations without module path still work correctly.
+    #[salsa_test]
+    fn test_ability_op_simple_name(db: &salsa::DatabaseImpl) {
+        // Create AbilityId with empty module path
+        let ability_id = test_ability_id(db, "Console");
+
+        // Create ability op call expression
+        let ability_op_call = ability_op_call_with_id(db, ability_id, "print");
+
+        // Create a function that calls this ability op
+        let func = simple_func(Symbol::new("test_fn"), ability_op_call);
+
+        let module = simple_module(vec![Decl::Function(func)]);
+
+        // Lower to IR
+        let path_id = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower(db, path_id, SpanMap::default(), module);
+
+        // Find the shift operation
+        let shifts = find_shift_ops(db, &ir_module);
+        assert_eq!(
+            shifts.len(),
+            1,
+            "Should have exactly 1 cont.shift operation"
+        );
+
+        // Check that the ability_ref uses just the simple name
+        let shift = &shifts[0];
+        let ability_ref_ty = shift.ability_ref(db);
+        let ability_ref = core::AbilityRefType::from_type(db, ability_ref_ty)
+            .expect("ability_ref should be AbilityRefType");
+        let name = ability_ref.name(db).expect("should have ability name");
+
+        // The name should be just "Console" (no module path prefix)
+        name.with_str(|s| {
+            assert_eq!(
+                s, "Console",
+                "AbilityOp with empty module path should use simple name"
+            );
+        });
     }
 }

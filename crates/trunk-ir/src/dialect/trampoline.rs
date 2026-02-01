@@ -79,18 +79,11 @@ dialect! {
         /// `trampoline.build_continuation` operation: creates a continuation struct.
         ///
         /// Creates a continuation with the captured state for later resumption.
-        /// - `tag`: prompt tag for handler matching (static)
-        /// - `op_idx`: operation index within the ability
-        #[attr(tag: u32, op_idx: u32)]
-        fn build_continuation(resume_fn, state, shift_value) -> result;
-
-        /// `trampoline.build_continuation_dynamic` operation: creates a continuation with dynamic tag.
-        ///
-        /// Same as build_continuation but takes tag as an operand for evidence-based dispatch.
+        /// Takes tag as an operand for evidence-based dispatch.
         /// - First operand: tag (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index within the ability
         #[attr(op_idx: u32)]
-        fn build_continuation_dynamic(tag, resume_fn, state, shift_value) -> result;
+        fn build_continuation(tag, resume_fn, state, shift_value) -> result;
 
         /// `trampoline.step_done` operation: creates a Done step.
         ///
@@ -100,18 +93,11 @@ dialect! {
         /// `trampoline.step_shift` operation: creates a Shift step.
         ///
         /// Indicates that a continuation was captured and should be propagated.
-        /// - `prompt`: prompt tag for handler matching (static)
-        /// - `op_idx`: operation index within the ability
-        #[attr(prompt: u32, op_idx: u32)]
-        fn step_shift(continuation) -> result;
-
-        /// `trampoline.step_shift_dynamic` operation: creates a Shift step with dynamic tag.
-        ///
-        /// Same as step_shift but takes prompt tag as an operand for evidence-based dispatch.
+        /// Takes prompt tag as an operand for evidence-based dispatch.
         /// - First operand: prompt (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index within the ability
         #[attr(op_idx: u32)]
-        fn step_shift_dynamic(prompt, continuation) -> result;
+        fn step_shift(prompt, continuation) -> result;
 
         /// `trampoline.continuation_get` operation: extracts a field from continuation.
         ///
@@ -128,18 +114,11 @@ dialect! {
         /// `trampoline.set_yield_state` operation: sets global yield state.
         ///
         /// Called when performing a shift to propagate yield information.
-        /// - `tag`: prompt tag (static)
-        /// - `op_idx`: operation index
-        #[attr(tag: u32, op_idx: u32)]
-        fn set_yield_state(continuation);
-
-        /// `trampoline.set_yield_state_dynamic` operation: sets global yield state with dynamic tag.
-        ///
-        /// Same as set_yield_state but takes tag as an operand for evidence-based dispatch.
+        /// Takes tag as an operand for evidence-based dispatch.
         /// - First operand: tag (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index
         #[attr(op_idx: u32)]
-        fn set_yield_state_dynamic(tag, continuation);
+        fn set_yield_state(tag, continuation);
 
         /// `trampoline.reset_yield_state` operation: clears global yield state.
         ///
