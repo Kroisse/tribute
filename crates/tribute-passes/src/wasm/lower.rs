@@ -5,7 +5,6 @@
 
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::tribute;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
@@ -59,9 +58,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = super::tribute_rt_to_wasm::lower(db, module);
     debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
-    // Concretize type variables in wasm operations (resolve tribute.type_var)
-    let module = super::wasm_type_concrete::lower(db, module);
-    debug_func_params(db, &module, "after wasm_type_concrete");
+    // NOTE: wasm_type_concrete pass removed - type variables are now resolved
+    // at AST level and converted to concrete types in ast_to_ir
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = super::const_to_wasm::analyze_consts(db, module);
@@ -643,13 +641,6 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Skip tribute dialect metadata operations - they have no runtime representation.
-        if dialect == tribute::DIALECT_NAME() {
-            // These are all metadata/definition ops that don't produce wasm code:
-            // - ability_def: ability type definitions
-            return;
-        }
-
         // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
@@ -663,18 +654,9 @@ impl<'db> WasmLowerer<'db> {
         // Note: Some dialects are allowed for edge cases:
         // - "func": func.call_indirect (closure support pending)
         // - "adt": adt.string_const (handled by const_to_wasm pass)
-        // - "tribute": tribute.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = [
-                "wasm",
-                "core",
-                "func",
-                "adt",
-                "scf",
-                "tribute",
-                "tribute_pat",
-            ];
+            let allowed = ["wasm", "core", "func", "adt", "scf"];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(
                     "Unhandled operation in lowering: {}.{} (this may cause emit errors)",

@@ -187,7 +187,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::{arith, core, func};
     use trunk_ir::ir::BlockBuilder;
-    use trunk_ir::{BlockId, DialectType, IdVec, Location, PathId, Span, Symbol};
+    use trunk_ir::{Attribute, BlockId, DialectType, IdVec, Location, PathId, Span, Symbol};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
@@ -220,7 +220,8 @@ mod tests {
     /// Create a region with one shift point:
     /// ```
     /// %0 = arith.const 42
-    /// %1 = cont.shift() -> Int  // shift point 0
+    /// %tag = arith.const 0
+    /// %1 = cont.shift(%tag) -> Int  // shift point 0
     /// %2 = arith.add %0, %1     // uses %0 (live) and %1 (shift result)
     /// func.return %2
     /// ```
@@ -228,6 +229,7 @@ mod tests {
     fn create_single_shift_region(db: &dyn salsa::Database) -> Region<'_> {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
         let ability_ref_ty =
             core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
                 .as_type();
@@ -238,14 +240,23 @@ mod tests {
         let const_op = builder.op(arith::Const::i32(db, location, 42));
         let const_val = const_op.result(db);
 
-        // %1 = cont.shift (shift point)
+        // %tag = arith.const 0 (prompt tag)
+        let tag_const = builder.op(arith::r#const(
+            db,
+            location,
+            prompt_tag_ty,
+            Attribute::IntBits(0),
+        ));
+        let tag_val = tag_const.result(db);
+
+        // %1 = cont.shift(%tag) (shift point)
         let handler_region = Region::new(db, location, IdVec::new());
         let shift_op = builder.op(cont::shift(
             db,
             test_location_at(db, 100), // different location to identify
+            tag_val,
             vec![],
             i32_ty,
-            0,
             ability_ref_ty,
             Symbol::new("get"),
             handler_region,
@@ -265,31 +276,42 @@ mod tests {
 
     /// Create a region with two shift points:
     /// ```
-    /// %0 = cont.shift() -> Int  // shift point 0
+    /// %tag = arith.const 0
+    /// %0 = cont.shift(%tag) -> Int  // shift point 0
     /// %1 = arith.const 1
     /// %2 = arith.add %0, %1
-    /// %3 = cont.shift(%2)       // shift point 1, %0 is live
-    /// func.return %0            // uses %0 from before both shifts
+    /// %3 = cont.shift(%tag, %2)     // shift point 1, %0 is live
+    /// func.return %0                // uses %0 from before both shifts
     /// ```
     #[salsa::tracked]
     fn create_dual_shift_region(db: &dyn salsa::Database) -> Region<'_> {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
         let nil_ty = core::Nil::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
         let ability_ref_ty =
             core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
                 .as_type();
 
         let mut builder = BlockBuilder::new(db, location);
 
-        // %0 = cont.shift() (shift point 0: State::get)
+        // %tag = arith.const 0 (prompt tag)
+        let tag_const = builder.op(arith::r#const(
+            db,
+            location,
+            prompt_tag_ty,
+            Attribute::IntBits(0),
+        ));
+        let tag_val = tag_const.result(db);
+
+        // %0 = cont.shift(%tag) (shift point 0: State::get)
         let handler_region0 = Region::new(db, location, IdVec::new());
         let shift0 = builder.op(cont::shift(
             db,
             test_location_at(db, 100),
+            tag_val,
             vec![],
             i32_ty,
-            0,
             ability_ref_ty,
             Symbol::new("get"),
             handler_region0,
@@ -304,14 +326,14 @@ mod tests {
         let add_op = builder.op(arith::add(db, location, n, one_val, i32_ty));
         let n_plus_1 = add_op.result(db);
 
-        // %3 = cont.shift(%2) (shift point 1: State::set)
+        // %3 = cont.shift(%tag, %2) (shift point 1: State::set)
         let handler_region1 = Region::new(db, location, IdVec::new());
         builder.op(cont::shift(
             db,
             test_location_at(db, 200),
+            tag_val,
             vec![n_plus_1],
             nil_ty,
-            0,
             ability_ref_ty,
             Symbol::new("set"),
             handler_region1,
@@ -393,14 +415,15 @@ mod tests {
         let region = create_dual_shift_region(db);
         let analysis = FunctionAnalysis::analyze(db, &region).unwrap();
 
-        // Shift 0: no values defined before it
+        // Shift 0: tag_val is defined before and used after (in shift 1)
         assert_eq!(
             analysis.shift_points[0].live_values.len(),
-            0,
-            "First shift has no live values (nothing defined before)"
+            1,
+            "First shift has one live value (tag_val used in second shift)"
         );
 
         // Shift 1: n (%0) is defined before and used after (in return)
+        // Note: tag_val is also defined before shift 1 but not used after it
         assert_eq!(
             analysis.shift_points[1].live_values.len(),
             1,

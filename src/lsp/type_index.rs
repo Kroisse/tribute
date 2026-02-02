@@ -81,11 +81,11 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
                     .iter()
                     .map(|e| {
                         if e.args.is_empty() {
-                            e.name.to_string()
+                            e.ability_id.name(db).to_string()
                         } else {
                             let args_str: Vec<String> =
                                 e.args.iter().map(|t| print_ast_type(db, *t)).collect();
-                            format!("{}({})", e.name, args_str.join(", "))
+                            format!("{}({})", e.ability_id.name(db), args_str.join(", "))
                         }
                     })
                     .collect();
@@ -676,13 +676,15 @@ mod tests {
 
     #[test]
     fn test_print_ast_type_function_with_effects() {
-        use tribute_front::ast::{Effect, EffectRow};
+        use tribute_front::ast::{AbilityId, Effect, EffectRow};
+        use trunk_ir::SymbolVec;
 
         let db = salsa::DatabaseImpl::default();
 
         let int_ty = Type::new(&db, TypeKind::Int);
+        let io_id = AbilityId::new(&db, SymbolVec::new(), trunk_ir::Symbol::new("IO"));
         let effect = Effect {
-            name: trunk_ir::Symbol::new("IO"),
+            ability_id: io_id,
             args: vec![],
         };
         let effect_row = EffectRow::new(&db, vec![effect], None);

@@ -23,6 +23,7 @@
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
 use trunk_ir::dialect::adt;
+use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
@@ -166,6 +167,10 @@ fn create_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
         })
+        // Convert cont.prompt_tag → core.i32 (same representation at runtime)
+        .add_conversion(|db, ty| {
+            cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
         // Materialize: trampoline types to ADT types are no-op conversions
         .add_materialization(|db, _location, _value, from_ty, to_ty| {
             if from_ty == to_ty {
@@ -284,6 +289,17 @@ fn create_type_converter() -> TypeConverter {
                     ref_cast_op.as_operation(),
                     unbox_op.as_operation(),
                 ]);
+            }
+            MaterializeResult::Skip
+        })
+        // Materialize: cont.prompt_tag → i32 (no-op, same representation)
+        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+            let is_from_prompt_tag = cont::PromptTag::from_type(db, from_ty).is_some();
+            let is_to_i32 = core::I32::from_type(db, to_ty).is_some();
+
+            if is_from_prompt_tag && is_to_i32 {
+                // PromptTag is represented as i32 at runtime, no conversion needed
+                return MaterializeResult::NoOp;
             }
             MaterializeResult::Skip
         })
@@ -462,6 +478,8 @@ fn null_any<'db>(
 // ============================================================================
 
 /// Lower `trampoline.build_continuation` → `adt.struct_new`
+///
+/// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerBuildContinuationPattern;
 
 impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
@@ -471,7 +489,7 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         op: &Operation<'db>,
         adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let build_cont = match trampoline::BuildContinuation::from_operation(db, *op) {
+        let _build_cont = match trampoline::BuildContinuation::from_operation(db, *op) {
             Ok(bc) => bc,
             Err(_) => return RewriteResult::Unchanged,
         };
@@ -479,39 +497,35 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         let location = op.location(db);
         let cont_type = continuation_adt_type(db);
 
-        let tag = build_cont.tag(db);
-
         let operands = adaptor.operands();
-        let resume_fn = operands.first().copied();
-        let state = operands.get(1).copied();
-        let shift_value = operands.get(2).copied();
+        // Operands are (tag, resume_fn, state, shift_value)
+        let tag_operand = operands.first().copied();
+        let resume_fn = operands.get(1).copied();
+        let state = operands.get(2).copied();
+        let shift_value = operands.get(3).copied();
 
         let mut ops = Vec::new();
 
-        // Create tag constant
-        let tag_const = create_i32_const(db, location, tag as i32);
-        let tag_value = tag_const.result(db, 0);
-        ops.push(tag_const);
+        // Tag comes from operand (cont.prompt_tag has same representation as i32)
+        let tag_value = tag_operand.expect("build_continuation requires tag operand");
 
-        // resume_fn field (i32 table index, no casting needed since func.constant
-        // is lowered to wasm.i32_const)
+        // resume_fn field
         let resume_fn_field = if let Some(v) = resume_fn {
             v
         } else {
-            // Use -1 as null index (invalid table index sentinel)
             let null_const = create_i32_const(db, location, -1);
             ops.push(null_const);
             null_const.result(db, 0)
         };
 
-        // state field - cast to any using TypeConverter materialization
+        // state field - cast to any
         let state_field = if let Some(v) = state {
             materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
             null_any(db, location, &mut ops)
         };
 
-        // shift_value field - cast to any using TypeConverter materialization
+        // shift_value field - cast to any
         let shift_value_field = if let Some(v) = shift_value {
             materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
@@ -577,6 +591,8 @@ impl<'db> RewritePattern<'db> for LowerStepDonePattern {
 }
 
 /// Lower `trampoline.step_shift` → `adt.struct_new` with tag=1
+///
+/// Takes prompt tag as first operand (dynamic tag from evidence lookup).
 struct LowerStepShiftPattern;
 
 impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
@@ -594,27 +610,29 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
         let location = op.location(db);
         let step_type = step_adt_type(db);
 
-        let prompt = step_shift.prompt(db);
         let op_idx = step_shift.op_idx(db);
 
-        let continuation = adaptor.operands().first().copied();
+        let operands = adaptor.operands();
+        // Operands are (prompt, continuation)
+        let prompt_operand = operands.first().copied();
+        let continuation = operands.get(1).copied();
 
         let mut ops = Vec::new();
 
-        // Create constants
+        // Create constants for tag
         let tag_const = create_i32_const(db, location, STEP_TAG_SHIFT);
-        let prompt_const = create_i32_const(db, location, prompt as i32);
-        let op_idx_const = create_i32_const(db, location, op_idx as i32);
-
         let tag_value = tag_const.result(db, 0);
-        let prompt_value = prompt_const.result(db, 0);
-        let op_idx_value = op_idx_const.result(db, 0);
-
         ops.push(tag_const);
-        ops.push(prompt_const);
+
+        // Prompt comes from operand (cont.prompt_tag has same representation as i32)
+        let prompt_value = prompt_operand.expect("step_shift requires prompt operand");
+
+        // op_idx from attribute
+        let op_idx_const = create_i32_const(db, location, op_idx as i32);
+        let op_idx_value = op_idx_const.result(db, 0);
         ops.push(op_idx_const);
 
-        // Value field - cast continuation to any using TypeConverter materialization
+        // Value field - cast continuation to any
         let value_field = if let Some(v) = continuation {
             materialize_to_any(db, location, v, adaptor, &mut ops)
         } else {
@@ -840,6 +858,8 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
 // ============================================================================
 
 /// Lower `trampoline.set_yield_state` → wasm.global_set (multiple)
+///
+/// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerSetYieldStatePattern;
 
 impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
@@ -855,12 +875,16 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         };
 
         let location = op.location(db);
-        let tag = set_yield.tag(db);
         let op_idx = set_yield.op_idx(db);
 
-        let cont_val = adaptor
-            .operands()
+        let operands = adaptor.operands();
+        // Operands are (tag, continuation)
+        let tag_operand = operands
             .first()
+            .copied()
+            .expect("set_yield_state requires tag operand");
+        let cont_val = operands
+            .get(1)
             .copied()
             .expect("set_yield_state requires continuation operand");
 
@@ -869,8 +893,10 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         // Set $yield_state = 1 (yielding)
         push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
 
-        // Set $yield_tag = tag
-        push_set_i32_global(db, location, tag as i32, yield_globals::TAG_IDX, &mut ops);
+        // Set $yield_tag = tag (cont.prompt_tag has same representation as i32)
+        ops.push(
+            wasm::global_set(db, location, tag_operand, yield_globals::TAG_IDX).as_operation(),
+        );
 
         // Set $yield_cont = continuation (as anyref)
         let cont_any = materialize_to_any(db, location, cont_val, adaptor, &mut ops);
@@ -1244,32 +1270,35 @@ mod tests {
         let location = test_location(db);
         let cont_ty = trampoline::Continuation::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
 
-        // Create operands: resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        // Create operands: tag (prompt_tag), resume_fn (i32 table index), state (anyref), shift_value (anyref)
+        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 1);
         let resume_fn_op = create_i32_const(db, location, -1);
         let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
 
-        let resume_fn = resume_fn_op.as_operation().result(db, 0);
+        let tag = tag_op.as_operation().result(db, 0);
+        let resume_fn = resume_fn_op.result(db, 0);
         let state = state_op.as_operation().result(db, 0);
         let shift_value = shift_value_op.as_operation().result(db, 0);
 
-        // Create trampoline.build_continuation
+        // Create trampoline.build_continuation with tag operand
         let build_cont_op = trampoline::build_continuation(
             db,
             location,
+            tag,
             resume_fn,
             state,
             shift_value,
             cont_ty,
-            1,
             0,
         );
 
         // Apply the pattern
         let pattern = LowerBuildContinuationPattern;
         let ctx = RewriteContext::new();
-        let type_converter = TypeConverter::new();
+        let type_converter = create_type_converter();
         let op = build_cont_op.as_operation();
         let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
@@ -1364,18 +1393,21 @@ mod tests {
     fn set_yield_state_uses_correct_globals(db: &dyn salsa::Database) -> Vec<u32> {
         let location = test_location(db);
         let anyref_ty = wasm::Anyref::new(db).as_type();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
 
-        // Create a dummy continuation value
+        // Create operands: tag, continuation
+        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
+        let tag_val = tag_op.as_operation().result(db, 0);
         let cont_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
         let cont_val = cont_op.as_operation().result(db, 0);
 
-        // Create trampoline.set_yield_state
-        let set_yield_op = trampoline::set_yield_state(db, location, cont_val, 42, 7);
+        // Create trampoline.set_yield_state with tag operand
+        let set_yield_op = trampoline::set_yield_state(db, location, tag_val, cont_val, 7);
 
         // Apply the pattern
         let pattern = LowerSetYieldStatePattern;
         let ctx = RewriteContext::new();
-        let type_converter = TypeConverter::new();
+        let type_converter = create_type_converter();
         let op = set_yield_op.as_operation();
         let adaptor = OpAdaptor::new(op, op.operands(db).clone(), vec![], &ctx, &type_converter);
         let result = pattern.match_and_rewrite(db, &op, &adaptor);
@@ -1416,6 +1448,51 @@ mod tests {
         assert!(
             indices.contains(&yield_globals::OP_IDX),
             "Should set yield_op_idx global"
+        );
+    }
+
+    // ========================================================================
+    // Test: TypeConverter prompt_tag conversion
+    // ========================================================================
+
+    #[salsa::tracked]
+    fn type_converter_converts_prompt_tag(db: &dyn salsa::Database) -> bool {
+        let type_converter = create_type_converter();
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+
+        let converted = type_converter.convert_type(db, prompt_tag_ty);
+        converted == Some(i32_ty)
+    }
+
+    #[salsa_test]
+    fn test_type_converter_converts_prompt_tag_to_i32(db: &salsa::DatabaseImpl) {
+        assert!(
+            type_converter_converts_prompt_tag(db),
+            "cont.prompt_tag should convert to core.i32"
+        );
+    }
+
+    #[salsa::tracked]
+    fn type_converter_prompt_tag_materialization(db: &dyn salsa::Database) -> bool {
+        let type_converter = create_type_converter();
+        let location = test_location(db);
+        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a dummy value with prompt_tag type
+        let dummy_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
+        let dummy_val = dummy_op.as_operation().result(db, 0);
+
+        let result = type_converter.materialize(db, location, dummy_val, prompt_tag_ty, i32_ty);
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_type_converter_prompt_tag_materialization_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(
+            type_converter_prompt_tag_materialization(db),
+            "cont.prompt_tag → i32 materialization should be NoOp"
         );
     }
 }

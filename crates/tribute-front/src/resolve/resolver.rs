@@ -120,6 +120,7 @@ impl<'db> Resolver<'db> {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }
+            Binding::AbilityOp { ability, op } => ResolvedRef::ability_op(*ability, *op),
         }
     }
 
@@ -417,6 +418,7 @@ impl<'db> Resolver<'db> {
                 op,
                 params,
                 continuation,
+                continuation_local_id: _, // Ignored, will be assigned here
             } => {
                 // Resolve ability reference, but skip "_" placeholder (unqualified ops).
                 // The "_" placeholder means the ability will be inferred later.
@@ -433,16 +435,16 @@ impl<'db> Resolver<'db> {
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
 
-                // Bind continuation if present
-                if let Some(cont_name) = continuation {
-                    self.bind_local(cont_name);
-                }
+                // Bind continuation if present and capture the LocalId
+                let continuation_local_id =
+                    continuation.map(|cont_name| self.bind_local(cont_name));
 
                 HandlerKind::Effect {
                     ability: resolved_ability,
                     op,
                     params: resolved_params,
                     continuation,
+                    continuation_local_id,
                 }
             }
         };

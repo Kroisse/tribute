@@ -1030,7 +1030,6 @@ fn extract_symbol_from_operation<'db>(
     op: &trunk_ir::Operation<'db>,
     rope: &Rope,
 ) -> Option<DocumentSymbol> {
-    use tribute_ir::dialect::tribute;
     use trunk_ir::DialectOp;
     use trunk_ir::dialect::{core, func};
 
@@ -1049,18 +1048,6 @@ fn extract_symbol_from_operation<'db>(
         return Some(create_symbol(
             func_op.name(db),
             SymbolKind::FUNCTION,
-            op.location(db).span,
-            rope,
-            vec![],
-        ));
-    }
-
-    // Try ability
-    if let Ok(ability_op) = tribute::AbilityDef::from_operation(db, *op) {
-        let name = ability_op.sym_name(db);
-        return Some(create_symbol(
-            name,
-            SymbolKind::INTERFACE,
             op.location(db).span,
             rope,
             vec![],

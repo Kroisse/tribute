@@ -37,6 +37,11 @@ pub enum DefinitionKind {
     },
     /// An ability definition.
     Ability,
+    /// An ability operation definition.
+    AbilityOp {
+        /// The owning ability name.
+        owner: Symbol,
+    },
     /// A local variable binding.
     Local,
     /// A function parameter.
@@ -87,6 +92,8 @@ pub enum ResolvedTarget {
     Type { name: Symbol },
     /// Reference to an ability.
     Ability { name: Symbol },
+    /// Reference to an ability operation.
+    AbilityOp { ability: Symbol, op: Symbol },
     /// Unresolved reference (for error recovery).
     Unresolved { name: Symbol },
     /// Reference to a struct field.
@@ -105,6 +112,7 @@ impl ResolvedTarget {
             ResolvedTarget::Constructor { variant, .. } => *variant,
             ResolvedTarget::Type { name } => *name,
             ResolvedTarget::Ability { name } => *name,
+            ResolvedTarget::AbilityOp { op, .. } => *op,
             ResolvedTarget::Unresolved { name } => *name,
             ResolvedTarget::Field { name, .. } => *name,
             ResolvedTarget::Other { name } => *name,
@@ -120,6 +128,7 @@ impl ResolvedTarget {
             | ResolvedTarget::Constructor { .. }
             | ResolvedTarget::Type { .. }
             | ResolvedTarget::Ability { .. }
+            | ResolvedTarget::AbilityOp { .. }
             | ResolvedTarget::Unresolved { .. }
             | ResolvedTarget::Other { .. } => None,
         }
@@ -253,6 +262,16 @@ impl<'db> AstDefinitionIndex<'db> {
                         )
                 })
             }
+            ResolvedTarget::AbilityOp { ability, op } => {
+                // Match by op name AND owner ability for precise disambiguation
+                self.definitions(db).iter().find(|d| {
+                    d.name == *op
+                        && matches!(
+                            &d.kind,
+                            DefinitionKind::AbilityOp { owner } if owner == ability
+                        )
+                })
+            }
             _ => {
                 // For non-locals, fall back to name-based lookup
                 self.definition_of(db, target.name())
@@ -318,6 +337,19 @@ impl<'db> AstDefinitionIndex<'db> {
                     })
                     .collect()
             }
+            ResolvedTarget::AbilityOp { ability, op } => {
+                // Match by op name AND owner ability for precise disambiguation
+                self.references(db)
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            &r.target,
+                            ResolvedTarget::AbilityOp { ability: a, op: o }
+                            if a == ability && o == op
+                        )
+                    })
+                    .collect()
+            }
             _ => {
                 // For non-locals, fall back to name-based lookup
                 self.references_of(db, target.name())
@@ -377,6 +409,10 @@ impl<'db> AstDefinitionIndex<'db> {
                 variant: def.name,
             },
             DefinitionKind::Ability => ResolvedTarget::Ability { name: def.name },
+            DefinitionKind::AbilityOp { owner } => ResolvedTarget::AbilityOp {
+                ability: *owner,
+                op: def.name,
+            },
             DefinitionKind::Field { owner } => ResolvedTarget::Field {
                 owner: *owner,
                 name: def.name,
@@ -540,9 +576,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_ability(&mut self, a: &AbilityDecl) {
         self.add_definition(a.id, a.name, DefinitionKind::Ability, None);
 
-        // Add operation definitions
+        // Add operation definitions with owner for disambiguation
         for op in &a.operations {
-            self.add_definition(op.id, op.name, DefinitionKind::Function, None);
+            self.add_definition(
+                op.id,
+                op.name,
+                DefinitionKind::AbilityOp { owner: a.name },
+                None,
+            );
         }
     }
 
@@ -726,6 +767,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 ability,
                 params,
                 continuation,
+                continuation_local_id,
                 ..
             } => {
                 let target = self.resolve_typed_ref(ability);
@@ -734,8 +776,13 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_pattern(param);
                 }
                 if let Some(k) = continuation {
-                    // Continuation binding doesn't have LocalId
-                    self.add_definition(handler.id, *k, DefinitionKind::Local, None);
+                    // Use the LocalId assigned during name resolution
+                    self.add_definition(
+                        handler.id,
+                        *k,
+                        DefinitionKind::Local,
+                        *continuation_local_id,
+                    );
                 }
             }
         }
@@ -767,6 +814,10 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             },
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
+            },
+            ResolvedRef::AbilityOp { ability, op } => ResolvedTarget::AbilityOp {
+                ability: ability.name(self.db),
+                op: *op,
             },
         }
     }
@@ -842,6 +893,7 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
             }
         }
         DefinitionKind::Function
+        | DefinitionKind::AbilityOp { .. }
         | DefinitionKind::Local
         | DefinitionKind::Parameter
         | DefinitionKind::Field { .. } => {

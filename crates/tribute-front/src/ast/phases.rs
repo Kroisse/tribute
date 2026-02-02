@@ -184,6 +184,35 @@ impl<'db> CtorId<'db> {
     }
 }
 
+/// A unique identifier for an ability definition.
+///
+/// AbilityId identifies an ability (effect) definition with its module path.
+/// For example, `State` ability in module `foo::bar` would have
+/// module_path `["foo", "bar"]` and name `"State"`.
+///
+/// AbilityId is interned (not tracked) so that the same (module_path, name)
+/// always produces the same AbilityId, regardless of where it's created.
+#[salsa::interned(debug)]
+pub struct AbilityId<'db> {
+    /// The module path (e.g., ["std", "state"]).
+    #[returns(ref)]
+    pub module_path: SymbolVec,
+    /// The ability name.
+    pub name: Symbol,
+}
+
+impl<'db> AbilityId<'db> {
+    /// Build a qualified name for IR generation.
+    ///
+    /// Returns a displayable qualified name like "std::state::State".
+    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
+        QualifiedName {
+            module_path: self.module_path(db),
+            name: self.name(db),
+        }
+    }
+}
+
 /// Reference to a builtin operation or value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub enum BuiltinRef {
@@ -269,6 +298,17 @@ pub enum ResolvedRef<'db> {
 
     /// Reference to a module (for qualified paths).
     Module { path: ModulePath<'db> },
+
+    /// Reference to an ability operation.
+    ///
+    /// Ability operations like `State::get()` are resolved to this variant,
+    /// which is lowered directly to `cont.shift` + runtime calls.
+    AbilityOp {
+        /// The ability identifier (e.g., AbilityId for "State").
+        ability: AbilityId<'db>,
+        /// The operation name (e.g., "get").
+        op: Symbol,
+    },
 }
 
 impl<'db> ResolvedRef<'db> {
@@ -295,6 +335,11 @@ impl<'db> ResolvedRef<'db> {
     /// Create a builtin reference.
     pub fn builtin(builtin: BuiltinRef) -> Self {
         Self::Builtin(builtin)
+    }
+
+    /// Create an ability operation reference.
+    pub fn ability_op(ability: AbilityId<'db>, op: Symbol) -> Self {
+        Self::AbilityOp { ability, op }
     }
 }
 

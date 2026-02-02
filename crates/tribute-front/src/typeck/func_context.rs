@@ -706,10 +706,16 @@ mod tests {
 #[cfg(test)]
 mod merge_effect_tests {
     use super::*;
+    use crate::ast::AbilityId;
     use crate::typeck::constraint::Constraint;
     use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
     use trunk_ir::SymbolVec;
+
+    /// Helper to create a simple AbilityId with empty module path
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+    }
 
     #[salsa_test]
     fn merge_pure_rows(db: &dyn salsa::Database) {
@@ -734,8 +740,8 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
-        let state = simple_effect(Symbol::new("State"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
+        let state = simple_effect(db, test_ability_id(db, "State"));
 
         let row1 = EffectRow::single(db, console.clone());
         let row2 = EffectRow::single(db, state.clone());
@@ -761,8 +767,8 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
-        let state = simple_effect(Symbol::new("State"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
+        let state = simple_effect(db, test_ability_id(db, "State"));
 
         let e1 = EffectVar { id: 1 };
         let e2 = EffectVar { id: 2 };
@@ -810,7 +816,7 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
 
         let row1 = EffectRow::single(db, console.clone());
         let row2 = EffectRow::single(db, console.clone());
@@ -831,8 +837,8 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
-        let state = simple_effect(Symbol::new("State"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
+        let state = simple_effect(db, test_ability_id(db, "State"));
 
         let e1 = EffectVar { id: 1 };
 
@@ -860,8 +866,8 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
-        let state = simple_effect(Symbol::new("State"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
+        let state = simple_effect(db, test_ability_id(db, "State"));
 
         // Both rows share the same rest variable
         let shared_var = EffectVar { id: 1 };
@@ -893,8 +899,8 @@ mod merge_effect_tests {
         let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
-        let console = simple_effect(Symbol::new("Console"));
-        let state = simple_effect(Symbol::new("State"));
+        let console = simple_effect(db, test_ability_id(db, "Console"));
+        let state = simple_effect(db, test_ability_id(db, "State"));
 
         // Both rows share the same rest variable and have overlapping effects
         let shared_var = EffectVar { id: 1 };

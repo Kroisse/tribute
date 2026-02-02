@@ -1,25 +1,20 @@
-//! Normalize tribute primitive types to core/wasm types.
+//! Normalize `tribute_rt` primitive types to core/wasm types.
 //!
-//! This pass converts high-level `tribute_rt` primitive types and unresolved
-//! `tribute.type` references to their corresponding `core` types early in the
-//! WASM pipeline, ensuring that downstream passes and the emit phase don't
-//! need to handle tribute-specific types.
+//! This pass converts high-level `tribute_rt` primitive types to their
+//! corresponding `core` and `wasm` types early in the WASM pipeline, ensuring
+//! that downstream passes and the emit phase don't need to handle
+//! tribute-specific types.
 //!
 //! ## Type Conversions
 //!
-//! | Source Type              | Target Type   |
-//! |--------------------------|---------------|
-//! | `tribute_rt.int`         | `core.i32`    |
-//! | `tribute_rt.nat`         | `core.i32`    |
-//! | `tribute_rt.bool`        | `core.i32`    |
-//! | `tribute_rt.float`       | `core.f64`    |
-//! | `tribute_rt.any`         | `wasm.anyref` |
-//! | `tribute_rt.intref`      | `wasm.i31ref` |
-//! | `tribute.type(name=Int)` | `core.i32`    |
-//! | `tribute.type(name=Nat)` | `core.i32`    |
-//! | `tribute.type(name=Bool)`| `core.i32`    |
-//! | `tribute.type(name=Float)`| `core.f64`   |
-//! | `tribute.type(name=String)`| `core.string` |
+//! | Source Type          | Target Type   |
+//! |----------------------|---------------|
+//! | `tribute_rt.int`     | `core.i32`    |
+//! | `tribute_rt.nat`     | `core.i32`    |
+//! | `tribute_rt.bool`    | `core.i32`    |
+//! | `tribute_rt.float`   | `core.f64`    |
+//! | `tribute_rt.any`     | `wasm.anyref` |
+//! | `tribute_rt.intref`  | `wasm.i31ref` |
 //!
 //! ## What this pass normalizes
 //!
@@ -27,11 +22,11 @@
 //! - Operation result types
 //! - Block argument types
 //!
-//! The pass uses the existing `wasm_type_converter()` which already defines
-//! these conversions and their materializations (boxing/unboxing operations).
+//! The pass uses `wasm_type_converter()` which defines these conversions
+//! and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
@@ -112,15 +107,6 @@ fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -
         return true;
     }
 
-    // Check unresolved tribute.type for known primitives
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
-            ty.get_attr(db, trunk_ir::Symbol::new("name"))
-    {
-        return name_sym
-            .with_str(|name_str| matches!(name_str, "Int" | "Nat" | "Bool" | "Float" | "String"));
-    }
-
     false
 }
 
@@ -163,19 +149,6 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
     // tribute_rt.intref -> wasm.i31ref
     if tribute_rt::Intref::from_type(db, ty).is_some() {
         return Some(wasm::I31ref::new(db).as_type());
-    }
-
-    // tribute.type(name=X) -> core type for known primitives
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
-            ty.get_attr(db, trunk_ir::Symbol::new("name"))
-    {
-        return name_sym.with_str(|name_str| match name_str {
-            "Int" | "Nat" | "Bool" => Some(core::I32::new(db).as_type()),
-            "Float" => Some(core::F64::new(db).as_type()),
-            "String" => Some(core::String::new(db).as_type()),
-            _ => None, // User-defined type - don't convert
-        });
     }
 
     None
@@ -336,14 +309,8 @@ impl<'db> RewritePattern<'db> for NormalizeCallIndirectPattern {
 
         let result_ty = results[0];
 
-        // Convert primitive types and tribute_rt.any to their WASM equivalents
-        let new_result_ty = if let Some(ty) = convert_primitive_type(db, result_ty) {
-            ty
-        } else if tribute_rt::Any::from_type(db, result_ty).is_some() {
-            // tribute_rt.any normalizes to wasm.anyref for call_indirect
-            // This ensures local allocation uses the same type as the call result
-            wasm::Anyref::new(db).as_type()
-        } else {
+        // Convert primitive types to their WASM equivalents
+        let Some(new_result_ty) = convert_primitive_type(db, result_ty) else {
             return RewriteResult::Unchanged;
         };
 

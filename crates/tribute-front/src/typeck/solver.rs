@@ -23,6 +23,12 @@ pub enum SolveError<'db> {
         expected: EffectRow<'db>,
         actual: EffectRow<'db>,
     },
+    /// Effect type argument arity mismatch.
+    EffectArgArityMismatch {
+        effect_name: trunk_ir::Symbol,
+        expected: usize,
+        found: usize,
+    },
 }
 
 /// Type substitution: maps type variable IDs to types.
@@ -102,7 +108,7 @@ impl<'db> TypeSubst<'db> {
                             .map(|a| self.apply_with_rows(db, *a, row_subst))
                             .collect();
                         crate::ast::Effect {
-                            name: e.name,
+                            ability_id: e.ability_id,
                             args: new_args,
                         }
                     })
@@ -353,7 +359,7 @@ impl<'db> TypeSubst<'db> {
                             })
                             .collect();
                         crate::ast::Effect {
-                            name: e.name,
+                            ability_id: e.ability_id,
                             args: new_args,
                         }
                     })
@@ -672,14 +678,91 @@ impl<'db> TypeSolver<'db> {
         }
     }
 
+    /// Check if a row variable occurs in an effect row (for row occurs check).
+    fn row_occurs_in(&self, var: EffectVar, row: EffectRow<'db>) -> bool {
+        // Apply current substitution first
+        let row = self.row_subst.apply(self.db, row);
+
+        // Check if the row's rest is the same variable
+        if row.rest(self.db) == Some(var) {
+            return true;
+        }
+
+        // Check type variables inside effect args
+        for effect in row.effects(self.db) {
+            for arg in &effect.args {
+                if self.row_occurs_in_type(var, *arg) {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Check if a row variable occurs in a type.
+    fn row_occurs_in_type(&self, var: EffectVar, ty: Type<'db>) -> bool {
+        match ty.kind(self.db) {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
+                let row = self.row_subst.apply(self.db, *effect);
+                if row.rest(self.db) == Some(var) {
+                    return true;
+                }
+                // Recursively check effect args
+                for e in row.effects(self.db) {
+                    for arg in &e.args {
+                        if self.row_occurs_in_type(var, *arg) {
+                            return true;
+                        }
+                    }
+                }
+                // Recursively check params and result
+                if params.iter().any(|p| self.row_occurs_in_type(var, *p)) {
+                    return true;
+                }
+                if self.row_occurs_in_type(var, *result) {
+                    return true;
+                }
+                false
+            }
+            TypeKind::Named { args, .. } => args.iter().any(|a| self.row_occurs_in_type(var, *a)),
+            TypeKind::Tuple(elems) => elems.iter().any(|e| self.row_occurs_in_type(var, *e)),
+            TypeKind::App { ctor, args } => {
+                self.row_occurs_in_type(var, *ctor)
+                    || args.iter().any(|a| self.row_occurs_in_type(var, *a))
+            }
+            TypeKind::UniVar { id } => {
+                if let Some(subst_ty) = self.type_subst.get(*id) {
+                    self.row_occurs_in_type(var, subst_ty)
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
     /// Unify two effect rows.
+    ///
+    /// Row unification handles several cases:
+    /// 1. Both closed: effects must match exactly (as sets)
+    /// 2. One open, one closed: bind the row variable to the difference
+    /// 3. Same row variable: unify the effect lists
+    /// 4. Different row variables: create a fresh variable for the common tail
     fn unify_rows(
         &mut self,
         r1: EffectRow<'db>,
         r2: EffectRow<'db>,
     ) -> Result<(), SolveError<'db>> {
-        // Simple implementation: just check equality for now
-        // TODO: Implement proper row unification with row variables
+        // Apply current row substitution first
+        let r1 = self.row_subst.apply(self.db, r1);
+        let r2 = self.row_subst.apply(self.db, r2);
+
+        // Same row: done
         if r1 == r2 {
             return Ok(());
         }
@@ -689,32 +772,394 @@ impl<'db> TypeSolver<'db> {
             return Ok(());
         }
 
-        // If one is an open row, bind it to the other
-        if let Some(var) = r1.rest(self.db) {
-            self.row_subst.insert(var.id, r2);
-            return Ok(());
+        let effects1 = r1.effects(self.db);
+        let effects2 = r2.effects(self.db);
+        let rest1 = r1.rest(self.db);
+        let rest2 = r2.rest(self.db);
+
+        match (rest1, rest2) {
+            // Both closed: effects must match as sets
+            (None, None) => self.unify_effects_as_sets(effects1, effects2, r1, r2),
+
+            // r1 is open, r2 is closed: var1 = r2's effects minus r1's effects
+            (Some(var1), None) => {
+                // Row occurs check
+                if self.row_occurs_in(var1, r2) {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
+                // Compute difference: effects in r2 but not in r1
+                // First check that all effects in r1 have matches in r2
+                let only_r2 = self.compute_effect_difference_with_unify(effects1, effects2)?;
+
+                // r1's effects must all be in r2
+                // (if any effect from r1 is in only_r2, it means no match was found)
+                let matched_count = effects2.len() - only_r2.len();
+                if matched_count != effects1.len() {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
+
+                // Bind var1 to remaining effects (closed)
+                let remainder = EffectRow::new(self.db, only_r2, None);
+                self.row_subst.insert(var1.id, remainder);
+                Ok(())
+            }
+
+            // r1 is closed, r2 is open: var2 = r1's effects minus r2's effects
+            (None, Some(var2)) => {
+                // Pure subsumption: if r1 is pure (closed empty) and r2 has existing effects,
+                // it means a pure function is being called from an effectful context.
+                // This is always valid, and the caller's effect row should remain unchanged.
+                //
+                // Example: calling `identity: fn(Int) -> Int` (effect: {}) from a context
+                // with effect `{State(Int) | var}` should not modify the caller's effect row.
+                //
+                // However, if r2 has no effects (just a bare variable `{|var}`), we should
+                // bind the variable to the closed row as normal instantiation behavior.
+                if r1.is_pure(self.db) && !effects2.is_empty() {
+                    return Ok(());
+                }
+
+                // Row occurs check
+                if self.row_occurs_in(var2, r1) {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
+                // Compute difference: effects in r1 but not in r2
+                let only_r1 = self.compute_effect_difference_with_unify(effects2, effects1)?;
+
+                // r2's effects must all be in r1
+                let matched_count = effects1.len() - only_r1.len();
+                if matched_count != effects2.len() {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
+                // Bind var2 to remaining effects (closed)
+                let remainder = EffectRow::new(self.db, only_r1, None);
+                self.row_subst.insert(var2.id, remainder);
+                Ok(())
+            }
+
+            // Both open with the same variable: just unify the effect lists
+            (Some(v1), Some(v2)) if v1 == v2 => {
+                self.unify_effects_as_sets(effects1, effects2, r1, r2)
+            }
+
+            // Both open with different variables: create a fresh variable for the common tail
+            // r1 = {A | v1}, r2 = {B | v2}
+            // Unify: v1 = {B's not in A | v3}, v2 = {A's not in B | v3}
+            (Some(v1), Some(v2)) => {
+                // Row occurs check
+                if self.row_occurs_in(v1, r2) || self.row_occurs_in(v2, r1) {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
+
+                let (only_r1, only_r2) =
+                    self.compute_effect_split_with_unify(effects1, effects2)?;
+
+                // Create a fresh row variable for the common tail
+                let v3 = self.fresh_row_var();
+
+                // v1 = {only_r2 | v3}
+                let row_for_v1 = EffectRow::new(self.db, only_r2, Some(v3));
+                self.row_subst.insert(v1.id, row_for_v1);
+
+                // v2 = {only_r1 | v3}
+                let row_for_v2 = EffectRow::new(self.db, only_r1, Some(v3));
+                self.row_subst.insert(v2.id, row_for_v2);
+
+                Ok(())
+            }
         }
-        if let Some(var) = r2.rest(self.db) {
-            self.row_subst.insert(var.id, r1);
-            return Ok(());
+    }
+
+    /// Check if two effect lists are equal as sets, unifying type arguments.
+    ///
+    /// Effects are matched by name first, then by arity, then args are unified.
+    /// - Same name, different arity → EffectArgArityMismatch
+    /// - Same name, same arity, args unify → matched
+    /// - Same name, same arity, args don't unify → different abilities (RowMismatch)
+    fn unify_effects_as_sets(
+        &mut self,
+        effects1: &[crate::ast::Effect<'db>],
+        effects2: &[crate::ast::Effect<'db>],
+        r1: EffectRow<'db>,
+        r2: EffectRow<'db>,
+    ) -> Result<(), SolveError<'db>> {
+        if effects1.len() != effects2.len() {
+            return Err(SolveError::RowMismatch {
+                expected: r1,
+                actual: r2,
+            });
         }
 
-        // Otherwise, check if effects match
-        // TODO: More sophisticated row unification
-        Err(SolveError::RowMismatch {
-            expected: r1,
-            actual: r2,
-        })
+        // For each effect in effects1, find a matching effect in effects2
+        for e1 in effects1 {
+            // Find effects with the same name
+            let same_name: Vec<_> = effects2
+                .iter()
+                .filter(|e2| e1.ability_id == e2.ability_id)
+                .collect();
+
+            if same_name.is_empty() {
+                return Err(SolveError::RowMismatch {
+                    expected: r1,
+                    actual: r2,
+                });
+            }
+
+            // Check for arity mismatch
+            for e2 in &same_name {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.ability_id.name(self.db),
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
+
+            // Try to find a matching effect (args unify successfully)
+            let mut found_match = false;
+            for e2 in &same_name {
+                // Try unifying args - if successful, we found a match
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
+
+                if args_match {
+                    // Actually perform the unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                // Same name and arity, but args don't unify → different abilities
+                return Err(SolveError::RowMismatch {
+                    expected: r1,
+                    actual: r2,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if two types can be unified without modifying substitution.
+    ///
+    /// This is a quick check that doesn't perform actual unification.
+    fn types_unifiable(&self, t1: Type<'db>, t2: Type<'db>) -> bool {
+        let t1 = self.type_subst.apply(self.db, t1);
+        let t2 = self.type_subst.apply(self.db, t2);
+
+        if t1 == t2 {
+            return true;
+        }
+
+        match (t1.kind(self.db), t2.kind(self.db)) {
+            // Type variables can unify with anything
+            (TypeKind::UniVar { .. }, _) | (_, TypeKind::UniVar { .. }) => true,
+            // Error type unifies with anything
+            (TypeKind::Error, _) | (_, TypeKind::Error) => true,
+            // Same kind, check recursively
+            (TypeKind::Int, TypeKind::Int)
+            | (TypeKind::Nat, TypeKind::Nat)
+            | (TypeKind::Float, TypeKind::Float)
+            | (TypeKind::Bool, TypeKind::Bool)
+            | (TypeKind::String, TypeKind::String)
+            | (TypeKind::Bytes, TypeKind::Bytes)
+            | (TypeKind::Rune, TypeKind::Rune)
+            | (TypeKind::Nil, TypeKind::Nil) => true,
+            (TypeKind::Named { name: n1, args: a1 }, TypeKind::Named { name: n2, args: a2 }) => {
+                n1 == n2
+                    && a1.len() == a2.len()
+                    && a1
+                        .iter()
+                        .zip(a2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
+            (TypeKind::Tuple(elems1), TypeKind::Tuple(elems2)) => {
+                elems1.len() == elems2.len()
+                    && elems1
+                        .iter()
+                        .zip(elems2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
+            (
+                TypeKind::Func {
+                    params: p1,
+                    result: r1,
+                    ..
+                },
+                TypeKind::Func {
+                    params: p2,
+                    result: r2,
+                    ..
+                },
+            ) => {
+                p1.len() == p2.len()
+                    && p1
+                        .iter()
+                        .zip(p2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+                    && self.types_unifiable(*r1, *r2)
+            }
+            (TypeKind::App { ctor: c1, args: a1 }, TypeKind::App { ctor: c2, args: a2 }) => {
+                self.types_unifiable(*c1, *c2)
+                    && a1.len() == a2.len()
+                    && a1
+                        .iter()
+                        .zip(a2.iter())
+                        .all(|(x, y)| self.types_unifiable(*x, *y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Compute effect difference with unification support.
+    ///
+    /// Returns matched effects and unmatched effects from list2.
+    fn compute_effect_difference_with_unify(
+        &mut self,
+        list1: &[crate::ast::Effect<'db>],
+        list2: &[crate::ast::Effect<'db>],
+    ) -> Result<Vec<crate::ast::Effect<'db>>, SolveError<'db>> {
+        let mut only_list2 = Vec::new();
+
+        for e2 in list2 {
+            // Check for arity mismatch with same-named effects
+            for e1 in list1.iter().filter(|e1| e1.ability_id == e2.ability_id) {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.ability_id.name(self.db),
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
+
+            // Try to find a matching effect
+            let mut found_match = false;
+            for e1 in list1.iter().filter(|e1| e1.ability_id == e2.ability_id) {
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
+
+                if args_match {
+                    // Perform unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                only_list2.push(e2.clone());
+            }
+        }
+
+        Ok(only_list2)
+    }
+
+    /// Compute effect split with unification support.
+    ///
+    /// Returns (only_list1, only_list2) after matching and unifying.
+    fn compute_effect_split_with_unify(
+        &mut self,
+        list1: &[crate::ast::Effect<'db>],
+        list2: &[crate::ast::Effect<'db>],
+    ) -> Result<(Vec<crate::ast::Effect<'db>>, Vec<crate::ast::Effect<'db>>), SolveError<'db>> {
+        let mut only_list1 = Vec::new();
+        let mut only_list2 = Vec::new();
+        let mut matched_in_list2 = vec![false; list2.len()];
+
+        // Find matches from list1's perspective
+        for e1 in list1 {
+            // Check for arity mismatch
+            for e2 in list2.iter().filter(|e2| e2.ability_id == e1.ability_id) {
+                if e1.args.len() != e2.args.len() {
+                    return Err(SolveError::EffectArgArityMismatch {
+                        effect_name: e1.ability_id.name(self.db),
+                        expected: e1.args.len(),
+                        found: e2.args.len(),
+                    });
+                }
+            }
+
+            let mut found_match = false;
+            for (i, e2) in list2.iter().enumerate() {
+                if e1.ability_id != e2.ability_id || matched_in_list2[i] {
+                    continue;
+                }
+
+                let args_match = e1
+                    .args
+                    .iter()
+                    .zip(e2.args.iter())
+                    .all(|(a1, a2)| self.types_unifiable(*a1, *a2));
+
+                if args_match {
+                    // Perform unification
+                    for (a1, a2) in e1.args.iter().zip(e2.args.iter()) {
+                        self.unify_types(*a1, *a2)?;
+                    }
+                    matched_in_list2[i] = true;
+                    found_match = true;
+                    break;
+                }
+            }
+
+            if !found_match {
+                only_list1.push(e1.clone());
+            }
+        }
+
+        // Collect unmatched from list2
+        for (i, e2) in list2.iter().enumerate() {
+            if !matched_in_list2[i] {
+                only_list2.push(e2.clone());
+            }
+        }
+
+        Ok((only_list1, only_list2))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Effect, EffectRow, UniVarSource};
+    use crate::ast::{AbilityId, Effect, EffectRow, UniVarSource};
+    use trunk_ir::{Symbol, SymbolVec};
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
+    }
+
+    /// Create an AbilityId for testing (with empty module path).
+    fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
+        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
     }
 
     /// Create a fresh type variable for testing.
@@ -793,7 +1238,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_ty],
             }],
             None,
@@ -830,7 +1275,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_b],
             }],
             None,
@@ -979,6 +1424,39 @@ mod tests {
         assert!(
             resolved.unwrap().is_pure(&db),
             "Row variable should be bound to empty"
+        );
+    }
+
+    #[test]
+    fn test_pure_callee_in_effectful_context() {
+        // Test that calling a pure function from an effectful context succeeds
+        // without modifying the caller's effect row.
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        // Create a pure effect row (callee's effect)
+        let pure_effect = EffectRow::new(&db, vec![], None);
+
+        // Create an effectful row with State effect (caller's context)
+        let row_var = EffectVar { id: 100 };
+        let state_effect = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![Type::new(&db, TypeKind::Int)],
+        };
+        let effectful_row = EffectRow::new(&db, vec![state_effect], Some(row_var));
+
+        // Unifying pure with effectful should succeed
+        let result = solver.unify_rows(pure_effect, effectful_row);
+        assert!(
+            result.is_ok(),
+            "Pure callee should be callable from effectful context"
+        );
+
+        // The row variable should NOT be bound - caller's effect stays unchanged
+        let resolved = solver.row_subst.get(row_var.id);
+        assert!(
+            resolved.is_none(),
+            "Caller's row variable should not be modified when calling pure function"
         );
     }
 
@@ -1191,7 +1669,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![var_ty],
             }],
             None,
@@ -1211,7 +1689,10 @@ mod tests {
         if let TypeKind::Func { effect, .. } = result.kind(&db) {
             let effects = effect.effects(&db);
             assert_eq!(effects.len(), 1);
-            assert_eq!(effects[0].name, trunk_ir::Symbol::new("State"));
+            assert_eq!(
+                effects[0].ability_id.name(&db),
+                trunk_ir::Symbol::new("State")
+            );
             assert_eq!(effects[0].args.len(), 1);
             assert_eq!(
                 effects[0].args[0], int_ty,
@@ -1232,7 +1713,7 @@ mod tests {
         let effect = EffectRow::new(
             &db,
             vec![Effect {
-                name: trunk_ir::Symbol::new("State"),
+                ability_id: test_ability_id(&db, "State"),
                 args: vec![int_ty],
             }],
             None,
@@ -1409,5 +1890,640 @@ mod tests {
         } else {
             panic!("Expected Func type");
         }
+    }
+
+    // =========================================================================
+    // Advanced row unification tests
+    // =========================================================================
+
+    #[test]
+    fn test_row_unification_with_effects() {
+        // {Console} unifies with {Console}
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let console = Effect {
+            ability_id: test_ability_id(&db, "Console"),
+            args: vec![],
+        };
+        let r1 = EffectRow::new(&db, vec![console.clone()], None);
+        let r2 = EffectRow::new(&db, vec![console], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_row_unification_closed_rows_mismatch() {
+        // {Console} does not unify with {IO}
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let console = Effect {
+            ability_id: test_ability_id(&db, "Console"),
+            args: vec![],
+        };
+        let io = Effect {
+            ability_id: test_ability_id(&db, "IO"),
+            args: vec![],
+        };
+        let r1 = EffectRow::new(&db, vec![console], None);
+        let r2 = EffectRow::new(&db, vec![io], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(matches!(result, Err(SolveError::RowMismatch { .. })));
+    }
+
+    #[test]
+    fn test_row_unification_open_row_binds_to_difference() {
+        // {Console | e} unifies with {Console, IO}
+        // Should bind e to {IO}
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let console = Effect {
+            ability_id: test_ability_id(&db, "Console"),
+            args: vec![],
+        };
+        let io = Effect {
+            ability_id: test_ability_id(&db, "IO"),
+            args: vec![],
+        };
+        let row_var = EffectVar { id: 50 };
+
+        let r1 = EffectRow::new(&db, vec![console.clone()], Some(row_var));
+        let r2 = EffectRow::new(&db, vec![console, io.clone()], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+
+        // e should be bound to {IO}
+        let resolved = solver.row_subst.get(row_var.id).unwrap();
+        let effects = resolved.effects(&db);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].ability_id.name(&db), trunk_ir::Symbol::new("IO"));
+        assert!(resolved.rest(&db).is_none()); // Closed
+    }
+
+    #[test]
+    fn test_row_unification_two_open_rows() {
+        // {Console | e1} unifies with {IO | e2}
+        // Should create fresh e3:
+        //   e1 = {IO | e3}
+        //   e2 = {Console | e3}
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let console = Effect {
+            ability_id: test_ability_id(&db, "Console"),
+            args: vec![],
+        };
+        let io = Effect {
+            ability_id: test_ability_id(&db, "IO"),
+            args: vec![],
+        };
+        let e1 = EffectVar { id: 100 };
+        let e2 = EffectVar { id: 200 };
+
+        let r1 = EffectRow::new(&db, vec![console.clone()], Some(e1));
+        let r2 = EffectRow::new(&db, vec![io.clone()], Some(e2));
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+
+        // e1 should be bound to {IO | e3} for some fresh e3
+        let e1_resolved = solver.row_subst.get(e1.id).unwrap();
+        let e1_effects = e1_resolved.effects(&db);
+        assert_eq!(e1_effects.len(), 1);
+        assert_eq!(
+            e1_effects[0].ability_id.name(&db),
+            trunk_ir::Symbol::new("IO")
+        );
+        assert!(e1_resolved.rest(&db).is_some()); // Open with e3
+
+        // e2 should be bound to {Console | e3}
+        let e2_resolved = solver.row_subst.get(e2.id).unwrap();
+        let e2_effects = e2_resolved.effects(&db);
+        assert_eq!(e2_effects.len(), 1);
+        assert_eq!(
+            e2_effects[0].ability_id.name(&db),
+            trunk_ir::Symbol::new("Console")
+        );
+        assert!(e2_resolved.rest(&db).is_some()); // Open with e3
+
+        // Both should have the same fresh variable
+        assert_eq!(e1_resolved.rest(&db), e2_resolved.rest(&db));
+    }
+
+    #[test]
+    fn test_row_unification_unifies_type_args() {
+        // {State(?a)} unifies with {State(Int)}
+        // Should bind ?a to Int
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = fresh_var(&db, 0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_var = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![var_ty],
+        };
+        let state_int = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_var], None);
+        let r2 = EffectRow::new(&db, vec![state_int], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(result.is_ok());
+
+        // ?a should be bound to Int
+        assert_eq!(solver.type_subst.apply(&db, var_ty), int_ty);
+    }
+
+    #[test]
+    fn test_row_unification_same_var_different_effects_fails() {
+        // {Console | e} and {IO | e} with the same e should fail
+        // (because the concrete effects don't match)
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let console = Effect {
+            ability_id: test_ability_id(&db, "Console"),
+            args: vec![],
+        };
+        let io = Effect {
+            ability_id: test_ability_id(&db, "IO"),
+            args: vec![],
+        };
+        let row_var = EffectVar { id: 42 };
+
+        let r1 = EffectRow::new(&db, vec![console], Some(row_var));
+        let r2 = EffectRow::new(&db, vec![io], Some(row_var));
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(matches!(result, Err(SolveError::RowMismatch { .. })));
+    }
+
+    #[test]
+    fn test_different_effect_arity_returns_arity_mismatch() {
+        // State(Int) and State() have different arity - this is an arity mismatch error
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_with_arg = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+        let state_no_arg = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_with_arg], None);
+        let r2 = EffectRow::new(&db, vec![state_no_arg], None);
+
+        let result = solver.unify_rows(r1, r2);
+        // Same ability name but different arity is an arity mismatch error
+        assert!(
+            matches!(
+                result,
+                Err(SolveError::EffectArgArityMismatch {
+                    effect_name,
+                    expected: 1,
+                    found: 0,
+                }) if effect_name == trunk_ir::Symbol::new("State")
+            ),
+            "Expected EffectArgArityMismatch error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_different_effect_arg_types_returns_row_mismatch() {
+        // State(Int) and State(Bool) are different parameterized abilities
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        let state_int = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+        let state_bool = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![bool_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_int], None);
+        let r2 = EffectRow::new(&db, vec![state_bool], None);
+
+        let result = solver.unify_rows(r1, r2);
+        // State(Int) and State(Bool) are distinct abilities, so this is a row mismatch
+        assert!(
+            matches!(result, Err(SolveError::RowMismatch { .. })),
+            "Expected RowMismatch error, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_same_effect_args_unifies_successfully() {
+        // State(Int) and State(Int) are the same ability - should unify
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_int1 = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+        let state_int2 = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_int1], None);
+        let r2 = EffectRow::new(&db, vec![state_int2], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "Same effects should unify, got {:?}",
+            result
+        );
+    }
+
+    // =========================================================================
+    // Parameterized ability unification with type variables
+    // =========================================================================
+
+    #[test]
+    fn test_effect_with_type_var_unifies_with_concrete() {
+        // State(?a) and State(Int) should unify with ?a = Int
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_ty = fresh_var(&db, 0);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        let state_var = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![var_ty],
+        };
+        let state_int = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![int_ty],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_var], None);
+        let r2 = EffectRow::new(&db, vec![state_int], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "State(?a) should unify with State(Int), got {:?}",
+            result
+        );
+
+        // Check that ?a was unified to Int
+        let resolved = solver.type_subst.apply(&db, var_ty);
+        assert_eq!(resolved, int_ty, "Type variable should be unified to Int");
+    }
+
+    #[test]
+    fn test_effect_with_two_type_vars_unifies() {
+        // State(?a) and State(?b) should unify with ?a = ?b
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+
+        let state_a = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![var_a],
+        };
+        let state_b = Effect {
+            ability_id: test_ability_id(&db, "State"),
+            args: vec![var_b],
+        };
+
+        let r1 = EffectRow::new(&db, vec![state_a], None);
+        let r2 = EffectRow::new(&db, vec![state_b], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "State(?a) should unify with State(?b), got {:?}",
+            result
+        );
+
+        // Check that they are unified (both resolve to the same type)
+        let resolved_a = solver.type_subst.apply(&db, var_a);
+        let resolved_b = solver.type_subst.apply(&db, var_b);
+        assert_eq!(resolved_a, resolved_b, "Type variables should be unified");
+    }
+
+    #[test]
+    fn test_effect_mixed_type_var_and_concrete_unifies() {
+        // Pair(?a, Int) and Pair(Bool, ?b) should unify with ?a = Bool, ?b = Int
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let var_a = fresh_var(&db, 0);
+        let var_b = fresh_var(&db, 1);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        let pair1 = Effect {
+            ability_id: test_ability_id(&db, "Pair"),
+            args: vec![var_a, int_ty],
+        };
+        let pair2 = Effect {
+            ability_id: test_ability_id(&db, "Pair"),
+            args: vec![bool_ty, var_b],
+        };
+
+        let r1 = EffectRow::new(&db, vec![pair1], None);
+        let r2 = EffectRow::new(&db, vec![pair2], None);
+
+        let result = solver.unify_rows(r1, r2);
+        assert!(
+            result.is_ok(),
+            "Pair(?a, Int) should unify with Pair(Bool, ?b), got {:?}",
+            result
+        );
+
+        // Check that ?a = Bool and ?b = Int
+        assert_eq!(solver.type_subst.apply(&db, var_a), bool_ty);
+        assert_eq!(solver.type_subst.apply(&db, var_b), int_ty);
+    }
+
+    #[test]
+    fn test_types_unifiable_simple() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let var_ty = fresh_var(&db, 0);
+
+        // Same types are unifiable
+        assert!(solver.types_unifiable(int_ty, int_ty));
+
+        // Different concrete types are not unifiable
+        assert!(!solver.types_unifiable(int_ty, bool_ty));
+
+        // Type variable is unifiable with any type
+        assert!(solver.types_unifiable(var_ty, int_ty));
+        assert!(solver.types_unifiable(int_ty, var_ty));
+
+        // Two type variables are unifiable
+        let var_ty2 = fresh_var(&db, 1);
+        assert!(solver.types_unifiable(var_ty, var_ty2));
+    }
+
+    #[test]
+    fn test_types_unifiable_func() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let effect = EffectRow::new(&db, vec![], None);
+
+        // Same function types are unifiable
+        let func1 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        let func2 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(solver.types_unifiable(func1, func2));
+
+        // Different param types are not unifiable
+        let func3 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![bool_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(!solver.types_unifiable(func1, func3));
+
+        // Different result types are not unifiable
+        let func4 = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: bool_ty,
+                effect,
+            },
+        );
+        assert!(!solver.types_unifiable(func1, func4));
+
+        // Function type with type variable in params is unifiable
+        let var_ty = fresh_var(&db, 0);
+        let func_with_var = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![var_ty],
+                result: int_ty,
+                effect,
+            },
+        );
+        assert!(solver.types_unifiable(func1, func_with_var));
+    }
+
+    #[test]
+    fn test_types_unifiable_app() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let list_ctor = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![],
+            },
+        );
+        let option_ctor = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![],
+            },
+        );
+
+        // Same App types are unifiable
+        let app1 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+        let app2 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![int_ty],
+            },
+        );
+        assert!(solver.types_unifiable(app1, app2));
+
+        // Different constructor is not unifiable
+        let app3 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: option_ctor,
+                args: vec![int_ty],
+            },
+        );
+        assert!(!solver.types_unifiable(app1, app3));
+
+        // Different arg types are not unifiable
+        let app4 = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![bool_ty],
+            },
+        );
+        assert!(!solver.types_unifiable(app1, app4));
+
+        // App with type variable in args is unifiable
+        let var_ty = fresh_var(&db, 0);
+        let app_with_var = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list_ctor,
+                args: vec![var_ty],
+            },
+        );
+        assert!(solver.types_unifiable(app1, app_with_var));
+    }
+
+    // =========================================================================
+    // row_occurs_in_type tests for params/result recursion
+    // =========================================================================
+
+    #[test]
+    fn test_row_occurs_in_func_params() {
+        // row var in function parameter should be detected
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn(fn() ->{e} Int) -> Int where we check for e in outer func
+        let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let inner_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect: inner_effect,
+            },
+        );
+        let outer_effect = EffectRow::new(&db, vec![], None);
+        let outer_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![inner_func],
+                result: int_ty,
+                effect: outer_effect,
+            },
+        );
+
+        assert!(
+            solver.row_occurs_in_type(row_var, outer_func),
+            "Row variable in param's effect should be detected"
+        );
+    }
+
+    #[test]
+    fn test_row_occurs_in_func_result() {
+        // row var in function result should be detected
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn() -> fn() ->{e} Int where we check for e in outer func
+        let inner_effect = EffectRow::new(&db, vec![], Some(row_var));
+        let inner_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect: inner_effect,
+            },
+        );
+        let outer_effect = EffectRow::new(&db, vec![], None);
+        let outer_func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: inner_func,
+                effect: outer_effect,
+            },
+        );
+
+        assert!(
+            solver.row_occurs_in_type(row_var, outer_func),
+            "Row variable in result's effect should be detected"
+        );
+    }
+
+    #[test]
+    fn test_row_not_in_func_if_absent() {
+        // row var not present should return false
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let row_var = EffectVar { id: 42 };
+        let other_var = EffectVar { id: 99 };
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // fn() -> Int with empty effect
+        let effect = EffectRow::new(&db, vec![], Some(other_var));
+        let func = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![],
+                result: int_ty,
+                effect,
+            },
+        );
+
+        assert!(
+            !solver.row_occurs_in_type(row_var, func),
+            "Row variable not present should not be detected"
+        );
     }
 }

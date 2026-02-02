@@ -344,7 +344,7 @@ fn check_struct_get_needs_boxing<'db>(
         .or_else(|| op.results(db).first().copied());
 
     // Check if the result expects anyref
-    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass
+    // Note: type variables are resolved at AST level before IR generation
     let expects_anyref = local_type
         .map(|ty| wasm::Anyref::from_type(db, ty).is_some())
         .unwrap_or(false);

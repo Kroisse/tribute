@@ -22,22 +22,33 @@ dialect! {
             #[region(handlers)] {}
         };
 
-        /// `cont.shift` operation: captures continuation and jumps to handler.
+        /// `cont.shift` operation: captures continuation with dynamic tag.
         ///
+        /// Takes the prompt tag as an operand (runtime value) to enable
+        /// evidence-based handler dispatch where the tag is looked up at runtime
+        /// from the evidence structure.
+        ///
+        /// The first operand is the prompt tag value, followed by optional value operands.
         /// The optional `value` operands are passed to the handler along with
         /// the captured continuation. Currently only the first value is used.
         ///
         /// The result is the value passed when the continuation is resumed.
         /// This corresponds to the value returned by `ability.perform`.
         ///
-        /// - `tag`: prompt tag for matching handler instance (runtime identifier)
         /// - `ability_ref`: ability reference type (semantic information)
         /// - `op_name`: operation name symbol (semantic information)
         ///
         /// Note: Operation index (op_idx) is computed deterministically from op_name
         /// during WASM lowering and is not stored in the IR.
-        #[attr(tag: u32, ability_ref: Type, op_name: Symbol)]
-        fn shift(#[rest] value) -> result {
+        ///
+        /// Used for evidence-based dispatch:
+        /// ```text
+        /// %marker = call @__tribute_evidence_lookup(%ev, ability_id)
+        /// %tag = call @__tribute_marker_prompt(%marker)
+        /// %result = cont.shift(%tag, %args...) { ability_ref, op_name }
+        /// ```
+        #[attr(ability_ref: Type, op_name: Symbol)]
+        fn shift(tag, #[rest] value) -> result {
             #[region(handler)] {}
         };
 
@@ -108,5 +119,19 @@ dialect! {
         /// - Second param: result type (what resuming returns)
         #[attr(effect: Type)]
         type continuation(arg, result);
+
+        /// `cont.prompt_tag` type: prompt tag for delimited control.
+        ///
+        /// A unique identifier that connects `cont.push_prompt` with `cont.shift`.
+        /// At runtime, this is represented as an i32 value.
+        type prompt_tag;
     }
 }
+
+// === Printable interface registrations ===
+
+use crate::type_interface::{PrintContext, Printable};
+use std::fmt::Write;
+
+// prompt_tag -> "PromptTag"
+inventory::submit! { Printable::implement("cont", "prompt_tag", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("PromptTag")) }

@@ -154,7 +154,7 @@ pub(crate) fn handle_call_indirect<'db>(
     // If result type is anyref but enclosing function returns funcref or Step,
     // upgrade the result type accordingly. This is needed because WebAssembly GC has separate
     // type hierarchies, and effectful functions return Step for yield bubbling.
-    // Note: tribute.type_var should be resolved before emit by wasm_type_concrete pass.
+    // Note: type variables are resolved at AST level before IR generation.
     let funcref_ty = wasm::Funcref::new(db).as_type();
     if let Some(func_ret_ty) = ctx.func_return_type {
         let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();

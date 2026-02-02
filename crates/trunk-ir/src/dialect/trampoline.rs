@@ -79,10 +79,11 @@ dialect! {
         /// `trampoline.build_continuation` operation: creates a continuation struct.
         ///
         /// Creates a continuation with the captured state for later resumption.
-        /// - `tag`: prompt tag for handler matching
+        /// Takes tag as an operand for evidence-based dispatch.
+        /// - First operand: tag (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index within the ability
-        #[attr(tag: u32, op_idx: u32)]
-        fn build_continuation(resume_fn, state, shift_value) -> result;
+        #[attr(op_idx: u32)]
+        fn build_continuation(tag, resume_fn, state, shift_value) -> result;
 
         /// `trampoline.step_done` operation: creates a Done step.
         ///
@@ -92,10 +93,11 @@ dialect! {
         /// `trampoline.step_shift` operation: creates a Shift step.
         ///
         /// Indicates that a continuation was captured and should be propagated.
-        /// - `prompt`: prompt tag for handler matching
+        /// Takes prompt tag as an operand for evidence-based dispatch.
+        /// - First operand: prompt (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index within the ability
-        #[attr(prompt: u32, op_idx: u32)]
-        fn step_shift(continuation) -> result;
+        #[attr(op_idx: u32)]
+        fn step_shift(prompt, continuation) -> result;
 
         /// `trampoline.continuation_get` operation: extracts a field from continuation.
         ///
@@ -112,10 +114,11 @@ dialect! {
         /// `trampoline.set_yield_state` operation: sets global yield state.
         ///
         /// Called when performing a shift to propagate yield information.
-        /// - `tag`: prompt tag
+        /// Takes tag as an operand for evidence-based dispatch.
+        /// - First operand: tag (i32) - prompt tag from evidence lookup
         /// - `op_idx`: operation index
-        #[attr(tag: u32, op_idx: u32)]
-        fn set_yield_state(continuation);
+        #[attr(op_idx: u32)]
+        fn set_yield_state(tag, continuation);
 
         /// `trampoline.reset_yield_state` operation: clears global yield state.
         ///

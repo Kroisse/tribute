@@ -10,8 +10,9 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, BuiltinRef, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm, HandlerKind,
-    LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
+    AbilityId, Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern,
+    HandlerArm, HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type,
+    TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
@@ -204,9 +205,54 @@ impl<'db> TypeChecker<'db> {
                 let effect = ctx.fresh_effect_row();
                 ctx.func_type(param_types, result_ty, effect)
             }
-            ExprKind::Handle { body, .. } => {
-                // Handle returns the body's type, with handled effects removed
-                self.infer_expr_type_with_ctx(ctx, body)
+            ExprKind::Handle { body, handlers } => {
+                // Handle expression:
+                // 1. Infer the body's type (body may have effects)
+                // 2. Extract handled effects from handler arms
+                // 3. Remove handled effects from the current effect row
+                // 4. Return the body's type
+
+                // Save the current effect state before checking body
+                let effect_before_body = ctx.current_effect();
+
+                // Create a fresh effect row for the body
+                let body_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(body_effect);
+
+                // Infer the body's type
+                let body_ty = self.infer_expr_type_with_ctx(ctx, body);
+
+                // Extract handled ability IDs from effect handlers
+                let handled_ability_ids: Vec<AbilityId<'db>> = handlers
+                    .iter()
+                    .filter_map(|h| match &h.kind {
+                        HandlerKind::Effect { ability, .. } => {
+                            // Get the ability ID from the ResolvedRef
+                            self.extract_ability_id_from_ref(ability)
+                        }
+                        HandlerKind::Result { .. } => None,
+                    })
+                    .collect();
+
+                // Get the body's effect after checking (may have effects added)
+                let body_effect_after = ctx.current_effect();
+
+                // Create a result effect row that excludes handled effects
+                // This is the effect that propagates out of the handle expression
+                let result_effect = if handled_ability_ids.is_empty() {
+                    // No effect handlers, body's effect propagates as-is
+                    body_effect_after
+                } else {
+                    // Remove handled effects from the body's effect row
+                    self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
+                };
+
+                // Merge the result effect with the effect before body
+                // (The outer function's effect now includes the unhandled effects)
+                ctx.set_current_effect(effect_before_body);
+                ctx.merge_effect(result_effect);
+
+                body_ty
             }
             ExprKind::Tuple(elems) => {
                 let elem_tys: Vec<Type<'db>> = elems
@@ -333,6 +379,60 @@ impl<'db> TypeChecker<'db> {
                 ctx.error_type()
             }
             ResolvedRef::Builtin(builtin) => self.infer_builtin_with_ctx(ctx, builtin),
+            ResolvedRef::AbilityOp { ability, op } => {
+                // Look up the ability operation signature from the module type env
+                if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
+                    // Create a function type from the operation signature
+                    // The effect row contains this ability (with a row variable tail for polymorphism)
+
+                    // Generate fresh type vars for parameterized abilities
+                    let ability_args: Vec<Type<'db>> =
+                        if let Some(ability_info) = self.env.lookup_ability(*ability) {
+                            ability_info
+                                .type_params
+                                .iter()
+                                .map(|_| ctx.fresh_type_var())
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                    // Substitute ability type params into the operation signature.
+                    // The operation's types may contain BoundVars that refer to the ability's
+                    // type parameters.
+                    let param_types: Vec<Type<'db>> = op_info
+                        .param_types
+                        .iter()
+                        .map(|ty| {
+                            subst::substitute_bound_vars(self.db(), *ty, &ability_args)
+                                .unwrap_or_else(|index, max| {
+                                    panic!(
+                                        "AbilityOp param BoundVar index out of range: index={}, subst.len()={}",
+                                        index, max
+                                    )
+                                })
+                        })
+                        .collect();
+                    let return_type =
+                        subst::substitute_bound_vars(self.db(), op_info.return_type, &ability_args)
+                            .unwrap_or_else(|index, max| {
+                                panic!(
+                                    "AbilityOp return BoundVar index out of range: index={}, subst.len()={}",
+                                    index, max
+                                )
+                            });
+
+                    let ability_effect = Effect {
+                        ability_id: *ability,
+                        args: ability_args,
+                    };
+                    let row_var = ctx.fresh_row_var();
+                    let effect = EffectRow::new(self.db(), vec![ability_effect], Some(row_var));
+                    ctx.func_type(param_types, return_type, effect)
+                } else {
+                    ctx.error_type()
+                }
+            }
         }
     }
 
@@ -408,6 +508,15 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Infer the result type of a function call.
+    ///
+    /// This method:
+    /// 1. Creates fresh type variables for parameter and result types
+    /// 2. Creates a fresh effect row for the callee's effect
+    /// 3. Constrains the callee to have the expected function type
+    /// 4. Constrains the callee's effect to be a subset of the current function's effect
+    ///
+    /// Effect propagation ensures that if we call `State::get()`, the `State`
+    /// effect constraint is added to the current function's effect row.
     fn infer_call_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -417,15 +526,24 @@ impl<'db> TypeChecker<'db> {
         // Create expected function type
         let param_types: Vec<Type<'db>> = arg_types.iter().map(|_| ctx.fresh_type_var()).collect();
         let result_ty = ctx.fresh_type_var();
-        let effect = ctx.fresh_effect_row();
+        let callee_effect = ctx.fresh_effect_row();
 
-        let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, effect);
+        let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
         ctx.constrain_eq(callee_ty, expected_func_ty);
 
         // Constrain argument types
         for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
+
+        // Effect constraint: the callee's effect must be compatible with the current
+        // function's effect. We use constrain_row_eq here, but the solver's unify_rows
+        // handles subsumption semantics, allowing pure callees in effectful contexts.
+        //
+        // For example, if calling State::get() which has effect {State | e},
+        // the constraint ensures this is compatible with the caller's effect row.
+        let current_effect = ctx.current_effect();
+        ctx.constrain_row_eq(callee_effect, current_effect);
 
         result_ty
     }
@@ -1197,6 +1315,7 @@ impl<'db> TypeChecker<'db> {
                 op,
                 params,
                 continuation,
+                continuation_local_id,
             } => HandlerKind::Effect {
                 ability: self.convert_ref_with_ctx(ctx, ability),
                 op,
@@ -1205,6 +1324,7 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
                 continuation,
+                continuation_local_id,
             },
         };
         HandlerArm {
@@ -1280,9 +1400,11 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 let result_ty = self.annotation_to_type_with_ctx(ctx, result);
                 let row_var = ctx.fresh_row_var();
+                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
+                    &module_path,
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || row_var,
                 );
@@ -1486,6 +1608,86 @@ impl<'db> TypeChecker<'db> {
             phase: CompilationPhase::TypeChecking,
         }
         .accumulate(self.db());
+    }
+
+    // =========================================================================
+    // Handle expression support
+    // =========================================================================
+
+    /// Extract the ability ID from a ResolvedRef.
+    ///
+    /// Used by handle expression to determine which abilities are being handled.
+    /// Returns None for references that don't represent abilities.
+    fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
+        match resolved {
+            ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
+            ResolvedRef::TypeDef { id } => {
+                // TypeDef might be an ability reference in handler context
+                // Create an AbilityId with the same module path and name
+                Some(AbilityId::new(
+                    self.db(),
+                    id.module_path(self.db()).clone(),
+                    id.name(self.db()),
+                ))
+            }
+            // Other reference types are not abilities
+            _ => None,
+        }
+    }
+
+    /// Remove handled effects from an effect row.
+    ///
+    /// Creates a new effect row with the specified abilities removed.
+    /// If the row has a row variable tail, we add a constraint to ensure
+    /// the tail cannot contain the handled effects.
+    ///
+    /// This version uses AbilityId for proper handling of parameterized abilities:
+    /// `State(Int)` and `State(Bool)` are now correctly distinguished.
+    fn remove_handled_effects(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        row: EffectRow<'db>,
+        handled_ability_ids: &[AbilityId<'db>],
+    ) -> EffectRow<'db> {
+        let db = ctx.db();
+        let effects = row.effects(db);
+
+        // Filter out effects whose ability_id is in the handled list
+        let remaining_effects: Vec<_> = effects
+            .iter()
+            .filter(|effect| !handled_ability_ids.contains(&effect.ability_id))
+            .cloned()
+            .collect();
+
+        // If there's a row variable tail, we need to constrain it
+        if let Some(tail_var) = row.rest(db) {
+            // Create a fresh row variable for the result (the "unhandled" portion of the tail)
+            let result_var = ctx.fresh_row_var();
+
+            // Collect Effect entries from the original effects list, preserving type args.
+            // Use full Effect equality (including args) for proper deduplication of
+            // parameterized abilities like State(Int) vs State(Bool).
+            let mut seen_effects: HashSet<Effect<'db>> = HashSet::new();
+            let handled_effects: Vec<crate::ast::Effect<'db>> = effects
+                .iter()
+                .filter(|effect| handled_ability_ids.contains(&effect.ability_id))
+                .filter(|effect| seen_effects.insert((*effect).clone()))
+                .cloned()
+                .collect();
+
+            // Add constraint: tail_var = {handled_effects | result_var}
+            // This decomposes the tail into the handled effects plus the result,
+            // ensuring result_var cannot contain any of the handled abilities.
+            let tail_row = EffectRow::open(db, tail_var);
+            let decomposed_row = EffectRow::new(db, handled_effects, Some(result_var));
+            ctx.constrain_row_eq(tail_row, decomposed_row);
+
+            // Return the remaining effects with the fresh result variable
+            EffectRow::new(db, remaining_effects, Some(result_var))
+        } else {
+            // Closed row: just return the remaining effects
+            EffectRow::new(db, remaining_effects, None)
+        }
     }
 }
 
@@ -1991,7 +2193,7 @@ mod tests {
             // Should have IO effect
             let effects = effect.effects(db);
             assert_eq!(effects.len(), 1);
-            assert_eq!(effects[0].name, Symbol::new("IO"));
+            assert_eq!(effects[0].ability_id.name(db), Symbol::new("IO"));
         } else {
             panic!("Func annotation should be Func type");
         }

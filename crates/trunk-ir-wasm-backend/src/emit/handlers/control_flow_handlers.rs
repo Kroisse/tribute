@@ -84,7 +84,7 @@ pub(crate) fn handle_if<'db>(
     );
 
     // Determine if we should use a result type
-    // Use IR result type directly - wasm_type_concrete should have resolved placeholders
+    // Use IR result type directly - type variables are resolved at AST level
     let has_result = then_has_result_value && matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
 
     let block_type = compute_block_type(db, has_result, result_ty, module_info)?;
@@ -220,7 +220,7 @@ pub(crate) fn handle_block<'db>(
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    // Use IR result type directly - wasm_type_concrete should have resolved placeholders
+    // Use IR result type directly - type variables are resolved at AST level
     let result_ty = op.results(db).first().copied();
     let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
 
@@ -256,7 +256,7 @@ pub(crate) fn handle_loop<'db>(
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    // Use IR result type directly - wasm_type_concrete should have resolved placeholders
+    // Use IR result type directly - type variables are resolved at AST level
     let result_ty = op.results(db).first().copied();
     let has_result = matches!(result_ty, Some(ty) if !is_nil_type(db, ty));
 

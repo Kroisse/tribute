@@ -1,9 +1,5 @@
 //! Tribute language-specific dialect modules.
 
-// === High-level (AST/HIR level) ===
-pub mod tribute;
-pub mod tribute_pat;
-
 // === Runtime types and boxing ===
 pub mod tribute_rt;
 

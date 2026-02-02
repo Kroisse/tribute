@@ -30,8 +30,7 @@ The pipeline is divided into two main phases:
 | evidence_params | `add_evidence_params(db, module)` | Add evidence params to effectful functions |
 | closure_lower | `lower_closures(db, module)` | Lower `closure.*` to function calls |
 | evidence_calls | `transform_evidence_calls(db, module)` | Pass evidence through call sites |
-| tribute_to_cont | `lower_tribute_to_cont(db, module)` | Lower `tribute.handle` to `cont.*` |
-| handler_lower | `lower_handlers(db, module)` | Lower `ability.*` to `cont.*` |
+| resolve_evidence | `resolve_evidence_dispatch(db, module)` | Resolve evidence and lower `ability.*` to `cont.*` |
 | cont_to_trampoline | `lower_cont_to_trampoline(db, module)` | Lower `cont.*` to trampoline ops |
 | dce | `eliminate_dead_functions(db, module)` | Dead code elimination |
 | resolve_casts | `resolve_unrealized_casts(db, module, ...)` | Resolve type casts |

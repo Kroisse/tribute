@@ -182,8 +182,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     );
                     if let Some(func_ret_ty) = enclosing_func_return_ty {
                         // Check if result is anyref (polymorphic type)
-                        // Note: tribute.type_var should be resolved to anyref before emit
-                        // by wasm_type_concrete pass
+                        // Note: type variables are resolved at AST level before IR generation
                         let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
                         let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
                             .is_some()
