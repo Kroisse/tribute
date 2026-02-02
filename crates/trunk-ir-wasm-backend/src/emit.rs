@@ -1420,8 +1420,8 @@ mod tests {
         let (gc_types, type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user struct
-        assert_eq!(gc_types.len(), 6);
+        // Should have 8 GC types: 7 built-in + 1 user struct
+        assert_eq!(gc_types.len(), 8);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1432,8 +1432,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is the user struct
+        // Index 5 is Marker
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
+        // Index 6 is Evidence
+        assert_eq!(gc_type_kind(&gc_types[6]), "array");
+        // Index 7 is the user struct
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
 
         // Type should be in the map
         let i32_ty = core::I32::new(db).as_type();
@@ -1484,8 +1488,8 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct) + 1 user array
-        assert_eq!(gc_types.len(), 6);
+        // Should have 8 GC types: 7 built-in + 1 user array
+        assert_eq!(gc_types.len(), 8);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray (array)
@@ -1496,8 +1500,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct (struct)
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is the user array
-        assert_eq!(gc_type_kind(&gc_types[5]), "array");
+        // Index 5 is Marker (struct)
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
+        // Index 6 is Evidence (array)
+        assert_eq!(gc_type_kind(&gc_types[6]), "array");
+        // Index 7 is the user array
+        assert_eq!(gc_type_kind(&gc_types[7]), "array");
     }
 
     // ========================================
@@ -1549,8 +1557,8 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 6 GC types: 5 built-in + 1 user struct (same type_idx used twice)
-        assert_eq!(gc_types.len(), 6);
+        // Should have 8 GC types: 7 built-in + 1 user struct (same type_idx used twice)
+        assert_eq!(gc_types.len(), 8);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1561,8 +1569,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is the deduplicated user struct
+        // Index 5 is Marker
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
+        // Index 6 is Evidence
+        assert_eq!(gc_type_kind(&gc_types[6]), "array");
+        // Index 7 is the deduplicated user struct
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
     }
 
     // ========================================
@@ -1671,8 +1683,8 @@ mod tests {
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
-        // (6 types: 5 built-in + 1 user struct)
-        assert_eq!(gc_types.len(), 6);
+        // (8 types: 7 built-in + 1 user struct)
+        assert_eq!(gc_types.len(), 8);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1683,8 +1695,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[3]), "struct");
         // Index 4 is ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is the user struct from inside the function body
+        // Index 5 is Marker
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
+        // Index 6 is Evidence
+        assert_eq!(gc_type_kind(&gc_types[6]), "array");
+        // Index 7 is the user struct from inside the function body
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
     }
 
     // ========================================
@@ -1736,13 +1752,15 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 5 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 5);
+        // Should only have the 7 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 7);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
         assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
+        assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
     }
 
     /// Test that struct_get with BYTES_STRUCT_IDX (2) doesn't panic.
@@ -1778,13 +1796,15 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 5 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 5);
+        // Should only have the 7 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 7);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
         assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
+        assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
+        assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
     }
 
     /// Test that array_set with BYTES_ARRAY_IDX (1) doesn't panic.
@@ -1834,8 +1854,8 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 5 built-in types
-        assert_eq!(gc_types.len(), 5);
+        // Should only have the 7 built-in types
+        assert_eq!(gc_types.len(), 7);
     }
 
     // ========================================

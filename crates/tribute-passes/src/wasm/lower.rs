@@ -58,6 +58,9 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = super::tribute_rt_to_wasm::lower(db, module);
     debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
+    // Lower evidence runtime function stubs (prepare for inline WASM operations)
+    let module = super::evidence_to_wasm::lower_evidence_to_wasm(db, module);
+
     // NOTE: wasm_type_concrete pass removed - type variables are now resolved
     // at AST level and converted to concrete types in ast_to_ir
 

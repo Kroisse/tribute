@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use im::HashMap as ImHashMap;
 use tribute_ir::dialect::ability;
-use trunk_ir::dialect::{cont, core, func};
+use trunk_ir::dialect::{adt, cont, core, func};
 use trunk_ir::{
     Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
     Value,
@@ -68,8 +68,7 @@ pub fn resolve_evidence_dispatch<'db>(
 ///
 /// These functions are:
 /// - `__tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker`
-/// - `__tribute_marker_prompt(marker: Marker) -> PromptTag`
-/// - `__tribute_evidence_extend(ev: Evidence, ability_id: i32, tag: PromptTag) -> Evidence`
+/// - `__tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence`
 fn ensure_runtime_functions<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
@@ -90,7 +89,6 @@ fn ensure_runtime_functions<'db>(
 
     // Check if functions already exist
     let mut has_evidence_lookup = false;
-    let mut has_marker_prompt = false;
     let mut has_evidence_extend = false;
 
     for op in entry_block.operations(db).iter() {
@@ -98,15 +96,13 @@ fn ensure_runtime_functions<'db>(
             let name = func_op.sym_name(db);
             if name == Symbol::new("__tribute_evidence_lookup") {
                 has_evidence_lookup = true;
-            } else if name == Symbol::new("__tribute_marker_prompt") {
-                has_marker_prompt = true;
             } else if name == Symbol::new("__tribute_evidence_extend") {
                 has_evidence_extend = true;
             }
         }
     }
 
-    if has_evidence_lookup && has_marker_prompt && has_evidence_extend {
+    if has_evidence_lookup && has_evidence_extend {
         return module;
     }
 
@@ -146,45 +142,12 @@ fn ensure_runtime_functions<'db>(
         new_ops.insert(0, func_op.as_operation());
     }
 
-    if !has_marker_prompt {
-        let marker_ty = ability::Marker::new(db).as_type();
-        let prompt_tag_ty = ability::PromptTag::new(db).as_type();
-
-        // fn __tribute_marker_prompt(marker: Marker) -> PromptTag
-        let func_ty = core::Func::new(db, IdVec::from(vec![marker_ty]), prompt_tag_ty);
-
-        // Empty body with unreachable
-        let unreachable_op = func::unreachable(db, location);
-        let body_block = Block::new(
-            db,
-            trunk_ir::BlockId::fresh(),
-            location,
-            IdVec::from(vec![BlockArg::of_type(db, marker_ty)]),
-            IdVec::from(vec![unreachable_op.as_operation()]),
-        );
-        let body = Region::new(db, location, IdVec::from(vec![body_block]));
-
-        let func_op = func::func(
-            db,
-            location,
-            Symbol::new("__tribute_marker_prompt"),
-            *func_ty,
-            body,
-        );
-        new_ops.insert(0, func_op.as_operation());
-    }
-
     if !has_evidence_extend {
         let evidence_ty = ability::EvidencePtr::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-        let prompt_tag_ty = ability::PromptTag::new(db).as_type();
+        let marker_ty = ability::Marker::new(db).as_type();
 
-        // fn __tribute_evidence_extend(ev: Evidence, ability_id: i32, tag: PromptTag) -> Evidence
-        let func_ty = core::Func::new(
-            db,
-            IdVec::from(vec![evidence_ty, i32_ty, prompt_tag_ty]),
-            evidence_ty,
-        );
+        // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
+        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, marker_ty]), evidence_ty);
 
         // Empty body with unreachable
         let unreachable_op = func::unreachable(db, location);
@@ -194,8 +157,7 @@ fn ensure_runtime_functions<'db>(
             location,
             IdVec::from(vec![
                 BlockArg::of_type(db, evidence_ty),
-                BlockArg::of_type(db, i32_ty),
-                BlockArg::of_type(db, prompt_tag_ty),
+                BlockArg::of_type(db, marker_ty),
             ]),
             IdVec::from(vec![unreachable_op.as_operation()]),
         );
@@ -440,8 +402,9 @@ fn transform_shifts_in_block_with_remap<'db>(
             let i32_ty = core::I32::new(db).as_type();
             let prompt_tag_ty = ability::PromptTag::new(db).as_type();
             let evidence_ty = ability::EvidencePtr::new(db).as_type();
+            let marker_ty = ability::Marker::new(db).as_type();
 
-            // Create tag constant
+            // Create tag constant (prompt_tag for the handler)
             let tag_const = trunk_ir::dialect::arith::r#const(
                 db,
                 location,
@@ -450,6 +413,12 @@ fn transform_shifts_in_block_with_remap<'db>(
             );
             let tag_val = tag_const.result(db);
             new_ops.push(tag_const.as_operation());
+
+            // Create op_table_index constant (0 for now - single handler per ability)
+            let op_table_idx_const =
+                trunk_ir::dialect::arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+            let op_table_idx_val = op_table_idx_const.result(db);
+            new_ops.push(op_table_idx_const.as_operation());
 
             // Extend evidence for each ability
             let mut current_ev = ev_value;
@@ -466,11 +435,22 @@ fn transform_shifts_in_block_with_remap<'db>(
                 let ability_id_val = ability_id_const.result(db);
                 new_ops.push(ability_id_const.as_operation());
 
-                // Call __tribute_evidence_extend
+                // Create Marker struct: { ability_id, prompt_tag, op_table_index }
+                let marker_struct = adt::struct_new(
+                    db,
+                    location,
+                    vec![ability_id_val, tag_val, op_table_idx_val],
+                    marker_ty,
+                    marker_ty,
+                );
+                let marker_val = marker_struct.result(db);
+                new_ops.push(marker_struct.as_operation());
+
+                // Call __tribute_evidence_extend with the Marker
                 let extend_call = func::call(
                     db,
                     location,
-                    vec![current_ev, ability_id_val, tag_val],
+                    vec![current_ev, marker_val],
                     evidence_ty,
                     Symbol::new("__tribute_evidence_extend"),
                 );
@@ -554,17 +534,12 @@ fn transform_shifts_in_block_with_remap<'db>(
             let marker_val = lookup_call.result(db);
             new_ops.push(lookup_call.as_operation());
 
-            // %tag = func.call @__tribute_marker_prompt(%marker)
+            // %tag = adt.struct_get(%marker, field=1)  -- prompt_tag is at field index 1
             let prompt_tag_ty = ability::PromptTag::new(db).as_type();
-            let prompt_call = func::call(
-                db,
-                location,
-                vec![marker_val],
-                prompt_tag_ty,
-                Symbol::new("__tribute_marker_prompt"),
-            );
-            let tag_val = prompt_call.result(db);
-            new_ops.push(prompt_call.as_operation());
+            let struct_get_op =
+                adt::struct_get(db, location, marker_val, prompt_tag_ty, marker_ty, 1);
+            let tag_val = struct_get_op.result(db);
+            new_ops.push(struct_get_op.as_operation());
 
             // Get result type
             let result_ty = op
