@@ -8,9 +8,26 @@
 //! This dialect contains the evidence operations for dynamic handler dispatch:
 //! - `ability.evidence_lookup`: look up a marker in the evidence
 //! - `ability.evidence_extend`: extend evidence with a new marker
-//! - `ability.marker_prompt`: extract prompt tag from a marker
 //!
 //! Handler lowering converts ability operations to `cont.push_prompt` + runtime calls.
+//!
+//! ## Future Direction
+//!
+//! The current `evidence_ptr` and `marker` opaque types are planned to be replaced
+//! with standard ADT types (struct/array) to simplify the type system:
+//!
+//! ```text
+//! type Evidence = Array(Marker)
+//!
+//! struct Marker {
+//!     ability_id: i32,
+//!     prompt_tag: i32,
+//!     op_table_index: i32,
+//! }
+//! ```
+//!
+//! The `marker_prompt` operation will be replaced by `adt.struct_get(marker, 1)` (field index 1).
+//! See `new-plans/implementation.md` for details.
 
 use std::fmt::Write;
 
@@ -42,6 +59,9 @@ dialect! {
         ///
         /// Returns the prompt tag associated with the marker, which is used
         /// for `cont.shift` to capture the correct continuation.
+        ///
+        /// **Deprecated**: This operation will be replaced by `adt.struct_get(marker, 1)`
+        /// (field index 1 = prompt_tag) once Evidence/Marker types are migrated to standard ADT types.
         fn marker_prompt(marker) -> result;
 
         // === Types ===
@@ -51,13 +71,19 @@ dialect! {
         /// Evidence is a runtime structure containing ability markers for
         /// dynamic handler dispatch. Passed as first argument to effectful functions.
         ///
-        /// See `new-plans/implementation.md` for the evidence passing design.
+        /// **Deprecated**: Will be replaced by `Array(Marker)` - a sorted array of
+        /// marker structs. See `new-plans/implementation.md` for the new design.
         type evidence_ptr;
 
         /// `ability.marker` type: marker within evidence.
         ///
         /// Contains the prompt tag and handler information for a specific ability.
         /// Used for evidence-based handler dispatch.
+        ///
+        /// **Deprecated**: Will be replaced by a standard struct type:
+        /// ```text
+        /// struct Marker { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+        /// ```
         type marker;
     }
 }

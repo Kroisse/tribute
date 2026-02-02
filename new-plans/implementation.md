@@ -94,44 +94,27 @@ fn foo(ev: *const Evidence) -> a { ... }
 
 ### Evidence 구조
 
-Evidence는 힙에 할당되고 GC가 관리한다. 정렬된 Marker 배열로 단순하게 구현:
+Evidence는 힙에 할당되고 GC가 관리한다. 정렬된 Marker 배열로 단순하게 구현하며,
+별도의 opaque 타입 대신 기존 ADT 시스템(struct/array)을 재사용한다:
 
 ```rust
-// Evidence: 정렬된 Marker slice
-struct Evidence {
-    markers: *const [Marker],  // sorted by ability_id, GC-managed
-}  // 16B (fat pointer)
+// Evidence: 정렬된 Marker 배열 (ability_id 기준)
+type Evidence = Array(Marker)
 
+// Marker: 각 ability에 대한 handler 정보
 struct Marker {
-    // 상위 8비트: ability_id (0-255)
-    // 하위 24비트: prompt_id
-    prompt_and_ability: u32,
-    op_table_index: u32,
-}  // 8B
-
-impl Marker {
-    fn ability_id(&self) -> u8 {
-        (self.prompt_and_ability >> 24) as u8
-    }
-    
-    fn prompt(&self) -> u32 {
-        self.prompt_and_ability & 0x00FFFFFF
-    }
-    
-    fn new(ability_id: u8, prompt: u32, op_table_index: u32) -> Self {
-        Marker {
-            prompt_and_ability: ((ability_id as u32) << 24) | (prompt & 0x00FFFFFF),
-            op_table_index,
-        }
-    }
-}
+    ability_id: i32,      // ability 식별자 (컴파일 타임 결정)
+    prompt_tag: i32,      // 런타임 prompt 식별자
+    op_table_index: i32,  // operation table 인덱스
+}  // 12B
 ```
 
 **설계 결정:**
 
-- Ability ID: 8비트 → 최대 256개 ability (하드 리밋, 충분함)
-- Prompt ID: 24비트 → 16M개 (중첩 handler에 충분)
-- Markers는 ability_id 기준 정렬 → binary search 가능
+- 모든 필드를 `i32`로 통일: WASM i32 기본 타입과 일치, 타입 변환 불필요
+- 별도의 opaque 타입(`ability.evidence_ptr`, `ability.marker`) 대신 struct/array 사용
+- 기존 `adt.array_get`, `adt.struct_get` 연산 재사용 가능
+- Markers는 ability_id 기준 정렬 → binary search 가능 O(log n)
 
 ### Operation Table
 
@@ -152,50 +135,47 @@ struct OpTable {
 
 ### 조회
 
+Evidence에서 marker를 찾는 것은 런타임 함수 + ADT 연산의 조합으로 구현:
+
 ```rust
-impl Evidence {
-    fn get(&self, ability_id: u8) -> Marker {
-        let markers = unsafe { &*self.markers };
-        // Binary search: O(log n), n ≤ 64면 최대 6번 비교
-        let idx = markers
-            .binary_search_by_key(&ability_id, |m| m.ability_id())
-            .unwrap();
-        markers[idx]
-    }
-}
+// ability operation 호출 시
+// Marker 필드: 0=ability_id, 1=prompt_tag, 2=op_table_index
+let idx = evidence_lookup(ev, STATE_ID)  // 런타임 함수: binary search O(log n)
+let marker = adt.array_get(ev, idx)      // 배열 접근
+let tag = adt.struct_get(marker, 1)      // prompt_tag 필드 (인덱스 1)
+let op_idx = adt.struct_get(marker, 2)   // op_table_index 필드 (인덱스 2)
+cont.shift(tag, ...)
 ```
+
+`evidence_lookup`은 런타임에 binary search를 수행하고, 나머지 필드 접근은
+기존 ADT 연산을 활용한다.
 
 ### Handler 설치
 
+Handler 설치 시 `evidence_extend` 런타임 함수로 새 Evidence를 생성:
+
 ```rust
-fn run_state(comp: fn(*const Evidence) -> a, init: s, ev: *const Evidence) -> a {
-    let marker = Marker::new(STATE_ID, fresh_prompt(), STATE_HANDLER_OP_TABLE);
-    
-    // 새 Evidence 할당 (정렬 유지하며 삽입)
-    let old_markers = unsafe { &*ev.markers };
-    let insert_pos = old_markers
-        .binary_search_by_key(&STATE_ID, |m| m.ability_id())
-        .unwrap_err();  // 중복 없어야 함
-    
-    let new_markers = gc_alloc_slice::<Marker>(old_markers.len() + 1);
-    new_markers[..insert_pos].copy_from_slice(&old_markers[..insert_pos]);
-    new_markers[insert_pos] = marker;
-    new_markers[insert_pos + 1..].copy_from_slice(&old_markers[insert_pos..]);
-    
-    let new_ev = gc_alloc::<Evidence>();
-    new_ev.markers = new_markers;
-    
-    push_prompt(marker.prompt(), || comp(new_ev))
+fn run_state(comp: fn(Evidence) -> a, init: s, ev: Evidence) -> a {
+    let tag = fresh_prompt()
+    let marker = Marker { ability_id: STATE_ID, prompt_tag: tag, op_table_index: STATE_HANDLER_OP_TABLE }
+
+    // evidence_extend: 정렬 유지하며 marker 삽입, 새 배열 반환
+    let new_ev = evidence_extend(ev, marker)
+
+    push_prompt(tag, || comp(new_ev))
 }
 ```
 
 ### Ability Operation
 
 ```rust
-fn state_get(ev: *const Evidence) -> s {
-    let marker = (*ev).get(STATE_ID);           // O(log n)
-    let op_table = &OP_TABLES[marker.op_table_index as usize];
-    shift(marker.prompt(), |k| (op_table.get)(k))
+fn state_get(ev: Evidence) -> s {
+    let idx = evidence_lookup(ev, STATE_ID)           // O(log n) binary search
+    let marker = adt.array_get(ev, idx)
+    let tag = adt.struct_get(marker, 1)               // prompt_tag (인덱스 1)
+    let op_idx = adt.struct_get(marker, 2)              // op_table_index (인덱스 2)
+    let op_table = &OP_TABLES[op_idx as usize]
+    shift(tag, |k| (op_table.get)(k))
 }
 ```
 
@@ -203,11 +183,11 @@ fn state_get(ev: *const Evidence) -> s {
 
 | 상황 | 동작 | 비용 |
 | ---- | ---- | ---- |
-| 일반 함수 호출 | 같은 포인터 전달 | 8B |
-| Handler 설치 | 새 Evidence 할당 | GC alloc + O(n) 복사 |
+| 일반 함수 호출 | 같은 배열 참조 전달 | 4B (WASM) / 8B (native) |
+| Handler 설치 | 새 Evidence 배열 할당 | GC alloc + O(n) 복사 |
 | Operation 조회 | Binary search | O(log n) |
 
-**대부분의 호출에서 Evidence는 변경되지 않으므로**, 포인터만 전달하면 충분하다.
+**대부분의 호출에서 Evidence는 변경되지 않으므로**, 참조만 전달하면 충분하다.
 
 ### 향후 최적화 가능성
 
@@ -221,6 +201,21 @@ fn state_get(ev: *const Evidence) -> s {
 3. **Handler 설치** 시 새 evidence를 할당한다
 4. **Ability operation** 시 evidence에서 marker를 조회한다
 
+### 런타임 함수
+
+Evidence 조작을 위한 런타임 함수들:
+
+| 함수 | 시그니처 (WASM) | 설명 |
+| ---- | -------------- | ---- |
+| `evidence_lookup` | `(ev: i32, ability_id: i32) -> i32` | Binary search로 marker 인덱스 반환 |
+| `evidence_extend` | `(ev: i32, marker: i32) -> i32` | 정렬 유지하며 새 배열 반환 |
+
+**설계 결정:**
+
+- `marker_prompt`, `marker_op_table` 함수는 제거 → `adt.struct_get`으로 대체
+- `ability_id`는 `i32`로 단순화 (8비트 제한 불필요, 실제 ability 수는 적음)
+- WASM에서 모든 참조 타입은 i32 인덱스로 표현
+
 ### 변환 예시
 
 ```rust
@@ -230,7 +225,7 @@ fn fetch_all(urls: List(Text)) ->{Http, Async} List(Response) {
 }
 
 // 변환 후 (개념적)
-fn fetch_all(urls: List(Text), ev: *const Evidence) -> List(Response) {
+fn fetch_all(urls: List(Text), ev: Evidence) -> List(Response) {
     urls.map(
         fn(url, ev_inner) {
             let response = http_get(url, ev_inner)
@@ -275,9 +270,11 @@ Handler가 항상 즉시 `k(value)`로 끝나면, continuation 캡처 없이 직
 { State::get() -> k } -> run_state(fn() k(state), state)
 
 // Tail-resumptive 감지 시, shift 없이:
-fn state_get_optimized(ev: *const Evidence) -> s {
-    let marker = (*ev).get(STATE_ID);
-    let op_table = &OP_TABLES[marker.op_table_index as usize];
+fn state_get_optimized(ev: Evidence) -> s {
+    let idx = evidence_lookup(ev, STATE_ID)
+    let marker = adt.array_get(ev, idx)
+    let op_idx = adt.struct_get(marker, 2)  // op_table_index (인덱스 2)
+    let op_table = &OP_TABLES[op_idx as usize]
     (op_table.get_value)()  // 직접 반환, shift 없음
 }
 ```
@@ -305,6 +302,41 @@ tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
 
 `State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의
 prompt(P3)까지만 continuation을 캡처한다.
+
+### ability_id와 prompt_tag의 관계
+
+Evidence 기반 디스패치에서 두 가지 핵심 식별자가 협력한다:
+
+| 식별자 | 역할 | 결정 시점 | 범위 |
+| ------ | ---- | --------- | ---- |
+| `ability_id` | 어떤 ability인지 식별 | 컴파일 타임 | 프로그램 전역 (0-255) |
+| `prompt_tag` | 어떤 handler 인스턴스인지 식별 | 런타임 | 동적으로 생성 |
+
+**N:N 관계:**
+
+- **같은 ability 중첩**: ability_id 동일, prompt_tag 상이
+- **한 handle에서 여러 ability 처리**: ability_id 상이, prompt_tag 동일
+
+```rust
+// 같은 ability를 중첩하는 예시
+fn nested_state_example() -> Int {
+    handle outer() {                    // prompt_tag = P1
+        handle inner() {                // prompt_tag = P2
+            State::get()                // ability_id = STATE_ID
+            // → evidence에서 STATE_ID로 조회하면 가장 안쪽(P2)의 marker 반환
+        } { State::get() -> k => k(10) }
+    } { State::get() -> k => k(20) }
+}
+```
+
+**조회 흐름:**
+
+1. `State::get()` 호출
+2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 가장 안쪽 handler의 marker 반환
+3. 반환된 marker의 `prompt_tag`(P2)로 shift 수행
+4. P2까지의 continuation만 캡처되어 inner handler로 전달
+
+이 설계로 같은 ability를 중첩해도 각 handler가 자신의 영역만 처리할 수 있다.
 
 ### shift/reset 의미론
 
@@ -603,32 +635,43 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 
 ### Evidence 타입
 
-```text
-Evidence : AbilityRow → Type
+런타임 수준에서 Evidence는 단순한 `Array(Marker)`이다:
+
+```rust
+type Evidence = Array(Marker)
+
+struct Marker {
+    ability_id: i32,
+    prompt_tag: i32,
+    op_table_index: i32,
+}
 ```
 
-Evidence는 ability row에 대해 parameterized된다. Row polymorphism으로 ability 합성을 표현:
+타입 시스템 수준에서는 ability row에 대해 parameterized된다:
 
 ```text
 fn foo() ->{State(Int), Console} Nil
 
-// Evidence 타입:
+// 타입 검사 시 Evidence가 포함해야 할 ability:
 Evidence({State(Int), Console | ρ})
 ```
+
+Row polymorphism으로 ability 합성을 표현하되, 런타임 표현은 단순 배열이다.
 
 ### Evidence 조작
 
 ```rust
-// Evidence 확장 (정렬 유지하며 삽입)
-ev.insert(marker) : Evidence({A | ρ}) → Evidence({A, B | ρ})
+// Evidence 확장 (런타임 함수)
+evidence_extend(ev, marker) : Evidence → Evidence
 
-// Evidence 조회 (binary search)
-ev.get(ability_id) : Evidence({A | ρ}) → Marker(A)
+// Evidence 조회 (런타임 함수 + ADT 연산)
+let idx = evidence_lookup(ev, ability_id)  // 런타임: binary search
+let marker = adt.array_get(ev, idx)        // ADT 연산
 ```
 
 ### Canonical Ordering
 
-각 ability에 전역적인 ID (0-255)를 부여한다:
+각 ability에 전역적인 ID (i32)를 부여한다:
 
 ```text
 State    → 0
@@ -638,19 +681,19 @@ Async    → 3
 ...
 ```
 
-Evidence의 markers 배열은 ability_id 기준으로 정렬된다. 조회 시 binary search로 O(log n) 탐색:
+Evidence 배열은 ability_id 기준으로 정렬된다. `evidence_lookup`이 binary search로 O(log n) 탐색:
 
 ```rust
 // {Console, State} 든 {State, Console} 이든
 // markers 배열은 항상 [State(id=0), Console(id=1)] 순서
-ev.get(STATE_ID)  // binary search로 찾음
+let idx = evidence_lookup(ev, STATE_ID)  // binary search
 ```
 
 **설계 결정:**
 
-- Ability ID: 8비트 → 최대 256개 (하드 리밋)
+- Ability ID: `i32` (실용적인 ability 개수는 수십 개 수준)
 - 표준 라이브러리 ability (State, Console, Http 등): 0-63 예약
-- 사용자 정의 ability: 64-255
+- 사용자 정의 ability: 64+
 
 ---
 
