@@ -129,7 +129,7 @@ Continuation은 **linear 타입**으로 취급한다:
 
 ### 지원 가능한 Ability 패턴
 
-```
+```text
 ✅ Exception / Abort     - continuation 버림
 ✅ State (Get/Set)       - continuation 1번 사용
 ✅ Reader / Writer       - continuation 1번 사용
@@ -151,7 +151,7 @@ Continuation은 **linear 타입**으로 취급한다:
 
 함수 타입에 ability 정보가 포함된다:
 
-```
+```text
 fn(a) ->{E} b
        ~~~~
        이 함수가 수행할 수 있는 abilities
@@ -215,7 +215,7 @@ Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다. MLI
 
 ### Compilation Pipeline
 
-```
+```text
 Tribute Source
     │
     ▼ Parse
@@ -277,7 +277,7 @@ Asyncify 변환 또는 CPS 변환 필요 (복잡함)
 
 Binaryen을 최적화 백엔드로 사용:
 
-```
+```text
 Core IR
     │
     ▼ Lower to WasmGC Dialect

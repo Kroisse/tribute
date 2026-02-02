@@ -52,7 +52,7 @@ fn test_example() {
 `#[salsa_test]` attaches a database but does NOT create a tracked function context.
 Unit tests that directly call code using accumulate() will fail:
 
-```
+```text
 cannot accumulate values outside of an active tracked function
 ```
 

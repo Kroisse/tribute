@@ -12,8 +12,8 @@ Important for ecosystem growth but requires stable language foundation first.
 
 ### Package Definition
 
-```tribute
-// tribute.toml
+```toml
+# tribute.toml
 [package]
 name = "my-lib"
 version = "1.0.0"
@@ -102,7 +102,7 @@ trb login                 # Authenticate with registry
 
 ## Registry Architecture
 
-```
+```text
 Client (trb) ←→ Registry API ←→ Package Storage
                       ↓
                  Metadata DB

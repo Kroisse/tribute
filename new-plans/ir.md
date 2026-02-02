@@ -15,7 +15,7 @@ TrunkIR은 Tribute 소스 코드에서 Wasm/네이티브 바이너리로 내려�
 
 ### Dialect 계층 구조
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │ Infrastructure                                          │
 │   core             module, unrealized_conversion_cast   │
@@ -50,7 +50,7 @@ TrunkIR은 Tribute 소스 코드에서 Wasm/네이티브 바이너리로 내려�
 
 #### 연산
 
-```
+```text
 core.module : (name: String, body: Region) -> Module
     모듈 정의
 
@@ -61,7 +61,7 @@ core.unrealized_conversion_cast : (value: T) -> U
 
 #### 타입
 
-```
+```text
 // 정수 (비트폭 명시)
 i1, i8, i16, i32, i64, i128, ...
 
@@ -130,7 +130,7 @@ impl ModulePathExt for Symbol { ... }
 
 #### 연산
 
-```
+```text
 tribute.call : (name: Symbol, args...) -> T
     Unqualified 호출 (foo(x, y) 형태), 미해소
     name은 단순 이름 또는 qualified path (e.g., "foo" 또는 "math::double")
@@ -147,7 +147,7 @@ tribute.case : (scrutinee) -> T { body }
 
 #### 타입
 
-```
+```text
 tribute.type     // 미해소 타입 참조
 tribute.int      // 정수 타입
 tribute.nat      // 자연수 타입
@@ -182,7 +182,7 @@ ability.marker_prompt : (marker: Marker) -> PromptTag
 클로저 생성 및 분해 연산. 클로저는 함수 참조와 캡처된 환경의 조합이다.
 타겟별로 다르게 lowering된다 (wasm: funcref + struct, native: 함수 포인터 + 힙).
 
-```
+```text
 closure.new : @func_ref(captures...) -> Closure<T>
     클로저 생성 (캡처된 변수들 명시)
 
@@ -197,7 +197,7 @@ closure.env : (closure: Closure<T>) -> Env
 
 클로저는 분해 후 `func.call_indirect`로 호출:
 
-```
+```text
 %closure = closure.new @lambda_0, [%captured]
 %fn = closure.func %closure
 %env = closure.env %closure
@@ -210,7 +210,7 @@ Algebraic Data Type 연산. 타겟 독립적.
 
 #### Struct (Product Type)
 
-```
+```text
 adt.struct_new : (type: StructType, fields...) -> ref<T>
     struct 인스턴스 생성
 
@@ -223,7 +223,7 @@ adt.struct_set : (ref: ref<T>, field: u32, value: FieldType) -> ()
 
 #### Variant (Sum Type)
 
-```
+```text
 adt.variant_new : (type: EnumType, tag: u32, fields...) -> ref<T>
     variant 인스턴스 생성
 
@@ -236,7 +236,7 @@ adt.variant_get : (ref: ref<T>, field: u32) -> FieldType
 
 #### Array
 
-```
+```text
 adt.array_new : (type: ArrayType, size: i32, init?) -> ref<Array<T>>
     배열 생성
 
@@ -252,7 +252,7 @@ adt.array_len : (ref: ref<Array<T>>) -> i32
 
 #### Reference
 
-```
+```text
 adt.ref_null : (type: RefType) -> ref<T>?
     null 참조 생성
 
@@ -265,7 +265,7 @@ adt.ref_cast : (ref: ref<T>) -> ref<U>
 
 #### 리터럴
 
-```
+```text
 adt.text_const : (literal: Text) -> Text
     텍스트 상수
 
@@ -281,7 +281,7 @@ adt.bytes_const : (bytes: [u8]) -> Bytes
 
 Delimited continuation 연산. ability가 이 수준으로 lowering된다.
 
-```
+```text
 cont.push_prompt : (tag: PromptTag, body: Region) -> T
     Prompt 설치, body 실행
 
@@ -299,7 +299,7 @@ cont.drop : (continuation: Continuation<T>) -> ()
 
 함수 정의 및 호출. MLIR 스타일을 따름.
 
-```
+```text
 func.func : (name: Symbol, type: Type, body: Region) -> FuncDef
     함수 정의
 
@@ -324,7 +324,7 @@ func.unreachable : () -> !
 
 #### Direct vs Indirect Call
 
-```
+```text
 // Direct call: callee가 컴파일 타임에 알려진 경우
 func.call @add(%x, %y) : (i32, i32) -> i32
 
@@ -337,7 +337,7 @@ func.call_indirect %f(%x, %y) : (i32, i32) -> i32
 
 람다는 세 단계로 lowering된다:
 
-```
+```text
 // 1. 파싱 직후 (캡처 분석 전)
 %f = tribute.lambda (%x) {
     arith.add %x, %y        // %y는 외부 변수 (캡처 대상인지 아직 모름)
@@ -369,7 +369,7 @@ Structured Control Flow. Tribute는 loop 구문이 없고 재귀만 사용한다
 
 #### 기본 연산
 
-```
+```text
 scf.case : (scrutinee: T, branches: [(Pattern, Region)]) -> U
     패턴 매칭, 모든 Region이 같은 타입 U를 yield
 
@@ -379,7 +379,7 @@ scf.yield : (values...) -> !
 
 #### Tail Call Inlining 결과물 (최적화 패스 산출)
 
-```
+```text
 scf.loop : (init: (T1, T2, ...), body: Region) -> U
     루프 (tail recursion 최적화 결과)
 
@@ -396,7 +396,7 @@ scf.break : (value: T) -> !
 
 #### 산술
 
-```
+```text
 arith.const : (value: Immediate) -> T
     상수
 
@@ -410,7 +410,7 @@ arith.neg : (value: T) -> T
 
 #### 비교
 
-```
+```text
 arith.cmp_eq  : (lhs: T, rhs: T) -> i1
 arith.cmp_ne  : (lhs: T, rhs: T) -> i1
 arith.cmp_lt  : (lhs: T, rhs: T) -> i1
@@ -421,7 +421,7 @@ arith.cmp_ge  : (lhs: T, rhs: T) -> i1
 
 #### 비트 연산
 
-```
+```text
 arith.and : (lhs: T, rhs: T) -> T
 arith.or  : (lhs: T, rhs: T) -> T
 arith.xor : (lhs: T, rhs: T) -> T
@@ -432,7 +432,7 @@ arith.shru : (value: T, amount: T) -> T   // logical
 
 #### 타입 변환
 
-```
+```text
 arith.cast    : (value: T) -> U    // 부호 확장/축소
 arith.trunc   : (value: T) -> U    // 절삭
 arith.extend  : (value: T) -> U    // 확장
@@ -443,7 +443,7 @@ arith.convert : (value: T) -> U    // int ↔ float
 
 저수준 메모리 연산. FFI 및 런타임 지원용.
 
-```
+```text
 mem.data : (bytes: [u8]) -> ptr
     Data section에 바이트 배치, 포인터 반환
 
@@ -464,7 +464,7 @@ Wasm 3.0 + WasmGC 타겟.
 
 #### Control
 
-```
+```text
 wasm.block : (body: Region) -> T
 wasm.loop : (body: Region) -> ()
 wasm.if : (cond: i32, then: Region, else: Region?) -> T
@@ -476,7 +476,7 @@ wasm.return_call : (callee: FuncRef, args...) -> !
 
 #### Arithmetic (예시)
 
-```
+```text
 wasm.i32_add : (lhs: i32, rhs: i32) -> i32
 wasm.i32_sub : (lhs: i32, rhs: i32) -> i32
 wasm.i32_eq  : (lhs: i32, rhs: i32) -> i32
@@ -485,7 +485,7 @@ wasm.i32_eq  : (lhs: i32, rhs: i32) -> i32
 
 #### WasmGC
 
-```
+```text
 wasm.struct_new : (type: TypeIdx, fields...) -> ref
 wasm.struct_get : (ref: ref, field: u32) -> T
 wasm.struct_set : (ref: ref, field: u32, value: T) -> ()
@@ -504,7 +504,7 @@ wasm.ref_cast : (ref: ref) -> ref
 
 Cranelift 타겟. (상세 정의 추후)
 
-```
+```text
 clif.* : Cranelift IR에 대응하는 연산들
 ```
 
@@ -514,7 +514,7 @@ clif.* : Cranelift IR에 대응하는 연산들
 
 TrunkIR은 SSA 기반이며, φ 노드 대신 block arguments를 사용한다.
 
-```
+```text
 func.func @sum(%xs: ref<List>, %acc: i32) -> i32 {
 ^entry:
     %tag = adt.variant_tag %xs
@@ -534,7 +534,7 @@ func.func @sum(%xs: ref<List>, %acc: i32) -> i32 {
 
 Tail call inlining 후:
 
-```
+```text
 func.func @sum(%xs: ref<List>, %acc: i32) -> i32 {
     scf.loop (%xs, %acc) -> i32 {
     ^body(%xs_cur: ref<List>, %acc_cur: i32):
@@ -558,7 +558,7 @@ func.func @sum(%xs: ref<List>, %acc: i32) -> i32 {
 
 ## Compilation Pipeline
 
-```
+```text
 Tribute Source
     │
     ▼ Parse (CST)

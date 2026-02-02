@@ -248,7 +248,7 @@ fn fetch_all(urls: List(Text), ev: *const Evidence) -> List(Response) {
 
 모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
 
-```
+```text
 순수 코드 (fn(a) ->{} b)     → 직접 스타일, 일반 호출
 Effect 코드 (fn(a) ->{E} b)  → shift/reset 지점만 특별 처리
 ```
@@ -291,7 +291,7 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 
 중첩된 handler에서 올바른 경계를 찾기 위해 prompt가 필요하다:
 
-```
+```text
 스택 (아래가 바닥)
 ─────────────────────
 [State prompt: P1]     ← 바깥쪽 run_state
@@ -383,7 +383,7 @@ libmprompt는 setjmp/longjmp + 스택 복사로 delimited continuation을 구현
 
 **메모리 레이아웃:**
 
-```
+```text
 ┌─────────────────┐
 │ Main Stack      │
 ├─────────────────┤
@@ -599,13 +599,13 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 
 ### Evidence 타입
 
-```
+```text
 Evidence : AbilityRow → Type
 ```
 
 Evidence는 ability row에 대해 parameterized된다. Row polymorphism으로 ability 합성을 표현:
 
-```
+```text
 fn foo() ->{State(Int), Console} Nil
 
 // Evidence 타입:
@@ -626,7 +626,7 @@ ev.get(ability_id) : Evidence({A | ρ}) → Marker(A)
 
 각 ability에 전역적인 ID (0-255)를 부여한다:
 
-```
+```text
 State    → 0
 Console  → 1
 Http     → 2

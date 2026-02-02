@@ -16,7 +16,7 @@ WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbl
 
 WasmGC에서 `anyref`와 `funcref`는 별개의 타입 계층에 속한다:
 
-```
+```text
 any
 ├── eq
 │   ├── i31
@@ -52,7 +52,7 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 
 ### 발생 오류
 
-```
+```text
 error: func 4 failed to validate
 Caused by: type mismatch: expected funcref, found (ref null $type)
 ```
@@ -136,7 +136,7 @@ wasm.func @counter() -> (ref $YieldResult) {
 
 #### Call Site 변환
 
-```
+```text
 // 원본
 let result = call @effectful_func()
 use(result)

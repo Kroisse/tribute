@@ -23,7 +23,7 @@ Salsa is an incremental computation framework written in Rust. Key features:
 
 ## Salsa Architecture in Tribute
 
-```
+```text
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
 │  SourceCst │ ──> │    Parse    │ ──> │   Program   │
 │   (Input)   │     │   (Query)   │     │  (Tracked)  │

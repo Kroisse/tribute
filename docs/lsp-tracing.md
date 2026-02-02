@@ -74,7 +74,7 @@ tribute --log trace debug file.trb
 
 ### 아키텍처
 
-```
+```text
 tracing 매크로 호출
     ↓
 LspLayer (커스텀 tracing_subscriber::Layer)

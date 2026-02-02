@@ -38,7 +38,7 @@ def main() {
 
 ## 프로젝트 구조
 
-```
+```text
 toy-dialect/
 ├── include/
 │   └── Toy/

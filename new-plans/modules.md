@@ -376,7 +376,7 @@ fn sort_and_print(items: List(Text)) ->{Console} Nil {
 | `lib.trb` | 라이브러리 패키지의 루트 |
 | `main.trb` | 실행 파일 패키지의 루트 |
 
-```
+```text
 my_library/
   src/
     lib.trb           // 라이브러리 루트 (pkg::)

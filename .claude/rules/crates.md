@@ -80,7 +80,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 
 ## Dependency Graph
 
-```
+```text
 tribute (main)
 ├── tribute-front
 ├── tribute-passes

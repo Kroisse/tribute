@@ -22,7 +22,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 
 ### 내부 표현
 
-```
+```text
 Bytes = (ptr: *const u8, len: usize)
 ```
 

@@ -12,7 +12,7 @@ Important for adoption and maintainability, but requires stable language and sta
 
 ### API Documentation
 
-```tribute
+```text
 /// Adds two integers together.
 /// 
 /// # Examples
@@ -30,7 +30,7 @@ fn add(a: Int, b: Int) -> Int {
 
 ### Module Documentation
 
-```tribute
+```text
 //! # Collections Module
 //! 
 //! This module provides efficient data structures for common
@@ -88,7 +88,7 @@ module collections {
 
 ### HTML Generation
 
-```
+```text
 Source Files → AST + Doc Comments → HTML Generator → Static Site
      ↓                    ↓              ↓
 Type Info ←→ Cross-refs ←→ Templates ←→ Assets
@@ -103,7 +103,7 @@ Type Info ←→ Cross-refs ←→ Templates ←→ Assets
 
 ### Documentation Structure
 
-```
+```text
 docs/
 ├── api/           # Auto-generated API docs
 ├── guide/         # User guides and tutorials

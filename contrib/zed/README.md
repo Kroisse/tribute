@@ -86,7 +86,7 @@ To update syntax highlighting queries, edit `languages/tribute/highlights.scm`.
 
 ## Structure
 
-```
+```text
 contrib/zed/
 ├── Cargo.toml               # Rust extension dependencies
 ├── extension.toml           # Extension metadata

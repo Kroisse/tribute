@@ -56,7 +56,7 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 Effect row는 다음으로 구성된다:
 
-```
+```text
 Row ::= {}                    -- 빈 row (순수)
       | {A₁, A₂, ..., Aₙ}     -- 구체적 ability들
       | {e}                   -- row 변수
@@ -101,7 +101,7 @@ fn nested() ->{State(Int) as counter, State(Int) as total} Nil {
 
 두 row를 unify할 때, 공통 label을 맞추고 나머지를 row 변수로 표현한다:
 
-```
+```text
 unify({A, B | e₁}, {A, C | e₂})
 
 1. 공통 label A 확인
@@ -112,7 +112,7 @@ unify({A, B | e₁}, {A, C | e₂})
 
 **중복 검사**: Unification 결과에 동일한 ability가 두 번 나타나면 에러:
 
-```
+```text
 unify({State(Int) | e₁}, {State(Int) | e₂})
 // e₁ = e₂ 로 unify됨, 결과: {State(Int) | e₁}  -- OK (중복 아님)
 
@@ -132,7 +132,7 @@ fn example(f: fn() ->{State(Int)} a, g: fn() ->{Console} b) {
 
 Unification 과정:
 
-```
+```text
 {State(Int) | e₁} ∪ {Console | e₂}
 = {State(Int), Console | e₃}
   where e₁ = {Console | e₃}, e₂ = {State(Int) | e₃}
@@ -142,7 +142,7 @@ Unification 과정:
 
 Row 변수에 대해서도 occurs check 필요:
 
-```
+```text
 unify(e, {State(Int) | e})  -- 에러: e가 자기 자신을 포함
 ```
 
@@ -160,7 +160,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a
 
 타입 규칙:
 
-```
+```text
 Γ ⊢ comp : fn() ->{e, State(s)} a
 Γ ⊢ init : s
 ────────────────────────────────────────
@@ -174,7 +174,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a
 
 ### Row에서 Ability 제거
 
-```
+```text
 remove(State(s), {State(s), Console | e}) = {Console | e}
 remove(State(s), {Console | e}) = 에러: State(s)가 없음
 remove(State(s), {e}) = e' where e = {State(s) | e'}
@@ -188,7 +188,7 @@ remove(State(s), {e}) = e' where e = {State(s) | e'}
 
 ### Judgment 형태
 
-```
+```text
 Γ ⊢ e ⇒ A ; E    -- Infer: 표현식 e의 타입 A와 effect E를 추론
 Γ ⊢ e ⇐ A ; E    -- Check: 표현식 e가 타입 A, effect E를 가지는지 검사
 ```
@@ -197,7 +197,7 @@ remove(State(s), {e}) = e' where e = {State(s) | e'}
 
 #### 변수 (Infer)
 
-```
+```text
 x : A ∈ Γ
 ─────────────────
 Γ ⊢ x ⇒ A ; {}
@@ -205,7 +205,7 @@ x : A ∈ Γ
 
 #### 람다 (Check)
 
-```
+```text
 Γ, x : A ⊢ body ⇐ B ; E
 ───────────────────────────────
 Γ ⊢ fn(x) body ⇐ fn(A) ->{E} B ; {}
@@ -213,7 +213,7 @@ x : A ∈ Γ
 
 #### 람다 (Infer)
 
-```
+```text
 fresh α, β, e
 Γ, x : α ⊢ body ⇐ β ; e
 ─────────────────────────────────
@@ -222,7 +222,7 @@ fresh α, β, e
 
 #### 함수 적용 (Infer)
 
-```
+```text
 Γ ⊢ f ⇒ fn(A) ->{E} B ; E₁
 Γ ⊢ x ⇐ A ; E₂
 ──────────────────────────────
@@ -231,7 +231,7 @@ fresh α, β, e
 
 #### Ability Operation (Infer)
 
-```
+```text
 op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 Γ ⊢ eᵢ ⇐ Aᵢ ; Eᵢ
 ─────────────────────────────────────
@@ -240,7 +240,7 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 
 #### Handle (Infer)
 
-```
+```text
 Γ ⊢ comp ⇒ fn() ->{E, Eff} A ; E₁
 Γ ⊢ clauses handle Eff with continuation type
 ────────────────────────────────────────────
@@ -251,7 +251,7 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 
 Effect row 간의 subsumption:
 
-```
+```text
 E₁ ⊆ E₂
 Γ ⊢ e ⇐ A ; E₁
 ───────────────────
@@ -274,7 +274,7 @@ E₁ ⊆ E₂
 
 ### Constraint 종류
 
-```
+```text
 C ::= τ₁ = τ₂           -- 타입 동치
     | ρ₁ = ρ₂           -- row 동치
     | ρ₁ ⊆ ρ₂           -- row 포함 (subsumption)
@@ -284,7 +284,7 @@ C ::= τ₁ = τ₂           -- 타입 동치
 
 ### Row Unification Algorithm
 
-```
+```text
 unify_row(ρ₁, ρ₂):
   match (ρ₁, ρ₂):
     ({}, {}) → success

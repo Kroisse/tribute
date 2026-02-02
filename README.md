@@ -13,7 +13,7 @@ A pure, practical functional language that's easy to learn with simple and famil
 
 ## Quick Example
 
-```tribute
+```text
 struct User { name: String, age: Int }
 
 fn greet(user: User) -> String {

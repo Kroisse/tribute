@@ -14,7 +14,7 @@ Tribute는 WasmGC (Wasm 3.0)를 주요 타겟으로 한다. 백엔드는 다음 
 
 ## 크레이트 구조
 
-```
+```text
 trunk-ir/
 ├── dialect/
 │   ├── wasm.rs           # wasm ops (struct_new, array_new, call, ...)
@@ -44,7 +44,7 @@ tribute/                  # main crate - 파이프라인 조율
 
 ### WasmGC 타겟 (주요 경로)
 
-```
+```text
 tribute-ir (High-level)
 ├── adt.struct_new
 ├── adt.variant_new
@@ -66,7 +66,7 @@ WebAssembly Binary
 
 ### Linear Memory 타겟 (미래)
 
-```
+```text
 tribute-ir (High-level)
 ├── adt.struct_new
 │

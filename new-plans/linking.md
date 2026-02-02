@@ -8,7 +8,7 @@ Tribute targets WasmGC, which significantly constrains linking options compared 
 
 ### 1. Single Module Compilation (Current)
 
-```
+```text
 user.trb + std/*.trb → single .wasm
 ```
 
@@ -47,7 +47,7 @@ user.trb + std/*.trb → single .wasm
 
 ### 3. Static Linking (wasm-ld style)
 
-```
+```text
 foo.trb → foo.o (relocatable)
 bar.trb → bar.o
         ↓ wasm-ld
