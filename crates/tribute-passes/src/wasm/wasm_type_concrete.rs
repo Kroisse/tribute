@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{closure, tribute, tribute_rt};
+use tribute_ir::dialect::{closure, tribute_rt};
 use trunk_ir::Attribute;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{cont, core, wasm};
@@ -123,16 +123,8 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // Check if result type needs concretization
-        let results = op.results(db);
-        if !results
-            .iter()
-            .any(|ty| tribute::is_placeholder_type(db, *ty))
-        {
-            return RewriteResult::Unchanged;
-        }
-
         // Look up the callee's return type
+        let results = op.results(db);
         // First try qualified name (e.g., "Point::x"), then fall back to last segment (e.g., "x")
         let callee = call_op.callee(db);
         let return_ty = if let Some(&ty) = self.func_return_types.get(&callee) {
@@ -147,17 +139,8 @@ impl<'db> RewritePattern<'db> for CallResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // Skip if the return type is also a placeholder (generic function not yet resolved)
-        if tribute::is_placeholder_type(db, return_ty) {
-            debug!(
-                "wasm_type_concrete: callee {} returns placeholder type",
-                callee
-            );
-            return RewriteResult::Unchanged;
-        }
-
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, results, return_ty) else {
+        let Some(new_results) = update_results_if_different(db, results, return_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -194,16 +177,8 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         }
 
-        // Check if result type needs concretization
-        let results = op.results(db);
-        if !results
-            .iter()
-            .any(|ty| tribute::is_placeholder_type(db, *ty))
-        {
-            return RewriteResult::Unchanged;
-        }
-
         // The callee is the first operand (funcref) in our IR convention
+        let results = op.results(db);
         // Note: WebAssembly stack order differs from IR operand order
         let operands = op.operands(db);
         let Some(&callee_val) = operands.first() else {
@@ -226,14 +201,8 @@ impl<'db> RewritePattern<'db> for CallIndirectResultTypePattern<'db> {
             return RewriteResult::Unchanged;
         };
 
-        // Skip if inferred type is also a placeholder
-        if tribute::is_placeholder_type(db, concrete_ty) {
-            debug!("wasm_type_concrete: wasm.call_indirect callee returns placeholder type");
-            return RewriteResult::Unchanged;
-        }
-
-        // Try to concretize results
-        let Some(new_results) = concretize_results(db, results, concrete_ty) else {
+        // Try to update results if they differ from inferred type
+        let Some(new_results) = update_results_if_different(db, results, concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -326,7 +295,7 @@ impl<'db> RewritePattern<'db> for IfResultTypePattern {
         };
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
+        let Some(new_results) = update_results_if_different(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -362,7 +331,7 @@ impl<'db> RewritePattern<'db> for BlockResultTypePattern {
         };
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
+        let Some(new_results) = update_results_if_different(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -398,7 +367,7 @@ impl<'db> RewritePattern<'db> for LoopResultTypePattern {
         };
 
         // Try to concretize results
-        let Some(new_results) = concretize_results(db, op.results(db), concrete_ty) else {
+        let Some(new_results) = update_results_if_different(db, op.results(db), concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -431,14 +400,7 @@ impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
             return RewriteResult::Unchanged;
         }
 
-        // Check if result is already concrete
         let results = op.results(db);
-        let has_placeholder = results
-            .iter()
-            .any(|ty| tribute::is_placeholder_type(db, *ty));
-        if !has_placeholder {
-            return RewriteResult::Unchanged;
-        }
 
         // Get field index from field_idx attribute
         let attrs = op.attributes(db);
@@ -477,13 +439,8 @@ impl<'db> RewritePattern<'db> for StructGetResultTypePattern {
             return RewriteResult::Unchanged;
         };
 
-        // Skip if inferred type is also a placeholder
-        if tribute::is_placeholder_type(db, concrete_ty) {
-            return RewriteResult::Unchanged;
-        }
-
-        // Concretize results
-        let Some(new_results) = concretize_results(db, results, concrete_ty) else {
+        // Update results if they differ from inferred type
+        let Some(new_results) = update_results_if_different(db, results, concrete_ty) else {
             return RewriteResult::Unchanged;
         };
 
@@ -556,33 +513,22 @@ fn get_field_type_from_struct<'db>(
 // Helper functions
 // ============================================================================
 
-/// Replace all placeholder results with a concrete type.
+/// Update results to the inferred type if they differ.
 ///
 /// Returns the modified results, or None if no changes were needed.
-fn concretize_results<'db>(
-    db: &'db dyn salsa::Database,
+fn update_results_if_different<'db>(
+    _db: &'db dyn salsa::Database,
     results: &IdVec<Type<'db>>,
     concrete_ty: Type<'db>,
 ) -> Option<IdVec<Type<'db>>> {
-    // Check if any result is a placeholder
-    let has_placeholder = results
-        .iter()
-        .any(|ty| tribute::is_placeholder_type(db, *ty));
-    if !has_placeholder {
+    // Check if any result type differs from the concrete type
+    let needs_update = results.iter().any(|ty| *ty != concrete_ty);
+    if !needs_update {
         return None;
     }
 
-    // Replace all placeholder results with the concrete type
-    let new_results: IdVec<Type<'db>> = results
-        .iter()
-        .map(|ty| {
-            if tribute::is_placeholder_type(db, *ty) {
-                concrete_ty
-            } else {
-                *ty
-            }
-        })
-        .collect();
+    // Replace all results with the concrete type
+    let new_results: IdVec<Type<'db>> = results.iter().map(|_| concrete_ty).collect();
 
     Some(new_results)
 }
@@ -634,11 +580,6 @@ fn infer_type_from_regions<'db>(
             continue;
         };
 
-        // Skip placeholder types - we want concrete types
-        if tribute::is_placeholder_type(db, ty) {
-            continue;
-        }
-
         match found {
             None => {
                 found = Some(ty);
@@ -680,9 +621,7 @@ fn infer_type_from_region<'db>(
             // Look for wasm.yield operations
             if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
                 let yielded_value = yield_op.value(db);
-                if let Some(ty) = get_value_type(db, yielded_value)
-                    && !tribute::is_placeholder_type(db, ty)
-                {
+                if let Some(ty) = get_value_type(db, yielded_value) {
                     return Some(ty);
                 }
             }

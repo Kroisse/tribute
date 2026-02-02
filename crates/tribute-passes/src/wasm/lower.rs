@@ -5,7 +5,6 @@
 
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::tribute;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
@@ -643,13 +642,6 @@ impl<'db> WasmLowerer<'db> {
         let dialect = op.dialect(self.db);
         let name = op.name(self.db);
 
-        // Skip tribute dialect metadata operations - they have no runtime representation.
-        if dialect == tribute::DIALECT_NAME() {
-            // These are all metadata/definition ops that don't produce wasm code:
-            // - ability_def: ability type definitions
-            return;
-        }
-
         // Handle wasm dialect metadata collection
         if dialect == wasm::DIALECT_NAME() {
             self.observe_wasm_module_op(&op, name);
@@ -666,15 +658,7 @@ impl<'db> WasmLowerer<'db> {
         // - "tribute": tribute.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
-            let allowed = [
-                "wasm",
-                "core",
-                "func",
-                "adt",
-                "scf",
-                "tribute",
-                "tribute_pat",
-            ];
+            let allowed = ["wasm", "core", "func", "adt", "scf"];
             if !allowed.contains(&dialect_str.as_str()) {
                 warn!(
                     "Unhandled operation in lowering: {}.{} (this may cause emit errors)",

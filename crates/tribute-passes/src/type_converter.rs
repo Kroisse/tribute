@@ -17,10 +17,10 @@
 //! `tribute_rt.any` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core;
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
-use trunk_ir::{Attribute, DialectOp, DialectType, Symbol, Type};
+use trunk_ir::{DialectOp, DialectType, Type};
 
 /// Create a TypeConverter configured for target-agnostic type conversions.
 ///
@@ -46,27 +46,6 @@ use trunk_ir::{Attribute, DialectOp, DialectType, Symbol, Type};
 /// ```
 pub fn generic_type_converter() -> TypeConverter {
     TypeConverter::new()
-        // Convert unresolved tribute.type → concrete types
-        // This handles cases where typeck didn't fully resolve type names
-        .add_conversion(|db, ty| {
-            if !tribute::is_unresolved_type(db, ty) {
-                return None;
-            }
-            // Get the type name from the name attribute
-            let name = ty.get_attr(db, Symbol::new("name"))?;
-            let Attribute::Symbol(name_sym) = name else {
-                return None;
-            };
-            // Convert known type names to concrete types
-            name_sym.with_str(|name_str| match name_str {
-                "Int" => Some(core::I32::new(db).as_type()),
-                "Nat" => Some(core::I32::new(db).as_type()),
-                "Bool" => Some(core::I32::new(db).as_type()),
-                "Float" => Some(core::F64::new(db).as_type()),
-                "String" => Some(core::String::new(db).as_type()),
-                _ => None, // Unknown type - leave as is
-            })
-        })
         // Convert tribute_rt.int → core.i32 (Phase 1: arbitrary precision as i32)
         .add_conversion(|db, ty| {
             tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
@@ -235,6 +214,7 @@ pub fn are_equivalent_primitives(db: &dyn salsa::Database, from_ty: Type, to_ty:
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use trunk_ir::Symbol;
 
     #[salsa_test]
     fn test_convert_tribute_rt_int_to_core_i32(db: &salsa::DatabaseImpl) {

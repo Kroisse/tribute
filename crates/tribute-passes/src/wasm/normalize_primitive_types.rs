@@ -31,7 +31,7 @@
 //! these conversions and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
-use tribute_ir::dialect::{tribute, tribute_rt};
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
@@ -112,15 +112,6 @@ fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -
         return true;
     }
 
-    // Check unresolved tribute.type for known primitives
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
-            ty.get_attr(db, trunk_ir::Symbol::new("name"))
-    {
-        return name_sym
-            .with_str(|name_str| matches!(name_str, "Int" | "Nat" | "Bool" | "Float" | "String"));
-    }
-
     false
 }
 
@@ -163,19 +154,6 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
     // tribute_rt.intref -> wasm.i31ref
     if tribute_rt::Intref::from_type(db, ty).is_some() {
         return Some(wasm::I31ref::new(db).as_type());
-    }
-
-    // tribute.type(name=X) -> core type for known primitives
-    if tribute::is_unresolved_type(db, ty)
-        && let Some(trunk_ir::Attribute::Symbol(name_sym)) =
-            ty.get_attr(db, trunk_ir::Symbol::new("name"))
-    {
-        return name_sym.with_str(|name_str| match name_str {
-            "Int" | "Nat" | "Bool" => Some(core::I32::new(db).as_type()),
-            "Float" => Some(core::F64::new(db).as_type()),
-            "String" => Some(core::String::new(db).as_type()),
-            _ => None, // User-defined type - don't convert
-        });
     }
 
     None
