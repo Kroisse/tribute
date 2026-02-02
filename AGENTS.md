@@ -4,7 +4,7 @@
 
 The documents under `new-plans/` are the **source of truth** for Tribute's
 current language and compiler design. If code/tests/older docs conflict,
-**treat `new-plans/` as authoritative** and align implementation afterwards.
+**treat `new-plans/` as authoritative** and align implementation afterward.
 
 - `new-plans/design.md`: high-level goals and direction
 - `new-plans/syntax.md`: surface syntax (keywords, literals, `case`, `handle`,

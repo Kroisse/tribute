@@ -80,7 +80,7 @@ enum String {
 
 **Library vs Builtin:**
 
-| | Library Type | Builtin Type |
+| | Library Type | Built-in Type |
 | --- | --- | --- |
 | 정의 위치 | 표준 라이브러리 | 컴파일러 내장 |
 | Bytes 의존 | String이 Bytes 사용 | 독립적 primitive |
