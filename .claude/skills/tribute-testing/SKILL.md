@@ -35,6 +35,7 @@ fn test_example(db: &salsa::DatabaseImpl) {
 ```
 
 Generated code:
+
 ```rust
 #[test]
 fn test_example() {

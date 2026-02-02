@@ -211,6 +211,7 @@ handle computation() {
 ```
 
 computation의 실행 결과는 두 가지 중 하나:
+
 - **완료**: computation이 값을 반환함 → `{ value }` 패턴 매칭
 - **Suspend**: ability operation에서 멈춤 → `{ Op(args) -> k }` 패턴 매칭
 

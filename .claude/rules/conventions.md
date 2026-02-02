@@ -50,6 +50,7 @@ Effect rows are managed in `crates/tribute-front/src/typeck/effect_row.rs`.
 ### Bidirectional Type Checking
 
 Two modes in `crates/tribute-front/src/typeck/checker.rs`:
+
 - **Infer mode**: Synthesize type from expression
 - **Check mode**: Verify expression against expected type
 
@@ -114,6 +115,7 @@ if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
 ```
 
 Benefits of typed helpers and wrappers:
+
 - Type-safe access to operation attributes and operands
 - Compile-time verification of operation structure
 - Cleaner, more readable code
@@ -153,6 +155,7 @@ pub enum Binding<'db> {
 ### Starting a New Task
 
 1. **Always start from latest origin/main**:
+
    ```bash
    git fetch origin
    git checkout -b <branch-name> origin/main

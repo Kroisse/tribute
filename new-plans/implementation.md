@@ -70,6 +70,7 @@ fn escape_continuation() -> fn(Int) -> Int {
 ```
 
 이 제한으로 인해:
+
 - Continuation이 유효하지 않은 컨텍스트에서 호출되는 것을 방지
 - 구현이 단순해짐 (evidence 유효성 보장)
 - 대부분의 실용적 패턴은 여전히 표현 가능
@@ -126,6 +127,7 @@ impl Marker {
 ```
 
 **설계 결정:**
+
 - Ability ID: 8비트 → 최대 256개 ability (하드 리밋, 충분함)
 - Prompt ID: 24비트 → 16M개 (중첩 handler에 충분)
 - Markers는 ability_id 기준 정렬 → binary search 가능
@@ -312,6 +314,7 @@ shift(tag, fn(k) handler_body)
 ```
 
 `shift(tag, f)`는:
+
 1. 현재 지점부터 `tag`가 설치된 지점까지의 continuation을 `k`로 캡처
 2. `f(k)`를 실행
 3. `k`는 one-shot linear 타입 (한 번만 사용 또는 명시적 drop)
@@ -415,6 +418,7 @@ fn example() ->{State(Int)} Text {
 ### Cranelift + Boehm GC
 
 **보수적 GC 방식:**
+
 - 복사된 스택 세그먼트를 GC 루트로 등록
 - 모든 워드를 잠재적 포인터로 취급하여 스캔
 - False retention 가능하지만 구현 단순
@@ -575,12 +579,14 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 ```
 
 #### rust-analyzer 아키텍처 참고점
+
 - `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
 - `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
 - `hir_ty`: 타입 추론 및 검사
 - ItemTree: 함수 본문 변경에 영향받지 않는 요약 구조
 
 **전환 시 고려사항:**
+
 - `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
 - 모듈 구조와 개별 항목 분리
 - 점진적 마이그레이션 전략 (일부 패스부터 적용)
@@ -637,6 +643,7 @@ ev.get(STATE_ID)  // binary search로 찾음
 ```
 
 **설계 결정:**
+
 - Ability ID: 8비트 → 최대 256개 (하드 리밋)
 - 표준 라이브러리 ability (State, Console, Http 등): 0-63 예약
 - 사용자 정의 ability: 64-255

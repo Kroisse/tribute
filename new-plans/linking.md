@@ -13,11 +13,13 @@ user.trb + std/*.trb → single .wasm
 ```
 
 **Pros:**
+
 - Simplest implementation
 - No linker needed
 - GC type sharing is trivial (same module)
 
 **Cons:**
+
 - No incremental compilation
 - Full recompile on any change
 - No separate library distribution
@@ -33,10 +35,12 @@ user.trb + std/*.trb → single .wasm
 ```
 
 **Pros:**
+
 - Standard Wasm mechanism
 - Separate compilation possible
 
 **Cons:**
+
 - GC type sharing across modules is problematic
 - How does runtime know `BigNat` in std.wasm == `BigNat` in user.wasm?
 - Type canonicalization at instantiation time is complex
@@ -51,12 +55,14 @@ bar.trb → bar.o
 ```
 
 **Pros:**
+
 - Incremental compilation (only recompile changed files)
 - Link-time optimization (dead code elimination, cross-module inlining)
 - Standard tooling (LLVM ecosystem)
 - Static library distribution (.a files)
 
 **Cons:**
+
 - **WasmGC is not supported** - wasm-ld designed for linear memory model
 - No standard for WasmGC object file format
 - Type definition merging undefined (recursive type groups, type hierarchies)
@@ -65,11 +71,13 @@ bar.trb → bar.o
 ### 4. Component Model
 
 **Pros:**
+
 - Modern approach with WIT interface definitions
 - Clean component composition
 - wasmtime support available
 
 **Cons:**
+
 - Browser support not yet available
 - WasmGC + Component Model combination is unexplored territory
 - Tooling still maturing
@@ -77,11 +85,13 @@ bar.trb → bar.o
 ## The WasmGC Problem
 
 wasm-ld handles relocations for linear memory Wasm:
+
 - Data section relocations
 - Function index relocations
 - Table index relocations
 
 WasmGC introduces new challenges:
+
 - **Type definitions** - struct/array types need merging
 - **Type indices** - GC ref types reference type indices
 - **Recursive type groups** - `(rec ...)` must be handled atomically
@@ -103,6 +113,7 @@ All major WasmGC implementations use single-module compilation.
 ## Decision
 
 **Short term:** Source-level merging → single module compilation
+
 - Compiler finds `use std::Int` and compiles referenced sources together
 - Similar to Go or Zig compilation model
 - No separate linking phase
@@ -112,6 +123,7 @@ All major WasmGC implementations use single-module compilation.
 ## Implementation Notes
 
 For source-level merging, the compiler needs:
+
 1. Module resolution - finding source files from `use` paths
 2. Dependency graph - determining compilation order
 3. Symbol visibility - `pub` vs private declarations

@@ -131,6 +131,7 @@ fn example(f: fn() ->{State(Int)} a, g: fn() ->{Console} b) {
 ```
 
 Unification 과정:
+
 ```
 {State(Int) | e₁} ∪ {Console | e₂}
 = {State(Int), Console | e₃}
@@ -158,6 +159,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a
 ```
 
 타입 규칙:
+
 ```
 Γ ⊢ comp : fn() ->{e, State(s)} a
 Γ ⊢ init : s
@@ -166,6 +168,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a
 ```
 
 `comp`의 effect `{e, State(s)}`에서:
+
 - `State(s)`는 handler가 처리
 - `e`(나머지)만 외부로 전파
 
@@ -193,6 +196,7 @@ remove(State(s), {e}) = e' where e = {State(s) | e'}
 ### 핵심 규칙
 
 #### 변수 (Infer)
+
 ```
 x : A ∈ Γ
 ─────────────────
@@ -200,6 +204,7 @@ x : A ∈ Γ
 ```
 
 #### 람다 (Check)
+
 ```
 Γ, x : A ⊢ body ⇐ B ; E
 ───────────────────────────────
@@ -207,6 +212,7 @@ x : A ∈ Γ
 ```
 
 #### 람다 (Infer)
+
 ```
 fresh α, β, e
 Γ, x : α ⊢ body ⇐ β ; e
@@ -215,6 +221,7 @@ fresh α, β, e
 ```
 
 #### 함수 적용 (Infer)
+
 ```
 Γ ⊢ f ⇒ fn(A) ->{E} B ; E₁
 Γ ⊢ x ⇐ A ; E₂
@@ -223,6 +230,7 @@ fresh α, β, e
 ```
 
 #### Ability Operation (Infer)
+
 ```
 op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 Γ ⊢ eᵢ ⇐ Aᵢ ; Eᵢ
@@ -231,6 +239,7 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 ```
 
 #### Handle (Infer)
+
 ```
 Γ ⊢ comp ⇒ fn() ->{E, Eff} A ; E₁
 Γ ⊢ clauses handle Eff with continuation type
@@ -414,6 +423,7 @@ fn example() -> Int {
 ```
 
 **이유**:
+
 1. **문서화**: 모듈의 공개 API는 명시적 타입이 필수
 2. **에러 지역화**: 타입 에러가 함수 경계를 넘어 전파되지 않음
 3. **증분 컴파일**: 함수 단위로 Salsa 캐싱 가능
@@ -455,6 +465,7 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 ```
 
 **참고**: 순수 함수(`->{} T`)와 polymorphic 함수(`-> T`, 즉 `->{e} T`)는 다르다:
+
 - `->{} Int`: 어떤 effect도 수행하지 않음
 - `-> Int`: 암묵적 effect 변수, 컨텍스트의 effect 수행 가능
 
@@ -467,6 +478,7 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 2. **IDE 지원**: 추론된 effect를 어떻게 표시할지
 
 3. **Effect aliases** (향후 고려):
+
    ```rust
    type IO = {Console, FileSystem, Http}
    fn main() ->{IO} Nil

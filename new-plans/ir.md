@@ -627,23 +627,27 @@ resolve → typeck → tdnr → ast_to_ir
 ```
 
 **resolve (Name Resolution)**:
+
 - qualified paths 해소 (`List::empty`)
 - constructor 해소 (`Some`, `None`)
 - 변수 바인딩 (`foo`, `x`)
 - UFCS 호출(`xs.map(f)`)은 `MethodCall`로 남김
 
 **typeck (Type Inference)**:
+
 - bidirectional type checking
 - constraint 수집 및 unification
 - 모든 type variable 해소
 - effect row 통합
 
 **tdnr (Type-Directed Name Resolution)**:
+
 - UFCS 해소: `xs.map(f)` → `List::map(xs, f)`
 - 이미 해소된 타입 정보를 사용
 - `MethodCall` → `Call` 변환
 
 **타입이 UFCS 해소에 필요한 이유**:
+
 - `xs.map(f)`에서 `map`이 `List::map`인지 `Option::map`인지는 `xs`의 타입에 따라 결정됨
 
 ---
@@ -708,16 +712,19 @@ text.to_bytes()
 현재 `Block::operations`는 `SmallVec`을 사용하지만, `im::Vector` 같은 persistent data structure를 고려할 수 있다.
 
 **배경:**
+
 - TrunkIR은 Salsa tracked struct로 immutable
 - 현재 rewrite는 블록 전체를 재구축 (O(n) 복사)
 - 대부분의 rewrite pass에서 변경되는 op은 소수
 
 **im::Vector 사용 시 이점:**
+
 - 구조적 공유로 변경된 부분만 새 노드 생성
 - `update(index, new_op)` O(log n)
 - 1000개 op 중 10개 변경 시: SmallVec은 1000개 복사, im::Vector는 ~100개 노드
 
 **고려사항:**
+
 - 작은 블록에서는 SmallVec이 캐시 지역성 면에서 유리
 - Rewriter 설계를 surgical update 방식으로 변경해야 최대 이점
 - 추가 의존성 (im crate)
@@ -729,11 +736,13 @@ text.to_bytes()
 현재 파이프라인: `Tree-sitter CST → AST (tribute-ast) → TrunkIR`
 
 고려 사항:
+
 - AST가 상당히 thin함 (대부분 concrete syntax 제거 정도)
 - TrunkIR이 이미 `Location`으로 소스 위치 보존
 - 중간 표현 하나 제거 시 코드/메모리 절약 가능
 
 Trade-off:
+
 - Tree-sitter CST는 더 verbose하고 cursor 관리 필요
 - AST가 다른 도구들 (formatter, linter, IDE)에 유용할 수 있음
 - 에러 리포팅이 AST 수준에서 더 쉬울 수 있음

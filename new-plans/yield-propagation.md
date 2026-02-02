@@ -171,6 +171,7 @@ fn map(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
 ```
 
 `generics.md`에 따르면:
+
 - 타입 다형성: Monomorphization
 - 효과 다형성: Evidence passing (monomorphization 아님)
 

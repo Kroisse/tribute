@@ -11,6 +11,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 | `Rune` | 단일 Unicode codepoint | `?a`, `?\n` |
 
 **설계 원칙:**
+
 - `Bytes`는 primitive type (ptr, len)
 - `String`은 UTF-8 인코딩된 텍스트 (내부적으로 rope 구조)
 - 인코딩 변환은 명시적으로 수행
@@ -72,6 +73,7 @@ enum String {
 ```
 
 **Rope의 장점:**
+
 - O(log n) concatenation, insert, delete
 - 큰 텍스트도 효율적으로 처리
 - 부분 문자열 공유 가능

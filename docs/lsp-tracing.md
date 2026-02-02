@@ -55,14 +55,17 @@ tribute --log trace debug file.trb
 ### 3. 에디터에서 로그 확인
 
 #### VS Code
+
 1. 출력(Output) 패널 열기: `Cmd+Shift+U` (macOS) 또는 `Ctrl+Shift+U` (Windows/Linux)
 2. 드롭다운에서 "Tribute Language Server" 선택
 
 #### Zed
+
 1. 커맨드 팔레트 열기: `Cmd+Shift+P`
 2. "lsp: open log" 검색 및 실행
 
 #### Neovim (nvim-lspconfig)
+
 ```vim
 :LspLog
 ```
@@ -98,6 +101,7 @@ LSP window/logMessage notification
 ## 예제
 
 ### 기본 사용
+
 ```rust
 tracing::info!("Server started");
 tracing::debug!("Processing request");
@@ -106,6 +110,7 @@ tracing::error!("Failed to compile");
 ```
 
 ### 구조화된 로깅
+
 ```rust
 // 필드와 함께 로그
 tracing::debug!(
@@ -122,6 +127,7 @@ tracing::debug!(
 ```
 
 ### 성능 측정
+
 ```rust
 use tracing::instrument;
 

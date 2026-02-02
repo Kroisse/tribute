@@ -21,6 +21,7 @@ fn assert(cond: Bool) ->{Exception} Nil {
 ```
 
 Test declaration syntax is TBD. Possibilities include:
+
 - Annotation/decorator style: `@test fn addition_works() { ... }`
 - Explicit registration via module-level list
 - Special file/module naming convention

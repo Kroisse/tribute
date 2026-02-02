@@ -38,12 +38,14 @@ The pipeline is divided into two main phases:
 ## Entry Point
 
 The main compilation entry points are:
+
 ```rust
 pub fn compile_ast(db: &dyn salsa::Database, source_file: SourceCst) -> Result<Module, ConversionError>
 pub fn compile_with_diagnostics(db: &dyn salsa::Database, source_file: SourceCst) -> CompilationResult
 ```
 
 Returns `CompilationResult` containing:
+
 - `module`: Final TrunkIR module
 - `solver`: TypeSolver with type information
 - `diagnostics`: Collected errors and warnings

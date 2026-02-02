@@ -7,6 +7,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: Shared compiler utilities (target info, future utilities)
 
 **Key Types**:
+
 - `TargetInfo` - Platform info (triple, pointer size, endianness)
 - `Endianness` - Target byte order
 
@@ -17,6 +18,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: TrunkIR transformation passes (boxing, closures, effects, continuations)
 
 **Key Modules**:
+
 - `boxing.rs` - Insert explicit box/unbox operations for polymorphism
 - `closure_lower.rs` - Lower closure operations to function calls
 - `evidence.rs` - Evidence parameter insertion for effect handling
@@ -30,6 +32,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: Front-end utilities (CST parsing, AST lowering, and text helpers)
 
 **Key Modules**:
+
 - `astgen/` - CST to AST lowering
 - `ast/` - Salsa-tracked AST types with phase-parameterized name resolution
 - `resolve.rs` - Name resolution (AST → AST)
@@ -46,6 +49,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: Multi-level dialect IR system (central IR representation)
 
 **Key Modules**:
+
 - `ir.rs` - Core IR structures (Operation, Value, Block, Region)
 - `ops.rs` - Dialect operation traits and macros
 - `types.rs` - Type system (interned types with attributes)
@@ -66,6 +70,7 @@ The Tribute compiler is organized as a Rust Cargo workspace with clearly separat
 **Role**: CLI entry point, LSP server, and pipeline orchestration
 
 **Key Modules**:
+
 - `cli.rs` - Command-line argument parsing (serve command)
 - `database.rs` - `TributeDatabaseImpl` and file loading cache
 - `lsp/` - LSP server (hover, diagnostics, document sync)

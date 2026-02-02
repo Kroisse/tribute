@@ -184,15 +184,18 @@ mod List {
 ## Implementation Strategy
 
 ### Phase 1: Core Foundation
+
 1. Primitive types (Int, String, Bool, etc.)
 2. Basic collections (List, Option)
 3. IO ability (console operations)
 
 ### Phase 2: Error Handling
+
 1. Exception ability
 2. Result type and conversion functions
 
 ### Phase 3: Advanced Features
+
 1. Async ability
 2. Extended IO operations
 3. Additional utilities as needed

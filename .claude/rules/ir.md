@@ -20,15 +20,18 @@ Located in `crates/trunk-ir/src/ir.rs`:
 ## Dialects
 
 Dialects are split across two crates:
+
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific high-level dialects
 
 ### Infrastructure (trunk-ir)
+
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `core` | `core.rs` | Core types: i32, f64, nil, tuple, string, ptr, array, ref_ |
 
 ### High-level Tribute (tribute-ir)
+
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, marker_prompt |
@@ -36,6 +39,7 @@ Dialects are split across two crates:
 | `closure` | `closure.rs` | Closures and captures |
 
 ### Mid-level (trunk-ir)
+
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `func` | `func.rs` | Function ops: func, call, call_indirect, return, constant |
@@ -45,6 +49,7 @@ Dialects are split across two crates:
 | `mem` | `mem.rs` | Memory operations |
 
 ### Low-level (trunk-ir)
+
 | Dialect | File | Purpose |
 |---------|------|---------|
 | `wasm` | `wasm.rs` | WebAssembly target ops |
@@ -71,6 +76,7 @@ dialect! {
 ```
 
 **Annotations**:
+
 - `#[attr(...)]` - Attributes (metadata stored on operation)
 - `#[region(...)]` - Regions (nested control flow)
 - `#[rest]` - Variadic operands

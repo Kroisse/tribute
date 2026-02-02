@@ -353,8 +353,8 @@ Cranelift 타겟에서는 GC가 필요하다. 선택지:
 - [ ] Effect Dialect
 - [ ] Handler 문법 파싱
 - [ ] Delimited continuation lowering
-    - [ ] Cranelift: setjmp + 스택 복사
-    - [ ] WasmGC: CPS 또는 Stack Switching
+  - [ ] Cranelift: setjmp + 스택 복사
+  - [ ] WasmGC: CPS 또는 Stack Switching
 
 ### Phase 3: 최적화
 

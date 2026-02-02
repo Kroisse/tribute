@@ -28,6 +28,7 @@ Tribute targets a functional language with **static types, type inference, and a
 ## Codebase Structure
 
 See `.claude/rules/` for detailed documentation:
+
 - `crates.md` - Crate structure and responsibilities
 - `pipeline.md` - Compilation pipeline stages
 - `ir.md` - TrunkIR dialect system
@@ -88,7 +89,7 @@ cargo nextest run -p trunk-ir
 ## Tree-sitter Grammar Development
 
 The grammar source of truth is in a separate repository:
-https://github.com/Kroisse/tree-sitter-tribute/blob/main/grammar.js
+<https://github.com/Kroisse/tree-sitter-tribute/blob/main/grammar.js>
 
 ```bash
 # Manual generation: run from the tree-sitter-tribute repo
