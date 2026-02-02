@@ -68,7 +68,7 @@ Caused by: type mismatch: expected funcref, found (ref null $type)
 ### 탐색 결과
 
 | 문제점 | 현재 상태 |
-|--------|----------|
+| ------ | --------- |
 | Shift 변환이 로컬 전용 | caller 업데이트 없음 |
 | Call graph 추적 없음 | wasm backend에 인프라 부재 |
 | Effect row 미활용 | typeck 정보가 wasm까지 전달 안됨 |
@@ -91,7 +91,7 @@ Koka는 유사한 문제를 다음과 같이 해결한다:
 ### 고려한 접근법들
 
 | 접근법 | 장점 | 단점 | 채택 |
-|--------|------|------|------|
+| ------ | ---- | ---- | ---- |
 | **A: Call graph + anyref 전파** | IR 기반, Direct yielder만 boxing | Cascading 전파 필요, 복잡한 unboxing | ❌ |
 | **B: YieldResult 구조** | 통일된 반환 타입, 전파 불필요 | 모든 effectful 호출 boxing | ✅ |
 | **Effect row 활용** | semantic 정확성 | lowering 중 정보 손실 | ❌ |
@@ -207,7 +207,7 @@ fn is_potentially_yielding(func: &FuncDef) -> bool {
 Handler arm lambda와 computation lambda는 다르게 처리:
 
 | Lambda 종류 | 반환 타입 | 설명 |
-|-------------|----------|------|
+| ----------- | --------- | ---- |
 | Computation lambda | `ref $YieldResult` | 실제 결과값 또는 yield |
 | Handler arm lambda | `funcref` | Continuation 호출 결과 |
 

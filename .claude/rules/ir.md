@@ -27,13 +27,13 @@ Dialects are split across two crates:
 ### Infrastructure (trunk-ir)
 
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `core` | `core.rs` | Core types: i32, f64, nil, tuple, string, ptr, array, ref_ |
 
 ### High-level Tribute (tribute-ir)
 
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, marker_prompt |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
 | `closure` | `closure.rs` | Closures and captures |
@@ -41,7 +41,7 @@ Dialects are split across two crates:
 ### Mid-level (trunk-ir)
 
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `func` | `func.rs` | Function ops: func, call, call_indirect, return, constant |
 | `cont` | `cont.rs` | Continuation-based control flow |
 | `scf` | `scf.rs` | Structured control flow: if, while, for |
@@ -51,7 +51,7 @@ Dialects are split across two crates:
 ### Low-level (trunk-ir)
 
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `wasm` | `wasm.rs` | WebAssembly target ops |
 
 ## dialect! Macro

@@ -340,7 +340,7 @@ case expr {
 ## Summary
 
 | 문법 | 의미 |
-|------|------|
+| ---- | ---- |
 | `struct Name { field: Type }` | Product type 선언 |
 | `enum Name { Variant }` | Sum type 선언 |
 | (타입 선언에서 개행 시 쉼표 생략 가능) | `struct`, `enum` 내부에서만 적용 |

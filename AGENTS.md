@@ -46,7 +46,7 @@ Implementation tasks are tracked in GitHub Issues. Use `gh issue list` to browse
 ### Labels
 
 | Label | Description |
-|-------|-------------|
+| ----- | ----------- |
 | `ability` | Effect system and abilities (#23-26) |
 | `type-system` | Type checking and inference |
 | `syntax` | Parser and syntax features |

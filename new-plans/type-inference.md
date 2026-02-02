@@ -7,7 +7,7 @@
 ### 결정 사항 요약
 
 | 항목 | 선택 | 대안 (채택하지 않음) |
-|------|------|----------------------|
+| ---- | ---- | -------------------- |
 | 타입 추론 방식 | Bidirectional | 순수 HM, 전면 양방향 |
 | Effect polymorphism | Row variables | Subtyping constraints |
 | Effect 흐름 | Hybrid (inward + outward) | Frank (순수 inward), Koka (순수 outward) |

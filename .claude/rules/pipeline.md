@@ -14,7 +14,7 @@ The pipeline is divided into two main phases:
 ## Frontend Stages (tribute-front)
 
 | Stage | Function | Description |
-|-------|----------|-------------|
+| ----- | -------- | ----------- |
 | parse_cst | `parse_cst(db, source)` | Parse source to CST using Tree-sitter |
 | astgen | `parsed_ast(db, source)` | Convert CST to AST |
 | resolve | `resolve_with_env(db, ast, env, spans)` | Resolve names at AST level |
@@ -25,7 +25,7 @@ The pipeline is divided into two main phases:
 ## TrunkIR Passes (tribute-passes)
 
 | Stage | Function | Description |
-|-------|----------|-------------|
+| ----- | -------- | ----------- |
 | boxing | `insert_boxing(db, module)` | Insert explicit box/unbox operations |
 | evidence_params | `add_evidence_params(db, module)` | Add evidence params to effectful functions |
 | closure_lower | `lower_closures(db, module)` | Lower `closure.*` to function calls |

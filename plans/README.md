@@ -10,7 +10,7 @@ This directory contains implementation plans for major features.
 See **[../new-plans/](../new-plans/)** directory:
 
 | Document | Description |
-|----------|-------------|
+| -------- | ----------- |
 | [design.md](../new-plans/design.md) | Language design overview |
 | [syntax.md](../new-plans/syntax.md) | Syntax definition |
 | [types.md](../new-plans/types.md) | Type system (struct/enum, UFCS) |
@@ -27,13 +27,13 @@ See **[../new-plans/](../new-plans/)** directory:
 ### Active
 
 | Plan | Description | Priority |
-|------|-------------|----------|
+| ---- | ----------- | -------- |
 | [02.04-wasm-translation.md](02.04-wasm-translation.md) | Wasm backend (see #38-41 for remaining work) | High |
 
 ### Future
 
 | Plan | Description | Priority |
-|------|-------------|----------|
+| ---- | ----------- | -------- |
 | [05-standard-library.md](05-standard-library.md) | Standard library (ability-based) | Medium |
 | [06-package-manager.md](06-package-manager.md) | Package manager | Medium |
 | [07-testing-framework.md](07-testing-framework.md) | Testing framework | Medium |
@@ -42,7 +42,7 @@ See **[../new-plans/](../new-plans/)** directory:
 ### Research
 
 | Document | Description |
-|----------|-------------|
+| -------- | ----------- |
 | [02.03-wasm-runtime-research.md](02.03-wasm-runtime-research.md) | WebAssembly runtime research (WasmGC + WASI) |
 
 ---

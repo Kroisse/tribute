@@ -7,7 +7,7 @@
 ### 결정 사항 요약
 
 | 항목 | 선택 | 대안 (채택하지 않음) |
-|------|------|----------------------|
+| ---- | ---- | -------------------- |
 | 의미론 | 동적 (호출 시점 핸들러) | 정적 (생성 시점 캡처) |
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
@@ -201,7 +201,7 @@ fn state_get(ev: *const Evidence) -> s {
 ### 시나리오별 동작
 
 | 상황 | 동작 | 비용 |
-|------|------|------|
+| ---- | ---- | ---- |
 | 일반 함수 호출 | 같은 포인터 전달 | 8B |
 | Handler 설치 | 새 Evidence 할당 | GC alloc + O(n) 복사 |
 | Operation 조회 | Binary search | O(log n) |
@@ -539,7 +539,7 @@ flowchart TB
 ### 패스 분류
 
 | 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
-|----------|------|------|------|------|
+| -------- | ---- | ---- | ---- | ---- |
 | **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | concrete types | ✓ |
@@ -683,7 +683,7 @@ ev.get(STATE_ID)  // binary search로 찾음
    **고려했던 대안들**
 
    | 방식 | 장점 | 단점 |
-   |------|------|------|
+   | ---- | ---- | ---- |
    | `OperationId` (BlockId와 유사) | 명시적 identity | 1:N 변환 시 대표 선택 필요 |
    | Fractional indexing (42.1.0) | 계층적 추적 가능 | ID 길이 폭발, N:1 여전히 문제 |
    | Origin tag (중복 허용) | 1:N 자연스럽게 해결 | Location과 기능 중복 |

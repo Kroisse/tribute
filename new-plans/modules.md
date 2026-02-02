@@ -7,7 +7,7 @@
 ### 결정 사항 요약
 
 | 항목 | 선택 | 대안 (채택하지 않음) |
-|------|------|----------------------|
+| ---- | ---- | -------------------- |
 | 모듈 구분자 | `::` | `.` (UFCS와 충돌), `/` (나눗셈과 모호), `:` (타입 어노테이션과 충돌) |
 | 메서드 호출 스타일 | UFCS (`.`) | Pipe (`\|>`) |
 | 타입 선언 | `struct` / `enum` | 단일 `type` 키워드 |
@@ -308,7 +308,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 ### 흔한 패턴들의 대체
 
 | Typeclass 용도 | Tribute 대안 |
-|---------------|--------------|
+| -------------- | ------------ |
 | `Show` | `fn show(x: T) -> Text`을 명시적 전달, 또는 type-directed resolution |
 | `Eq` | `fn eq(a: T, b: T) -> Bool` 명시적 전달 |
 | `Ord` | `fn compare(a: T, b: T) -> Ordering` 명시적 전달 |
@@ -372,7 +372,7 @@ fn sort_and_print(items: List(Text)) ->{Console} Nil {
 패키지의 최상위 모듈은 관례적으로:
 
 | 파일 | 용도 |
-|------|------|
+| ---- | ---- |
 | `lib.trb` | 라이브러리 패키지의 루트 |
 | `main.trb` | 실행 파일 패키지의 루트 |
 
@@ -435,7 +435,7 @@ pub mod api
 ### 경로 키워드
 
 | 키워드 | 설명 | 예시 |
-|--------|------|------|
+| ------ | ---- | ---- |
 | `pkg` | 현재 패키지 루트 | `use pkg::utils::math` |
 | `super` | 부모 모듈 | `use super::sibling` |
 | `self` | 현재 모듈 | `use self::internal` |
@@ -449,7 +449,7 @@ use pkg::api::Response       // api::Response (패키지 루트에서)
 ### 가시성 (Visibility)
 
 | 수식자 | 범위 |
-|--------|------|
+| ------ | ---- |
 | (없음) | 현재 모듈 내부만 |
 | `pub(super)` | 부모 모듈까지 |
 | `pub(pkg)` | 패키지 내부 전체 |

@@ -5,7 +5,7 @@ Tribute는 텍스트와 바이트 데이터를 명확히 구분한다.
 ## 개요
 
 | 타입 | 설명 | 리터럴 |
-|------|------|--------|
+| ---- | ---- | ------ |
 | `Bytes` | raw bytes, 인코딩 가정 없음 | `b"..."` |
 | `String` | Unicode 텍스트 (UTF-8 rope) | `"..."` |
 | `Rune` | 단일 Unicode codepoint | `?a`, `?\n` |
@@ -81,7 +81,7 @@ enum String {
 **Library vs Builtin:**
 
 | | Library Type | Builtin Type |
-|---|---|---|
+| --- | --- | --- |
 | 정의 위치 | 표준 라이브러리 | 컴파일러 내장 |
 | Bytes 의존 | String이 Bytes 사용 | 독립적 primitive |
 | 확장성 | 사용자 정의 가능 | 컴파일러만 정의 |
@@ -329,7 +329,7 @@ ability Display {
 ### 결정됨
 
 | 항목 | 결정 |
-|------|------|
+| ---- | ---- |
 | 타입 이름 | `String` (보편적인 이름 원칙) |
 | String 인코딩 | UTF-8 |
 | String 구조 | Rope |
@@ -342,7 +342,7 @@ ability Display {
 ### 미결정
 
 | 항목 | 선택지 |
-|------|--------|
+| ---- | ------ |
 | String 정의 위치 | Library type vs Builtin type |
 | String byte 인덱싱 | 허용 vs 금지 |
 | Display ability | 도입 vs 명시적 변환만 |

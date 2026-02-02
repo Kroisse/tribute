@@ -102,7 +102,7 @@ There is no standard for WasmGC relocatable object files.
 ## Current State of WasmGC Languages
 
 | Language | Linking Approach |
-|----------|-----------------|
+| -------- | ---------------- |
 | Rust → WasmGC | Single module only |
 | OCaml → WasmGC | Single module only |
 | Kotlin/Wasm | Single module only |

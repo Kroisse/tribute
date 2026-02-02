@@ -218,7 +218,7 @@ computation의 실행 결과는 두 가지 중 하나:
 ### Handler 패턴
 
 | 패턴 | 의미 |
-|------|------|
+| ---- | ---- |
 | `{ value }` | Computation 완료, 결과값 바인딩 |
 | `{ Operation(args) -> k }` | Suspend, continuation `k` 바인딩 |
 
@@ -358,7 +358,7 @@ fn main() ->{IO} Nil {
 ## 요약
 
 | 문법 | 의미 |
-|------|------|
+| ---- | ---- |
 | `fn(a) -> b` | `fn(a) ->{e} b` (fresh e) |
 | `fn(a) ->{} b` | 순수 함수 타입 |
 | `fn(a) ->{E} b` | ability E를 수행하는 함수 타입 |

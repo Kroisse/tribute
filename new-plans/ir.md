@@ -155,9 +155,9 @@ tribute.nat      // 자연수 타입
 
 #### Invariant
 
-| Pass 완료 후 | 조건                                         |
-|--------------|----------------------------------------------|
-| Resolution   | 모든 이름 해소됨                             |
+| Pass 완료 후 | 조건                                          |
+| ------------ | --------------------------------------------- |
+| Resolution   | 모든 이름 해소됨                              |
 | Type Check   | 타입 추론 변수 모두 해소 (front-end에서 처리) |
 
 ### ability Dialect
@@ -656,19 +656,19 @@ resolve → typeck → tdnr → ast_to_ir
 
 각 pass가 완료된 후 만족해야 하는 조건:
 
-| Pass                     | Invariant                                        |
-| ------------------------ | ------------------------------------------------ |
-| Parse                    | 유효한 CST 구조                                  |
-| AST Lowering (astgen)    | 유효한 AST 구조                                  |
-| Name Resolution (resolve)| qualified path, constructor, 변수 이름 해소      |
-| Type Inference (typeck)  | 모든 type variable 해소, 타입 구체화             |
-| TDNR (tdnr)              | UFCS 해소 완료 (MethodCall → Call)               |
-| AST → IR (ast_to_ir)     | 유효한 TrunkIR 구조                              |
-| Boxing (boxing)          | 다형성을 위한 box/unbox 삽입                     |
-| Closure Lowering         | closure.* 없음                                   |
-| Evidence Resolution      | ability 연산 없음 (ability 타입은 유지)          |
-| Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)               |
-| Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)             |
+| Pass                      | Invariant                                         |
+| ------------------------- | ------------------------------------------------- |
+| Parse                     | 유효한 CST 구조                                   |
+| AST Lowering (astgen)     | 유효한 AST 구조                                   |
+| Name Resolution (resolve) | qualified path, constructor, 변수 이름 해소       |
+| Type Inference (typeck)   | 모든 type variable 해소, 타입 구체화              |
+| TDNR (tdnr)               | UFCS 해소 완료 (MethodCall → Call)                |
+| AST → IR (ast_to_ir)      | 유효한 TrunkIR 구조                               |
+| Boxing (boxing)           | 다형성을 위한 box/unbox 삽입                      |
+| Closure Lowering          | closure.* 없음                                    |
+| Evidence Resolution       | ability 연산 없음 (ability 타입은 유지)           |
+| Wasm Lowering             | wasm.\* 만 존재 (타겟이 Wasm일 때)                |
+| Cranelift Lowering        | clif.\* 만 존재 (타겟이 native일 때)              |
 
 ---
 

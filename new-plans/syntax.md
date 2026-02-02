@@ -487,9 +487,9 @@ HandlerPattern ::= '{' Identifier '}'                              // completion
 
 **Handler pattern 종류:**
 
-| 패턴 | 의미 |
-|------|------|
-| `{ value }` | Computation이 완료됨, 결과값을 `value`에 바인딩 |
+| 패턴                | 의미                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| `{ value }`         | Computation이 완료됨, 결과값을 `value`에 바인딩              |
 | `{ Op(args) -> k }` | Ability operation에서 suspend됨, continuation을 `k`에 바인딩 |
 
 **Continuation:**
@@ -1042,15 +1042,15 @@ fn main() ->{Console} Nil {
 
 ### Types
 
-| 구문                     | 의미                           |
-| ------------------------ | ------------------------------ |
-| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입               |
-| `List(a)`, `Option(Int)` | 제네릭 타입                    |
-| `#(Int, Text)`           | Tuple 타입                     |
-| `fn(a) -> b`             | 함수 타입 (암묵적 polymorphic) |
-| `fn(a) ->{} b`           | 순수 함수 타입                 |
-| `fn(a) ->{E} b`          | Effect E를 수행하는 함수       |
-| `fn(a) ->{E, e} b`       | E + row variable e             |
+| 구문                               | 의미                           |
+| ---------------------------------- | ------------------------------ |
+| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입                      |
+| `List(a)`, `Option(Int)`           | 제네릭 타입                    |
+| `#(Int, Text)`                     | Tuple 타입                     |
+| `fn(a) -> b`                       | 함수 타입 (암묵적 polymorphic) |
+| `fn(a) ->{} b`                     | 순수 함수 타입                 |
+| `fn(a) ->{E} b`                    | Effect E를 수행하는 함수       |
+| `fn(a) ->{E, e} b`                 | E + row variable e             |
 
 ### Expressions
 

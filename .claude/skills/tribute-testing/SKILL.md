@@ -79,7 +79,7 @@ fn test_diagnostics(db: &salsa::DatabaseImpl) {
 ### Test Level Separation
 
 | Level | Test Target | accumulate OK |
-|-------|-------------|---------------|
+| ----- | ----------- | ------------- |
 | Unit tests | Pure logic (bindings, scopes) | ❌ |
 | Integration tests | Tracked queries + diagnostics | ✅ |
 
