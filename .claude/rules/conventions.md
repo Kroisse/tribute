@@ -50,6 +50,7 @@ Effect rows are managed in `crates/tribute-front/src/typeck/effect_row.rs`.
 ### Bidirectional Type Checking
 
 Two modes in `crates/tribute-front/src/typeck/checker.rs`:
+
 - **Infer mode**: Synthesize type from expression
 - **Check mode**: Verify expression against expected type
 
@@ -70,12 +71,14 @@ Name resolution is performed at the AST level in `tribute-front`.
 
 Two-phase resolution:
 
-1. **Basic resolution** (`crates/tribute-front/src/resolve.rs`): Resolves names and paths
+1. **Basic resolution** (`crates/tribute-front/src/resolve.rs`):
+   Resolves names and paths
    - Builds `ModuleEnv` with bindings from definitions
    - Resolves variable references to their definitions
    - Handles qualified paths (e.g., `Foo::bar`)
 
-2. **Type-directed (TDNR)** (`crates/tribute-front/src/tdnr.rs`): Resolves UFCS after type inference
+2. **Type-directed (TDNR)** (`crates/tribute-front/src/tdnr.rs`):
+   Resolves UFCS after type inference
    - `expr.method(args)` → `Type::method(expr, args)`
    - Requires inferred type information from typecheck phase
 
@@ -96,7 +99,8 @@ let call_op = func::call(db, location, callee, args, result_ty);
 
 ### Matching Operations
 
-When matching dialect operations, prefer typed wrappers over manual dialect/name comparison:
+When matching dialect operations, prefer typed wrappers over manual
+dialect/name comparison:
 
 ```rust
 // ✅ Preferred: Use from_operation for type-safe matching
@@ -114,6 +118,7 @@ if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
 ```
 
 Benefits of typed helpers and wrappers:
+
 - Type-safe access to operation attributes and operands
 - Compile-time verification of operation structure
 - Cleaner, more readable code
@@ -153,6 +158,7 @@ pub enum Binding<'db> {
 ### Starting a New Task
 
 1. **Always start from latest origin/main**:
+
    ```bash
    git fetch origin
    git checkout -b <branch-name> origin/main

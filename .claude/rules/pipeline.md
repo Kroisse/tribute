@@ -9,12 +9,13 @@ See the detailed pipeline diagram in the doc comment at the top of `src/pipeline
 The pipeline is divided into two main phases:
 
 1. **Frontend (tribute-front)**: CST → AST → resolve → typecheck → TDNR → TrunkIR
-2. **TrunkIR Passes (tribute-passes)**: Boxing → Evidence → Closures → Continuations → Backend
+2. **TrunkIR Passes (tribute-passes)**:
+   Boxing → Evidence → Closures → Continuations → Backend
 
 ## Frontend Stages (tribute-front)
 
 | Stage | Function | Description |
-|-------|----------|-------------|
+| ----- | -------- | ----------- |
 | parse_cst | `parse_cst(db, source)` | Parse source to CST using Tree-sitter |
 | astgen | `parsed_ast(db, source)` | Convert CST to AST |
 | resolve | `resolve_with_env(db, ast, env, spans)` | Resolve names at AST level |
@@ -25,7 +26,7 @@ The pipeline is divided into two main phases:
 ## TrunkIR Passes (tribute-passes)
 
 | Stage | Function | Description |
-|-------|----------|-------------|
+| ----- | -------- | ----------- |
 | boxing | `insert_boxing(db, module)` | Insert explicit box/unbox operations |
 | evidence_params | `add_evidence_params(db, module)` | Add evidence params to effectful functions |
 | closure_lower | `lower_closures(db, module)` | Lower `closure.*` to function calls |
@@ -38,12 +39,14 @@ The pipeline is divided into two main phases:
 ## Entry Point
 
 The main compilation entry points are:
+
 ```rust
 pub fn compile_ast(db: &dyn salsa::Database, source_file: SourceCst) -> Result<Module, ConversionError>
 pub fn compile_with_diagnostics(db: &dyn salsa::Database, source_file: SourceCst) -> CompilationResult
 ```
 
 Returns `CompilationResult` containing:
+
 - `module`: Final TrunkIR module
 - `solver`: TypeSolver with type information
 - `diagnostics`: Collected errors and warnings

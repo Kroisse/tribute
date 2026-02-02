@@ -23,7 +23,8 @@ cargo insta review                      # Review snapshot test failures
 
 ### #[salsa_test] Macro
 
-The `#[salsa_test]` macro from `salsa_test_macros` automatically provides a Salsa database context.
+The `#[salsa_test]` macro from `salsa_test_macros` automatically provides a
+Salsa database context.
 
 ```rust
 use salsa_test_macros::salsa_test;
@@ -35,6 +36,7 @@ fn test_example(db: &salsa::DatabaseImpl) {
 ```
 
 Generated code:
+
 ```rust
 #[test]
 fn test_example() {
@@ -46,16 +48,18 @@ fn test_example() {
 
 ### accumulate() Test Constraints
 
-**Key constraint**: `Diagnostic.accumulate(db)` must be called inside a `#[salsa::tracked]` function.
+**Key constraint**: `Diagnostic.accumulate(db)` must be called inside a
+`#[salsa::tracked]` function.
 
 `#[salsa_test]` attaches a database but does NOT create a tracked function context.
 Unit tests that directly call code using accumulate() will fail:
 
-```
+```text
 cannot accumulate values outside of an active tracked function
 ```
 
-**Solution**: Test diagnostic accumulation at the integration level via tracked queries.
+**Solution**: Test diagnostic accumulation at the integration level via
+tracked queries.
 
 ```rust
 // ❌ Direct accumulate in unit test - FAILS
@@ -78,7 +82,7 @@ fn test_diagnostics(db: &salsa::DatabaseImpl) {
 ### Test Level Separation
 
 | Level | Test Target | accumulate OK |
-|-------|-------------|---------------|
+| ----- | ----------- | ------------- |
 | Unit tests | Pure logic (bindings, scopes) | ❌ |
 | Integration tests | Tracked queries + diagnostics | ✅ |
 

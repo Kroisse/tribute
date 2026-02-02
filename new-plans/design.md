@@ -129,7 +129,7 @@ Continuation은 **linear 타입**으로 취급한다:
 
 ### 지원 가능한 Ability 패턴
 
-```
+```text
 ✅ Exception / Abort     - continuation 버림
 ✅ State (Get/Set)       - continuation 1번 사용
 ✅ Reader / Writer       - continuation 1번 사용
@@ -151,7 +151,7 @@ Continuation은 **linear 타입**으로 취급한다:
 
 함수 타입에 ability 정보가 포함된다:
 
-```
+```text
 fn(a) ->{E} b
        ~~~~
        이 함수가 수행할 수 있는 abilities
@@ -202,7 +202,8 @@ fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b
 
 ### TrunkIR
 
-Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다. MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내에 공존할 수 있다.
+Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다.
+MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내에 공존할 수 있다.
 
 ### Dialect 계층
 
@@ -215,7 +216,7 @@ Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다. MLI
 
 ### Compilation Pipeline
 
-```
+```text
 Tribute Source
     │
     ▼ Parse
@@ -277,7 +278,7 @@ Asyncify 변환 또는 CPS 변환 필요 (복잡함)
 
 Binaryen을 최적화 백엔드로 사용:
 
-```
+```text
 Core IR
     │
     ▼ Lower to WasmGC Dialect
@@ -353,8 +354,8 @@ Cranelift 타겟에서는 GC가 필요하다. 선택지:
 - [ ] Effect Dialect
 - [ ] Handler 문법 파싱
 - [ ] Delimited continuation lowering
-    - [ ] Cranelift: setjmp + 스택 복사
-    - [ ] WasmGC: CPS 또는 Stack Switching
+  - [ ] Cranelift: setjmp + 스택 복사
+  - [ ] WasmGC: CPS 또는 Stack Switching
 
 ### Phase 3: 최적화
 
@@ -375,14 +376,17 @@ Cranelift 타겟에서는 GC가 필요하다. 선택지:
 
 ### 구현
 
-- [libmprompt](https://github.com/koka-lang/libmprompt) - Delimited continuation 런타임
+- [libmprompt](https://github.com/koka-lang/libmprompt) -
+  Delimited continuation 런타임
 - [Binaryen](https://github.com/WebAssembly/binaryen) - WasmGC 최적화
 - [Cranelift](https://cranelift.dev/) - 네이티브 코드 생성
-- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) - Continuation proposal
+- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) -
+  Continuation proposal
 
 ### 논문
 
 - "Liberating Effects with Rows and Handlers" (Koka)
 - "Do Be Do Be Do" (Frank)
-- "Effekt: Capability-passing style for type- and effect-safe, extensible effect handlers"
+- "Effekt: Capability-passing style for type- and effect-safe,
+  extensible effect handlers"
 - "Perceus: Garbage-Free Reference Counting with Reuse" (Koka)

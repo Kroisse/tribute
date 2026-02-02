@@ -59,7 +59,7 @@ pub fn lower_to_wasm(db: &dyn Database, module: Module) -> Module {
 
 ADT 연산을 WasmGC 연산으로 변환.
 
-```
+```text
 adt.struct_new  → wasm.struct_new
 adt.variant_new → wasm.struct_new + wasm.ref_cast
 adt.field_get   → wasm.struct_get
@@ -73,7 +73,7 @@ adt.array_set   → wasm.array_set
 
 Structured control flow를 Wasm control로 변환.
 
-```
+```text
 scf.if    → wasm.if
 scf.while → wasm.block(wasm.loop(...))
 scf.for   → wasm.block(wasm.loop(...))
@@ -86,7 +86,7 @@ scf.case  → wasm.br_table 또는 중첩 wasm.if
 
 함수 정의 및 호출을 Wasm으로 변환.
 
-```
+```text
 func.func          → wasm.func
 func.call          → wasm.call
 func.return        → wasm.return
@@ -100,7 +100,7 @@ func.tail_call     → wasm.return_call
 
 산술 연산을 타입별 Wasm 명령어로 변환.
 
-```
+```text
 arith.add(i32, i32) → wasm.i32_add
 arith.add(i64, i64) → wasm.i64_add
 arith.add(f64, f64) → wasm.f64_add
@@ -113,7 +113,7 @@ arith.mul(...)      → wasm.{i32,i64,f32,f64}_mul
 
 Intrinsic 함수 호출을 WASI import 호출로 변환.
 
-```
+```text
 func.call @std::intrinsics::wasi::preview1::fd_write(...) → wasm.call $wasi_fd_write(...)
 func.call @std::intrinsics::wasi::preview1::fd_read(...)  → wasm.call $wasi_fd_read(...)
 func.call @std::intrinsics::wasm::memory_grow(...)        → wasm.memory_grow(...)
@@ -135,7 +135,7 @@ func.call @std::intrinsics::wasm::memory_grow(...)        → wasm.memory_grow(.
 
 상수를 Wasm 상수 또는 data segment 참조로 변환.
 
-```
+```text
 func.constant(int)    → wasm.i32_const / wasm.i64_const
 func.constant(string) → wasm.i32_const(data_offset)
 ```
@@ -550,7 +550,7 @@ pub fn memory_plan<'db>(
 
 ## Analysis 모듈 구조
 
-```
+```text
 tribute-wasm-backend/
 ├── src/
 │   ├── lib.rs
@@ -619,7 +619,7 @@ pub fn wasm_metadata<'db>(
 
 ### 점진적 Lowering
 
-```
+```text
 High-level IR
     │ [adt.struct_new, adt.variant_new, scf.if, func.call, arith.add]
     │

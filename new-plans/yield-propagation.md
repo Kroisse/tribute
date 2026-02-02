@@ -4,7 +4,9 @@
 
 ## Overview
 
-WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbling 방식으로 구현된다. 이 과정에서 effectful 함수는 정상 반환값 또는 continuation을 반환해야 하므로 통일된 반환 타입이 필요하다.
+WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbling
+방식으로 구현된다. 이 과정에서 effectful 함수는 정상 반환값 또는
+continuation을 반환해야 하므로 통일된 반환 타입이 필요하다.
 
 **핵심 결정**: Koka 스타일의 `YieldResult` 구조체 사용
 
@@ -16,7 +18,7 @@ WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbl
 
 WasmGC에서 `anyref`와 `funcref`는 별개의 타입 계층에 속한다:
 
-```
+```text
 any
 ├── eq
 │   ├── i31
@@ -52,7 +54,7 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 
 ### 발생 오류
 
-```
+```text
 error: func 4 failed to validate
 Caused by: type mismatch: expected funcref, found (ref null $type)
 ```
@@ -68,7 +70,7 @@ Caused by: type mismatch: expected funcref, found (ref null $type)
 ### 탐색 결과
 
 | 문제점 | 현재 상태 |
-|--------|----------|
+| ------ | --------- |
 | Shift 변환이 로컬 전용 | caller 업데이트 없음 |
 | Call graph 추적 없음 | wasm backend에 인프라 부재 |
 | Effect row 미활용 | typeck 정보가 wasm까지 전달 안됨 |
@@ -91,7 +93,7 @@ Koka는 유사한 문제를 다음과 같이 해결한다:
 ### 고려한 접근법들
 
 | 접근법 | 장점 | 단점 | 채택 |
-|--------|------|------|------|
+| ------ | ---- | ---- | ---- |
 | **A: Call graph + anyref 전파** | IR 기반, Direct yielder만 boxing | Cascading 전파 필요, 복잡한 unboxing | ❌ |
 | **B: YieldResult 구조** | 통일된 반환 타입, 전파 불필요 | 모든 effectful 호출 boxing | ✅ |
 | **Effect row 활용** | semantic 정확성 | lowering 중 정보 손실 | ❌ |
@@ -136,7 +138,7 @@ wasm.func @counter() -> (ref $YieldResult) {
 
 #### Call Site 변환
 
-```
+```text
 // 원본
 let result = call @effectful_func()
 use(result)
@@ -171,6 +173,7 @@ fn map(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
 ```
 
 `generics.md`에 따르면:
+
 - 타입 다형성: Monomorphization
 - 효과 다형성: Evidence passing (monomorphization 아님)
 
@@ -206,7 +209,7 @@ fn is_potentially_yielding(func: &FuncDef) -> bool {
 Handler arm lambda와 computation lambda는 다르게 처리:
 
 | Lambda 종류 | 반환 타입 | 설명 |
-|-------------|----------|------|
+| ----------- | --------- | ---- |
 | Computation lambda | `ref $YieldResult` | 실제 결과값 또는 yield |
 | Handler arm lambda | `funcref` | Continuation 호출 결과 |
 
@@ -278,8 +281,14 @@ wasm.func @main::__lambda_2() -> (ref $YieldResult) {
 
 ## References
 
-- [Generalized Evidence Passing for Effect Handlers](https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers/) (Koka)
-- [Effect Handlers, Evidently](https://dl.acm.org/doi/10.1145/3408981) (Scoped Resumption)
-- [libmprompt](https://github.com/koka-lang/libmprompt) (Delimited Continuation Runtime)
+- [Generalized Evidence Passing for Effect Handlers][evidence-passing] (Koka)
+- [Effect Handlers, Evidently][handlers-evidently] (Scoped Resumption)
+- [libmprompt] (Delimited Continuation Runtime)
 - `new-plans/implementation.md` - Tribute ability implementation strategy
 - `new-plans/generics.md` - Tribute generics and effect polymorphism
+
+<!-- markdownlint-disable MD013 -->
+[evidence-passing]: https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers/
+<!-- markdownlint-enable MD013 -->
+[handlers-evidently]: https://dl.acm.org/doi/10.1145/3408981
+[libmprompt]: https://github.com/koka-lang/libmprompt

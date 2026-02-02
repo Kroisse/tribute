@@ -7,7 +7,7 @@
 ### 결정 사항 요약
 
 | 항목 | 선택 | 대안 (채택하지 않음) |
-|------|------|----------------------|
+| ---- | ---- | -------------------- |
 | 의미론 | 동적 (호출 시점 핸들러) | 정적 (생성 시점 캡처) |
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
@@ -44,7 +44,8 @@ run_state(fn() {
 }, 100)
 ```
 
-클로저 타입에 `->{State(Int)}`가 명시되어 있으므로, 호출하는 쪽에서 State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한 계약이다.
+클로저 타입에 `->{State(Int)}`가 명시되어 있으므로, 호출하는 쪽에서
+State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한 계약이다.
 
 ### Scoped Resumption
 
@@ -70,6 +71,7 @@ fn escape_continuation() -> fn(Int) -> Int {
 ```
 
 이 제한으로 인해:
+
 - Continuation이 유효하지 않은 컨텍스트에서 호출되는 것을 방지
 - 구현이 단순해짐 (evidence 유효성 보장)
 - 대부분의 실용적 패턴은 여전히 표현 가능
@@ -126,6 +128,7 @@ impl Marker {
 ```
 
 **설계 결정:**
+
 - Ability ID: 8비트 → 최대 256개 ability (하드 리밋, 충분함)
 - Prompt ID: 24비트 → 16M개 (중첩 handler에 충분)
 - Markers는 ability_id 기준 정렬 → binary search 가능
@@ -199,7 +202,7 @@ fn state_get(ev: *const Evidence) -> s {
 ### 시나리오별 동작
 
 | 상황 | 동작 | 비용 |
-|------|------|------|
+| ---- | ---- | ---- |
 | 일반 함수 호출 | 같은 포인터 전달 | 8B |
 | Handler 설치 | 새 Evidence 할당 | GC alloc + O(n) 복사 |
 | Operation 조회 | Binary search | O(log n) |
@@ -246,7 +249,7 @@ fn fetch_all(urls: List(Text), ev: *const Evidence) -> List(Response) {
 
 모든 코드를 CPS로 변환하지 않는다. Ability operation 지점에서만 continuation 캡처가 필요하다:
 
-```
+```text
 순수 코드 (fn(a) ->{} b)     → 직접 스타일, 일반 호출
 Effect 코드 (fn(a) ->{E} b)  → shift/reset 지점만 특별 처리
 ```
@@ -279,7 +282,8 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 }
 ```
 
-대부분의 실용적 ability (State, Reader, Writer, Console)가 tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
+대부분의 실용적 ability (State, Reader, Writer, Console)가
+tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
 
 ---
 
@@ -289,7 +293,7 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 
 중첩된 handler에서 올바른 경계를 찾기 위해 prompt가 필요하다:
 
-```
+```text
 스택 (아래가 바닥)
 ─────────────────────
 [State prompt: P1]     ← 바깥쪽 run_state
@@ -299,7 +303,8 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 ─────────────────────
 ```
 
-`State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의 prompt(P3)까지만 continuation을 캡처한다.
+`State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의
+prompt(P3)까지만 continuation을 캡처한다.
 
 ### shift/reset 의미론
 
@@ -312,6 +317,7 @@ shift(tag, fn(k) handler_body)
 ```
 
 `shift(tag, f)`는:
+
 1. 현재 지점부터 `tag`가 설치된 지점까지의 continuation을 `k`로 캡처
 2. `f(k)`를 실행
 3. `k`는 one-shot linear 타입 (한 번만 사용 또는 명시적 drop)
@@ -380,7 +386,7 @@ libmprompt는 setjmp/longjmp + 스택 복사로 delimited continuation을 구현
 
 **메모리 레이아웃:**
 
-```
+```text
 ┌─────────────────┐
 │ Main Stack      │
 ├─────────────────┤
@@ -415,6 +421,7 @@ fn example() ->{State(Int)} Text {
 ### Cranelift + Boehm GC
 
 **보수적 GC 방식:**
+
 - 복사된 스택 세그먼트를 GC 루트로 등록
 - 모든 워드를 잠재적 포인터로 취급하여 스캔
 - False retention 가능하지만 구현 단순
@@ -535,7 +542,7 @@ flowchart TB
 ### 패스 분류
 
 | 카테고리 | 패스 | 입력 | 출력 | 캐싱 |
-|----------|------|------|------|------|
+| -------- | ---- | ---- | ---- | ---- |
 | **Frontend** | `resolve` | tribute.* ops | func.*, adt.* | ✓ |
 | | `inline_constants` | const refs | inlined values | |
 | | `typecheck` | type.var | concrete types | ✓ |
@@ -550,7 +557,8 @@ flowchart TB
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
-현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로 rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
+현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로
+rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
 
 #### 현재 (Coarse-Grained)
 
@@ -575,12 +583,14 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 ```
 
 #### rust-analyzer 아키텍처 참고점
+
 - `base_db`: 입력 쿼리 (파일 내용, 크레이트 그래프)
 - `hir_def`: 정의 추출 (함수, 타입, 모듈 구조)
 - `hir_ty`: 타입 추론 및 검사
 - ItemTree: 함수 본문 변경에 영향받지 않는 요약 구조
 
 **전환 시 고려사항:**
+
 - `FunctionId`, `TypeId` 등 안정적인 ID 체계 필요
 - 모듈 구조와 개별 항목 분리
 - 점진적 마이그레이션 전략 (일부 패스부터 적용)
@@ -593,13 +603,13 @@ fn infer_function(db, func_id: FunctionId) -> InferenceResult
 
 ### Evidence 타입
 
-```
+```text
 Evidence : AbilityRow → Type
 ```
 
 Evidence는 ability row에 대해 parameterized된다. Row polymorphism으로 ability 합성을 표현:
 
-```
+```text
 fn foo() ->{State(Int), Console} Nil
 
 // Evidence 타입:
@@ -620,7 +630,7 @@ ev.get(ability_id) : Evidence({A | ρ}) → Marker(A)
 
 각 ability에 전역적인 ID (0-255)를 부여한다:
 
-```
+```text
 State    → 0
 Console  → 1
 Http     → 2
@@ -637,6 +647,7 @@ ev.get(STATE_ID)  // binary search로 찾음
 ```
 
 **설계 결정:**
+
 - Ability ID: 8비트 → 최대 256개 (하드 리밋)
 - 표준 라이브러리 ability (State, Console, Http 등): 0-63 예약
 - 사용자 정의 ability: 64-255
@@ -676,7 +687,7 @@ ev.get(STATE_ID)  // binary search로 찾음
    **고려했던 대안들**
 
    | 방식 | 장점 | 단점 |
-   |------|------|------|
+   | ---- | ---- | ---- |
    | `OperationId` (BlockId와 유사) | 명시적 identity | 1:N 변환 시 대표 선택 필요 |
    | Fractional indexing (42.1.0) | 계층적 추적 가능 | ID 길이 폭발, N:1 여전히 문제 |
    | Origin tag (중복 허용) | 1:N 자연스럽게 해결 | Location과 기능 중복 |
@@ -694,7 +705,11 @@ ev.get(STATE_ID)  // binary search로 찾음
 
 ## References
 
-- [Generalized Evidence Passing for Effect Handlers](https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers-or-efficient-compilation-of-effect-handlers-to-c/) (Koka)
-- [Effect Handlers, Evidently](https://dl.acm.org/doi/10.1145/3408981) (Scoped Resumption)
-- [libmprompt](https://github.com/koka-lang/libmprompt) (Delimited Continuation Runtime)
+- [Generalized Evidence Passing for Effect Handlers][koka-evidence] (Koka)
+- [Effect Handlers, Evidently][effect-evidently] (Scoped Resumption)
+- [libmprompt][libmprompt] (Delimited Continuation Runtime)
 - [Do Be Do Be Do](https://arxiv.org/abs/1611.09259) (Frank, Unison의 기반)
+
+[koka-evidence]: https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers-or-efficient-compilation-of-effect-handlers-to-c/
+[effect-evidently]: https://dl.acm.org/doi/10.1145/3408981
+[libmprompt]: https://github.com/koka-lang/libmprompt

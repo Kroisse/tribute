@@ -5,7 +5,7 @@
 
 ## Notation
 
-```
+```ebnf
 A | B       택일 (A 또는 B)
 A*          0개 이상 반복
 A+          1개 이상 반복
@@ -20,7 +20,7 @@ A?          선택적 (0개 또는 1개)
 
 ### Keywords
 
-```
+```text
 fn let const struct enum ability mod pub use case handle if as
 True False Nil
 ```
@@ -29,7 +29,7 @@ True False Nil
 
 ### Reserved (향후 사용)
 
-```
+```text
 type where in do
 ```
 
@@ -37,7 +37,7 @@ type where in do
 
 ### Operators
 
-```
+```text
 // 산술
 +  -  *  /  %
 
@@ -56,7 +56,7 @@ type where in do
 
 ### Literals
 
-```
+```ebnf
 // 숫자 리터럴
 NatLiteral   ::= Digit+                        // 0, 1, 42 → Nat
                | '0b' BinDigit+                // 0b1010 → Nat (binary)
@@ -193,7 +193,7 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 
 ### Comments
 
-```
+```ebnf
 LineComment  ::= '//' .* '\n'
 BlockComment ::= '/*' .* '*/'
 
@@ -231,7 +231,7 @@ struct User {
 
 ## Program Structure
 
-```
+```ebnf
 Program ::= Item*
 
 Item ::= UseDecl
@@ -250,7 +250,7 @@ Item ::= UseDecl
 
 ### Use Declaration
 
-```
+```ebnf
 UseDecl ::= 'use' UsePath
 
 UsePath ::= PathSegment ('::' PathSegment)* UseTree?
@@ -271,7 +271,7 @@ use std::io::Console as IO
 
 ### Module Declaration
 
-```
+```ebnf
 ModDecl ::= 'pub'? 'mod' TypeId '{' Item* '}'
 ```
 
@@ -286,7 +286,7 @@ pub mod List {
 
 ### Path Expression
 
-```
+```ebnf
 Path ::= PathSegment ('::' PathSegment)*
 PathSegment ::= Identifier | TypeId
 ```
@@ -303,7 +303,7 @@ std::io::Console::println
 
 ## Constant Declaration
 
-```
+```ebnf
 ConstDecl ::= 'pub'? 'const' Identifier (':' Type)? '=' ConstExpr
 
 ConstExpr ::= Literal                        // -1은 Int 리터럴로 처리
@@ -332,7 +332,7 @@ pub const VERSION = "0.1.0"
 
 ### Struct (Product Type)
 
-```
+```ebnf
 StructDecl ::= 'pub'? 'struct' TypeId TypeParams? StructBody
 
 TypeParams ::= '(' TypeParam (',' TypeParam)* ','? ')'
@@ -362,7 +362,7 @@ struct Point { x: Int, y: Int }
 
 ### Enum (Sum Type)
 
-```
+```ebnf
 EnumDecl ::= 'pub'? 'enum' TypeId TypeParams? EnumBody
 
 EnumBody ::= '{' EnumVariants '}'
@@ -398,7 +398,7 @@ enum Expr {
 
 ## Type Syntax
 
-```
+```ebnf
 Type ::= TypePath TypeArgs?
        | FunctionType
        | TupleType
@@ -446,7 +446,7 @@ fn() ->{State(Int), e} Int    // State + row variable e
 
 ### Ability Declaration
 
-```
+```ebnf
 AbilityDecl ::= 'ability' TypeId TypeParams? '{' AbilityOp* '}'
 
 AbilityOp ::= 'fn' Identifier '(' ParamList? ')' '->' Type
@@ -473,7 +473,7 @@ ability Http {
 
 ### Handle Expression
 
-```
+```ebnf
 HandleExpr ::= 'handle' Expression '{' HandlerArm+ '}'
 
 HandlerArm ::= HandlerPattern '->' Expression
@@ -487,9 +487,9 @@ HandlerPattern ::= '{' Identifier '}'                              // completion
 
 **Handler pattern 종류:**
 
-| 패턴 | 의미 |
-|------|------|
-| `{ value }` | Computation이 완료됨, 결과값을 `value`에 바인딩 |
+| 패턴                | 의미                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| `{ value }`         | Computation이 완료됨, 결과값을 `value`에 바인딩              |
 | `{ Op(args) -> k }` | Ability operation에서 suspend됨, continuation을 `k`에 바인딩 |
 
 **Continuation:**
@@ -532,7 +532,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
 
 ### Function Definition
 
-```
+```ebnf
 FunctionDef ::= 'pub'? 'fn' Identifier '(' ParamList? ')' ReturnType? Block
 
 ParamList ::= Param (',' Param)* ','?
@@ -565,7 +565,7 @@ fn pure_add(x: Int, y: Int) ->{} Int {
 
 ### Lambda Expression
 
-```
+```ebnf
 Lambda ::= 'fn' '(' ParamList? ')' Expression
 ```
 
@@ -586,7 +586,7 @@ fn(x) {
 
 ### Primary Expressions
 
-```
+```ebnf
 PrimaryExpr ::= Literal
               | Identifier
               | Path
@@ -607,7 +607,7 @@ OperatorFn ::= '(' Operator ')'           // (+), (<>)
 
 ### Block Expression
 
-```
+```ebnf
 Block ::= '{' Statement* Expression? '}'
 
 Statement ::= LetStatement
@@ -631,11 +631,12 @@ LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
 x * { y + z }           // x * (y + z) 와 동일
 ```
 
-**Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는 `{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
+**Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는
+`{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
 
 ### Record Expression
 
-```
+```ebnf
 RecordExpr ::= TypeId '{' RecordFields? '}'
 RecordFields ::= RecordField (',' RecordField)* ','?
 RecordField ::= '..' Expression                    // spread
@@ -654,7 +655,7 @@ Point { x: 10, y: 20 }
 
 ### Variant Construction
 
-```
+```ebnf
 VariantExpr ::= TypeId '(' ExprList? ')'     // positional
               | TypeId '{' RecordFields '}'   // named
               | TypeId                         // unit variant
@@ -672,7 +673,7 @@ Error { error: "failed" }
 
 ### Call and UFCS
 
-```
+```ebnf
 CallExpr ::= Expression '(' ExprList? ')'
 UFCSExpr ::= Expression '.' Path CallArgs?
 CallArgs ::= '(' ExprList? ')'
@@ -712,7 +713,7 @@ data
 
 ### Binary Operators
 
-```
+```ebnf
 BinaryExpr ::= Expression BinOp Expression
              | Expression QualifiedOp Expression
 
@@ -765,7 +766,7 @@ bits.bit_not  // ~bits (비트 부정)
 
 ### Case Expression
 
-```
+```ebnf
 CaseExpr ::= 'case' Expression '{' CaseArm+ '}'
 
 CaseArm ::= Pattern '->' Expression           // guard 없음
@@ -803,7 +804,7 @@ case result {
 
 ## Patterns
 
-```
+```ebnf
 Pattern ::= LiteralPattern
           | WildcardPattern
           | IdentifierPattern
@@ -829,7 +830,8 @@ RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
 
-**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle` 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
+**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle`
+표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
 
 **예시:**
 
@@ -914,7 +916,7 @@ user
 
 ## Visibility
 
-```
+```ebnf
 Visibility ::= 'pub'?
 ```
 
@@ -1042,15 +1044,15 @@ fn main() ->{Console} Nil {
 
 ### Types
 
-| 구문                     | 의미                           |
-| ------------------------ | ------------------------------ |
-| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입               |
-| `List(a)`, `Option(Int)` | 제네릭 타입                    |
-| `#(Int, Text)`           | Tuple 타입                     |
-| `fn(a) -> b`             | 함수 타입 (암묵적 polymorphic) |
-| `fn(a) ->{} b`           | 순수 함수 타입                 |
-| `fn(a) ->{E} b`          | Effect E를 수행하는 함수       |
-| `fn(a) ->{E, e} b`       | E + row variable e             |
+| 구문                               | 의미                           |
+| ---------------------------------- | ------------------------------ |
+| `Nat`, `Int`, `Float`, `Text`, ... | 기본 타입                      |
+| `List(a)`, `Option(Int)`           | 제네릭 타입                    |
+| `#(Int, Text)`                     | Tuple 타입                     |
+| `fn(a) -> b`                       | 함수 타입 (암묵적 polymorphic) |
+| `fn(a) ->{} b`                     | 순수 함수 타입                 |
+| `fn(a) ->{E} b`                    | Effect E를 수행하는 함수       |
+| `fn(a) ->{E, e} b`                 | E + row variable e             |
 
 ### Expressions
 

@@ -73,7 +73,7 @@ fn map_effect(a, b)(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b) {
 
 ### 전략
 
-```
+```text
 제네릭 함수/타입
        │
        ▼
@@ -101,7 +101,7 @@ Monomorph  Uniform Rep
 
 ### 파이프라인 위치
 
-```
+```text
 Stage 4: Type Inference
     ↓
 Stage 5: TDNR
@@ -115,7 +115,7 @@ Stage 7: Codegen (Wasm/Cranelift)
 
 ### 이름 맹글링
 
-```
+```text
 Box(Int)           → Box$Int
 List(Option(Int))  → List$Option_Int_
 Pair(Int, Text)    → Pair$Int$Text
@@ -183,7 +183,8 @@ fn nest(a)(n: Int, x: a) -> ??? {
 
 순수 monomorphization으로는 무한 인스턴스화 발생:
 
-- `nest<Int>` → `nest<Pair<Int, Int>>` → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
+- `nest<Int>` → `nest<Pair<Int, Int>>`
+  → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
 
 ### 해결책: Uniform Representation
 

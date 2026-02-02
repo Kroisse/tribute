@@ -143,7 +143,8 @@ fn or_else(opt: Option(a), fallback: fn() ->{e} a) ->{e} a {
 
 ## Ability 호출
 
-Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키워드 없이 `Ability::operation(args)` 형태를 사용한다:
+Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키워드 없이
+`Ability::operation(args)` 형태를 사용한다:
 
 ```rust
 fn fetch(url: Text) ->{Http} Response {
@@ -211,13 +212,14 @@ handle computation() {
 ```
 
 computation의 실행 결과는 두 가지 중 하나:
+
 - **완료**: computation이 값을 반환함 → `{ value }` 패턴 매칭
 - **Suspend**: ability operation에서 멈춤 → `{ Op(args) -> k }` 패턴 매칭
 
 ### Handler 패턴
 
 | 패턴 | 의미 |
-|------|------|
+| ---- | ---- |
 | `{ value }` | Computation 완료, 결과값 바인딩 |
 | `{ Operation(args) -> k }` | Suspend, continuation `k` 바인딩 |
 
@@ -357,7 +359,7 @@ fn main() ->{IO} Nil {
 ## 요약
 
 | 문법 | 의미 |
-|------|------|
+| ---- | ---- |
 | `fn(a) -> b` | `fn(a) ->{e} b` (fresh e) |
 | `fn(a) ->{} b` | 순수 함수 타입 |
 | `fn(a) ->{E} b` | ability E를 수행하는 함수 타입 |

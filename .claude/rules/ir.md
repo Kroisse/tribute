@@ -6,7 +6,8 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
 
 Located in `crates/trunk-ir/src/ir.rs`:
 
-- **`Operation`** - Generic IR operation with operands, results, regions, successors, and attributes
+- **`Operation`** - Generic IR operation with operands, results, regions,
+  successors, and attributes
 - **`Value`** - SSA value with definition site and index
 - **`ValueDef`** - Either operation result or block argument
 - **`Block`** - Basic block with arguments and operations
@@ -20,24 +21,29 @@ Located in `crates/trunk-ir/src/ir.rs`:
 ## Dialects
 
 Dialects are split across two crates:
+
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific high-level dialects
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
+  high-level dialects
 
 ### Infrastructure (trunk-ir)
+
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `core` | `core.rs` | Core types: i32, f64, nil, tuple, string, ptr, array, ref_ |
 
 ### High-level Tribute (tribute-ir)
+
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, marker_prompt |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
 | `closure` | `closure.rs` | Closures and captures |
 
 ### Mid-level (trunk-ir)
+
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `func` | `func.rs` | Function ops: func, call, call_indirect, return, constant |
 | `cont` | `cont.rs` | Continuation-based control flow |
 | `scf` | `scf.rs` | Structured control flow: if, while, for |
@@ -45,8 +51,9 @@ Dialects are split across two crates:
 | `mem` | `mem.rs` | Memory operations |
 
 ### Low-level (trunk-ir)
+
 | Dialect | File | Purpose |
-|---------|------|---------|
+| ------- | ---- | ------- |
 | `wasm` | `wasm.rs` | WebAssembly target ops |
 
 ## dialect! Macro
@@ -71,6 +78,7 @@ dialect! {
 ```
 
 **Annotations**:
+
 - `#[attr(...)]` - Attributes (metadata stored on operation)
 - `#[region(...)]` - Regions (nested control flow)
 - `#[rest]` - Variadic operands

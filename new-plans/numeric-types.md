@@ -21,7 +21,7 @@
 
 Tribute의 `Int`는 **임의 정밀도 정수**이다:
 
-```
+```text
 Int = i31ref (fixnum) | BigInt (bignum)
      ├─ -2³⁰ ≤ n < 2³⁰ → i31ref (인라인, 0바이트 오버헤드)
      └─ 그 외 → BigInt (힙 할당, GMP 스타일)
@@ -158,7 +158,7 @@ Float = f64  // IEEE 754 64비트 부동소수점
 
 ### 타입 계층
 
-```
+```text
 any (anyref)
  ├─ i31       ← Int (fixnum)
  └─ struct
