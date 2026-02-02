@@ -362,9 +362,25 @@ fn transform_shifts_in_block<'db>(
     ev_value: Value<'db>,
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
 ) -> (Block<'db>, bool) {
+    transform_shifts_in_block_with_remap(db, block, ev_value, handled_by_tag, HashMap::new())
+}
+
+/// Transform shifts in a block with an initial value remap.
+///
+/// The `initial_remap` provides a seed for the value_map, allowing operand
+/// references to be remapped before processing. This is used when processing
+/// push_prompt body/handlers regions to remap the outer evidence to the
+/// extended evidence.
+fn transform_shifts_in_block_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    ev_value: Value<'db>,
+    handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
+    initial_remap: HashMap<Value<'db>, Value<'db>>,
+) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
-    let mut changed = false;
-    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+    let mut changed = !initial_remap.is_empty(); // If we have remaps, consider it a change
+    let mut value_map: HashMap<Value<'db>, Value<'db>> = initial_remap;
 
     for op in block.operations(db).iter() {
         // Remap operands using value map
@@ -453,11 +469,28 @@ fn transform_shifts_in_block<'db>(
                 new_ops.push(extend_call.as_operation());
             }
 
-            // Transform body region with new evidence
+            // Transform body region with new evidence.
+            // We need to create a remap from the original evidence (ev_value) to the
+            // extended evidence (current_ev) so that any operands in the body/handlers
+            // that reference ev_value will be correctly remapped to current_ev.
             let body_region = push_prompt_op.body(db);
             let handlers_region = push_prompt_op.handlers(db);
-            let (new_body, _) = transform_shifts_in_region(db, &body_region, current_ev);
-            let (new_handlers, _) = transform_shifts_in_region(db, &handlers_region, current_ev);
+            let mut evidence_remap = HashMap::new();
+            if ev_value != current_ev {
+                evidence_remap.insert(ev_value, current_ev);
+            }
+            let (new_body, _) = transform_shifts_in_region_with_remap(
+                db,
+                &body_region,
+                current_ev,
+                evidence_remap.clone(),
+            );
+            let (new_handlers, _) = transform_shifts_in_region_with_remap(
+                db,
+                &handlers_region,
+                current_ev,
+                evidence_remap,
+            );
 
             // Create new push_prompt with transformed regions
             let result_ty = op
@@ -638,6 +671,21 @@ fn transform_shifts_in_region<'db>(
     region: &Region<'db>,
     ev_value: Value<'db>,
 ) -> (Region<'db>, bool) {
+    transform_shifts_in_region_with_remap(db, region, ev_value, HashMap::new())
+}
+
+/// Transform shifts in a region with an initial value remap.
+///
+/// The `initial_remap` is used to remap operand references before processing.
+/// This is needed for push_prompt body/handlers regions where the outer evidence
+/// (`ev_value`) needs to be remapped to the extended evidence (`current_ev`)
+/// created by `evidence_extend`.
+fn transform_shifts_in_region_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    ev_value: Value<'db>,
+    initial_remap: HashMap<Value<'db>, Value<'db>>,
+) -> (Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<Block<'db>> = region
         .blocks(db)
@@ -645,8 +693,13 @@ fn transform_shifts_in_region<'db>(
         .map(|block| {
             // Precompute handled abilities for each block in the region
             let handled_by_tag = collect_handled_abilities_by_tag(db, block);
-            let (new_block, block_changed) =
-                transform_shifts_in_block(db, block, ev_value, &handled_by_tag);
+            let (new_block, block_changed) = transform_shifts_in_block_with_remap(
+                db,
+                block,
+                ev_value,
+                &handled_by_tag,
+                initial_remap.clone(),
+            );
             if block_changed {
                 changed = true;
             }
@@ -831,25 +884,227 @@ fn hash_type(db: &dyn salsa::Database, ty: Type<'_>) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use salsa::Database;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::{BlockId, Location, PathId, Span, ValueDef, idvec};
 
-    #[test]
-    fn test_compute_ability_id() {
-        let db = salsa::DatabaseImpl::default();
-        db.attach(|db| {
-            let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
-            let console_ref = core::AbilityRefType::simple(db, Symbol::new("Console"));
+    #[salsa_test]
+    fn test_compute_ability_id(db: &salsa::DatabaseImpl) {
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let console_ref = core::AbilityRefType::simple(db, Symbol::new("Console"));
 
-            let state_id = compute_ability_id(db, state_ref.as_type());
-            let console_id = compute_ability_id(db, console_ref.as_type());
+        let state_id = compute_ability_id(db, state_ref.as_type());
+        let console_id = compute_ability_id(db, console_ref.as_type());
 
-            // Same ability should have same ID
-            let state_ref2 = core::AbilityRefType::simple(db, Symbol::new("State"));
-            let state_id2 = compute_ability_id(db, state_ref2.as_type());
-            assert_eq!(state_id, state_id2);
+        // Same ability should have same ID
+        let state_ref2 = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let state_id2 = compute_ability_id(db, state_ref2.as_type());
+        assert_eq!(state_id, state_id2);
 
-            // Different abilities should have different IDs
-            assert_ne!(state_id, console_id);
-        });
+        // Different abilities should have different IDs
+        assert_ne!(state_id, console_id);
+    }
+
+    /// Helper to create test location
+    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
+        let path = PathId::new(db, "test".to_owned());
+        Location::new(path, Span::new(0, 0))
+    }
+
+    /// Test that transform_shifts_in_block correctly remaps ev_value to current_ev
+    /// in push_prompt body when abilities are handled.
+    ///
+    /// This tracked function contains all the test logic because Salsa requires
+    /// tracked struct creation to happen within tracked functions.
+    ///
+    /// Returns Ok(()) if the test passes, Err(message) if it fails.
+    #[salsa::tracked]
+    fn run_evidence_remap_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+        let evidence_ty = ability::EvidencePtr::new(db).as_type();
+
+        // Entry block with evidence parameter
+        let entry_block_id = BlockId::fresh();
+        let ev_arg = BlockArg::of_type(db, evidence_ty);
+
+        // Create a func.call inside push_prompt body that uses the evidence
+        // This simulates: func.call @effectful_fn(%ev)
+        let ev_value = Value::new(db, ValueDef::BlockArg(entry_block_id), 0);
+
+        // Create the call operation that uses ev_value as operand
+        let inner_call = func::call(
+            db,
+            location,
+            vec![ev_value], // Uses original evidence
+            i64_ty,
+            Symbol::new("effectful_fn"),
+        );
+
+        // Create yield operation
+        let yield_op = trunk_ir::dialect::scf::r#yield(db, location, vec![inner_call.result(db)]);
+
+        // Create the body region for push_prompt
+        let body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![inner_call.as_operation(), yield_op.as_operation()],
+        );
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        // Create empty handlers region
+        let handlers_region = Region::new(db, location, idvec![]);
+
+        // Create push_prompt with tag 0
+        let push_prompt = cont::push_prompt(db, location, i64_ty, 0, body_region, handlers_region);
+
+        // Create handler_dispatch that handles an ability for tag 0
+        // This is needed so that evidence_extend is generated
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let handler_block_arg = BlockArg::with_attr(
+            db,
+            core::Nil::new(db).as_type(),
+            Symbol::new("ability_ref"),
+            Attribute::Type(state_ref.as_type()),
+        );
+        let handler_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![handler_block_arg],
+            idvec![],
+        );
+        let done_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![BlockArg::of_type(db, i64_ty)],
+            idvec![],
+        );
+        let dispatch_body = Region::new(db, location, idvec![done_block, handler_block]);
+        let handler_dispatch = cont::handler_dispatch(
+            db,
+            location,
+            push_prompt.result(db),
+            i64_ty,
+            0,
+            i64_ty,
+            dispatch_body,
+        );
+
+        // Create return
+        let ret = func::r#return(db, location, Some(handler_dispatch.result(db)));
+
+        // Create the entry block
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![ev_arg],
+            idvec![
+                push_prompt.as_operation(),
+                handler_dispatch.as_operation(),
+                ret.as_operation()
+            ],
+        );
+
+        // Now call transform_shifts_in_block with this block
+        let handled_by_tag = collect_handled_abilities_by_tag(db, &entry_block);
+
+        // Verify that tag 0 has State ability
+        if !handled_by_tag.contains_key(&0) {
+            return Err("Should find handler for tag 0".to_string());
+        }
+        let abilities = handled_by_tag.get(&0).unwrap();
+        if abilities.len() != 1 {
+            return Err(format!("Should have one ability, got {}", abilities.len()));
+        }
+
+        // Run the transformation
+        let (new_block, changed) =
+            transform_shifts_in_block(db, &entry_block, ev_value, &handled_by_tag);
+
+        if !changed {
+            return Err("Block should be transformed".to_string());
+        }
+
+        // Find the new push_prompt in the transformed block
+        let mut found_evidence_extend = false;
+        let mut new_push_prompt_op = None;
+
+        for op in new_block.operations(db).iter() {
+            if let Ok(call) = func::Call::from_operation(db, *op)
+                && call.callee(db) == "__tribute_evidence_extend"
+            {
+                found_evidence_extend = true;
+            }
+            if cont::PushPrompt::from_operation(db, *op).is_ok() {
+                new_push_prompt_op = Some(*op);
+            }
+        }
+
+        if !found_evidence_extend {
+            return Err("Should generate evidence_extend call".to_string());
+        }
+
+        let Some(push_prompt_op) = new_push_prompt_op else {
+            return Err("Should find new push_prompt".to_string());
+        };
+        let new_push_prompt = cont::PushPrompt::from_operation(db, push_prompt_op).unwrap();
+        let new_body = new_push_prompt.body(db);
+
+        // Find the func.call in the new body
+        let new_body_block = new_body.blocks(db).first().unwrap();
+        let mut inner_call_operands = None;
+
+        for op in new_body_block.operations(db).iter() {
+            if let Ok(call) = func::Call::from_operation(db, *op)
+                && call.callee(db) == "effectful_fn"
+            {
+                inner_call_operands = Some(op.operands(db).to_vec());
+            }
+        }
+
+        let Some(operands) = inner_call_operands else {
+            return Err("Should find effectful_fn call in body".to_string());
+        };
+
+        // THE KEY ASSERTION:
+        // The evidence operand should NOT be the original ev_value (block arg 0)
+        // It should be the result of evidence_extend (or remapped to current_ev)
+        if operands.is_empty() {
+            return Err("Call should have evidence operand".to_string());
+        }
+
+        let evidence_operand = operands[0];
+
+        // The original ev_value is BlockArg(entry_block_id, 0)
+        // If the bug exists, evidence_operand == ev_value
+        // If fixed, evidence_operand should be the result of evidence_extend
+        if evidence_operand == ev_value {
+            return Err(format!(
+                "BUG CONFIRMED: Handler body effectful call still uses original evidence \
+                 parameter ({:?}) instead of extended evidence. \
+                 The ev_value -> current_ev remap is missing in transform_shifts_in_region.",
+                ev_value
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Test that transform_shifts_in_block correctly remaps ev_value to current_ev
+    /// in push_prompt body when abilities are handled.
+    ///
+    /// This test verifies the fix for the evidence remap issue where effectful
+    /// function calls inside handler body/handlers regions need to use the
+    /// extended evidence (from evidence_extend) rather than the original evidence.
+    #[salsa_test]
+    fn test_push_prompt_body_remaps_evidence(db: &salsa::DatabaseImpl) {
+        let result = run_evidence_remap_test(db);
+        if let Err(msg) = result {
+            panic!("{}", msg);
+        }
     }
 }
