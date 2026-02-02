@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use im::HashMap as ImHashMap;
 use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{cont, core, func};
 use trunk_ir::{
@@ -362,7 +363,7 @@ fn transform_shifts_in_block<'db>(
     ev_value: Value<'db>,
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
 ) -> (Block<'db>, bool) {
-    transform_shifts_in_block_with_remap(db, block, ev_value, handled_by_tag, HashMap::new())
+    transform_shifts_in_block_with_remap(db, block, ev_value, handled_by_tag, ImHashMap::new())
 }
 
 /// Transform shifts in a block with an initial value remap.
@@ -376,11 +377,11 @@ fn transform_shifts_in_block_with_remap<'db>(
     block: &Block<'db>,
     ev_value: Value<'db>,
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
-    initial_remap: HashMap<Value<'db>, Value<'db>>,
+    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
 ) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut changed = !initial_remap.is_empty(); // If we have remaps, consider it a change
-    let mut value_map: HashMap<Value<'db>, Value<'db>> = initial_remap;
+    let mut value_map: ImHashMap<Value<'db>, Value<'db>> = initial_remap;
 
     for op in block.operations(db).iter() {
         // Remap operands using value map
@@ -402,10 +403,18 @@ fn transform_shifts_in_block_with_remap<'db>(
             if abilities.is_empty() {
                 let body_region = push_prompt_op.body(db);
                 let handlers_region = push_prompt_op.handlers(db);
-                let (new_body, body_changed) =
-                    transform_shifts_in_region(db, &body_region, ev_value);
-                let (new_handlers, handlers_changed) =
-                    transform_shifts_in_region(db, &handlers_region, ev_value);
+                let (new_body, body_changed) = transform_shifts_in_region_with_remap(
+                    db,
+                    &body_region,
+                    ev_value,
+                    value_map.clone(),
+                );
+                let (new_handlers, handlers_changed) = transform_shifts_in_region_with_remap(
+                    db,
+                    &handlers_region,
+                    ev_value,
+                    value_map.clone(),
+                );
 
                 if body_changed || handlers_changed {
                     changed = true;
@@ -475,7 +484,7 @@ fn transform_shifts_in_block_with_remap<'db>(
             // that reference ev_value will be correctly remapped to current_ev.
             let body_region = push_prompt_op.body(db);
             let handlers_region = push_prompt_op.handlers(db);
-            let mut evidence_remap = HashMap::new();
+            let mut evidence_remap: ImHashMap<Value<'db>, Value<'db>> = value_map.clone();
             if ev_value != current_ev {
                 evidence_remap.insert(ev_value, current_ev);
             }
@@ -566,7 +575,12 @@ fn transform_shifts_in_block_with_remap<'db>(
 
             // Transform regions
             let handler_region = shift_op.handler(db);
-            let (new_handler_region, _) = transform_shifts_in_region(db, &handler_region, ev_value);
+            let (new_handler_region, _) = transform_shifts_in_region_with_remap(
+                db,
+                &handler_region,
+                ev_value,
+                value_map.clone(),
+            );
 
             // Get value operands (skip the old tag operand at index 0)
             let value_operands: Vec<Value<'db>> =
@@ -603,7 +617,12 @@ fn transform_shifts_in_block_with_remap<'db>(
             let new_regions: IdVec<Region<'db>> = regions
                 .iter()
                 .map(|region| {
-                    let (new_region, r_changed) = transform_shifts_in_region(db, region, ev_value);
+                    let (new_region, r_changed) = transform_shifts_in_region_with_remap(
+                        db,
+                        region,
+                        ev_value,
+                        value_map.clone(),
+                    );
                     if r_changed {
                         region_changed = true;
                     }
@@ -665,15 +684,6 @@ fn transform_shifts_in_block_with_remap<'db>(
     (new_block, changed)
 }
 
-/// Transform cont.shift operations in a region.
-fn transform_shifts_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    ev_value: Value<'db>,
-) -> (Region<'db>, bool) {
-    transform_shifts_in_region_with_remap(db, region, ev_value, HashMap::new())
-}
-
 /// Transform shifts in a region with an initial value remap.
 ///
 /// The `initial_remap` is used to remap operand references before processing.
@@ -684,7 +694,7 @@ fn transform_shifts_in_region_with_remap<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     ev_value: Value<'db>,
-    initial_remap: HashMap<Value<'db>, Value<'db>>,
+    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
 ) -> (Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<Block<'db>> = region

@@ -7,6 +7,7 @@ license.workspace = true
 description = "Compiler passes for Tribute (CST to TrunkIR lowering, type inference, etc.)"
 
 [dependencies]
+im = "15"
 salsa.workspace = true
 tracing.workspace = true
 tribute-core.workspace = true
