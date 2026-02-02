@@ -517,10 +517,24 @@ fn get_field_type_from_struct<'db>(
 ///
 /// Returns the modified results, or None if no changes were needed.
 fn update_results_if_different<'db>(
-    _db: &'db dyn salsa::Database,
+    db: &'db dyn salsa::Database,
     results: &IdVec<Type<'db>>,
     concrete_ty: Type<'db>,
 ) -> Option<IdVec<Type<'db>>> {
+    // Debug assertion: only placeholder/reference types should be updated
+    #[cfg(debug_assertions)]
+    for ty in results.iter() {
+        if *ty != concrete_ty && !is_placeholder_type(db, *ty) {
+            tracing::warn!(
+                "wasm_type_concrete: updating non-placeholder type {}.{} -> {}.{}",
+                ty.dialect(db),
+                ty.name(db),
+                concrete_ty.dialect(db),
+                concrete_ty.name(db)
+            );
+        }
+    }
+
     // Check if any result type differs from the concrete type
     let needs_update = results.iter().any(|ty| *ty != concrete_ty);
     if !needs_update {
@@ -531,6 +545,29 @@ fn update_results_if_different<'db>(
     let new_results: IdVec<Type<'db>> = results.iter().map(|_| concrete_ty).collect();
 
     Some(new_results)
+}
+
+/// Check if a type is a placeholder that can be safely updated.
+///
+/// Placeholder types include:
+/// - `wasm.structref`, `wasm.anyref`, `wasm.funcref` (generic reference types)
+/// - `core.ptr`, `tribute_rt.any` (map to anyref)
+#[cfg(debug_assertions)]
+fn is_placeholder_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    // wasm generic reference types
+    if wasm::Structref::from_type(db, ty).is_some()
+        || wasm::Anyref::from_type(db, ty).is_some()
+        || wasm::Funcref::from_type(db, ty).is_some()
+    {
+        return true;
+    }
+
+    // Types that map to anyref
+    if core::Ptr::from_type(db, ty).is_some() || tribute_rt::is_any(db, ty) {
+        return true;
+    }
+
+    false
 }
 
 /// Check if two types are both reference-like and will be lowered to the same WASM type.

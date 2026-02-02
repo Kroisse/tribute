@@ -5,14 +5,12 @@
 //!
 //! ## Design
 //!
-//! Ability declarations (`tribute.ability_def`, `tribute.op_def`) are in the tribute dialect.
 //! This dialect contains the evidence operations for dynamic handler dispatch:
 //! - `ability.evidence_lookup`: look up a marker in the evidence
 //! - `ability.evidence_extend`: extend evidence with a new marker
 //! - `ability.marker_prompt`: extract prompt tag from a marker
 //!
-//! Handler pattern matching uses fused `tribute.handle` which lowers directly
-//! to the `cont` dialect.
+//! Handler lowering converts ability operations to `cont.push_prompt` + runtime calls.
 
 use std::fmt::Write;
 

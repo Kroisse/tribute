@@ -655,7 +655,6 @@ impl<'db> WasmLowerer<'db> {
         // Note: Some dialects are allowed for edge cases:
         // - "func": func.call_indirect (closure support pending)
         // - "adt": adt.string_const (handled by const_to_wasm pass)
-        // - "tribute": tribute.var operations kept for LSP (filtered above)
         if cfg!(debug_assertions) {
             let dialect_str = dialect.to_string();
             let allowed = ["wasm", "core", "func", "adt", "scf"];
