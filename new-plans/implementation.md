@@ -494,7 +494,7 @@ flowchart TB
 
     subgraph ability["Ability Processing"]
         evidence["evidence_insert"]
-        handler["handler_lower"]
+        resolve_ev["resolve_evidence"]
         tail_opt["tail_resumptive_optimize (TODO)"]
     end
 
@@ -523,8 +523,8 @@ flowchart TB
     lambda_lift -->|"closure.new"| closure_lower
     closure_lower -->|"call_indirect"| tdnr
     tdnr --> evidence
-    evidence -->|"+evidence param"| handler
-    handler -->|"cont.*"| tail_opt
+    evidence -->|"+evidence param"| resolve_ev
+    resolve_ev -->|"cont.*"| tail_opt
     tail_opt --> lower_case
     lower_case -->|"scf.if"| dce
     dce --> wasm & cranelift & future
@@ -543,7 +543,7 @@ flowchart TB
 | | `closure_lower` | closure.new | func.call_indirect | |
 | | `tdnr` | x.method() | Type::method(x) | |
 | **Ability** | `evidence_insert` | effectful funcs | +ev param | |
-| | `handler_lower` | ability.* | cont.* | |
+| | `resolve_evidence` | ability.* | cont.* | |
 | | `tail_resumptive` | cont.shift | direct calls | |
 | **Lowering** | `lower_case` | tribute.case | scf.if | |
 | | `dce` | all funcs | reachable funcs | |

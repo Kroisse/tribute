@@ -100,15 +100,15 @@ When matching dialect operations, prefer typed wrappers over manual dialect/name
 
 ```rust
 // ✅ Preferred: Use from_operation for type-safe matching
-if let Ok(bind_op) = tribute_pat::Bind::from_operation(db, op) {
-    let name = bind_op.name(db);
+if let Ok(call_op) = func::Call::from_operation(db, op) {
+    let callee = call_op.callee(db);
     // ...
 }
 
 // ❌ Avoid: Manual dialect and name comparison
 let dialect = op.dialect(db);
 let op_name = op.name(db);
-if dialect == tribute_pat::DIALECT_NAME() && op_name == tribute_pat::BIND() {
+if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
     // ...
 }
 ```

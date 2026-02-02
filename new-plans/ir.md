@@ -143,22 +143,12 @@ tribute.lambda : (params: [(String, Type?)], body: Region) -> T
 
 tribute.case : (scrutinee) -> T { body }
     패턴 매칭
-
-tribute.struct_def : (sym_name, fields) -> TypeDef
-    Struct 타입 정의
-
-tribute.enum_def : (sym_name, variants) -> TypeDef
-    Enum 타입 정의
-
-tribute.handle : (scrutinee) -> T { handler_arms }
-    Handler expression (ability handling)
 ```
 
 #### 타입
 
 ```
 tribute.type     // 미해소 타입 참조
-tribute.type_var // 타입 추론 변수
 tribute.int      // 정수 타입
 tribute.nat      // 자연수 타입
 ```
@@ -168,7 +158,7 @@ tribute.nat      // 자연수 타입
 | Pass 완료 후 | 조건                            |
 | ------------ | ------------------------------- |
 | Resolution   | tribute.var/call 대부분 해소    |
-| Type Check   | tribute.type_var 모두 해소      |
+| Type Check   | 타입 추론 변수 모두 해소 (front-end에서 처리) |
 
 ### ability Dialect
 
@@ -587,9 +577,8 @@ Tribute Source
     │
     ▼ Lower (CST → TrunkIR)
     │
-TrunkIR [tribute, tribute_pat, adt, ability, func, scf, arith]
+TrunkIR [tribute, adt, ability, func, scf, arith, cont]
     │   (tribute.var, tribute.path, tribute.call, tribute.type 포함)
-    │   (tribute.type_var 타입 변수 포함)
     │   (tribute.lambda 포함)
     │
     ▼ Name Resolution + Type Inference (interleaved)
@@ -683,7 +672,7 @@ tribute.var/call 해소   tribute.type_var 해소
 | Type-directed Resolution | tribute.var, tribute.call 없음 (UFCS 포함)       |
 | Type Inference (완료)    | tribute.type_var 없음, 모든 타입 구체화          |
 | Capture Analysis         | tribute.lambda 없음, closure.new로 대체          |
-| Ability Lowering         | ability.\* 없음 (tribute.handle 포함)            |
+| Ability Lowering         | ability.\* 없음                                  |
 | Wasm Lowering            | wasm.\* 만 존재 (타겟이 Wasm일 때)               |
 | Cranelift Lowering       | clif.\* 만 존재 (타겟이 native일 때)             |
 
