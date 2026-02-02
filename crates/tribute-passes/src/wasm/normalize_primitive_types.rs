@@ -1,25 +1,20 @@
-//! Normalize tribute primitive types to core/wasm types.
+//! Normalize `tribute_rt` primitive types to core/wasm types.
 //!
-//! This pass converts high-level `tribute_rt` primitive types and unresolved
-//! `tribute.type` references to their corresponding `core` types early in the
-//! WASM pipeline, ensuring that downstream passes and the emit phase don't
-//! need to handle tribute-specific types.
+//! This pass converts high-level `tribute_rt` primitive types to their
+//! corresponding `core` and `wasm` types early in the WASM pipeline, ensuring
+//! that downstream passes and the emit phase don't need to handle
+//! tribute-specific types.
 //!
 //! ## Type Conversions
 //!
-//! | Source Type              | Target Type   |
-//! |--------------------------|---------------|
-//! | `tribute_rt.int`         | `core.i32`    |
-//! | `tribute_rt.nat`         | `core.i32`    |
-//! | `tribute_rt.bool`        | `core.i32`    |
-//! | `tribute_rt.float`       | `core.f64`    |
-//! | `tribute_rt.any`         | `wasm.anyref` |
-//! | `tribute_rt.intref`      | `wasm.i31ref` |
-//! | `tribute.type(name=Int)` | `core.i32`    |
-//! | `tribute.type(name=Nat)` | `core.i32`    |
-//! | `tribute.type(name=Bool)`| `core.i32`    |
-//! | `tribute.type(name=Float)`| `core.f64`   |
-//! | `tribute.type(name=String)`| `core.string` |
+//! | Source Type          | Target Type   |
+//! |----------------------|---------------|
+//! | `tribute_rt.int`     | `core.i32`    |
+//! | `tribute_rt.nat`     | `core.i32`    |
+//! | `tribute_rt.bool`    | `core.i32`    |
+//! | `tribute_rt.float`   | `core.f64`    |
+//! | `tribute_rt.any`     | `wasm.anyref` |
+//! | `tribute_rt.intref`  | `wasm.i31ref` |
 //!
 //! ## What this pass normalizes
 //!
@@ -27,8 +22,8 @@
 //! - Operation result types
 //! - Block argument types
 //!
-//! The pass uses the existing `wasm_type_converter()` which already defines
-//! these conversions and their materializations (boxing/unboxing operations).
+//! The pass uses `wasm_type_converter()` which defines these conversions
+//! and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
 use tribute_ir::dialect::tribute_rt;

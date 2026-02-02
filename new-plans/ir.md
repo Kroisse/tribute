@@ -155,16 +155,16 @@ tribute.nat      // 자연수 타입
 
 #### Invariant
 
-| Pass 완료 후 | 조건                            |
-| ------------ | ------------------------------- |
-| Resolution   | 모든 이름 해소됨                |
+| Pass 완료 후 | 조건                                         |
+|--------------|----------------------------------------------|
+| Resolution   | 모든 이름 해소됨                             |
 | Type Check   | 타입 추론 변수 모두 해소 (front-end에서 처리) |
 
 ### ability Dialect
 
 Evidence 기반 핸들러 디스패치 연산. 런타임 evidence 구조를 조작한다.
 
-```
+```text
 ability.evidence_lookup : (evidence: EvidencePtr, ability_ref: Type) -> Marker
     Evidence에서 ability marker 조회
 
@@ -622,7 +622,7 @@ TrunkIR [wasm.*]                     TrunkIR [clif.*]
 
 Frontend는 순차적으로 실행되는 4단계로 구성된다:
 
-```
+```text
 resolve → typeck → tdnr → ast_to_ir
 ```
 
