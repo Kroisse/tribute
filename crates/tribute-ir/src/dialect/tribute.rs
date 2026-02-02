@@ -4,53 +4,16 @@
 //!
 //! ## Dialect Organization
 //!
-//! **Data construction**:
-//! - `tribute.tuple` (tuple construction)
-//!
-//! **Effect system** (ability declarations):
-//! - `tribute.ability_def`, `tribute.op_def` (ability declarations)
-//!
 //! **Types**:
 //! - `tribute.type` (unresolved type reference)
-//! - `tribute.tuple_type` (tuple type cons cell)
 
 use std::fmt::Write;
 
-use trunk_ir::type_interface::{PrintContext, Printable};
+use trunk_ir::type_interface::Printable;
 use trunk_ir::{Attribute, IdVec, Symbol, dialect};
 
 dialect! {
     mod tribute {
-        // === Data construction ===
-
-        /// `tribute.tuple` operation: tuple construction.
-        /// Takes variadic operands (tuple elements) and produces a tuple value.
-        fn tuple(#[rest] elements) -> result;
-
-        /// `tribute.ability_def` operation: defines an ability (effect) type.
-        ///
-        /// The operations region contains `tribute.op_def` operations defining the signatures.
-        ///
-        /// Attributes:
-        /// - `sym_name`: The name of the ability
-        #[attr(sym_name: Symbol)]
-        fn ability_def() -> result {
-            #[region(operations)] {}
-        };
-
-        // === Effect definition operations (metadata) ===
-
-        /// `tribute.op_def` operation: declares an operation signature within an ability.
-        ///
-        /// Used inside `tribute.ability_def` operations region to define what
-        /// operations the ability provides.
-        ///
-        /// Attributes:
-        /// - `sym_name`: The operation name
-        /// - `type`: The operation's function type (func.Fn)
-        #[attr(sym_name: Symbol, r#type: Type)]
-        fn op_def();
-
         // === Types ===
 
         /// `tribute.type`: an unresolved type reference that needs name resolution.
@@ -60,11 +23,6 @@ dialect! {
         type r#type(#[rest] params);
 
         // NOTE: Primitive types (int, nat, float, bool) are now in `tribute_rt` dialect.
-
-        /// `tribute.tuple_type` type: cons cell (head, tail).
-        /// Use `core.nil` as the tail terminator.
-        /// Example: `(a, b, c)` → `TupleType(a, TupleType(b, TupleType(c, Nil)))`
-        type tuple_type(head, tail);
     }
 }
 
@@ -132,56 +90,6 @@ inventory::submit! {
     })
 }
 
-// tribute.tuple_type -> "(a, b, c)"
-inventory::submit! { Printable::implement("tribute", "tuple_type", print_tuple_type) }
-
-fn print_tuple_type(
-    db: &dyn salsa::Database,
-    ty: trunk_ir::Type<'_>,
-    f: &mut PrintContext<'_, '_>,
-) -> std::fmt::Result {
-    let params = ty.params(db);
-    if params.is_empty() {
-        return f.write_str("#()");
-    }
-
-    // Flatten cons cells into a list
-    let mut elements = Vec::new();
-    let mut current = ty;
-
-    while current.is_dialect(db, DIALECT_NAME(), TUPLE_TYPE()) {
-        let params = current.params(db);
-        if params.len() >= 2 {
-            elements.push(params[0]); // head
-            current = params[1]; // tail
-        } else {
-            break;
-        }
-    }
-
-    // Check if tail is nil (complete tuple)
-    let has_tail = !current.is_dialect(
-        db,
-        trunk_ir::dialect::core::DIALECT_NAME(),
-        trunk_ir::dialect::core::NIL(),
-    );
-
-    f.write_char('(')?;
-    for (i, &elem) in elements.iter().enumerate() {
-        if i > 0 {
-            f.write_str(", ")?;
-        }
-        Printable::print_type(db, elem, f)?;
-    }
-    if has_tail {
-        if !elements.is_empty() {
-            f.write_str(", ")?;
-        }
-        Printable::print_type(db, current, f)?;
-    }
-    f.write_char(')')
-}
-
 // NOTE: tribute.int and tribute.nat Printable implementations moved to tribute_rt dialect
 
 #[cfg(test)]
@@ -212,18 +120,5 @@ mod tests {
 
         assert!(is_placeholder_type(db, unresolved));
         assert!(!is_placeholder_type(db, concrete));
-    }
-
-    #[salsa_test]
-    fn test_tuple_type_printable(db: &salsa::DatabaseImpl) {
-        let int_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-
-        // (Int, Int) -> TupleType(Int, TupleType(Int, Nil))
-        let inner = TupleType::new(db, int_ty, nil_ty);
-        let tuple = TupleType::new(db, int_ty, inner.as_type());
-
-        let printed = print_type(db, tuple.as_type());
-        assert_eq!(printed, "(I32, I32)");
     }
 }

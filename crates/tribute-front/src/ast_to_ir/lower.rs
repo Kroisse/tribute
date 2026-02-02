@@ -12,7 +12,7 @@ use trunk_ir::{
 };
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{closure, tribute, tribute_rt};
+use tribute_ir::dialect::{closure, tribute_rt};
 
 use super::context::CaptureInfo;
 
@@ -587,15 +587,16 @@ fn lower_expr<'db>(
 
         ExprKind::Tuple(elements) => {
             // Lower elements, propagating errors properly
+            let db = builder.db();
             let values: Vec<_> = elements
                 .iter()
                 .map(|elem| lower_expr(builder, elem.clone()))
                 .collect::<Option<Vec<_>>>()?;
-            let result_ty = tribute_rt::any_type(builder.db());
+            let result_ty = tribute_rt::any_type(db);
             let op = builder
                 .block
-                .op(tribute::tuple(builder.db(), location, values, result_ty));
-            Some(op.result(builder.db()))
+                .op(adt::struct_new(db, location, values, result_ty, result_ty));
+            Some(op.result(db))
         }
 
         ExprKind::Record {
@@ -1770,17 +1771,10 @@ fn lower_ability_op_call<'db>(
     // cont_to_trampoline only uses the first argument, so multi-arg ability ops
     // need to be packed into a single tuple value.
     let shift_args = if args.len() > 1 {
-        // Build tuple type as cons cells: TupleType(a, TupleType(b, TupleType(c, Nil)))
         let any_ty = tribute_rt::any_type(db);
-        let nil_ty = core::Nil::new(db).as_type();
-        let tuple_ty = args.iter().rev().fold(nil_ty, |tail, _| {
-            tribute::TupleType::new(db, any_ty, tail).as_type()
-        });
-
-        // Create tuple value
         let tuple_op = builder
             .block
-            .op(tribute::tuple(db, location, args, tuple_ty));
+            .op(adt::struct_new(db, location, args, any_ty, any_ty));
         vec![tuple_op.result(db)]
     } else {
         args
@@ -4355,14 +4349,12 @@ mod tests {
         let func_op = func::Func::from_operation(db, ops[0]).expect("Expected func.func");
         let body_ops = get_func_body_ops(db, &func_op);
 
-        // Body should contain tribute.tuple operation
+        // Body should contain adt.struct_new operation for the tuple
         let tuple_ops: Vec<_> = body_ops
             .iter()
-            .filter(|op| {
-                op.dialect(db) == tribute::DIALECT_NAME() && op.name(db) == tribute::TUPLE()
-            })
+            .filter(|op| op.dialect(db) == adt::DIALECT_NAME() && op.name(db) == adt::STRUCT_NEW())
             .collect();
-        assert_eq!(tuple_ops.len(), 1, "Expected one tribute.tuple operation");
+        assert_eq!(tuple_ops.len(), 1, "Expected one adt.struct_new operation");
 
         // Tuple should have 3 operands
         let tuple_op = tuple_ops[0];
@@ -4500,13 +4492,13 @@ mod tests {
         let func_typed = func::Func::from_operation(db, *func_op).unwrap();
         let body_ops = get_func_body_ops(db, &func_typed);
 
-        // With proper error propagation, tuple should NOT be emitted
-        let tuple_op = body_ops
+        // With proper error propagation, adt.struct_new should NOT be emitted for the tuple
+        let struct_new_op = body_ops
             .iter()
-            .find(|op| op.dialect(db) == "tribute" && op.name(db) == "tuple");
+            .find(|op| op.dialect(db) == "adt" && op.name(db) == "struct_new");
         assert!(
-            tuple_op.is_none(),
-            "Tuple with failing element should not emit tribute.tuple"
+            struct_new_op.is_none(),
+            "Tuple with failing element should not emit adt.struct_new"
         );
     }
 

@@ -31,7 +31,7 @@ Dialects are split across two crates:
 ### High-level Tribute (tribute-ir)
 | Dialect | File | Purpose |
 |---------|------|---------|
-| `tribute` | `tribute.rs` | Tribute AST/HIR: tuple, ability_def, op_def |
+| `tribute` | `tribute.rs` | Tribute AST/HIR: tuple |
 | `ability` | `ability.rs` | Effect operations: perform, resume, abort |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
 | `closure` | `closure.rs` | Closures and captures |
