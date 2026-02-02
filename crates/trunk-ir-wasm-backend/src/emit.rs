@@ -851,8 +851,8 @@ fn assign_locals_in_region<'db>(
             // used as arguments (e.g., empty closure environments passed as ref.null none).
             // The local allocation handles nil types specially below.
             if let Some(result_ty) = result_types.first().copied() {
-                // Use the IR result type directly. The wasm_type_concrete pass should have
-                // already resolved all placeholder types to concrete types.
+                // Use the IR result type directly. Type variables are resolved at AST level
+                // before IR generation, so types should already be concrete.
                 let effective_ty = result_ty;
 
                 // For wasm.ref_cast and wasm.struct_new with placeholder structref type,

@@ -58,9 +58,8 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = super::tribute_rt_to_wasm::lower(db, module);
     debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
-    // Concretize type variables in wasm operations (resolve tribute.type_var)
-    let module = super::wasm_type_concrete::lower(db, module);
-    debug_func_params(db, &module, "after wasm_type_concrete");
+    // NOTE: wasm_type_concrete pass removed - type variables are now resolved
+    // at AST level and converted to concrete types in ast_to_ir
 
     // Const analysis and lowering (string/bytes constants to data segments)
     let const_analysis = super::const_to_wasm::analyze_consts(db, module);
