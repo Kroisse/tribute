@@ -98,7 +98,7 @@ Evidence는 힙에 할당되고 GC가 관리한다. 정렬된 Marker 배열로 �
 별도의 opaque 타입 대신 기존 ADT 시스템(struct/array)을 재사용한다:
 
 ```rust
-// Evidence: 정렬된 Marker 배열 (ability_id 기준)
+// Evidence: 정렬된 Marker 배열 (ability_id 기준, 고정 크기)
 type Evidence = Array(Marker)
 
 // Marker: 각 ability에 대한 handler 정보
@@ -115,6 +115,7 @@ struct Marker {
 - 별도의 opaque 타입(`ability.evidence_ptr`, `ability.marker`) 대신 struct/array 사용
 - 기존 `adt.array_get`, `adt.struct_get` 연산 재사용 가능
 - Markers는 ability_id 기준 정렬 → binary search 가능 O(log n)
+- 배열은 고정 크기: `evidence_extend`는 새 배열을 할당하여 반환
 
 ### Operation Table
 
