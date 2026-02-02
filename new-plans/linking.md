@@ -2,7 +2,8 @@
 
 ## Overview
 
-Tribute targets WasmGC, which significantly constrains linking options compared to traditional linear memory WebAssembly.
+Tribute targets WasmGC, which significantly constrains linking options
+compared to traditional linear memory WebAssembly.
 
 ## Options Considered
 

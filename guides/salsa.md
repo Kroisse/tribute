@@ -1,6 +1,7 @@
 # Salsa Integration Guide for Tribute
 
-This document explains how Salsa (an incremental computation framework) is integrated and used in the Tribute project.
+This document explains how Salsa (an incremental computation framework) is
+integrated and used in the Tribute project.
 
 ## Table of Contents
 
@@ -88,7 +89,9 @@ pub struct TrackedExpression<'db> {
 
 ### 4. Accumulators
 
-Accumulators collect side effects (errors, warnings, etc.) during query execution. A single `Diagnostic` type can be used across all compilation phases:
+Accumulators collect side effects (errors, warnings, etc.) during query
+execution. A single `Diagnostic` type can be used across all compilation
+phases:
 
 ```rust
 #[salsa::accumulator]
@@ -461,11 +464,13 @@ fn compile_workspace(db: &dyn salsa::Database, files: Vec<SourceCst>) -> Workspa
 ## Best Practices
 
 1. **Keep queries pure**: Side effects only through Accumulators
-2. **Split into small queries**: Improves reusability and incremental computation efficiency
+2. **Split into small queries**: Improves reusability and incremental
+   computation efficiency
 3. **Use Tracked types**: Store intermediate results as Tracked types
 4. **Use attach pattern for tests**: Ensures isolation between tests
 5. **Minimize dependencies**: Pass only necessary data to queries
-6. **Use `&dyn salsa::Database`**: Always use the generic database type in query signatures
+6. **Use `&dyn salsa::Database`**: Always use the generic database type in
+   query signatures
 
 ## Debugging Tips
 
@@ -496,4 +501,6 @@ fn recover_from_parse_error(
 }
 ```
 
-This guide explains how to effectively use Salsa in the Tribute project. For more information, see the [official Salsa documentation](https://salsa-rs.github.io/salsa/).
+This guide explains how to effectively use Salsa in the Tribute project.
+For more information, see the
+[official Salsa documentation](https://salsa-rs.github.io/salsa/).

@@ -2,7 +2,8 @@
 
 ## Overview
 
-Develop a modern package manager for Tribute with dependency resolution, version management, and seamless build integration.
+Develop a modern package manager for Tribute with dependency resolution,
+version management, and seamless build integration.
 
 ## Priority: Medium (6/8)
 

@@ -2,11 +2,13 @@
 
 ## Overview
 
-Create a comprehensive documentation system for Tribute with automatic API documentation generation, examples testing, and integrated tutorials.
+Create a comprehensive documentation system for Tribute with automatic API
+documentation generation, examples testing, and integrated tutorials.
 
 ## Priority: Medium (8/8)
 
-Important for adoption and maintainability, but requires stable language and standard library first.
+Important for adoption and maintainability, but requires stable language and
+standard library first.
 
 ## Core Features
 

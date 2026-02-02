@@ -631,7 +631,8 @@ LetStatement ::= 'let' Pattern (':' Type)? '=' Expression
 x * { y + z }           // x * (y + z) 와 동일
 ```
 
-**Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는 `{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
+**Note:** `(expr)` 형태의 괄호 표현식은 지원하지 않음. 우선순위 조정에는
+`{ expr }` 사용. `(...)` 는 연산자-함수 `(+)`, `(<>)` 전용.
 
 ### Record Expression
 
@@ -829,7 +830,8 @@ RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
 
-**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle` 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
+**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle`
+표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
 
 **예시:**
 

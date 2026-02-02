@@ -143,7 +143,8 @@ fn or_else(opt: Option(a), fallback: fn() ->{e} a) ->{e} a {
 
 ## Ability 호출
 
-Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키워드 없이 `Ability::operation(args)` 형태를 사용한다:
+Ability operation은 일반 함수처럼 호출한다. 별도의 `perform` 키워드 없이
+`Ability::operation(args)` 형태를 사용한다:
 
 ```rust
 fn fetch(url: Text) ->{Http} Response {

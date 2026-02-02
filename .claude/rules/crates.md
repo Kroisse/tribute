@@ -1,6 +1,7 @@
 # Crate Structure
 
-The Tribute compiler is organized as a Rust Cargo workspace with clearly separated responsibilities.
+The Tribute compiler is organized as a Rust Cargo workspace with clearly
+separated responsibilities.
 
 ## tribute-core
 
@@ -93,4 +94,5 @@ tribute-front
 └── tree-sitter-tribute
 ```
 
-Note: `trunk-ir` is now fully independent with no dependencies on other tribute crates (not even as dev-dependencies). It's a standalone IR system.
+Note: `trunk-ir` is now fully independent with no dependencies on other
+tribute crates (not even as dev-dependencies). It's a standalone IR system.

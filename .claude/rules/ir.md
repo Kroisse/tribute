@@ -6,7 +6,8 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
 
 Located in `crates/trunk-ir/src/ir.rs`:
 
-- **`Operation`** - Generic IR operation with operands, results, regions, successors, and attributes
+- **`Operation`** - Generic IR operation with operands, results, regions,
+  successors, and attributes
 - **`Value`** - SSA value with definition site and index
 - **`ValueDef`** - Either operation result or block argument
 - **`Block`** - Basic block with arguments and operations
@@ -22,7 +23,8 @@ Located in `crates/trunk-ir/src/ir.rs`:
 Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific high-level dialects
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
+  high-level dialects
 
 ### Infrastructure (trunk-ir)
 

@@ -2,11 +2,13 @@
 
 ## Overview
 
-Development plan for Tribute's standard library. Designed around the ability system for I/O and error handling.
+Development plan for Tribute's standard library. Designed around the ability
+system for I/O and error handling.
 
 ## Priority: Medium (5/8)
 
-Essential for language usability, can be developed incrementally alongside other features.
+Essential for language usability, can be developed incrementally alongside
+other features.
 
 ## Core Modules
 

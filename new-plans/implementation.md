@@ -44,7 +44,8 @@ run_state(fn() {
 }, 100)
 ```
 
-클로저 타입에 `->{State(Int)}`가 명시되어 있으므로, 호출하는 쪽에서 State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한 계약이다.
+클로저 타입에 `->{State(Int)}`가 명시되어 있으므로, 호출하는 쪽에서
+State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한 계약이다.
 
 ### Scoped Resumption
 
@@ -281,7 +282,8 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 }
 ```
 
-대부분의 실용적 ability (State, Reader, Writer, Console)가 tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
+대부분의 실용적 ability (State, Reader, Writer, Console)가
+tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
 
 ---
 
@@ -301,7 +303,8 @@ fn state_get_optimized(ev: *const Evidence) -> s {
 ─────────────────────
 ```
 
-`State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의 prompt(P3)까지만 continuation을 캡처한다.
+`State::get()`은 evidence에서 State marker를 조회하고, 해당 marker의
+prompt(P3)까지만 continuation을 캡처한다.
 
 ### shift/reset 의미론
 
@@ -554,7 +557,8 @@ flowchart TB
 
 ### 점진적 개선 방향: Fine-Grained Queries
 
-현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로 rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
+현재 구조는 모듈 단위(coarse-grained) 처리를 한다. 장기적으로
+rust-analyzer 스타일의 fine-grained 쿼리 기반 아키텍처로 발전을 고려한다.
 
 #### 현재 (Coarse-Grained)
 
@@ -701,7 +705,11 @@ ev.get(STATE_ID)  // binary search로 찾음
 
 ## References
 
-- [Generalized Evidence Passing for Effect Handlers](https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers-or-efficient-compilation-of-effect-handlers-to-c/) (Koka)
-- [Effect Handlers, Evidently](https://dl.acm.org/doi/10.1145/3408981) (Scoped Resumption)
-- [libmprompt](https://github.com/koka-lang/libmprompt) (Delimited Continuation Runtime)
+- [Generalized Evidence Passing for Effect Handlers][koka-evidence] (Koka)
+- [Effect Handlers, Evidently][effect-evidently] (Scoped Resumption)
+- [libmprompt][libmprompt] (Delimited Continuation Runtime)
 - [Do Be Do Be Do](https://arxiv.org/abs/1611.09259) (Frank, Unison의 기반)
+
+[koka-evidence]: https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers-or-efficient-compilation-of-effect-handlers-to-c/
+[effect-evidently]: https://dl.acm.org/doi/10.1145/3408981
+[libmprompt]: https://github.com/koka-lang/libmprompt

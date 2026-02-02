@@ -9,7 +9,8 @@ See the detailed pipeline diagram in the doc comment at the top of `src/pipeline
 The pipeline is divided into two main phases:
 
 1. **Frontend (tribute-front)**: CST → AST → resolve → typecheck → TDNR → TrunkIR
-2. **TrunkIR Passes (tribute-passes)**: Boxing → Evidence → Closures → Continuations → Backend
+2. **TrunkIR Passes (tribute-passes)**:
+   Boxing → Evidence → Closures → Continuations → Backend
 
 ## Frontend Stages (tribute-front)
 

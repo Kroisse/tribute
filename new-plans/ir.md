@@ -709,7 +709,8 @@ text.to_bytes()
 
 ### Persistent Data Structure for Block Operations
 
-현재 `Block::operations`는 `SmallVec`을 사용하지만, `im::Vector` 같은 persistent data structure를 고려할 수 있다.
+현재 `Block::operations`는 `SmallVec`을 사용하지만, `im::Vector` 같은
+persistent data structure를 고려할 수 있다.
 
 **배경:**
 

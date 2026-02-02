@@ -2,7 +2,8 @@
 
 ## Overview
 
-Testing framework for Tribute. Design is still evolving, but will be deeply integrated with the ability system.
+Testing framework for Tribute. Design is still evolving, but will be deeply
+integrated with the ability system.
 
 ## Priority: Medium (7/8)
 
@@ -50,7 +51,9 @@ test "fetch_user calls the API" {
 
 ### Property-Based Testing
 
-Property-based testing requires exploration of multiple values. Since we use one-shot continuations (no backtracking), this will likely use a functional random generator approach rather than an ability:
+Property-based testing requires exploration of multiple values. Since we use
+one-shot continuations (no backtracking), this will likely use a functional
+random generator approach rather than an ability:
 
 ```rust
 fn forall(gen: Gen(a), prop: fn(a) ->{Test} Nil) -> TestResult

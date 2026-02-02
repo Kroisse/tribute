@@ -202,7 +202,8 @@ fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b
 
 ### TrunkIR
 
-Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다. MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내에 공존할 수 있다.
+Tribute 컴파일러는 **TrunkIR**이라는 multi-level IR을 사용한다.
+MLIR의 dialect 개념을 차용하여 여러 수준의 연산이 한 모듈 내에 공존할 수 있다.
 
 ### Dialect 계층
 
@@ -375,14 +376,17 @@ Cranelift 타겟에서는 GC가 필요하다. 선택지:
 
 ### 구현
 
-- [libmprompt](https://github.com/koka-lang/libmprompt) - Delimited continuation 런타임
+- [libmprompt](https://github.com/koka-lang/libmprompt) -
+  Delimited continuation 런타임
 - [Binaryen](https://github.com/WebAssembly/binaryen) - WasmGC 최적화
 - [Cranelift](https://cranelift.dev/) - 네이티브 코드 생성
-- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) - Continuation proposal
+- [WASM Stack Switching](https://github.com/WebAssembly/stack-switching) -
+  Continuation proposal
 
 ### 논문
 
 - "Liberating Effects with Rows and Handlers" (Koka)
 - "Do Be Do Be Do" (Frank)
-- "Effekt: Capability-passing style for type- and effect-safe, extensible effect handlers"
+- "Effekt: Capability-passing style for type- and effect-safe,
+  extensible effect handlers"
 - "Perceus: Garbage-Free Reference Counting with Reuse" (Koka)

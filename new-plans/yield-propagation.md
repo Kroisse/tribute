@@ -4,7 +4,9 @@
 
 ## Overview
 
-WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbling 방식으로 구현된다. 이 과정에서 effectful 함수는 정상 반환값 또는 continuation을 반환해야 하므로 통일된 반환 타입이 필요하다.
+WasmGC (Stack Switching 미지원) 환경에서 ability operation은 yield bubbling
+방식으로 구현된다. 이 과정에서 effectful 함수는 정상 반환값 또는
+continuation을 반환해야 하므로 통일된 반환 타입이 필요하다.
 
 **핵심 결정**: Koka 스타일의 `YieldResult` 구조체 사용
 
@@ -279,8 +281,14 @@ wasm.func @main::__lambda_2() -> (ref $YieldResult) {
 
 ## References
 
-- [Generalized Evidence Passing for Effect Handlers](https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers/) (Koka)
-- [Effect Handlers, Evidently](https://dl.acm.org/doi/10.1145/3408981) (Scoped Resumption)
-- [libmprompt](https://github.com/koka-lang/libmprompt) (Delimited Continuation Runtime)
+- [Generalized Evidence Passing for Effect Handlers][evidence-passing] (Koka)
+- [Effect Handlers, Evidently][handlers-evidently] (Scoped Resumption)
+- [libmprompt] (Delimited Continuation Runtime)
 - `new-plans/implementation.md` - Tribute ability implementation strategy
 - `new-plans/generics.md` - Tribute generics and effect polymorphism
+
+<!-- markdownlint-disable MD013 -->
+[evidence-passing]: https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers/
+<!-- markdownlint-enable MD013 -->
+[handlers-evidently]: https://dl.acm.org/doi/10.1145/3408981
+[libmprompt]: https://github.com/koka-lang/libmprompt

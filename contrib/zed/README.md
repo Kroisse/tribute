@@ -1,6 +1,7 @@
 # Tribute Language Support for Zed
 
-Zed editor extension providing syntax highlighting and LSP support for the Tribute language.
+Zed editor extension providing syntax highlighting and LSP support for the
+Tribute language.
 
 ## Installation
 
@@ -39,7 +40,8 @@ Zed editor extension providing syntax highlighting and LSP support for the Tribu
 
 ### LSP Log Level
 
-To adjust the LSP server log level, add the following to your Zed `settings.json` (open with `Cmd+,` or `Ctrl+,`):
+To adjust the LSP server log level, add the following to your Zed
+`settings.json` (open with `Cmd+,` or `Ctrl+,`):
 
 ```json
 {

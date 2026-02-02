@@ -183,7 +183,8 @@ fn nest(a)(n: Int, x: a) -> ??? {
 
 순수 monomorphization으로는 무한 인스턴스화 발생:
 
-- `nest<Int>` → `nest<Pair<Int, Int>>` → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
+- `nest<Int>` → `nest<Pair<Int, Int>>`
+  → `nest<Pair<Pair<Int, Int>, Pair<Int, Int>>>` → ...
 
 ### 해결책: Uniform Representation
 

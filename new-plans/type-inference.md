@@ -1,6 +1,7 @@
 # Tribute Type Inference
 
-> 이 문서는 Tribute의 타입 추론 시스템, 특히 row polymorphic effect typing과 bidirectional typing의 통합을 정의한다.
+> 이 문서는 Tribute의 타입 추론 시스템, 특히 row polymorphic effect typing과
+> bidirectional typing의 통합을 정의한다.
 
 ## Design Decisions
 
@@ -77,7 +78,9 @@ fn foo() ->{State(Int), State(Text)} Nil
 fn bar() ->{State(Int), State(Int)} Nil
 ```
 
-**이유**: 중복 허용 시 `State::get()`이 어떤 handler를 참조하는지 타입 수준에서 결정할 수 없다. "가장 안쪽 handler"는 런타임 개념이지 타입 시스템이 추적할 수 있는 정보가 아니다.
+**이유**: 중복 허용 시 `State::get()`이 어떤 handler를 참조하는지 타입
+수준에서 결정할 수 없다. "가장 안쪽 handler"는 런타임 개념이지 타입 시스템이
+추적할 수 있는 정보가 아니다.
 
 **향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, effect row에서 이름을 붙일 수 있다:
 
@@ -258,7 +261,8 @@ E₁ ⊆ E₂
 Γ ⊢ e ⇐ A ; E₂
 ```
 
-`{State(Int)} ⊆ {State(Int), Console}` 이므로, 더 적은 effect를 가진 표현식은 더 많은 effect가 허용되는 컨텍스트에서 사용 가능하다.
+`{State(Int)} ⊆ {State(Int), Console}` 이므로, 더 적은 effect를 가진
+표현식은 더 많은 effect가 허용되는 컨텍스트에서 사용 가능하다.
 
 ---
 
