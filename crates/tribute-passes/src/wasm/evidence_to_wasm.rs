@@ -161,62 +161,17 @@ impl<'db> RewritePattern<'db> for EvidenceLookupPattern {
 
         let operands = op.operands(db);
         if operands.len() != 2 {
-            return RewriteResult::Unchanged;
+            panic!(
+                "malformed __tribute_evidence_lookup call: expected 2 operands, got {}",
+                operands.len()
+            );
         }
 
-        let evidence_val = operands[0];
-        let ability_id_val = operands[1];
-        let location = op.location(db);
-
-        // Generate inline lookup code
-        let ops = generate_evidence_lookup(db, location, evidence_val, ability_id_val);
-        RewriteResult::Expand(ops)
+        // Evidence lookup requires runtime binary search since ability_id is a hash value,
+        // not an array index. Keep the call to the runtime function.
+        let _ = (operands, op.location(db));
+        RewriteResult::Unchanged
     }
-}
-
-/// Generate inline WASM operations for evidence lookup.
-///
-/// The generated code uses a block+loop pattern for the search:
-/// - Outer block catches the "found" branch
-/// - Inner loop iterates through the array
-fn generate_evidence_lookup<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    evidence_val: Value<'db>,
-    ability_id_val: Value<'db>,
-) -> Vec<Operation<'db>> {
-    let i32_ty = core::I32::new(db).as_type();
-    let marker_ref_ty = marker_ref_type(db);
-
-    // For now, use a simple sequential search pattern without complex control flow.
-    // This generates operations that will work with the current emitter.
-    //
-    // Simplified approach: Since evidence is sorted and typically small,
-    // we can use a linear scan. For the MVP, we keep the call but it will
-    // be linked/inlined at a later stage.
-    //
-    // TODO: Implement proper block+loop pattern when the emitter supports it.
-
-    // Get array length
-    let len_op = wasm::array_len(db, location, evidence_val, i32_ty);
-    let _len_val = len_op.result(db);
-
-    // For now, emit a simple array access at index 0 as placeholder.
-    // The actual loop implementation requires block/loop region support
-    // which needs careful coordination with the emitter.
-    //
-    // This is a temporary implementation that assumes ability_id maps directly
-    // to array index (which works for single-ability cases).
-    let get_marker = wasm::array_get(
-        db,
-        location,
-        evidence_val,
-        ability_id_val,
-        marker_ref_ty,
-        EVIDENCE_IDX,
-    );
-
-    vec![len_op.as_operation(), get_marker.as_operation()]
 }
 
 // =============================================================================
@@ -354,12 +309,6 @@ fn generate_evidence_extend<'db>(
 // Helper functions
 // =============================================================================
 
-/// Get the WASM reference type for Marker.
-fn marker_ref_type(db: &dyn salsa::Database) -> Type<'_> {
-    // Marker is a struct ref (non-nullable)
-    wasm::Structref::new(db).as_type()
-}
-
 /// Get the WASM reference type for Evidence.
 fn evidence_ref_type(db: &dyn salsa::Database) -> Type<'_> {
     // Evidence is an array ref (non-nullable)
@@ -481,6 +430,95 @@ mod tests {
             new_entry.operations(db).len(),
             1,
             "Other functions should be preserved"
+        );
+    }
+
+    /// Create a module with a function that calls __tribute_evidence_lookup.
+    #[salsa::tracked]
+    fn make_evidence_lookup_call_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        use trunk_ir::{Value, ValueDef};
+
+        let location = test_location(db);
+        let evidence_ty = wasm::Arrayref::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+        let marker_ty = wasm::Structref::new(db).as_type();
+
+        // Create a function that calls __tribute_evidence_lookup
+        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_ty);
+
+        // Build caller function body
+        let body_block_id = BlockId::fresh();
+        let ev_arg = BlockArg::of_type(db, evidence_ty);
+        let ability_id_arg = BlockArg::of_type(db, i32_ty);
+
+        // wasm.call @__tribute_evidence_lookup(ev, ability_id)
+        let ev_val = Value::new(db, ValueDef::BlockArg(body_block_id), 0);
+        let ability_id_val = Value::new(db, ValueDef::BlockArg(body_block_id), 1);
+        let call_op = wasm::call(
+            db,
+            location,
+            vec![ev_val, ability_id_val],
+            vec![marker_ty],
+            Symbol::new("__tribute_evidence_lookup"),
+        );
+
+        // Return the result
+        let return_op = func::r#return(db, location, vec![call_op.result(db, 0)]);
+
+        let body_block = Block::new(
+            db,
+            body_block_id,
+            location,
+            IdVec::from(vec![ev_arg, ability_id_arg]),
+            IdVec::from(vec![call_op.as_operation(), return_op.as_operation()]),
+        );
+        let body = Region::new(db, location, IdVec::from(vec![body_block]));
+        let caller_func = func::func(db, location, Symbol::new("test_caller"), *func_ty, body);
+
+        let entry_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            IdVec::from(vec![caller_func.as_operation()]),
+        );
+        let module_body = Region::new(db, location, IdVec::from(vec![entry_block]));
+        core::Module::create(db, location, "test".into(), module_body)
+    }
+
+    #[salsa_test]
+    fn test_evidence_lookup_call_preserved(db: &salsa::DatabaseImpl) {
+        // Test that __tribute_evidence_lookup calls are preserved (not inlined)
+        // because ability_id is a hash value, not an array index
+        let module = make_evidence_lookup_call_module(db);
+
+        // Lower
+        let lowered = lower_evidence_to_wasm(db, module);
+
+        // Find the caller function and check that the call is still there
+        let body = lowered.body(db);
+        let entry = body.blocks(db).first().unwrap();
+
+        // Should have the caller function
+        assert_eq!(entry.operations(db).len(), 1);
+
+        let func_op = entry.operations(db).first().unwrap();
+        let func = func::Func::from_operation(db, *func_op).expect("expected func.func");
+
+        // Check the function body still has the wasm.call
+        let func_body = func.body(db);
+        let func_entry = func_body.blocks(db).first().unwrap();
+
+        // Should have: wasm.call + func.return
+        assert_eq!(func_entry.operations(db).len(), 2);
+
+        // First op should still be wasm.call
+        let first_op = func_entry.operations(db).first().unwrap();
+        let call = wasm::Call::from_operation(db, *first_op).expect("expected wasm.call");
+        assert_eq!(
+            call.callee(db).last_segment(),
+            Symbol::new("__tribute_evidence_lookup"),
+            "evidence_lookup call should be preserved"
         );
     }
 }

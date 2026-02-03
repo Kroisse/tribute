@@ -240,12 +240,13 @@ impl<'db> GcTypeRegistry<'db> {
                     mutable: false,
                 },
             ]),
-            // Index 6: Evidence - array (ref Marker)
+            // Index 6: Evidence - array (ref null Marker)
             // Sorted array of markers for O(log n) ability lookup.
             // Each handler installation adds a marker to the evidence.
+            // Elements must be nullable to allow array.new_default initialization.
             GcTypeDef::Array(FieldType {
                 element_type: StorageType::Val(ValType::Ref(RefType {
-                    nullable: false,
+                    nullable: true,
                     heap_type: HeapType::Concrete(MARKER_IDX),
                 })),
                 mutable: true,
@@ -1146,5 +1147,53 @@ mod tests {
 
         // Step is a builtin, so get_step_type_idx always returns Some(STEP_IDX)
         assert_eq!(get_step_type_idx(&db, &registry), Some(STEP_IDX));
+    }
+
+    #[test]
+    fn test_evidence_array_element_is_nullable() {
+        // Evidence array elements must be nullable to allow array.new_default initialization
+        let builtins = GcTypeRegistry::builtin_types();
+        let evidence_def = &builtins[EVIDENCE_IDX as usize];
+
+        match evidence_def {
+            GcTypeDef::Array(field_type) => {
+                match field_type.element_type {
+                    StorageType::Val(ValType::Ref(ref_type)) => {
+                        assert!(
+                            ref_type.nullable,
+                            "Evidence array elements must be nullable for array.new_default"
+                        );
+                        // Also verify it references MARKER_IDX
+                        assert!(
+                            matches!(ref_type.heap_type, HeapType::Concrete(MARKER_IDX)),
+                            "Evidence array should contain Marker references"
+                        );
+                    }
+                    _ => panic!("Evidence array element should be a reference type"),
+                }
+            }
+            _ => panic!("Evidence (index 6) should be an array type"),
+        }
+    }
+
+    #[test]
+    fn test_marker_struct_has_three_i32_fields() {
+        // Marker struct: { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+        let builtins = GcTypeRegistry::builtin_types();
+        let marker_def = &builtins[MARKER_IDX as usize];
+
+        match marker_def {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(fields.len(), 3, "Marker should have 3 fields");
+                for (i, field) in fields.iter().enumerate() {
+                    assert!(
+                        matches!(field.element_type, StorageType::Val(ValType::I32)),
+                        "Marker field {} should be i32",
+                        i
+                    );
+                }
+            }
+            _ => panic!("Marker (index 5) should be a struct type"),
+        }
     }
 }

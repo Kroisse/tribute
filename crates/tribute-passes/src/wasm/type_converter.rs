@@ -77,12 +77,10 @@ pub fn marker_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 /// Get the canonical Evidence ADT type (array of Marker).
 ///
 /// Evidence is a sorted array of Marker structs for O(log n) ability lookup.
-/// For simplicity in the initial implementation, we use wasm.anyref as the
-/// evidence type since arrays are represented as anyref in the current backend.
+/// This matches evidence_ref_type() in evidence_to_wasm.rs for type consistency.
 pub fn evidence_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    // Evidence is represented as wasm.anyref at the WASM level
-    // (an array ref that can hold Marker structs)
-    wasm::Anyref::new(db).as_type()
+    // Evidence is represented as wasm.arrayref at the WASM level
+    wasm::Arrayref::new(db).as_type()
 }
 
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
@@ -601,5 +599,42 @@ mod tests {
             is_noop,
             "tribute_rt.Int → core.I32 should be NoOp (same representation)"
         );
+    }
+
+    #[salsa_test]
+    fn test_evidence_adt_type_is_arrayref(db: &salsa::DatabaseImpl) {
+        // evidence_adt_type should return wasm.arrayref for consistency
+        // with evidence_ref_type in evidence_to_wasm.rs
+        let evidence_ty = evidence_adt_type(db);
+        let expected = wasm::Arrayref::new(db).as_type();
+        assert_eq!(
+            evidence_ty, expected,
+            "evidence_adt_type should return wasm.arrayref"
+        );
+    }
+
+    #[salsa_test]
+    fn test_marker_adt_type_structure(db: &salsa::DatabaseImpl) {
+        // marker_adt_type should have 3 i32 fields
+        let marker_ty = marker_adt_type(db);
+
+        // Verify it's an adt.struct
+        assert_eq!(marker_ty.dialect(db), adt::DIALECT_NAME());
+        assert_eq!(marker_ty.name(db), Symbol::new("struct"));
+
+        // Verify it has 3 fields
+        let fields = adt::get_struct_fields(db, marker_ty).expect("should have fields");
+        assert_eq!(fields.len(), 3, "Marker should have 3 fields");
+
+        // All fields should be i32
+        let i32_ty = core::I32::new(db).as_type();
+        for (name, ty) in &fields {
+            assert_eq!(
+                *ty,
+                i32_ty,
+                "field '{}' should be i32",
+                name.with_str(|s| s.to_string())
+            );
+        }
     }
 }
