@@ -81,7 +81,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         "type_identifier" => {
             let name = ctx.node_symbol(&node);
             let ctor_id = ctx.fresh_id_with_span(&node);
-            let ctor = UnresolvedName::new(name, ctor_id);
+            let ctor = UnresolvedName::simple(name, ctor_id);
             PatternKind::Variant {
                 ctor,
                 fields: Vec::new(),
@@ -115,7 +115,7 @@ fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKin
 
     let name = ctx.node_symbol(&name_node);
     let ctor_id = ctx.fresh_id_with_span(&name_node);
-    let ctor = UnresolvedName::new(name, ctor_id);
+    let ctor = UnresolvedName::simple(name, ctor_id);
 
     // Handle tuple-style args: Some(x), Pair(a, b)
     if let Some(args) = args_node {
@@ -180,7 +180,7 @@ fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unr
     let type_name = if let Some(n) = type_node {
         let name = ctx.node_symbol(&n);
         let id = ctx.fresh_id_with_span(&n);
-        Some(UnresolvedName::new(name, id))
+        Some(UnresolvedName::simple(name, id))
     } else {
         None
     };

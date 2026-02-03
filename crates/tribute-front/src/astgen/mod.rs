@@ -1152,7 +1152,11 @@ mod tests {
         let ExprKind::Var(name) = value.kind.as_ref() else {
             panic!("Expected var for path, got {:?}", value.kind);
         };
-        assert!(name.name.to_string().contains("::"));
+        // Qualified identifier should have module_path = ["std", "io"] and name = "println"
+        assert_eq!(name.module_path.len(), 2, "Expected 2 path segments");
+        assert_eq!(name.module_path[0].to_string(), "std");
+        assert_eq!(name.module_path[1].to_string(), "io");
+        assert_eq!(name.name.to_string(), "println");
     }
 
     // =============================================================================

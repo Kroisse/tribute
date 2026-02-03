@@ -50,18 +50,54 @@ impl Display for QualifiedName<'_> {
 ///
 /// At this stage, we don't know whether `foo` refers to a local variable,
 /// a function, a constructor, or something else.
+///
+/// # Examples
+///
+/// - `foo` → `{ module_path: [], name: "foo" }`
+/// - `State::get` → `{ module_path: ["State"], name: "get" }`
+/// - `a::b::c` → `{ module_path: ["a", "b"], name: "c" }`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct UnresolvedName {
-    /// The name as written in source.
+    /// The module path prefix (empty for simple names).
+    pub module_path: SymbolVec,
+    /// The final name segment.
     pub name: Symbol,
     /// Node ID for looking up the span in SpanMap.
     pub id: NodeId,
 }
 
 impl UnresolvedName {
-    /// Create a new unresolved name reference.
-    pub fn new(name: Symbol, id: NodeId) -> Self {
-        Self { name, id }
+    /// Create a new simple (unqualified) name reference.
+    pub fn simple(name: Symbol, id: NodeId) -> Self {
+        Self {
+            module_path: SymbolVec::new(),
+            name,
+            id,
+        }
+    }
+
+    /// Create a new qualified name reference.
+    pub fn qualified(module_path: SymbolVec, name: Symbol, id: NodeId) -> Self {
+        Self {
+            module_path,
+            name,
+            id,
+        }
+    }
+
+    /// Returns true if this is a simple (unqualified) name.
+    pub fn is_simple(&self) -> bool {
+        self.module_path.is_empty()
+    }
+}
+
+impl Display for UnresolvedName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        QualifiedName {
+            module_path: &self.module_path,
+            name: self.name,
+        }
+        .fmt(f)
     }
 }
 

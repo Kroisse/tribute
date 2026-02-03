@@ -75,19 +75,33 @@ impl<'db> Resolver<'db> {
     fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
         let sym = name.name;
 
-        // First check local variables
-        if let Some(local_id) = self.lookup_local(sym) {
-            return ResolvedRef::local(local_id, sym);
-        }
+        // For simple names: check locals, builtins, then module environment
+        if name.is_simple() {
+            // First check local variables
+            if let Some(local_id) = self.lookup_local(sym) {
+                return ResolvedRef::local(local_id, sym);
+            }
 
-        // Check for builtin operators
-        if let Some(builtin) = self.resolve_builtin(sym) {
-            return ResolvedRef::builtin(builtin);
-        }
+            // Check for builtin operators
+            if let Some(builtin) = self.resolve_builtin(sym) {
+                return ResolvedRef::builtin(builtin);
+            }
 
-        // Check module environment
-        if let Some(binding) = self.env.lookup(sym) {
-            return self.binding_to_ref(binding, sym);
+            // Check module environment (unqualified lookup)
+            if let Some(binding) = self.env.lookup(sym) {
+                return self.binding_to_ref(binding, sym);
+            }
+        } else {
+            // Qualified path: e.g., State::get, Option::Some
+            // For single-segment module path (e.g., ["State"], "get"),
+            // use lookup_qualified(namespace, name)
+            if name.module_path.len() == 1 {
+                let namespace = name.module_path[0];
+                if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
+                    return self.binding_to_ref(binding, sym);
+                }
+            }
+            // TODO: Support multi-level paths (e.g., std::io::Reader)
         }
 
         // Not found - emit diagnostic and return unresolved sentinel
@@ -100,7 +114,7 @@ impl<'db> Resolver<'db> {
         let span = self.span_map.get_or_default(name.id);
 
         Diagnostic {
-            message: format!("unresolved name `{}`", name.name),
+            message: format!("unresolved name `{}`", name),
             span,
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::NameResolution,
@@ -581,10 +595,7 @@ mod tests {
         resolver.bind_local(param_name);
 
         // Create unresolved reference to the parameter
-        let body_var = UnresolvedName {
-            name: param_name,
-            id: NodeId::from_raw(2),
-        };
+        let body_var = UnresolvedName::simple(param_name, NodeId::from_raw(2));
 
         // Resolve the variable reference
         let resolved = resolver.resolve_name(&body_var);
@@ -604,10 +615,7 @@ mod tests {
         let resolver = Resolver::new(db, env, SpanMap::default());
 
         // Create unresolved reference to print
-        let unresolved = UnresolvedName {
-            name: Symbol::new("print"),
-            id: NodeId::from_raw(1),
-        };
+        let unresolved = UnresolvedName::simple(Symbol::new("print"), NodeId::from_raw(1));
 
         // Resolve the builtin
         let resolved = resolver.resolve_name(&unresolved);
@@ -630,10 +638,7 @@ mod tests {
         resolver.bind_local(name);
 
         // Create unresolved reference
-        let unresolved = UnresolvedName {
-            name,
-            id: NodeId::from_raw(1),
-        };
+        let unresolved = UnresolvedName::simple(name, NodeId::from_raw(1));
 
         // Resolve - should get local, not builtin
         let resolved = resolver.resolve_name(&unresolved);
@@ -663,10 +668,7 @@ mod tests {
         resolver.pop_scope();
 
         // After popping inner scope, x should still be visible
-        let x_ref = UnresolvedName {
-            name: x,
-            id: NodeId::from_raw(1),
-        };
+        let x_ref = UnresolvedName::simple(x, NodeId::from_raw(1));
         let resolved = resolver.resolve_name(&x_ref);
 
         match resolved {
@@ -697,14 +699,8 @@ mod tests {
         let y_id = resolver.bind_local(y);
 
         // Both x and y should be visible from inner scope
-        let x_ref = UnresolvedName {
-            name: x,
-            id: NodeId::from_raw(1),
-        };
-        let y_ref = UnresolvedName {
-            name: y,
-            id: NodeId::from_raw(2),
-        };
+        let x_ref = UnresolvedName::simple(x, NodeId::from_raw(1));
+        let y_ref = UnresolvedName::simple(y, NodeId::from_raw(2));
 
         let resolved_x = resolver.resolve_name(&x_ref);
         let resolved_y = resolver.resolve_name(&y_ref);
