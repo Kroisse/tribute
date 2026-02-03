@@ -12,7 +12,9 @@
 //! Index 2: BytesStruct - struct { data: ref BytesArray, offset: i32, len: i32 }
 //! Index 3: Step - struct { tag: i32, value: anyref, prompt: i32, op_idx: i32 } (trampoline)
 //! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
-//! Index 5+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 } (evidence)
+//! Index 6: Evidence - array (ref Marker) (evidence array)
+//! Index 7+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
 //! ## Usage
@@ -53,8 +55,18 @@ pub const STEP_IDX: u32 = 3;
 /// All closures share this uniform representation: (table_idx: i32, env: anyref).
 pub const CLOSURE_STRUCT_IDX: u32 = 4;
 
+/// Type index for Marker (struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 }).
+/// This is always index 5 in the GC type section.
+/// Used for evidence-based handler dispatch in the ability system.
+pub const MARKER_IDX: u32 = 5;
+
+/// Type index for Evidence (array (ref Marker)).
+/// This is always index 6 in the GC type section.
+/// Evidence is a sorted array of markers for ability handler lookup.
+pub const EVIDENCE_IDX: u32 = 6;
+
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 5;
+pub const FIRST_USER_TYPE_IDX: u32 = 7;
 
 /// Check if a type is a closure struct (adt.struct with name "_closure").
 /// Closure structs contain (funcref, anyref) and are used for call_indirect.
@@ -137,9 +149,11 @@ impl<'db> GcTypeRegistry<'db> {
         }
     }
 
-    /// Returns the builtin type definitions (BoxedF64, BytesArray, BytesStruct, Step, ClosureStruct).
+    /// Returns the builtin type definitions.
     ///
     /// These must be prepended to the user-defined types when emitting.
+    /// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), Step(3), ClosureStruct(4),
+    ///          Marker(5), Evidence(6)
     pub fn builtin_types() -> Vec<GcTypeDef> {
         vec![
             // Index 0: BoxedF64 - struct { value: f64 }
@@ -207,6 +221,36 @@ impl<'db> GcTypeRegistry<'db> {
                     mutable: false,
                 },
             ]),
+            // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+            // Used for evidence-based handler dispatch in the ability system.
+            // ability_id: hash of the ability type for lookup
+            // prompt_tag: prompt tag for cont.shift (determines which handler to invoke)
+            // op_table_index: index into operation table (for multi-op abilities)
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+            ]),
+            // Index 6: Evidence - array (ref null Marker)
+            // Sorted array of markers for O(log n) ability lookup.
+            // Each handler installation adds a marker to the evidence.
+            // Elements must be nullable to allow array.new_default initialization.
+            GcTypeDef::Array(FieldType {
+                element_type: StorageType::Val(ValType::Ref(RefType {
+                    nullable: true,
+                    heap_type: HeapType::Concrete(MARKER_IDX),
+                })),
+                mutable: true,
+            }),
         ]
     }
 
@@ -777,7 +821,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = GcTypeRegistry::builtin_types();
-        assert_eq!(builtins.len(), 5);
+        assert_eq!(builtins.len(), 7);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -789,6 +833,10 @@ mod tests {
         assert!(matches!(&builtins[3], GcTypeDef::Struct(fields) if fields.len() == 4));
         // ClosureStruct
         assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 2));
+        // Marker (3 fields: ability_id, prompt_tag, op_table_index)
+        assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 3));
+        // Evidence (array of Marker refs)
+        assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
     }
 
     #[test]
@@ -868,7 +916,7 @@ mod tests {
         registry.register_type(i32_ty, def);
 
         let all = registry.all_types();
-        assert_eq!(all.len(), 6); // 5 builtins + 1 user type
+        assert_eq!(all.len(), 8); // 7 builtins + 1 user type
     }
 
     #[test]
@@ -1099,5 +1147,53 @@ mod tests {
 
         // Step is a builtin, so get_step_type_idx always returns Some(STEP_IDX)
         assert_eq!(get_step_type_idx(&db, &registry), Some(STEP_IDX));
+    }
+
+    #[test]
+    fn test_evidence_array_element_is_nullable() {
+        // Evidence array elements must be nullable to allow array.new_default initialization
+        let builtins = GcTypeRegistry::builtin_types();
+        let evidence_def = &builtins[EVIDENCE_IDX as usize];
+
+        match evidence_def {
+            GcTypeDef::Array(field_type) => {
+                match field_type.element_type {
+                    StorageType::Val(ValType::Ref(ref_type)) => {
+                        assert!(
+                            ref_type.nullable,
+                            "Evidence array elements must be nullable for array.new_default"
+                        );
+                        // Also verify it references MARKER_IDX
+                        assert!(
+                            matches!(ref_type.heap_type, HeapType::Concrete(MARKER_IDX)),
+                            "Evidence array should contain Marker references"
+                        );
+                    }
+                    _ => panic!("Evidence array element should be a reference type"),
+                }
+            }
+            _ => panic!("Evidence (index 6) should be an array type"),
+        }
+    }
+
+    #[test]
+    fn test_marker_struct_has_three_i32_fields() {
+        // Marker struct: { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+        let builtins = GcTypeRegistry::builtin_types();
+        let marker_def = &builtins[MARKER_IDX as usize];
+
+        match marker_def {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(fields.len(), 3, "Marker should have 3 fields");
+                for (i, field) in fields.iter().enumerate() {
+                    assert!(
+                        matches!(field.element_type, StorageType::Val(ValType::I32)),
+                        "Marker field {} should be i32",
+                        i
+                    );
+                }
+            }
+            _ => panic!("Marker (index 5) should be a struct type"),
+        }
     }
 }

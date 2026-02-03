@@ -1140,11 +1140,15 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
 
         let location = op.location(db);
 
-        // Compute op_idx from ability_ref and op_name
+        // Use op_offset from the shift operation if available (set by resolve_evidence)
+        // Otherwise fall back to hash-based op_idx for backwards compatibility
         let ability_name =
             core::AbilityRefType::from_type(db, ability_ref_type).and_then(|ar| ar.name(db));
         let op_name = Some(op_name_sym);
-        let op_idx = compute_op_idx(ability_name, op_name);
+        let op_idx = match shift_op.op_offset(db) {
+            Some(offset) => offset,
+            None => compute_op_idx(ability_name, op_name),
+        };
 
         // Look up shift point analysis - fail fast if missing
         let shift_point_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
@@ -2486,6 +2490,13 @@ struct SuspendArm<'db> {
 }
 
 /// Collect suspend arms from handler blocks with their expected op_idx.
+///
+/// For table-based dispatch, the op_idx is simply the block index (0-based,
+/// relative to suspend blocks). This matches the op_offset assigned by
+/// resolve_evidence.
+///
+/// For backwards compatibility with hash-based dispatch, if no blocks have
+/// op_offset metadata, we fall back to computing op_idx from ability_ref and op_name.
 fn collect_suspend_arms<'db>(
     db: &'db dyn salsa::Database,
     blocks: &IdVec<Block<'db>>,
@@ -2493,7 +2504,7 @@ fn collect_suspend_arms<'db>(
     let mut arms = Vec::new();
 
     // Skip block 0 (done case), process blocks 1+ (suspend cases)
-    for block in blocks.iter().skip(1) {
+    for (idx, block) in blocks.iter().skip(1).enumerate() {
         // Extract ability_ref and op_name from marker block arg
         let block_args = block.args(db);
         if let Some(marker_arg) = block_args.first() {
@@ -2513,7 +2524,19 @@ fn collect_suspend_arms<'db>(
                 }
             });
 
-            let expected_op_idx = compute_op_idx(ability_ref, op_name);
+            // For table-based dispatch, use the block index as op_idx.
+            // This corresponds to the op_offset assigned by resolve_evidence.
+            let expected_op_idx = if ability_ref.is_some() || op_name.is_some() {
+                // Use block index when we have metadata
+                idx as u32
+            } else {
+                // Missing metadata indicates malformed IR - all suspend blocks should
+                // have ability_ref/op_name from resolve_evidence pass.
+                tracing::warn!(
+                    "suspend block missing ability_ref/op_name metadata, using hash fallback"
+                );
+                compute_op_idx(ability_ref, op_name)
+            };
             arms.push(SuspendArm {
                 expected_op_idx,
                 block: *block,
@@ -3346,6 +3369,15 @@ fn get_region_result_value<'db>(
     last_op.results(db).first().map(|_| last_op.result(db, 0))
 }
 
+/// Compute operation index using hash-based dispatch.
+///
+/// **Deprecated**: This function is kept for backwards compatibility.
+/// New code should use table-based dispatch with `op_offset` from the
+/// `OpTableRegistry` in `resolve_evidence.rs`.
+///
+/// The hash-based approach computes a stable hash from ability name and
+/// operation name, but requires runtime comparison against expected values.
+/// Table-based dispatch uses direct indexing for O(1) lookup.
 fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -3801,5 +3833,162 @@ mod tests {
             name_mod1, name_mod2,
             "Different module_names should produce different names"
         );
+    }
+
+    // ========================================================================
+    // Test: Table-based dispatch (collect_suspend_arms)
+    // ========================================================================
+
+    /// Helper tracked function to test table-based indexing.
+    #[salsa::tracked]
+    fn run_collect_suspend_arms_table_based_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create done block (block 0)
+        let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+
+        // Create suspend blocks with ability_ref and op_name attributes
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+
+        let marker_arg_get = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("get")),
+            );
+            BlockArg::new(db, i32_ty, attrs)
+        };
+
+        let marker_arg_set = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("set")),
+            );
+            BlockArg::new(db, i32_ty, attrs)
+        };
+
+        let marker_arg_modify = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("modify")),
+            );
+            BlockArg::new(db, i32_ty, attrs)
+        };
+
+        // Create suspend blocks
+        let suspend_block_get = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::from(vec![marker_arg_get]),
+            IdVec::new(),
+        );
+        let suspend_block_set = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::from(vec![marker_arg_set]),
+            IdVec::new(),
+        );
+        let suspend_block_modify = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::from(vec![marker_arg_modify]),
+            IdVec::new(),
+        );
+
+        // Collect blocks: done + 3 suspend blocks
+        let blocks = IdVec::from(vec![
+            done_block,
+            suspend_block_get,
+            suspend_block_set,
+            suspend_block_modify,
+        ]);
+
+        // Collect suspend arms
+        let arms = collect_suspend_arms(db, &blocks);
+
+        // Should have 3 arms (skip done block)
+        if arms.len() != 3 {
+            return Err(format!("Expected 3 suspend arms, got {}", arms.len()));
+        }
+
+        // With table-based dispatch, expected_op_idx should be 0, 1, 2 (block indices)
+        if arms[0].expected_op_idx != 0 {
+            return Err(format!(
+                "First arm should have op_idx 0, got {}",
+                arms[0].expected_op_idx
+            ));
+        }
+        if arms[1].expected_op_idx != 1 {
+            return Err(format!(
+                "Second arm should have op_idx 1, got {}",
+                arms[1].expected_op_idx
+            ));
+        }
+        if arms[2].expected_op_idx != 2 {
+            return Err(format!(
+                "Third arm should have op_idx 2, got {}",
+                arms[2].expected_op_idx
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Test that collect_suspend_arms assigns sequential indices (table-based dispatch).
+    #[salsa_test]
+    fn test_collect_suspend_arms_table_based_indexing(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_collect_suspend_arms_table_based_test(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    /// Helper tracked function to test done-only case.
+    #[salsa::tracked]
+    fn run_collect_suspend_arms_done_only_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+
+        // Create only done block (block 0)
+        let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+
+        let blocks = IdVec::from(vec![done_block]);
+
+        // Collect suspend arms
+        let arms = collect_suspend_arms(db, &blocks);
+
+        // Should have no arms (only done block)
+        if !arms.is_empty() {
+            return Err(format!(
+                "Expected no suspend arms when only done block exists, got {}",
+                arms.len()
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Test that collect_suspend_arms handles empty blocks correctly.
+    #[salsa_test]
+    fn test_collect_suspend_arms_done_only(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_collect_suspend_arms_done_only_test(db) {
+            panic!("{}", msg);
+        }
     }
 }

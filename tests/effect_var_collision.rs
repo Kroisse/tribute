@@ -37,7 +37,7 @@ fn source_from_str(path: &str, text: &str) -> SourceCst {
 /// 2. A lambda `fn(x: Int) { x + 1 }` inside that function should be pure
 /// 3. The lambda's effect variable should NOT be the same as the function's effect variable
 #[salsa_test]
-#[ignore = "ability system not yet fully implemented (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_lambda_effect_var_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -51,7 +51,7 @@ fn effectful_with_lambda() ->{State(Int)} Int {
     f(n)
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
     let source = source_from_str("effect_collision.trb", code);
@@ -70,7 +70,7 @@ fn main() -> Int { 0 }
 
 /// Test that multiple lambdas in the same function get independent effect variables.
 #[salsa_test]
-#[ignore = "ability system not yet fully implemented (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_lambdas_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -85,7 +85,7 @@ fn effectful_with_multiple_lambdas() ->{State(Int)} Int {
     f2(f1(n))
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
     let source = source_from_str("multiple_lambdas.trb", code);
@@ -114,7 +114,6 @@ fn main() -> Int { 0 }
 /// - If EffectVar { id: 0 } collision occurs, the lambda might get typed as effectful
 /// - This would cause a type error when passing to `apply_pure`
 #[salsa_test]
-#[ignore = "ability system not yet fully implemented (#283)"]
 fn test_pure_lambda_in_effectful_context(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -136,7 +135,7 @@ fn effectful_using_pure(init: Int) ->{State(Int)} Int {
     apply_pure(pure_fn, init)
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
     let source = source_from_str("pure_in_effectful.trb", code);
@@ -163,7 +162,7 @@ fn main() -> Int { 0 }
 /// If this test passes but `test_pure_lambda_in_effectful_context` fails,
 /// it strongly suggests an EffectVar collision bug.
 #[salsa_test]
-#[ignore = "ability system not yet fully implemented (#283)"]
+#[ignore = "Regression in #317: ability operations cause ICE in evidence pass (#319)"]
 fn test_effectful_lambda_rejected_for_pure(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -186,7 +185,7 @@ fn should_fail() ->{State(Int)} Int {
     apply_pure(effectful_fn, 0)
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
     let source = source_from_str("effectful_rejected.trb", code);
@@ -203,7 +202,7 @@ fn main() -> Int { 0 }
 
 /// Test nested lambdas - each should have independent effect variables.
 #[salsa_test]
-#[ignore = "ability system not yet fully implemented (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_nested_lambda_effects(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -220,7 +219,7 @@ fn nested_lambdas() ->{State(Int)} Int {
     outer(n)
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
     let source = source_from_str("nested_lambdas.trb", code);

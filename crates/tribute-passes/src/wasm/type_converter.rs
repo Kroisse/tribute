@@ -55,6 +55,34 @@ pub fn closure_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     )
 }
 
+/// Get the canonical Marker ADT type for evidence-based dispatch.
+///
+/// Layout: (ability_id: i32, prompt_tag: i32, op_table_index: i32)
+///
+/// This type is used in the evidence array for dynamic handler lookup.
+pub fn marker_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+    let i32_ty = core::I32::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_Marker",
+        vec![
+            (Symbol::new("ability_id"), i32_ty),
+            (Symbol::new("prompt_tag"), i32_ty),
+            (Symbol::new("op_table_index"), i32_ty),
+        ],
+    )
+}
+
+/// Get the canonical Evidence ADT type (array of Marker).
+///
+/// Evidence is a sorted array of Marker structs for O(log n) ability lookup.
+/// This matches evidence_ref_type() in evidence_to_wasm.rs for type consistency.
+pub fn evidence_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+    // Evidence is represented as wasm.arrayref at the WASM level
+    wasm::Arrayref::new(db).as_type()
+}
+
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
 ///
 /// This is used when converting anyref-typed values back to i32, such as
@@ -150,10 +178,18 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
-        // Convert ability.evidence_ptr → wasm.anyref (evidence is a runtime handle)
+        // Convert ability.evidence_ptr → wasm.arrayref (evidence is array ref)
         .add_conversion(|db, ty| {
             if ability::EvidencePtr::from_type(db, ty).is_some() {
-                Some(wasm::Anyref::new(db).as_type())
+                Some(evidence_adt_type(db))
+            } else {
+                None
+            }
+        })
+        // Convert ability.marker → adt.struct (Marker struct)
+        .add_conversion(|db, ty| {
+            if ability::Marker::from_type(db, ty).is_some() {
+                Some(marker_adt_type(db))
             } else {
                 None
             }
@@ -358,6 +394,16 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
+            // ability.marker → _Marker ADT (same representation)
+            if ability::Marker::from_type(db, from_ty).is_some() && to_ty == marker_adt_type(db) {
+                return MaterializeResult::NoOp;
+            }
+            // ability.marker → wasm.structref (marker is a struct)
+            if ability::Marker::from_type(db, from_ty).is_some()
+                && wasm::Structref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
             MaterializeResult::Skip
         })
 }
@@ -553,5 +599,42 @@ mod tests {
             is_noop,
             "tribute_rt.Int → core.I32 should be NoOp (same representation)"
         );
+    }
+
+    #[salsa_test]
+    fn test_evidence_adt_type_is_arrayref(db: &salsa::DatabaseImpl) {
+        // evidence_adt_type should return wasm.arrayref for consistency
+        // with evidence_ref_type in evidence_to_wasm.rs
+        let evidence_ty = evidence_adt_type(db);
+        let expected = wasm::Arrayref::new(db).as_type();
+        assert_eq!(
+            evidence_ty, expected,
+            "evidence_adt_type should return wasm.arrayref"
+        );
+    }
+
+    #[salsa_test]
+    fn test_marker_adt_type_structure(db: &salsa::DatabaseImpl) {
+        // marker_adt_type should have 3 i32 fields
+        let marker_ty = marker_adt_type(db);
+
+        // Verify it's an adt.struct
+        assert_eq!(marker_ty.dialect(db), adt::DIALECT_NAME());
+        assert_eq!(marker_ty.name(db), Symbol::new("struct"));
+
+        // Verify it has 3 fields
+        let fields = adt::get_struct_fields(db, marker_ty).expect("should have fields");
+        assert_eq!(fields.len(), 3, "Marker should have 3 fields");
+
+        // All fields should be i32
+        let i32_ty = core::I32::new(db).as_type();
+        for (name, ty) in &fields {
+            assert_eq!(
+                *ty,
+                i32_ty,
+                "field '{}' should be i32",
+                name.with_str(|s| s.to_string())
+            );
+        }
     }
 }

@@ -1734,7 +1734,7 @@ fn bind_pattern_fields<'db>(
 /// ```text
 /// // TODO: Evidence-based dispatch (currently uses placeholder tag)
 /// // %marker = func.call @__tribute_evidence_lookup(%ev, ability_id)
-/// // %tag = func.call @__tribute_marker_prompt(%marker)
+/// // %tag = adt.struct_get(%marker, 1)  // field 1 = prompt_tag
 /// %result = cont.shift(tag, args...) { ability_ref, op_name }
 /// ```
 fn lower_ability_op_call<'db>(
@@ -1793,6 +1793,7 @@ fn lower_ability_op_call<'db>(
     let tag_value = tag_const.result(db);
 
     // Generate cont.shift with dynamic tag operand
+    // op_table_index and op_offset are set by resolve_evidence pass
     let shift_op = builder.block.op(cont::shift(
         db,
         location,
@@ -1801,6 +1802,8 @@ fn lower_ability_op_call<'db>(
         result_ty,
         ability_ref,
         op,
+        None, // op_table_index (set by resolve_evidence)
+        None, // op_offset (set by resolve_evidence)
         handler_region,
     ));
 

@@ -892,11 +892,8 @@ fn check_for_lowered_closure_ops(
 // Closure Execution Tests (verifies function table based closure implementation)
 // ============================================================================
 
-/// Test simple lambda (no capture) compiles and executes correctly.
-/// Currently ignored: lambda codegen has unresolved type inference issues
-/// (return type stays as tribute.type_var, effect handling code inserted incorrectly)
+/// Test simple lambda (no capture) compiles correctly.
 #[test]
-#[ignore]
 fn test_closure_execution_simple() {
     use tribute::database::parse_with_thread_local;
 
@@ -924,13 +921,7 @@ fn main() ->{} Int {
         let wasm_binary = compile_to_wasm_binary(db, source_file)
             .expect("WASM compilation failed (returned None)");
 
-        // Write wasm to file for inspection
-        let wasm_bytes = wasm_binary.bytes(db);
-        std::fs::write("/tmp/claude/closure_test.wasm", wasm_bytes).expect("Failed to write wasm");
-        eprintln!(
-            "Wrote {} bytes to /tmp/claude/closure_test.wasm",
-            wasm_bytes.len()
-        );
+        let _wasm_bytes = wasm_binary.bytes(db);
 
         // TODO: Re-enable once print_line is fixed for wasmtime output
         // let result = run_wasm::<i32>(wasm_bytes);

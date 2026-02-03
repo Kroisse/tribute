@@ -37,17 +37,19 @@ dialect! {
         ///
         /// - `ability_ref`: ability reference type (semantic information)
         /// - `op_name`: operation name symbol (semantic information)
+        /// - `op_table_index`: index into the operation table for this handler (optional)
+        /// - `op_offset`: offset within the handler's operation list (optional)
         ///
-        /// Note: Operation index (op_idx) is computed deterministically from op_name
-        /// during WASM lowering and is not stored in the IR.
+        /// The op_table_index and op_offset are used for table-based dispatch.
+        /// When not specified, hash-based dispatch is used as a fallback.
         ///
         /// Used for evidence-based dispatch:
         /// ```text
         /// %marker = call @__tribute_evidence_lookup(%ev, ability_id)
-        /// %tag = call @__tribute_marker_prompt(%marker)
-        /// %result = cont.shift(%tag, %args...) { ability_ref, op_name }
+        /// %tag = adt.struct_get(%marker, 1)  // field 1 = prompt_tag
+        /// %result = cont.shift(%tag, %args...) { ability_ref, op_name, op_table_index?, op_offset? }
         /// ```
-        #[attr(ability_ref: Type, op_name: Symbol)]
+        #[attr(ability_ref: Type, op_name: Symbol, op_table_index?: u32, op_offset?: u32)]
         fn shift(tag, #[rest] value) -> result {
             #[region(handler)] {}
         };
