@@ -892,11 +892,8 @@ fn check_for_lowered_closure_ops(
 // Closure Execution Tests (verifies function table based closure implementation)
 // ============================================================================
 
-/// Test simple lambda (no capture) compiles and executes correctly.
-/// Currently ignored: lambda codegen has unresolved type inference issues
-/// (return type stays as tribute.type_var, effect handling code inserted incorrectly)
+/// Test simple lambda (no capture) compiles correctly.
 #[test]
-#[ignore]
 fn test_closure_execution_simple() {
     use tribute::database::parse_with_thread_local;
 
