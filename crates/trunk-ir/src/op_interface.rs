@@ -162,7 +162,7 @@ macro_rules! register_pure_op {
 ///
 /// Examples of non-isolated operations (can capture outer values):
 /// - `scf.if`, `scf.for` - control flow
-/// - `tribute.case`, `tribute.lambda` - closures and pattern matching
+/// - `closure.new` - closure creation
 pub trait IsolatedFromAbove {}
 
 /// Registration entry for isolated operations.

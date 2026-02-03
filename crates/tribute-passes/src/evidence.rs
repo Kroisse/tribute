@@ -236,7 +236,7 @@ fn transform_calls_in_block<'db>(
         // We don't handle them here because closure types have already been lowered
         // to adt.struct by the time this pass runs.
 
-        // Recursively transform nested regions (e.g., in scf.if, tribute.case)
+        // Recursively transform nested regions (e.g., in scf.if)
         let regions = op.regions(db);
         if !regions.is_empty() {
             let mut region_changed = false;

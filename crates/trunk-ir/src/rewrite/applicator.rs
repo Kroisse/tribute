@@ -195,9 +195,9 @@ impl<'db> PatternApplicator<'db> {
     /// ```ignore
     /// let target = ConversionTarget::new()
     ///     .legal_dialect("func")
-    ///     .illegal_dialect("tribute");
+    ///     .illegal_dialect("ability");
     ///
-    /// // Only convert some tribute.* ops, others handled by later passes
+    /// // Only convert some ability.* ops, others handled by later passes
     /// let result = applicator.apply_partial(db, module, target);
     /// ```
     pub fn apply_partial(
