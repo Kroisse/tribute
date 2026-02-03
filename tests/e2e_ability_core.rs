@@ -26,14 +26,25 @@ use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_to_wasm_binary, compile_with_diagnostics};
+use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
 
-/// Helper to parse source code
-fn parse_source(db: &dyn salsa::Database, name: &str, code: &str) -> SourceCst {
+/// Helper to compile code and collect diagnostics using CLI pipeline.
+fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::Diagnostic> {
+    use tribute_passes::diagnostic::Diagnostic;
+
     let source_code = Rope::from_str(code);
-    let tree = parse_with_thread_local(&source_code, None);
-    SourceCst::from_path(db, name, source_code, tree)
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
+
+        let _result = compile_to_wasm_binary(db, source_file);
+        compile_to_wasm_binary::accumulated::<Diagnostic>(db, source_file)
+            .into_iter()
+            .cloned()
+            .collect()
+    })
 }
 
 /// Helper to compile code (execution disabled until print_line is fixed).
@@ -60,35 +71,31 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
 
 /// Test that ability definitions parse and typecheck.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
 fn test_ability_definition() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "ability_def.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "ability_def.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Expected no errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test ability operations with effect annotations.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_ability_operation_with_effect() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -101,23 +108,20 @@ fn counter() ->{State(Int)} Int {
     n
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "ability_effect.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "ability_effect.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Expected no errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -126,7 +130,7 @@ fn main() -> Int { 0 }
 
 /// Test basic handle expression parsing and typechecking.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_handle_expression() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -148,20 +152,17 @@ fn run() -> Int {
 fn main() -> Int { run() }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "handle_expr.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "handle_expr.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Expected no errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -178,7 +179,7 @@ fn main() -> Int { run() }
 ///
 /// Note: Full execution requires backend support (issues #112-#114).
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_milestone_target_code() {
     // This is the target code from issue #100
     let code = r#"ability State(s) {
@@ -209,20 +210,17 @@ fn main() -> Int {
 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "milestone_100.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "milestone_100.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Milestone target code should compile without errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Milestone target code should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -232,7 +230,7 @@ fn main() -> Int {
 /// Test that effect row polymorphism works correctly.
 /// The function `run_state` should handle `State(s)` and propagate remaining effects `e`.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_effect_row_polymorphism() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -250,28 +248,25 @@ fn stateful_print() ->{State(Int), Console} Int {
     n
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "effect_row.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "effect_row.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Expected no errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that multiple abilities can be combined in effect rows.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_abilities() {
     let code = r#"ability Reader(r) {
     fn ask() -> r
@@ -286,23 +281,20 @@ fn copy() ->{Reader(Int), Writer(Int)} Nil {
     Writer::tell(x)
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "multiple_abilities.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "multiple_abilities.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Expected no errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Expected no errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -314,7 +306,7 @@ fn main() -> Int { 0 }
 /// When a let binding initializes from an effectful expression,
 /// the effect must propagate to the enclosing function.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_let_binding_effect_propagation() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -327,28 +319,25 @@ fn read_state() ->{State(Int)} Int {
     x
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "let_effect_propagation.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "let_effect_propagation.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Effect should propagate through let binding, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Effect should propagate through let binding, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that multiple let bindings accumulate effects correctly.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_let_bindings_accumulate_effects() {
     let code = r#"ability Reader(r) {
     fn ask() -> r
@@ -365,28 +354,25 @@ fn copy_value() ->{Reader(Int), Writer(Int)} Nil {
     Nil
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "multiple_let_effects.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "multiple_let_effects.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Multiple effects should accumulate from let bindings, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Multiple effects should accumulate from let bindings, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that sequential let bindings with effects work correctly (Phase 1-2 compatible).
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_sequential_let_bindings_with_effects() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -400,23 +386,20 @@ fn sequential_state() ->{State(Int)} Int {
     c + 1
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "sequential_let_effects.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "sequential_let_effects.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Sequential let bindings should propagate effects, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Sequential let bindings should propagate effects, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that nested block let bindings with effects work correctly.
@@ -439,28 +422,24 @@ fn nested_state() ->{State(Int)} Int {
     a + b
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "nested_let_effects.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "nested_let_effects.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Nested let bindings should propagate effects, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Nested let bindings should propagate effects, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that let binding with pure expression doesn't introduce spurious effects.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
 fn test_pure_let_binding_no_spurious_effects() {
     // This function has no effect annotation and uses only pure let bindings
     let code = r#"fn pure_computation() -> Int {
@@ -472,20 +451,17 @@ fn test_pure_let_binding_no_spurious_effects() {
 fn main() -> Int { pure_computation() }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "pure_let_binding.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "pure_let_binding.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Pure let bindings should not introduce effects, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Pure let bindings should not introduce effects, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -509,19 +485,16 @@ fn bad_counter() -> Int {
     n
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "unhandled_effect.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "unhandled_effect.trb");
 
-        // Should have an error about unhandled effect
-        assert!(
-            !result.diagnostics.is_empty(),
-            "Expected error for unhandled effect"
-        );
-    });
+    // Should have an error about unhandled effect
+    assert!(
+        !diagnostics.is_empty(),
+        "Expected error for unhandled effect"
+    );
 }
 
 // =============================================================================
@@ -674,7 +647,7 @@ fn main() -> Int {
 /// and State::set both from State), the handled_abilities list may contain
 /// duplicates. The deduplication fix ensures constraint generation doesn't fail.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_duplicate_ability_handlers_compile() {
     // This code has two handlers for the same ability (State)
     // Previously, this could cause constraint issues due to duplicate entries
@@ -698,20 +671,17 @@ fn main() -> Int {
 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "duplicate_handlers.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "duplicate_handlers.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Duplicate ability handlers should compile without errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Duplicate ability handlers should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 // =============================================================================
@@ -721,7 +691,7 @@ fn main() -> Int {
 /// Test that State(Int) and State(Bool) are treated as distinct abilities.
 /// A function with State(Int) effect cannot be called where State(Bool) is expected.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_parameterized_ability_distinct_types() {
     // This should produce a type error: State(Int) is not State(Bool)
     let code = r#"ability State(s) {
@@ -738,35 +708,32 @@ fn wrapper() ->{State(Bool)} Int {
     use_int_state()
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "param_ability_distinct.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "param_ability_distinct.trb");
 
-        // Should have a type error due to State(Int) != State(Bool)
-        assert!(
-            !result.diagnostics.is_empty(),
-            "Expected type error for State(Int) vs State(Bool) mismatch"
-        );
+    // Should have a type error due to State(Int) != State(Bool)
+    assert!(
+        !diagnostics.is_empty(),
+        "Expected type error for State(Int) vs State(Bool) mismatch"
+    );
 
-        // Verify it's a row mismatch or type mismatch error
-        let has_type_error = result.diagnostics.iter().any(|d| {
-            let msg = format!("{:?}", d);
-            msg.contains("Mismatch") || msg.contains("mismatch")
-        });
-        assert!(
-            has_type_error,
-            "Expected row/type mismatch error, got: {:?}",
-            result.diagnostics
-        );
+    // Verify it's a row mismatch or type mismatch error
+    let has_type_error = diagnostics.iter().any(|d| {
+        let msg = format!("{:?}", d);
+        msg.contains("Mismatch") || msg.contains("mismatch")
     });
+    assert!(
+        has_type_error,
+        "Expected row/type mismatch error, got: {:?}",
+        diagnostics
+    );
 }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -790,25 +757,22 @@ fn main() -> Int {
 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "param_ability_same.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "param_ability_same.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Same parameterized abilities should unify without errors, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Same parameterized abilities should unify without errors, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
@@ -833,25 +797,22 @@ fn main() -> Int {
 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "param_ability_typevar.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "param_ability_typevar.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Type variable in ability arg should unify, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Type variable in ability arg should unify, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test arity mismatch: State(Int) vs State() should be an error.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_parameterized_ability_arity_mismatch() {
     // This is invalid: ability State(s) requires one type argument
     let code = r#"ability State(s) {
@@ -863,19 +824,16 @@ fn bad_func() ->{State()} Int {
     State::get()
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "param_ability_arity.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "param_ability_arity.trb");
 
-        // Should have an arity mismatch error
-        assert!(
-            !result.diagnostics.is_empty(),
-            "Expected arity mismatch error for State() vs State(s)"
-        );
-    });
+    // Should have an arity mismatch error
+    assert!(
+        !diagnostics.is_empty(),
+        "Expected arity mismatch error for State() vs State(s)"
+    );
 }
 
 // =============================================================================
@@ -887,7 +845,7 @@ fn main() -> Int { 0 }
 /// When handling State(Int), the type argument Int should be preserved in the
 /// effect row constraint, not lost by creating Effect entries with empty args.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -895,7 +853,7 @@ fn test_handle_preserves_parameterized_ability_type_args() {
 }
 
 fn use_state() ->{State(Int)} Int {
-    State::set(10);
+    State::set(10)
     State::get()
 }
 
@@ -908,20 +866,17 @@ fn main() -> Int {
 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "handle_param_ability.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "handle_param_ability.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Handle should preserve parameterized ability type args, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Handle should preserve parameterized ability type args, got {} diagnostics",
+        diagnostics.len()
+    );
 }
 
 /// Test that ability operations substitute type parameters into their signature.
@@ -929,7 +884,7 @@ fn main() -> Int {
 /// When calling State::get() with State(Int), the return type should be Int,
 /// not the unsubstituted type parameter `s`.
 #[test]
-#[ignore = "prelude uses case+tuple patterns not yet supported by tirgen (#283)"]
+#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_ability_op_substitutes_type_params() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -937,25 +892,22 @@ fn test_ability_op_substitutes_type_params() {
 }
 
 fn use_state() ->{State(Int)} Int {
-    let x: Int = State::get();
+    let x = State::get()
     x + 1
 }
 
-fn main() -> Int { 0 }
+fn main() -> Nat { 0 }
 "#;
 
-    TributeDatabaseImpl::default().attach(|db| {
-        let source = parse_source(db, "ability_op_subst.trb", code);
-        let result = compile_with_diagnostics(db, source);
+    let diagnostics = compile_and_check(code, "ability_op_subst.trb");
 
-        for diag in &result.diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
+    for diag in &diagnostics {
+        eprintln!("Diagnostic: {:?}", diag);
+    }
 
-        assert!(
-            result.diagnostics.is_empty(),
-            "Ability op should substitute type params into signature, got {} diagnostics",
-            result.diagnostics.len()
-        );
-    });
+    assert!(
+        diagnostics.is_empty(),
+        "Ability op should substitute type params into signature, got {} diagnostics",
+        diagnostics.len()
+    );
 }
