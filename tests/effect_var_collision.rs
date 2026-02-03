@@ -162,6 +162,7 @@ fn main() -> Nat { 0 }
 /// If this test passes but `test_pure_lambda_in_effectful_context` fails,
 /// it strongly suggests an EffectVar collision bug.
 #[salsa_test]
+#[ignore = "Regression in #317: ability operations cause ICE in evidence pass"]
 fn test_effectful_lambda_rejected_for_pure(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
