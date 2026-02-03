@@ -28,8 +28,8 @@
 //!         None
 //!     });
 //!
-//! let applicator = PatternApplicator::new(converter.clone())
-//!     .add_pattern(FuncSignatureConversionPattern::new(converter));
+//! let applicator = PatternApplicator::new(converter)
+//!     .add_pattern(FuncSignatureConversionPattern);
 //! ```
 
 use crate::dialect::{core, func, wasm};

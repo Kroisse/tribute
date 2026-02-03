@@ -55,31 +55,15 @@ pub fn closure_adt_type(db: &dyn salsa::Database) -> Type<'_> {
     )
 }
 
-/// Get the canonical Marker ADT type for evidence-based dispatch.
-///
-/// Layout: (ability_id: i32, prompt_tag: i32, op_table_index: i32)
-///
-/// This type is used in the evidence array for dynamic handler lookup.
-pub fn marker_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    let i32_ty = core::I32::new(db).as_type();
+// Re-export marker_adt_type from ability module for backward compatibility
+pub use ability::marker_adt_type;
 
-    adt::struct_type(
-        db,
-        "_Marker",
-        vec![
-            (Symbol::new("ability_id"), i32_ty),
-            (Symbol::new("prompt_tag"), i32_ty),
-            (Symbol::new("op_table_index"), i32_ty),
-        ],
-    )
-}
-
-/// Get the canonical Evidence ADT type (array of Marker).
+/// Get the canonical Evidence ADT type for WASM representation.
 ///
-/// Evidence is a sorted array of Marker structs for O(log n) ability lookup.
-/// This matches evidence_ref_type() in evidence_to_wasm.rs for type consistency.
-pub fn evidence_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    // Evidence is represented as wasm.arrayref at the WASM level
+/// At the WASM level, evidence is represented as `wasm.arrayref`.
+/// This is distinct from `ability::evidence_adt_type()` which returns
+/// `core.array(Marker)` for high-level IR representation.
+pub fn evidence_wasm_type(db: &dyn salsa::Database) -> Type<'_> {
     wasm::Arrayref::new(db).as_type()
 }
 
@@ -121,7 +105,7 @@ fn unbox_via_i31<'db>(
 /// # use tribute_ir::dialect::tribute_rt;
 /// # use trunk_ir::dialect::core;
 /// # use trunk_ir::DialectType;
-/// use tribute_passes::wasm_type_converter::wasm_type_converter;
+/// use tribute_passes::wasm::type_converter::wasm_type_converter;
 ///
 /// # let db = salsa::DatabaseImpl::default();
 /// let converter = wasm_type_converter();
@@ -178,17 +162,18 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
-        // Convert ability.evidence_ptr → wasm.arrayref (evidence is array ref)
+        // Convert evidence ADT type (core.array(Marker)) → wasm.arrayref
         .add_conversion(|db, ty| {
-            if ability::EvidencePtr::from_type(db, ty).is_some() {
-                Some(evidence_adt_type(db))
+            if ability::is_evidence_type(db, ty) {
+                Some(evidence_wasm_type(db))
             } else {
                 None
             }
         })
-        // Convert ability.marker → adt.struct (Marker struct)
+        // Convert marker ADT type → pass through (already standard ADT struct)
+        // This conversion is a no-op since marker_adt_type() returns a standard adt.struct
         .add_conversion(|db, ty| {
-            if ability::Marker::from_type(db, ty).is_some() {
+            if ability::is_marker_type(db, ty) {
                 Some(marker_adt_type(db))
             } else {
                 None
@@ -387,19 +372,15 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
-            // ability.evidence_ptr → wasm.anyref (same representation)
-            // Evidence pointers are runtime handles stored as anyref
-            if ability::EvidencePtr::from_type(db, from_ty).is_some()
+            // evidence (core.array(Marker)) → wasm.anyref (same representation)
+            // Evidence arrays are stored as arrayref, which is a subtype of anyref
+            if ability::is_evidence_type(db, from_ty)
                 && wasm::Anyref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
             }
-            // ability.marker → _Marker ADT (same representation)
-            if ability::Marker::from_type(db, from_ty).is_some() && to_ty == marker_adt_type(db) {
-                return MaterializeResult::NoOp;
-            }
-            // ability.marker → wasm.structref (marker is a struct)
-            if ability::Marker::from_type(db, from_ty).is_some()
+            // marker (adt.struct) → wasm.structref (marker is a struct)
+            if ability::is_marker_type(db, from_ty)
                 && wasm::Structref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
@@ -602,14 +583,14 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_evidence_adt_type_is_arrayref(db: &salsa::DatabaseImpl) {
-        // evidence_adt_type should return wasm.arrayref for consistency
+    fn test_evidence_wasm_type_is_arrayref(db: &salsa::DatabaseImpl) {
+        // evidence_wasm_type should return wasm.arrayref for consistency
         // with evidence_ref_type in evidence_to_wasm.rs
-        let evidence_ty = evidence_adt_type(db);
+        let evidence_ty = evidence_wasm_type(db);
         let expected = wasm::Arrayref::new(db).as_type();
         assert_eq!(
             evidence_ty, expected,
-            "evidence_adt_type should return wasm.arrayref"
+            "evidence_wasm_type should return wasm.arrayref"
         );
     }
 

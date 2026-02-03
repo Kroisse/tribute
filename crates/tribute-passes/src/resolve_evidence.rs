@@ -231,9 +231,9 @@ fn ensure_runtime_functions<'db>(
     let mut new_ops: Vec<Operation<'db>> = entry_block.operations(db).iter().copied().collect();
 
     if !has_evidence_lookup {
-        let evidence_ty = ability::EvidencePtr::new(db).as_type();
+        let evidence_ty = ability::evidence_adt_type(db);
         let i32_ty = core::I32::new(db).as_type();
-        let marker_ty = ability::Marker::new(db).as_type();
+        let marker_ty = ability::marker_adt_type(db);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
         let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_ty);
@@ -263,8 +263,8 @@ fn ensure_runtime_functions<'db>(
     }
 
     if !has_evidence_extend {
-        let evidence_ty = ability::EvidencePtr::new(db).as_type();
-        let marker_ty = ability::Marker::new(db).as_type();
+        let evidence_ty = ability::evidence_adt_type(db);
+        let marker_ty = ability::marker_adt_type(db);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
         let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, marker_ty]), evidence_ty);
@@ -320,9 +320,7 @@ fn collect_functions_with_evidence<'db>(
                 let func_ty = func_op.r#type(db);
                 if let Some(core_func) = core::Func::from_type(db, func_ty) {
                     let params = core_func.params(db);
-                    if !params.is_empty()
-                        && ability::EvidencePtr::from_type(db, params[0]).is_some()
-                    {
+                    if !params.is_empty() && ability::is_evidence_type(db, params[0]) {
                         fns_with_evidence.insert(func_op.sym_name(db));
                     }
                 }
@@ -542,8 +540,8 @@ fn transform_shifts_in_block_with_remap<'db>(
             // Generate evidence_extend calls for each ability
             let i32_ty = core::I32::new(db).as_type();
             let prompt_tag_ty = ability::PromptTag::new(db).as_type();
-            let evidence_ty = ability::EvidencePtr::new(db).as_type();
-            let marker_ty = ability::Marker::new(db).as_type();
+            let evidence_ty = ability::evidence_adt_type(db);
+            let marker_ty = ability::marker_adt_type(db);
 
             // Collect operations from the handler_dispatch for this tag
             let operations = collect_operations_for_tag(db, block, tag);
@@ -666,7 +664,7 @@ fn transform_shifts_in_block_with_remap<'db>(
             let ability_id = compute_ability_id(db, ability_ref);
 
             // Create evidence lookup call
-            let marker_ty = ability::Marker::new(db).as_type();
+            let marker_ty = ability::marker_adt_type(db);
             let i32_ty = core::I32::new(db).as_type();
 
             // %ability_id_const = arith.const ability_id
@@ -1264,7 +1262,7 @@ mod tests {
     fn run_evidence_remap_test(db: &dyn salsa::Database) -> Result<(), String> {
         let location = test_location(db);
         let i64_ty = core::I64::new(db).as_type();
-        let evidence_ty = ability::EvidencePtr::new(db).as_type();
+        let evidence_ty = ability::evidence_adt_type(db);
 
         // Entry block with evidence parameter
         let entry_block_id = BlockId::fresh();

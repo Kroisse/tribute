@@ -11,25 +11,24 @@
 //!
 //! Handler lowering converts ability operations to `cont.push_prompt` + runtime calls.
 //!
-//! ## Future Direction
+//! ## Types
 //!
-//! The current `evidence_ptr` and `marker` opaque types are planned to be replaced
-//! with standard ADT types (struct/array) to simplify the type system:
+//! Evidence and Marker are represented using standard ADT types:
 //!
 //! ```text
-//! type Evidence = Array(Marker)
+//! type Evidence = core.array(Marker)  // Array of markers for O(log n) lookup
 //!
-//! struct Marker {
-//!     ability_id: i32,
-//!     prompt_tag: i32,
-//!     op_table_index: i32,
+//! struct _Marker {                    // adt.struct type
+//!     ability_id: i32,                // Hash of ability name
+//!     prompt_tag: i32,                // For cont.shift
+//!     op_table_index: i32,            // Handler dispatch table index
 //! }
 //! ```
 //!
-//! The `marker_prompt` operation has been replaced by `adt.struct_get(marker, 1)` (field index 1).
+//! Use `evidence_adt_type()` and `marker_adt_type()` to create these types.
+//! Use `is_evidence_type()` and `is_marker_type()` to check type compatibility.
+//!
 //! See `new-plans/implementation.md` for details.
-
-use std::fmt::Write;
 
 use trunk_ir::dialect;
 
@@ -54,15 +53,6 @@ dialect! {
         /// `prompt_tag` is the fresh prompt tag for the new handler.
         #[attr(ability_ref: Type, prompt_tag: any)]
         fn evidence_extend(evidence) -> result;
-
-        /// `ability.marker_prompt` operation: extracts the prompt tag from a marker.
-        ///
-        /// Returns the prompt tag associated with the marker, which is used
-        /// for `cont.shift` to capture the correct continuation.
-        ///
-        /// **Deprecated**: This operation will be replaced by `adt.struct_get(marker, 1)`
-        /// (field index 1 = prompt_tag) once Evidence/Marker types are migrated to standard ADT types.
-        fn marker_prompt(marker) -> result;
 
         // === Handler Table Operations ===
 
@@ -115,43 +105,83 @@ dialect! {
         fn handler_entry() {
             #[region(funcs)] {}
         };
-
-        // === Types ===
-
-        /// `ability.evidence_ptr` type: pointer to evidence struct.
-        ///
-        /// Evidence is a runtime structure containing ability markers for
-        /// dynamic handler dispatch. Passed as first argument to effectful functions.
-        ///
-        /// **Deprecated**: Will be replaced by `Array(Marker)` - a sorted array of
-        /// marker structs. See `new-plans/implementation.md` for the new design.
-        type evidence_ptr;
-
-        /// `ability.marker` type: marker within evidence.
-        ///
-        /// Contains the prompt tag and handler information for a specific ability.
-        /// Used for evidence-based handler dispatch.
-        ///
-        /// **Deprecated**: Will be replaced by a standard struct type:
-        /// ```text
-        /// struct Marker { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
-        /// ```
-        type marker;
     }
 }
 
 // Re-export cont::PromptTag for backward compatibility
 pub use trunk_ir::dialect::cont::PromptTag;
 
-// === Printable interface registrations ===
+// === ADT Type Functions ===
+//
+// These functions provide the canonical ADT representations for evidence-based
+// handler dispatch. They are used by various passes to ensure consistent type
+// identity across the compilation pipeline.
 
-use trunk_ir::type_interface::{PrintContext, Printable};
+use trunk_ir::dialect::{adt, core};
+use trunk_ir::{DialectType, Symbol, Type};
 
-// evidence_ptr -> "Evidence"
-inventory::submit! { Printable::implement("ability", "evidence_ptr", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("Evidence")) }
+/// Get the canonical Marker ADT type for evidence-based dispatch.
+///
+/// Layout:
+/// ```text
+/// struct _Marker {
+///     ability_id: i32,      // Hash of ability name for fast lookup
+///     prompt_tag: i32,      // Prompt tag for cont.shift
+///     op_table_index: i32,  // Index into handler dispatch table
+/// }
+/// ```
+///
+/// This type is used in the evidence array for dynamic handler lookup.
+pub fn marker_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+    let i32_ty = core::I32::new(db).as_type();
 
-// marker -> "Marker"
-inventory::submit! { Printable::implement("ability", "marker", |_, _, f: &mut PrintContext<'_, '_>| f.write_str("Marker")) }
+    adt::struct_type(
+        db,
+        "_Marker",
+        vec![
+            (Symbol::new("ability_id"), i32_ty),
+            (Symbol::new("prompt_tag"), i32_ty),
+            (Symbol::new("op_table_index"), i32_ty),
+        ],
+    )
+}
+
+/// Get the canonical Evidence ADT type (array of Marker).
+///
+/// Evidence is a sorted array of Marker structs for O(log n) ability lookup.
+/// At the WASM level, this is represented as `wasm.arrayref`.
+///
+/// ```text
+/// type Evidence = Array(Marker)
+/// ```
+pub fn evidence_adt_type(db: &dyn salsa::Database) -> Type<'_> {
+    let marker_ty = marker_adt_type(db);
+    core::Array::new(db, marker_ty).as_type()
+}
+
+/// Check if a type is the evidence ADT type (`core.array(Marker)`).
+pub fn is_evidence_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    // Evidence is core.array(Marker)
+    if let Some(array_ty) = core::Array::from_type(db, ty) {
+        is_marker_type(db, array_ty.element(db))
+    } else {
+        false
+    }
+}
+
+/// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
+pub fn is_marker_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    // Check if it's an adt.struct with name "_Marker"
+    if !adt::is_struct_type(db, ty) {
+        return false;
+    }
+
+    if let Some(name) = adt::get_type_name(db, ty) {
+        name == Symbol::new("_Marker")
+    } else {
+        false
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -166,30 +196,75 @@ mod tests {
         Location::new(path, Span::new(0, 0))
     }
 
-    #[salsa_test]
-    fn test_evidence_ptr_type(db: &salsa::DatabaseImpl) {
-        let evidence_ty = EvidencePtr::new(db);
+    // === ADT Type Function Tests ===
 
-        assert_eq!(evidence_ty.as_type().dialect(db), DIALECT_NAME());
-        assert_eq!(evidence_ty.as_type().name(db), EVIDENCE_PTR());
+    #[salsa_test]
+    fn test_marker_adt_type(db: &salsa::DatabaseImpl) {
+        let marker_ty = marker_adt_type(db);
+
+        // Should be an adt.struct
+        assert!(adt::is_struct_type(db, marker_ty));
+
+        // Should have name "_Marker"
+        let name = adt::get_type_name(db, marker_ty);
+        assert_eq!(name, Some(Symbol::new("_Marker")));
+
+        // Should have 3 i32 fields
+        let fields = adt::get_struct_fields(db, marker_ty).expect("should have fields");
+        assert_eq!(fields.len(), 3);
+
+        let i32_ty = core::I32::new(db).as_type();
+        assert_eq!(fields[0], (Symbol::new("ability_id"), i32_ty));
+        assert_eq!(fields[1], (Symbol::new("prompt_tag"), i32_ty));
+        assert_eq!(fields[2], (Symbol::new("op_table_index"), i32_ty));
     }
 
     #[salsa_test]
-    fn test_evidence_ptr_printable(db: &salsa::DatabaseImpl) {
-        let evidence_ty = EvidencePtr::new(db);
+    fn test_evidence_adt_type(db: &salsa::DatabaseImpl) {
+        let evidence_ty = evidence_adt_type(db);
 
-        let printed = print_type(db, evidence_ty.as_type());
-        assert_eq!(printed, "Evidence");
+        // Should be a core.array type
+        let array = core::Array::from_type(db, evidence_ty);
+        assert!(array.is_some());
+
+        // Element type should be the Marker ADT
+        let element_ty = array.unwrap().element(db);
+        assert!(is_marker_type(db, element_ty));
     }
 
     #[salsa_test]
-    fn test_marker_type(db: &salsa::DatabaseImpl) {
-        let marker_ty = Marker::new(db);
+    fn test_is_marker_type(db: &salsa::DatabaseImpl) {
+        let marker_ty = marker_adt_type(db);
+        assert!(is_marker_type(db, marker_ty));
 
-        assert_eq!(marker_ty.as_type().dialect(db), DIALECT_NAME());
-        assert_eq!(marker_ty.as_type().name(db), MARKER());
-        assert_eq!(print_type(db, marker_ty.as_type()), "Marker");
+        // Non-marker struct should return false
+        let other_struct = adt::struct_type(
+            db,
+            "OtherStruct",
+            vec![(Symbol::new("field"), core::I32::new(db).as_type())],
+        );
+        assert!(!is_marker_type(db, other_struct));
+
+        // Non-struct type should return false
+        let i32_ty = core::I32::new(db).as_type();
+        assert!(!is_marker_type(db, i32_ty));
     }
+
+    #[salsa_test]
+    fn test_is_evidence_type(db: &salsa::DatabaseImpl) {
+        let evidence_ty = evidence_adt_type(db);
+        assert!(is_evidence_type(db, evidence_ty));
+
+        // Array of non-marker should return false
+        let other_array = core::Array::new(db, core::I32::new(db).as_type()).as_type();
+        assert!(!is_evidence_type(db, other_array));
+
+        // Non-array type should return false
+        let i32_ty = core::I32::new(db).as_type();
+        assert!(!is_evidence_type(db, i32_ty));
+    }
+
+    // === PromptTag Re-export Test ===
 
     #[salsa_test]
     fn test_prompt_tag_type(db: &salsa::DatabaseImpl) {
@@ -201,11 +276,13 @@ mod tests {
         assert_eq!(print_type(db, prompt_tag_ty.as_type()), "PromptTag");
     }
 
+    // === Operation Tests ===
+
     #[salsa::tracked]
     fn evidence_lookup_test(db: &dyn salsa::Database) -> (Symbol, Symbol) {
         let location = test_location(db);
-        let evidence_ty = EvidencePtr::new(db).as_type();
-        let marker_ty = Marker::new(db).as_type();
+        let evidence_ty = evidence_adt_type(db);
+        let marker_ty = marker_adt_type(db);
         let ability_ref = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
 
         let evidence_val =
@@ -229,7 +306,7 @@ mod tests {
     #[salsa::tracked]
     fn evidence_extend_test(db: &dyn salsa::Database) -> Symbol {
         let location = test_location(db);
-        let evidence_ty = EvidencePtr::new(db).as_type();
+        let evidence_ty = evidence_adt_type(db);
         let ability_ref = core::AbilityRefType::simple(db, Symbol::new("Console")).as_type();
 
         let evidence_val =
@@ -251,27 +328,6 @@ mod tests {
     fn test_evidence_extend_operation(db: &salsa::DatabaseImpl) {
         let name = evidence_extend_test(db);
         assert_eq!(name, EVIDENCE_EXTEND());
-    }
-
-    #[salsa::tracked]
-    fn marker_prompt_test(db: &dyn salsa::Database) -> Symbol {
-        let location = test_location(db);
-        let marker_ty = Marker::new(db).as_type();
-        let prompt_tag_ty = PromptTag::new(db).as_type();
-
-        let marker_val = arith::r#const(db, location, marker_ty, Attribute::IntBits(0)).result(db);
-        let op = marker_prompt(db, location, marker_val, prompt_tag_ty);
-
-        MarkerPrompt::from_operation(db, op.as_operation())
-            .unwrap()
-            .as_operation()
-            .name(db)
-    }
-
-    #[salsa_test]
-    fn test_marker_prompt_operation(db: &salsa::DatabaseImpl) {
-        let name = marker_prompt_test(db);
-        assert_eq!(name, MARKER_PROMPT());
     }
 
     #[salsa::tracked]
