@@ -306,7 +306,7 @@ fn ensure_runtime_functions<'db>(
     core::Module::create(db, module.location(db), module.name(db), new_body)
 }
 
-/// Collect all function names that have `ability.evidence_ptr` as their first parameter.
+/// Collect all function names that have evidence (`core.array(Marker)`) as their first parameter.
 fn collect_functions_with_evidence<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,

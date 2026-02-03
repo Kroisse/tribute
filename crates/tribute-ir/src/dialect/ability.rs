@@ -170,17 +170,10 @@ pub fn is_evidence_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 }
 
 /// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
+///
+/// Uses interned type equality for O(1) comparison.
 pub fn is_marker_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    // Check if it's an adt.struct with name "_Marker"
-    if !adt::is_struct_type(db, ty) {
-        return false;
-    }
-
-    if let Some(name) = adt::get_type_name(db, ty) {
-        name == Symbol::new("_Marker")
-    } else {
-        false
-    }
+    ty == marker_adt_type(db)
 }
 
 #[cfg(test)]
