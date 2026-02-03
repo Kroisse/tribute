@@ -4,7 +4,7 @@
 //! during pattern application, delegating to `RewriteContext` internally.
 //!
 //! When a `TypeConverter` is configured on `PatternApplicator`, `operand_type()`
-//! returns already-converted types (e.g., `tribute.int` → `core.i32`).
+//! returns already-converted types (e.g., `adt.struct` → `wasm.struct`).
 
 use crate::{IdVec, Operation, Type, Value};
 

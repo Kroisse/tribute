@@ -243,7 +243,7 @@ struct FunctionEmitContext<'db> {
     /// Effective types for values (after unification).
     effective_types: HashMap<Value<'db>, Type<'db>>,
     /// The function's expected return type (from function signature).
-    /// Used to determine block types when IR type is type_var.
+    /// Used to determine block types for polymorphic operations.
     func_return_type: Option<Type<'db>>,
 }
 
@@ -775,7 +775,7 @@ fn emit_function<'db>(
         ));
     }
 
-    // Get the function's expected return type for use when IR type is type_var
+    // Get the function's expected return type for polymorphic block type inference
     let func_return_type = Some(func_def.ty.result(db));
     let mut ctx = FunctionEmitContext {
         value_locals: HashMap::new(),

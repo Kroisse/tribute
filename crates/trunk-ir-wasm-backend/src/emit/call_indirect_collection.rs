@@ -167,7 +167,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         None => continue, // Skip if no result
                     };
 
-                    // If result type is anyref/type_var but enclosing function returns funcref,
+                    // If result type is anyref but enclosing function returns funcref,
                     // use funcref as the result type. This is needed because WebAssembly GC has
                     // separate type hierarchies for anyref and funcref - you can't cast between them.
                     let funcref_ty = wasm::Funcref::new(db).as_type();
@@ -211,7 +211,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         }
                     }
 
-                    // Normalize result type: primitive types and type_var should become anyref
+                    // Normalize result type: anyref stays as anyref for polymorphic dispatch
                     // This must match the normalization done in call_handlers for emit
                     if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
                         debug!(

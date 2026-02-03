@@ -155,7 +155,7 @@ fn types_equivalent_for_gc<'db>(
         return true;
     }
     // Compare canonical names for user-defined types
-    // (e.g., tribute.type(name=Expr) vs adt.enum$Num with base_enum Expr)
+    // (e.g., adt.struct with name=Foo vs adt.enum with base_enum Foo)
     if let (Some(name1), Some(name2)) = (
         get_canonical_type_name(db, ty1),
         get_canonical_type_name(db, ty2),
@@ -648,7 +648,7 @@ pub(crate) fn collect_gc_types<'db>(
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
                 // Record field type from result type
-                // Note: tribute.type_var should be resolved to concrete types before emit
+                // Note: type variables should be resolved to concrete types before emit
                 if let Some(result_ty) = op.results(db).first().copied() {
                     debug!(
                         "GC: struct_get type_idx={} recording field {} with result_ty {}.{}",
@@ -756,7 +756,7 @@ pub(crate) fn collect_gc_types<'db>(
                     register_type(&mut type_idx_by_type, type_idx, ty);
                 }
                 // Record element type from result type
-                // Note: tribute.type_var should be resolved to concrete types before emit
+                // Note: type variables should be resolved to concrete types before emit
                 if let Some(result_ty) = op.results(db).first().copied() {
                     record_array_elem(type_idx, builder, result_ty)?;
                 }

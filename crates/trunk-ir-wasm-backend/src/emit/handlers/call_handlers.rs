@@ -171,7 +171,7 @@ pub(crate) fn handle_call_indirect<'db>(
         }
     }
 
-    // Normalize result type: primitive types and type_var should become anyref
+    // Normalize result type: anyref stays as anyref for polymorphic dispatch
     // This must match the normalization done in collect_call_indirect_types
     if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
         debug!(
@@ -269,13 +269,6 @@ pub(crate) fn handle_call_indirect<'db>(
 
         // Emit call_ref with the function type index
         function.instruction(&Instruction::CallRef(type_idx));
-
-        // The call_ref returns the declared result type of the called function.
-        // But the local where we store the result may have a different (concrete) type.
-        // We need to cast the result to match the local's type.
-        //
-        // Note: This is a workaround for unresolved type variables (tribute.type_var)
-        // in the IR. The proper fix would be to resolve types earlier in the pipeline.
     } else {
         // Traditional call_indirect with i32 table index
         // IR operand order: [table_idx, arg1, arg2, ...]
