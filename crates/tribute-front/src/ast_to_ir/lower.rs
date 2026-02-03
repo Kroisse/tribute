@@ -1734,7 +1734,7 @@ fn bind_pattern_fields<'db>(
 /// ```text
 /// // TODO: Evidence-based dispatch (currently uses placeholder tag)
 /// // %marker = func.call @__tribute_evidence_lookup(%ev, ability_id)
-/// // %tag = func.call @__tribute_marker_prompt(%marker)
+/// // %tag = adt.struct_get(%marker, 1)  // field 1 = prompt_tag
 /// %result = cont.shift(tag, args...) { ability_ref, op_name }
 /// ```
 fn lower_ability_op_call<'db>(

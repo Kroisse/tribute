@@ -46,7 +46,7 @@ dialect! {
         /// Used for evidence-based dispatch:
         /// ```text
         /// %marker = call @__tribute_evidence_lookup(%ev, ability_id)
-        /// %tag = call @__tribute_marker_prompt(%marker)
+        /// %tag = adt.struct_get(%marker, 1)  // field 1 = prompt_tag
         /// %result = cont.shift(%tag, %args...) { ability_ref, op_name, op_table_index?, op_offset? }
         /// ```
         #[attr(ability_ref: Type, op_name: Symbol, op_table_index?: u32, op_offset?: u32)]

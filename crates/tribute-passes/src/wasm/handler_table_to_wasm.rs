@@ -212,7 +212,14 @@ fn build_elem_segment<'db>(
         }
 
         // Add padding (null references) to fill up to max_ops_per_handler
-        let padding_count = max_ops_per_handler as usize - entry.func_refs.len();
+        let func_count = entry.func_refs.len();
+        if func_count > max_ops_per_handler as usize {
+            panic!(
+                "Handler has {} operations, exceeds max_ops_per_handler ({}). Handler tag: {}",
+                func_count, max_ops_per_handler, entry.tag
+            );
+        }
+        let padding_count = max_ops_per_handler as usize - func_count;
         for _ in 0..padding_count {
             let null_op = wasm::ref_null(db, location, funcref_ty, funcref_ty, None);
             func_ops.push(null_op.as_operation());

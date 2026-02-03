@@ -2526,12 +2526,15 @@ fn collect_suspend_arms<'db>(
 
             // For table-based dispatch, use the block index as op_idx.
             // This corresponds to the op_offset assigned by resolve_evidence.
-            // Fall back to hash-based computation for backwards compatibility.
             let expected_op_idx = if ability_ref.is_some() || op_name.is_some() {
-                // Check if we should use table-based indexing (block index) or hash
-                // For now, always use block index when we have metadata
+                // Use block index when we have metadata
                 idx as u32
             } else {
+                // Missing metadata indicates malformed IR - all suspend blocks should
+                // have ability_ref/op_name from resolve_evidence pass.
+                tracing::warn!(
+                    "suspend block missing ability_ref/op_name metadata, using hash fallback"
+                );
                 compute_op_idx(ability_ref, op_name)
             };
             arms.push(SuspendArm {

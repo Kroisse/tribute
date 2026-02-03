@@ -26,7 +26,7 @@
 //! }
 //! ```
 //!
-//! The `marker_prompt` operation will be replaced by `adt.struct_get(marker, 1)` (field index 1).
+//! The `marker_prompt` operation has been replaced by `adt.struct_get(marker, 1)` (field index 1).
 //! See `new-plans/implementation.md` for details.
 
 use std::fmt::Write;
