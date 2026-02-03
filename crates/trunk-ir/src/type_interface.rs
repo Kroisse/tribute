@@ -8,6 +8,7 @@
 //! ```
 //! # use salsa::DatabaseImpl;
 //! # use std::collections::BTreeMap;
+//! # use std::fmt::Write;
 //! # use trunk_ir::{IdVec, Symbol, Type};
 //! # use trunk_ir::type_interface::Printable;
 //! #

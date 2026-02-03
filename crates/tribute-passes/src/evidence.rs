@@ -140,9 +140,7 @@ fn collect_functions_with_evidence_param<'db>(
                 let func_ty = func_op.r#type(db);
                 if let Some(core_func) = core::Func::from_type(db, func_ty) {
                     let params = core_func.params(db);
-                    if !params.is_empty()
-                        && ability::EvidencePtr::from_type(db, params[0]).is_some()
-                    {
+                    if !params.is_empty() && ability::is_evidence_type(db, params[0]) {
                         fns_with_evidence.insert(func_op.sym_name(db));
                     }
                 }
@@ -415,14 +413,14 @@ impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
 
         let params = core_func.params(db);
         if !params.is_empty() {
-            // Check if first param is already evidence_ptr
-            if ability::EvidencePtr::from_type(db, params[0]).is_some() {
+            // Check if first param is already evidence type
+            if ability::is_evidence_type(db, params[0]) {
                 return RewriteResult::Unchanged;
             }
         }
 
         // Create evidence type
-        let ev_ty = *ability::EvidencePtr::new(db);
+        let ev_ty = ability::evidence_adt_type(db);
 
         // Create new function type with evidence as first parameter
         let mut new_params = IdVec::with_capacity(params.len() + 1);
@@ -523,7 +521,7 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
         let first_param_type =
             core::Func::from_type(db, func_ty).and_then(|ft| ft.params(db).first().copied());
         let has_evidence_param =
-            first_param_type.is_some_and(|ty| ability::EvidencePtr::from_type(db, ty).is_some());
+            first_param_type.is_some_and(|ty| ability::is_evidence_type(db, ty));
 
         if !self.effectful_fns.contains(&func_name) && !has_evidence_param {
             return RewriteResult::Unchanged;

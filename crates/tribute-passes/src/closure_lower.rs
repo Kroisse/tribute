@@ -388,8 +388,8 @@ fn transform_closure_calls_in_block_with_null<'db>(
             ev
         } else {
             // Create null evidence
-            // Use anyref directly for wasm compatibility - ability.evidence_ptr
-            // may not be converted properly by the wasm backend
+            // Use anyref directly for wasm compatibility - evidence is represented
+            // as core.array(Marker) which is converted to wasm.arrayref
             let anyref_ty = wasm::Anyref::new(db).as_type();
             let null_ev_op = adt::ref_null(db, func_location, anyref_ty, anyref_ty);
             let ev = null_ev_op.as_operation().result(db, 0);

@@ -1277,7 +1277,7 @@ fn create_resume_function_with_continuation<'db>(
     db: &'db dyn salsa::Database,
     spec: &ResumeFuncSpec<'db>,
 ) -> Operation<'db> {
-    let evidence_ty = tribute_ir::dialect::ability::EvidencePtr::new(db).as_type();
+    let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
     let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
     let step_ty = trampoline::Step::new(db).as_type();
     let anyref_ty = tribute_rt::Any::new(db).as_type();
@@ -1614,7 +1614,7 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         // === 5. Call resume function ===
         // Resume functions take (evidence, wrapper) for calling convention consistency
         // with lifted lambdas. We pass null evidence since we're inside a handler arm.
-        let evidence_ty = tribute_ir::dialect::ability::EvidencePtr::new(db).as_type();
+        let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
         let null_evidence = adt::ref_null(db, location, evidence_ty, anyref_ty);
         ops.push(null_evidence.as_operation());
         let evidence_val = null_evidence.as_operation().result(db, 0);
