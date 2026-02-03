@@ -259,6 +259,8 @@ mod tests {
             i32_ty,
             ability_ref_ty,
             Symbol::new("get"),
+            None, // op_table_index
+            None, // op_offset
             handler_region,
         ));
         let shift_result = shift_op.result(db);
@@ -314,6 +316,8 @@ mod tests {
             i32_ty,
             ability_ref_ty,
             Symbol::new("get"),
+            None, // op_table_index
+            None, // op_offset
             handler_region0,
         ));
         let n = shift0.result(db);
@@ -336,6 +340,8 @@ mod tests {
             nil_ty,
             ability_ref_ty,
             Symbol::new("set"),
+            None, // op_table_index
+            None, // op_offset
             handler_region1,
         ));
 

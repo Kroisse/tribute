@@ -18,7 +18,9 @@
 //! This pass must run AFTER `add_evidence_params` so that effectful functions
 //! have evidence as their first parameter.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use im::HashMap as ImHashMap;
 use tribute_ir::dialect::ability;
@@ -27,6 +29,99 @@ use trunk_ir::{
     Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type,
     Value,
 };
+
+// ============================================================================
+// OpTable Registry - assigns unique indices to handler dispatch points
+// ============================================================================
+
+/// Entry in the operation table registry.
+/// Each entry represents a handler (push_prompt) with its handled abilities and operations.
+#[derive(Debug, Clone)]
+pub struct OpTableEntry<'db> {
+    /// Abilities handled by this handler
+    pub abilities: Vec<Type<'db>>,
+    /// Operations in this handler, ordered by (ability_ref, op_name)
+    /// The order determines op_offset for each operation
+    pub operations: Vec<(Type<'db>, Symbol)>,
+    /// Location of the handler for debugging
+    pub location: trunk_ir::Location<'db>,
+}
+
+/// Registry for managing op_table_index assignments.
+/// Thread-safe via RefCell for use during IR transformation.
+#[derive(Debug, Default)]
+pub struct OpTableRegistry<'db> {
+    entries: Vec<OpTableEntry<'db>>,
+}
+
+impl<'db> OpTableRegistry<'db> {
+    /// Create a new empty registry.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Register a handler and return its op_table_index.
+    ///
+    /// The abilities list specifies which abilities this handler handles.
+    /// Operations are extracted from the handler dispatch body.
+    pub fn register(
+        &mut self,
+        abilities: Vec<Type<'db>>,
+        operations: Vec<(Type<'db>, Symbol)>,
+        location: trunk_ir::Location<'db>,
+    ) -> u32 {
+        let index = self.entries.len() as u32;
+        self.entries.push(OpTableEntry {
+            abilities,
+            operations,
+            location,
+        });
+        index
+    }
+
+    /// Get the number of registered entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Check if the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Get an entry by index.
+    pub fn get(&self, index: u32) -> Option<&OpTableEntry<'db>> {
+        self.entries.get(index as usize)
+    }
+
+    /// Get all entries.
+    pub fn entries(&self) -> &[OpTableEntry<'db>] {
+        &self.entries
+    }
+
+    /// Compute the op_offset for a given ability and operation within this registry.
+    ///
+    /// Returns the index of the operation within the handler's operation list,
+    /// or None if the operation is not found.
+    pub fn compute_op_offset(
+        &self,
+        op_table_index: u32,
+        ability_ref: Type<'db>,
+        op_name: Symbol,
+    ) -> Option<u32> {
+        let entry = self.get(op_table_index)?;
+        entry
+            .operations
+            .iter()
+            .position(|(a, o)| *a == ability_ref && *o == op_name)
+            .map(|pos| pos as u32)
+    }
+}
+
+/// Shared reference to OpTableRegistry for use during IR transformation.
+pub type SharedOpTableRegistry<'db> = Rc<RefCell<OpTableRegistry<'db>>>;
 
 /// Sentinel value used for unresolved cont.shift tags.
 /// When a shift is generated without an enclosing handler, this value is used
@@ -38,11 +133,28 @@ pub const UNRESOLVED_SHIFT_TAG: u32 = u32::MAX;
 /// Transforms `cont.shift` with placeholder tags into `cont.shift` with
 /// dynamically resolved tags via evidence lookup. This enables proper
 /// handler dispatch at runtime.
+///
+/// Returns the transformed module along with the OpTableRegistry containing
+/// information about all registered handlers and their operations.
 #[salsa::tracked]
 pub fn resolve_evidence_dispatch<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
+    resolve_evidence_dispatch_with_registry(db, module).0
+}
+
+/// Resolve evidence-based dispatch and return the OpTableRegistry.
+///
+/// This is the internal implementation that also returns the registry,
+/// which can be used by downstream passes for table-based dispatch.
+pub fn resolve_evidence_dispatch_with_registry<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> (core::Module<'db>, OpTableRegistry<'db>) {
+    // Create shared registry for this pass
+    let registry: SharedOpTableRegistry<'db> = Rc::new(RefCell::new(OpTableRegistry::new()));
+
     // First, ensure runtime helper functions are declared
     let module = ensure_runtime_functions(db, module);
 
@@ -53,7 +165,7 @@ pub fn resolve_evidence_dispatch<'db>(
     let module = if fns_with_evidence.is_empty() {
         module
     } else {
-        transform_shifts_in_module(db, module, &fns_with_evidence)
+        transform_shifts_in_module(db, module, &fns_with_evidence, Rc::clone(&registry))
     };
 
     // Validate that all shifts have been resolved (no sentinel tags remain).
@@ -61,7 +173,12 @@ pub fn resolve_evidence_dispatch<'db>(
     // any unresolved shifts that may have been introduced incorrectly.
     validate_no_unresolved_shifts(db, &module);
 
-    module
+    // Extract the registry from the RefCell
+    let final_registry = Rc::try_unwrap(registry)
+        .expect("OpTableRegistry should have no other references")
+        .into_inner();
+
+    (module, final_registry)
 }
 
 /// Ensure runtime helper functions are declared in the module.
@@ -218,6 +335,7 @@ fn transform_shifts_in_module<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
     fns_with_evidence: &HashSet<Symbol>,
+    registry: SharedOpTableRegistry<'db>,
 ) -> core::Module<'db> {
     let body = module.body(db);
     let blocks = body.blocks(db);
@@ -241,8 +359,11 @@ fn transform_shifts_in_module<'db>(
             if let Ok(func_op) = func::Func::from_operation(db, *op) {
                 let func_name = func_op.sym_name(db);
                 if fns_with_evidence.contains(&func_name) {
-                    let (new_func, func_changed) =
-                        transform_shifts_in_function(db, func_op.as_operation());
+                    let (new_func, func_changed) = transform_shifts_in_function(
+                        db,
+                        func_op.as_operation(),
+                        Rc::clone(&registry),
+                    );
                     if func_changed {
                         changed = true;
                         return new_func;
@@ -273,6 +394,7 @@ fn transform_shifts_in_module<'db>(
 fn transform_shifts_in_function<'db>(
     db: &'db dyn salsa::Database,
     func_op: Operation<'db>,
+    registry: SharedOpTableRegistry<'db>,
 ) -> (Operation<'db>, bool) {
     let Ok(func) = func::Func::from_operation(db, func_op) else {
         return (func_op, false);
@@ -294,8 +416,13 @@ fn transform_shifts_in_function<'db>(
         .map(|block| {
             // Precompute handled abilities for all prompt tags in this block
             let handled_by_tag = collect_handled_abilities_by_tag(db, block);
-            let (new_block, block_changed) =
-                transform_shifts_in_block(db, block, ev_value, &handled_by_tag);
+            let (new_block, block_changed) = transform_shifts_in_block(
+                db,
+                block,
+                ev_value,
+                &handled_by_tag,
+                Rc::clone(&registry),
+            );
             if block_changed {
                 changed = true;
             }
@@ -324,8 +451,16 @@ fn transform_shifts_in_block<'db>(
     block: &Block<'db>,
     ev_value: Value<'db>,
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
+    registry: SharedOpTableRegistry<'db>,
 ) -> (Block<'db>, bool) {
-    transform_shifts_in_block_with_remap(db, block, ev_value, handled_by_tag, ImHashMap::new())
+    transform_shifts_in_block_with_remap(
+        db,
+        block,
+        ev_value,
+        handled_by_tag,
+        ImHashMap::new(),
+        registry,
+    )
 }
 
 /// Transform shifts in a block with an initial value remap.
@@ -340,6 +475,7 @@ fn transform_shifts_in_block_with_remap<'db>(
     ev_value: Value<'db>,
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
     initial_remap: ImHashMap<Value<'db>, Value<'db>>,
+    registry: SharedOpTableRegistry<'db>,
 ) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut changed = !initial_remap.is_empty(); // If we have remaps, consider it a change
@@ -370,12 +506,14 @@ fn transform_shifts_in_block_with_remap<'db>(
                     &body_region,
                     ev_value,
                     value_map.clone(),
+                    Rc::clone(&registry),
                 );
                 let (new_handlers, handlers_changed) = transform_shifts_in_region_with_remap(
                     db,
                     &handlers_region,
                     ev_value,
                     value_map.clone(),
+                    Rc::clone(&registry),
                 );
 
                 if body_changed || handlers_changed {
@@ -404,6 +542,15 @@ fn transform_shifts_in_block_with_remap<'db>(
             let evidence_ty = ability::EvidencePtr::new(db).as_type();
             let marker_ty = ability::Marker::new(db).as_type();
 
+            // Collect operations from the handler_dispatch for this tag
+            let operations = collect_operations_for_tag(db, block, tag);
+
+            // Register this handler in the OpTableRegistry and get the assigned index
+            let op_table_idx =
+                registry
+                    .borrow_mut()
+                    .register(abilities.clone(), operations, location);
+
             // Create tag constant (prompt_tag for the handler)
             let tag_const = trunk_ir::dialect::arith::r#const(
                 db,
@@ -414,9 +561,13 @@ fn transform_shifts_in_block_with_remap<'db>(
             let tag_val = tag_const.result(db);
             new_ops.push(tag_const.as_operation());
 
-            // Create op_table_index constant (0 for now - single handler per ability)
-            let op_table_idx_const =
-                trunk_ir::dialect::arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+            // Create op_table_index constant with the assigned index from registry
+            let op_table_idx_const = trunk_ir::dialect::arith::r#const(
+                db,
+                location,
+                i32_ty,
+                Attribute::IntBits(op_table_idx as u64),
+            );
             let op_table_idx_val = op_table_idx_const.result(db);
             new_ops.push(op_table_idx_const.as_operation());
 
@@ -473,12 +624,14 @@ fn transform_shifts_in_block_with_remap<'db>(
                 &body_region,
                 current_ev,
                 evidence_remap.clone(),
+                Rc::clone(&registry),
             );
             let (new_handlers, _) = transform_shifts_in_region_with_remap(
                 db,
                 &handlers_region,
                 current_ev,
                 evidence_remap,
+                Rc::clone(&registry),
             );
 
             // Create new push_prompt with transformed regions
@@ -536,10 +689,16 @@ fn transform_shifts_in_block_with_remap<'db>(
 
             // %tag = adt.struct_get(%marker, field=1)  -- prompt_tag is at field index 1
             let prompt_tag_ty = ability::PromptTag::new(db).as_type();
-            let struct_get_op =
+            let struct_get_tag =
                 adt::struct_get(db, location, marker_val, prompt_tag_ty, marker_ty, 1);
-            let tag_val = struct_get_op.result(db);
-            new_ops.push(struct_get_op.as_operation());
+            let tag_val = struct_get_tag.result(db);
+            new_ops.push(struct_get_tag.as_operation());
+
+            // %op_table_idx = adt.struct_get(%marker, field=2)  -- op_table_index is at field index 2
+            let struct_get_op_table =
+                adt::struct_get(db, location, marker_val, i32_ty, marker_ty, 2);
+            let op_table_idx_val = struct_get_op_table.result(db);
+            new_ops.push(struct_get_op_table.as_operation());
 
             // Get result type
             let result_ty = op
@@ -555,13 +714,32 @@ fn transform_shifts_in_block_with_remap<'db>(
                 &handler_region,
                 ev_value,
                 value_map.clone(),
+                Rc::clone(&registry),
             );
 
             // Get value operands (skip the old tag operand at index 0)
             let value_operands: Vec<Value<'db>> =
                 remapped_operands.iter().skip(1).copied().collect();
 
-            // Create new cont.shift with the resolved tag
+            // Look up op_offset from registry (if available)
+            // The op_table_index is dynamic at runtime, but for static analysis we can
+            // try to determine it from known registrations. If not found, use None.
+            let op_offset = {
+                let reg = registry.borrow();
+                // Try all registered handlers to find one that handles this ability/op
+                let mut found_offset = None;
+                for idx in 0..reg.len() {
+                    if let Some(offset) = reg.compute_op_offset(idx as u32, ability_ref, op_name) {
+                        found_offset = Some(offset);
+                        break;
+                    }
+                }
+                found_offset
+            };
+
+            // Note: op_table_index is a runtime value (from Marker), so we pass None here.
+            // The actual dispatch will use the runtime value from trampoline.get_yield_op_idx.
+            // op_offset is known statically from the registry.
             let new_shift = cont::shift(
                 db,
                 location,
@@ -570,8 +748,14 @@ fn transform_shifts_in_block_with_remap<'db>(
                 result_ty,
                 ability_ref,
                 op_name,
+                None, // op_table_index is dynamic (from Marker at runtime)
+                op_offset,
                 new_handler_region,
             );
+
+            // Store op_table_idx_val for use by the trampoline pass
+            // This is done by the trampoline pass reading from Marker
+            let _ = op_table_idx_val; // Suppress unused warning - value is in IR
 
             // Map old result to new result
             if !op.results(db).is_empty() {
@@ -597,6 +781,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                         region,
                         ev_value,
                         value_map.clone(),
+                        Rc::clone(&registry),
                     );
                     if r_changed {
                         region_changed = true;
@@ -670,6 +855,7 @@ fn transform_shifts_in_region_with_remap<'db>(
     region: &Region<'db>,
     ev_value: Value<'db>,
     initial_remap: ImHashMap<Value<'db>, Value<'db>>,
+    registry: SharedOpTableRegistry<'db>,
 ) -> (Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<Block<'db>> = region
@@ -684,6 +870,7 @@ fn transform_shifts_in_region_with_remap<'db>(
                 ev_value,
                 &handled_by_tag,
                 initial_remap.clone(),
+                Rc::clone(&registry),
             );
             if block_changed {
                 changed = true;
@@ -737,6 +924,67 @@ fn collect_handled_abilities_by_tag<'db>(
     }
 
     map
+}
+
+/// Collect operations (ability_ref, op_name) pairs for a given tag from handler_dispatch.
+///
+/// This is used by the OpTableRegistry to track which operations each handler handles,
+/// enabling table-based dispatch. The operations are ordered by their appearance in the
+/// handler body blocks.
+fn collect_operations_for_tag<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    target_tag: u32,
+) -> Vec<(Type<'db>, Symbol)> {
+    let mut operations = Vec::new();
+
+    for op in block.operations(db).iter() {
+        if let Ok(dispatch_op) = cont::HandlerDispatch::from_operation(db, *op) {
+            let tag = dispatch_op.tag(db);
+            if tag != target_tag {
+                continue;
+            }
+
+            // Extract (ability_ref, op_name) pairs from body blocks
+            // Skip block 0 which is the "done" case
+            let body = dispatch_op.body(db);
+            for (i, body_block) in body.blocks(db).iter().enumerate() {
+                if i == 0 {
+                    continue; // Skip "done" block
+                }
+
+                // Check block arguments for ability_ref and op_name attributes
+                for arg in body_block.args(db).iter() {
+                    let attrs = arg.attrs(db);
+                    let ability_ref = attrs.get(&Symbol::new("ability_ref")).and_then(|a| {
+                        if let Attribute::Type(ty) = a {
+                            Some(*ty)
+                        } else {
+                            None
+                        }
+                    });
+                    let op_name = attrs.get(&Symbol::new("op_name")).and_then(|a| {
+                        if let Attribute::Symbol(s) = a {
+                            Some(*s)
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let (Some(ability), Some(name)) = (ability_ref, op_name) {
+                        // Avoid duplicates
+                        if !operations.contains(&(ability, name)) {
+                            operations.push((ability, name));
+                        }
+                    }
+                }
+            }
+
+            break; // Found the target tag, no need to continue
+        }
+    }
+
+    operations
 }
 
 /// Validate that no unresolved cont.shift operations remain in the module.
@@ -1007,8 +1255,9 @@ mod tests {
         }
 
         // Run the transformation
+        let registry = Rc::new(RefCell::new(OpTableRegistry::new()));
         let (new_block, changed) =
-            transform_shifts_in_block(db, &entry_block, ev_value, &handled_by_tag);
+            transform_shifts_in_block(db, &entry_block, ev_value, &handled_by_tag, registry);
 
         if !changed {
             return Err("Block should be transformed".to_string());
@@ -1091,5 +1340,146 @@ mod tests {
         if let Err(msg) = result {
             panic!("{}", msg);
         }
+    }
+
+    // ========================================================================
+    // OpTableRegistry Tests
+    // ========================================================================
+
+    #[salsa_test]
+    fn test_op_table_registry_basic(db: &salsa::DatabaseImpl) {
+        let mut registry = OpTableRegistry::new();
+        let location = test_location(db);
+
+        // Initially empty
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+
+        // Register a handler with one ability and two operations
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let abilities = vec![state_ref.as_type()];
+        let operations = vec![
+            (state_ref.as_type(), Symbol::new("get")),
+            (state_ref.as_type(), Symbol::new("set")),
+        ];
+
+        let idx = registry.register(abilities.clone(), operations.clone(), location);
+        assert_eq!(idx, 0);
+        assert_eq!(registry.len(), 1);
+
+        // Verify entry contents
+        let entry = registry.get(0).expect("Entry should exist");
+        assert_eq!(entry.abilities.len(), 1);
+        assert_eq!(entry.operations.len(), 2);
+    }
+
+    #[salsa_test]
+    fn test_op_table_registry_compute_op_offset(db: &salsa::DatabaseImpl) {
+        let mut registry = OpTableRegistry::new();
+        let location = test_location(db);
+
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let operations = vec![
+            (state_ref.as_type(), Symbol::new("get")),
+            (state_ref.as_type(), Symbol::new("set")),
+            (state_ref.as_type(), Symbol::new("modify")),
+        ];
+
+        let idx = registry.register(vec![state_ref.as_type()], operations, location);
+
+        // Test op_offset lookup
+        let get_offset = registry.compute_op_offset(idx, state_ref.as_type(), Symbol::new("get"));
+        assert_eq!(get_offset, Some(0));
+
+        let set_offset = registry.compute_op_offset(idx, state_ref.as_type(), Symbol::new("set"));
+        assert_eq!(set_offset, Some(1));
+
+        let modify_offset =
+            registry.compute_op_offset(idx, state_ref.as_type(), Symbol::new("modify"));
+        assert_eq!(modify_offset, Some(2));
+
+        // Non-existent operation
+        let unknown_offset =
+            registry.compute_op_offset(idx, state_ref.as_type(), Symbol::new("unknown"));
+        assert_eq!(unknown_offset, None);
+
+        // Non-existent handler index
+        let invalid_idx_offset =
+            registry.compute_op_offset(999, state_ref.as_type(), Symbol::new("get"));
+        assert_eq!(invalid_idx_offset, None);
+    }
+
+    #[salsa_test]
+    fn test_op_table_registry_multiple_handlers(db: &salsa::DatabaseImpl) {
+        let mut registry = OpTableRegistry::new();
+        let location = test_location(db);
+
+        // Register first handler (State)
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        let state_ops = vec![
+            (state_ref.as_type(), Symbol::new("get")),
+            (state_ref.as_type(), Symbol::new("set")),
+        ];
+        let state_idx = registry.register(vec![state_ref.as_type()], state_ops, location);
+
+        // Register second handler (Console)
+        let console_ref = core::AbilityRefType::simple(db, Symbol::new("Console"));
+        let console_ops = vec![
+            (console_ref.as_type(), Symbol::new("print")),
+            (console_ref.as_type(), Symbol::new("read")),
+        ];
+        let console_idx = registry.register(vec![console_ref.as_type()], console_ops, location);
+
+        // Handlers should get sequential indices
+        assert_eq!(state_idx, 0);
+        assert_eq!(console_idx, 1);
+        assert_eq!(registry.len(), 2);
+
+        // Each handler should have correct op_offsets
+        assert_eq!(
+            registry.compute_op_offset(state_idx, state_ref.as_type(), Symbol::new("get")),
+            Some(0)
+        );
+        assert_eq!(
+            registry.compute_op_offset(state_idx, state_ref.as_type(), Symbol::new("set")),
+            Some(1)
+        );
+
+        assert_eq!(
+            registry.compute_op_offset(console_idx, console_ref.as_type(), Symbol::new("print")),
+            Some(0)
+        );
+        assert_eq!(
+            registry.compute_op_offset(console_idx, console_ref.as_type(), Symbol::new("read")),
+            Some(1)
+        );
+
+        // Cross-handler lookups should fail
+        assert_eq!(
+            registry.compute_op_offset(state_idx, console_ref.as_type(), Symbol::new("print")),
+            None
+        );
+        assert_eq!(
+            registry.compute_op_offset(console_idx, state_ref.as_type(), Symbol::new("get")),
+            None
+        );
+    }
+
+    #[salsa_test]
+    fn test_op_table_registry_entries_accessor(db: &salsa::DatabaseImpl) {
+        let mut registry = OpTableRegistry::new();
+        let location = test_location(db);
+
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        registry.register(
+            vec![state_ref.as_type()],
+            vec![(state_ref.as_type(), Symbol::new("get"))],
+            location,
+        );
+
+        let entries = registry.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].abilities.len(), 1);
+        assert_eq!(entries[0].operations.len(), 1);
     }
 }

@@ -1793,6 +1793,7 @@ fn lower_ability_op_call<'db>(
     let tag_value = tag_const.result(db);
 
     // Generate cont.shift with dynamic tag operand
+    // op_table_index and op_offset are set by resolve_evidence pass
     let shift_op = builder.block.op(cont::shift(
         db,
         location,
@@ -1801,6 +1802,8 @@ fn lower_ability_op_call<'db>(
         result_ty,
         ability_ref,
         op,
+        None, // op_table_index (set by resolve_evidence)
+        None, // op_offset (set by resolve_evidence)
         handler_region,
     ));
 

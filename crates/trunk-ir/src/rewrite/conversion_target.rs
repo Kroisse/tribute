@@ -431,6 +431,8 @@ mod tests {
             i32_ty,
             ability_ref_ty,
             Symbol::new("get"),
+            None, // op_table_index
+            None, // op_offset
             handler_region,
         )
         .as_operation();
