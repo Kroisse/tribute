@@ -271,9 +271,9 @@ fn generate_evidence_lookup_function<'db>(
     ops.push(high_init.as_operation());
 
     // Build the search loop
-    let loop_region =
-        build_lookup_loop_body(db, location, ev_val, target_id_val, i32_ty, marker_ty);
-    let loop_op = wasm::r#loop(db, location, marker_ty, loop_region);
+    let nil_ty = core::Nil::new(db).as_type();
+    let loop_region = build_lookup_loop_body(db, location, ev_val, target_id_val, i32_ty);
+    let loop_op = wasm::r#loop(db, location, nil_ty, loop_region);
     ops.push(loop_op.as_operation());
 
     // unreachable after loop (should never reach here - loop always returns)
@@ -306,8 +306,9 @@ fn build_lookup_loop_body<'db>(
     ev_val: Value<'db>,
     target_id_val: Value<'db>,
     i32_ty: Type<'db>,
-    marker_ty: Type<'db>,
 ) -> Region<'db> {
+    let nil_ty = core::Nil::new(db).as_type();
+    let marker_ty = wasm::Structref::new(db).as_type();
     let block_id = BlockId::fresh();
     let mut ops = Vec::new();
 
@@ -344,7 +345,7 @@ fn build_lookup_loop_body<'db>(
         db,
         location,
         ge_check.result(db),
-        i32_ty,
+        nil_ty,
         unreachable_then,
         empty_else,
     );
@@ -426,7 +427,7 @@ fn build_lookup_loop_body<'db>(
             db,
             location,
             lt_check.result(db),
-            i32_ty,
+            nil_ty,
             update_low,
             update_high,
         );
@@ -452,7 +453,7 @@ fn build_lookup_loop_body<'db>(
         db,
         location,
         eq_check.result(db),
-        i32_ty,
+        nil_ty,
         found_then,
         continue_else,
     );
@@ -510,9 +511,21 @@ fn generate_evidence_extend_function<'db>(
 
     // Binary search loop to find insertion point
     // After loop, LOW contains the insertion index
+    let nil_ty = core::Nil::new(db).as_type();
     let search_loop = build_extend_search_loop(db, location, ev_val, marker_id, i32_ty);
-    let loop_op = wasm::r#loop(db, location, i32_ty, search_loop);
-    ops.push(loop_op.as_operation());
+    let loop_op = wasm::r#loop(db, location, nil_ty, search_loop);
+
+    // Wrap loop in block for br_if(..., 1) target
+    let loop_block = Block::new(
+        db,
+        BlockId::fresh(),
+        location,
+        IdVec::new(),
+        IdVec::from(vec![loop_op.as_operation()]),
+    );
+    let loop_region = Region::new(db, location, IdVec::from(vec![loop_block]));
+    let block_op = wasm::block(db, location, nil_ty, loop_region);
+    ops.push(block_op.as_operation());
 
     // insert_idx = local.get LOW
     let get_insert_idx = wasm::local_get(db, location, i32_ty, locals::LOW);
@@ -666,6 +679,7 @@ fn build_extend_search_loop<'db>(
     marker_id: Value<'db>,
     i32_ty: Type<'db>,
 ) -> Region<'db> {
+    let nil_ty = core::Nil::new(db).as_type();
     let marker_ty = wasm::Structref::new(db).as_type();
     let block_id = BlockId::fresh();
     let mut ops = Vec::new();
@@ -746,7 +760,7 @@ fn build_extend_search_loop<'db>(
         db,
         location,
         lt_check.result(db),
-        i32_ty,
+        nil_ty,
         update_low,
         update_high,
     );
