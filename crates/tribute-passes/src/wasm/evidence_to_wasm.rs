@@ -582,7 +582,7 @@ fn generate_evidence_extend_function<'db>(
         db,
         location,
         gt_zero.result(db),
-        i32_ty,
+        nil_ty,
         copy_prefix_then,
         empty_else1,
     );
@@ -639,7 +639,7 @@ fn generate_evidence_extend_function<'db>(
         db,
         location,
         gt_zero2.result(db),
-        i32_ty,
+        nil_ty,
         copy_suffix_then,
         empty_else2,
     );

@@ -39,7 +39,6 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        let _result = compile_to_wasm_binary(db, source_file);
         compile_to_wasm_binary::accumulated::<Diagnostic>(db, source_file)
             .into_iter()
             .cloned()

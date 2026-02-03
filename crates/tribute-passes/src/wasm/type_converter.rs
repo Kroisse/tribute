@@ -178,7 +178,7 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
-        // Convert ability.evidence_ptr → wasm.anyref (evidence is array ref)
+        // Convert ability.evidence_ptr → wasm.arrayref (evidence is array ref)
         .add_conversion(|db, ty| {
             if ability::EvidencePtr::from_type(db, ty).is_some() {
                 Some(evidence_adt_type(db))

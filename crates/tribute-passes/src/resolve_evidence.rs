@@ -756,9 +756,9 @@ fn transform_shifts_in_block_with_remap<'db>(
                 new_handler_region,
             );
 
-            // Store op_table_idx_val for use by the trampoline pass
-            // This is done by the trampoline pass reading from Marker
-            let _ = op_table_idx_val; // Suppress unused warning - value is in IR
+            // op_table_idx_val is emitted to IR via struct_get_op_table above
+            // and consumed by the trampoline pass at runtime
+            let _ = op_table_idx_val;
 
             // Map old result to new result
             if !op.results(db).is_empty() {
