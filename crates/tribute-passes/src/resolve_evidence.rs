@@ -178,6 +178,9 @@ pub fn resolve_evidence_dispatch_with_registry<'db>(
         .expect("OpTableRegistry should have no other references")
         .into_inner();
 
+    // Emit handler_table operation to capture the handler dispatch table structure
+    let module = emit_handler_table(db, module, &final_registry);
+
     (module, final_registry)
 }
 
@@ -1114,6 +1117,113 @@ fn hash_type(db: &dyn salsa::Database, ty: Type<'_>) -> u32 {
     hash
 }
 
+// ============================================================================
+// Handler Table Emission
+// ============================================================================
+
+/// Maximum number of operations per handler for table sizing.
+/// This constant determines the stride in the flattened handler dispatch table.
+pub const MAX_OPS_PER_HANDLER: u32 = 8;
+
+/// Emit `ability.handler_table` operation to capture the handler dispatch table structure.
+///
+/// This operation is emitted at module level and later lowered to `wasm.table` + `wasm.elem`
+/// for table-based handler dispatch.
+///
+/// If the registry is empty, the module is returned unchanged.
+pub fn emit_handler_table<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+    registry: &OpTableRegistry<'db>,
+) -> core::Module<'db> {
+    if registry.is_empty() {
+        return module;
+    }
+
+    let location = module.location(db);
+    let body = module.body(db);
+    let blocks = body.blocks(db);
+
+    let Some(entry_block) = blocks.first() else {
+        return module;
+    };
+
+    // Build handler_entry operations for each registered handler
+    let mut entry_ops: Vec<Operation<'db>> = Vec::new();
+    for (idx, entry) in registry.entries().iter().enumerate() {
+        let entry_location = entry.location;
+
+        // Create funcs region with func.constant operations
+        // For now, we just record the function names; actual function references
+        // will be resolved during WASM lowering
+        // Use core.ptr type as placeholder for funcref (will be lowered to wasm.funcref)
+        let funcref_ty = core::Ptr::new(db).as_type();
+        let func_ops: Vec<Operation<'db>> = entry
+            .operations
+            .iter()
+            .enumerate()
+            .map(|(op_idx, (_ability_ref, _op_name))| {
+                // Generate handler function name: __handler_{tag}_op_{idx}
+                let func_name = format!("__handler_{}_op_{}", idx, op_idx);
+                func::constant(
+                    db,
+                    entry_location,
+                    funcref_ty,
+                    Symbol::from_dynamic(&func_name),
+                )
+                .as_operation()
+            })
+            .collect();
+
+        let funcs_block = Block::new(
+            db,
+            trunk_ir::BlockId::fresh(),
+            entry_location,
+            IdVec::new(),
+            IdVec::from(func_ops),
+        );
+        let funcs_region = Region::new(db, entry_location, IdVec::from(vec![funcs_block]));
+
+        let entry_op = ability::handler_entry(
+            db,
+            entry_location,
+            idx as u32,                    // tag
+            entry.operations.len() as u32, // op_count
+            funcs_region,
+        );
+        entry_ops.push(entry_op.as_operation());
+    }
+
+    // Create entries region containing all handler_entry ops
+    let entries_block = Block::new(
+        db,
+        trunk_ir::BlockId::fresh(),
+        location,
+        IdVec::new(),
+        IdVec::from(entry_ops),
+    );
+    let entries_region = Region::new(db, location, IdVec::from(vec![entries_block]));
+
+    // Create handler_table operation
+    let handler_table_op =
+        ability::handler_table(db, location, MAX_OPS_PER_HANDLER, entries_region);
+
+    // Prepend handler_table to module body
+    let mut new_ops: Vec<Operation<'db>> = vec![handler_table_op.as_operation()];
+    new_ops.extend(entry_block.operations(db).iter().copied());
+
+    let new_entry_block = Block::new(
+        db,
+        entry_block.id(db),
+        entry_block.location(db),
+        entry_block.args(db).clone(),
+        IdVec::from(new_ops),
+    );
+
+    let new_body = Region::new(db, body.location(db), IdVec::from(vec![new_entry_block]));
+    core::Module::create(db, module.location(db), module.name(db), new_body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1481,5 +1591,188 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].abilities.len(), 1);
         assert_eq!(entries[0].operations.len(), 1);
+    }
+
+    // ========================================================================
+    // emit_handler_table Tests
+    // ========================================================================
+
+    #[salsa::tracked]
+    fn run_emit_handler_table_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+
+        // Create an empty module
+        let entry_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+        let body = Region::new(db, location, idvec![entry_block]);
+        let module = core::Module::create(db, location, Symbol::new("test"), body);
+
+        // Create a registry with one handler
+        let mut registry = OpTableRegistry::new();
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+        registry.register(
+            vec![state_ref.as_type()],
+            vec![
+                (state_ref.as_type(), Symbol::new("get")),
+                (state_ref.as_type(), Symbol::new("set")),
+            ],
+            location,
+        );
+
+        // Emit handler_table
+        let new_module = emit_handler_table(db, module, &registry);
+
+        // Verify handler_table was added to module body
+        let new_body = new_module.body(db);
+        let blocks = new_body.blocks(db);
+        if blocks.is_empty() {
+            return Err("Module body should have blocks".to_string());
+        }
+
+        let entry = blocks.first().unwrap();
+        let ops = entry.operations(db);
+        if ops.is_empty() {
+            return Err("Module body should have operations".to_string());
+        }
+
+        // First operation should be handler_table
+        let first_op = ops[0];
+        let handler_table_op = ability::HandlerTable::from_operation(db, first_op)
+            .map_err(|_| "First operation should be handler_table")?;
+
+        // Verify max_ops_per_handler
+        if handler_table_op.max_ops_per_handler(db) != MAX_OPS_PER_HANDLER {
+            return Err(format!(
+                "max_ops_per_handler should be {}, got {}",
+                MAX_OPS_PER_HANDLER,
+                handler_table_op.max_ops_per_handler(db)
+            ));
+        }
+
+        // Verify entries region has one handler_entry
+        let entries_region = handler_table_op.entries(db);
+        let entries_blocks = entries_region.blocks(db);
+        if entries_blocks.is_empty() {
+            return Err("Entries region should have blocks".to_string());
+        }
+
+        let entries_block = entries_blocks.first().unwrap();
+        let entry_ops = entries_block.operations(db);
+        if entry_ops.len() != 1 {
+            return Err(format!(
+                "Should have 1 handler_entry, got {}",
+                entry_ops.len()
+            ));
+        }
+
+        // Verify handler_entry
+        let entry_op = entry_ops[0];
+        let handler_entry = ability::HandlerEntry::from_operation(db, entry_op)
+            .map_err(|_| "Should be handler_entry operation")?;
+
+        if handler_entry.tag(db) != 0 {
+            return Err(format!(
+                "Handler tag should be 0, got {}",
+                handler_entry.tag(db)
+            ));
+        }
+
+        if handler_entry.op_count(db) != 2 {
+            return Err(format!(
+                "Handler op_count should be 2, got {}",
+                handler_entry.op_count(db)
+            ));
+        }
+
+        // Verify funcs region has func.constant operations
+        let funcs_region = handler_entry.funcs(db);
+        let funcs_blocks = funcs_region.blocks(db);
+        if funcs_blocks.is_empty() {
+            return Err("Funcs region should have blocks".to_string());
+        }
+
+        let funcs_block = funcs_blocks.first().unwrap();
+        let func_ops = funcs_block.operations(db);
+        if func_ops.len() != 2 {
+            return Err(format!(
+                "Should have 2 func.constant ops, got {}",
+                func_ops.len()
+            ));
+        }
+
+        // Verify func.constant names
+        let const_0 = func::Constant::from_operation(db, func_ops[0])
+            .map_err(|_| "Should be func.constant operation")?;
+        let const_1 = func::Constant::from_operation(db, func_ops[1])
+            .map_err(|_| "Should be func.constant operation")?;
+
+        if const_0.func_ref(db) != Symbol::new("__handler_0_op_0") {
+            return Err(format!(
+                "First func.constant should reference __handler_0_op_0, got {}",
+                const_0.func_ref(db)
+            ));
+        }
+
+        if const_1.func_ref(db) != Symbol::new("__handler_0_op_1") {
+            return Err(format!(
+                "Second func.constant should reference __handler_0_op_1, got {}",
+                const_1.func_ref(db)
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_emit_handler_table(db: &salsa::DatabaseImpl) {
+        let result = run_emit_handler_table_test(db);
+        if let Err(msg) = result {
+            panic!("{}", msg);
+        }
+    }
+
+    #[salsa::tracked]
+    fn run_emit_handler_table_empty_registry_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+
+        // Create an empty module with one operation
+        let ret_op = func::r#return(db, location, None).as_operation();
+        let entry_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), idvec![ret_op]);
+        let body = Region::new(db, location, idvec![entry_block]);
+        let module = core::Module::create(db, location, Symbol::new("test"), body);
+
+        // Empty registry
+        let registry = OpTableRegistry::new();
+
+        // Emit handler_table (should be no-op)
+        let new_module = emit_handler_table(db, module, &registry);
+
+        // Verify module is unchanged (no handler_table added)
+        let new_body = new_module.body(db);
+        let blocks = new_body.blocks(db);
+        let entry = blocks.first().unwrap();
+        let ops = entry.operations(db);
+
+        // Should only have the original return op
+        if ops.len() != 1 {
+            return Err(format!(
+                "Module should have only 1 op (return), got {}",
+                ops.len()
+            ));
+        }
+
+        // Verify it's not a handler_table
+        if ability::HandlerTable::from_operation(db, ops[0]).is_ok() {
+            return Err("Should not have handler_table when registry is empty".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_emit_handler_table_empty_registry(db: &salsa::DatabaseImpl) {
+        let result = run_emit_handler_table_empty_registry_test(db);
+        if let Err(msg) = result {
+            panic!("{}", msg);
+        }
     }
 }
