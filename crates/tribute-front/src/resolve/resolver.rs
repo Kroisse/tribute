@@ -135,6 +135,7 @@ impl<'db> Resolver<'db> {
                 ResolvedRef::Module { path: path_ref }
             }
             Binding::AbilityOp { ability, op } => ResolvedRef::ability_op(*ability, *op),
+            Binding::Ability { id } => ResolvedRef::ability(*id),
         }
     }
 

@@ -47,6 +47,14 @@ pub enum Binding<'db> {
         /// The operation name (e.g., "get").
         op: Symbol,
     },
+
+    /// An ability definition (not an operation).
+    ///
+    /// Used when resolving ability names in handler patterns.
+    Ability {
+        /// The ability identifier.
+        id: AbilityId<'db>,
+    },
 }
 
 /// Module environment for name resolution.
@@ -88,6 +96,11 @@ impl<'db> ModuleEnv<'db> {
     /// Add a type definition.
     pub fn add_type(&mut self, name: Symbol, id: TypeDefId<'db>) {
         self.definitions.insert(name, Binding::TypeDef { id });
+    }
+
+    /// Add an ability definition.
+    pub fn add_ability(&mut self, name: Symbol, id: AbilityId<'db>) {
+        self.definitions.insert(name, Binding::Ability { id });
     }
 
     /// Add a qualified name to a namespace.

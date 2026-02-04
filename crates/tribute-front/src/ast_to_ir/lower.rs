@@ -464,9 +464,10 @@ fn lower_expr<'db>(
                         .op(func::constant(builder.db(), location, func_ty, *variant));
                 Some(op.result(builder.db()))
             }
-            ResolvedRef::Builtin(_) | ResolvedRef::Module { .. } | ResolvedRef::TypeDef { .. } => {
-                None
-            }
+            ResolvedRef::Builtin(_)
+            | ResolvedRef::Module { .. }
+            | ResolvedRef::TypeDef { .. }
+            | ResolvedRef::Ability { .. } => None,
             ResolvedRef::AbilityOp { ability, op } => {
                 // AbilityOp as a value (not called) is not yet supported
                 // TODO: Support passing ability operations as first-class functions
@@ -2126,6 +2127,10 @@ fn build_suspend_handler_block<'db>(
     // Extract ability name from resolved reference and construct proper AbilityRefType
     // Use qualified name to match the name used in cont.shift generation (line 545-546)
     let ability_name = match &ability.resolved {
+        crate::ast::ResolvedRef::Ability { id } => {
+            Symbol::from_dynamic(&id.qualified_name(db).to_string())
+        }
+        // Legacy support: TypeDef was used before Binding::Ability was introduced
         crate::ast::ResolvedRef::TypeDef { id } => {
             Symbol::from_dynamic(&id.qualified_name(db).to_string())
         }

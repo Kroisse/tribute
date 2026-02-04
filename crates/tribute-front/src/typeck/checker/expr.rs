@@ -444,6 +444,11 @@ impl<'db> TypeChecker<'db> {
                     ctx.error_type()
                 }
             }
+            ResolvedRef::Ability { .. } => {
+                // Ability definitions cannot be used as values in expression context.
+                // They are only valid in handler patterns to identify which ability is being handled.
+                ctx.error_type()
+            }
         }
     }
 
