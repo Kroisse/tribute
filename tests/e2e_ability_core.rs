@@ -366,7 +366,6 @@ fn main() -> Nat { 0 }
 
 /// Test that sequential let bindings with effects work correctly (Phase 1-2 compatible).
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_sequential_let_bindings_with_effects() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -395,10 +394,8 @@ fn main() -> Nat { 0 }
 }
 
 /// Test that nested block let bindings with effects work correctly.
-/// Currently ignored: Phase 1-2 only supports sequential code without nested blocks containing shifts.
-/// TODO: Enable in Phase 3 when nested control flow with shifts is supported.
+/// Note: This test now passes - nested blocks with shifts are supported.
 #[test]
-#[ignore = "Phase 3: nested blocks with shifts not yet supported"]
 fn test_nested_let_bindings_with_effects() {
     let code = r#"ability State(s) {
     fn get() -> s
