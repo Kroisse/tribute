@@ -58,7 +58,7 @@ fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
         } else {
             diag.message.clone()
         };
-        eprintln!("[{}] {}: {}", diag.severity, diag.phase, msg);
+        eprintln!("[{:?}] {}: {}", diag.severity, diag.phase, msg);
     }
 }
 
@@ -236,7 +236,6 @@ fn main() -> Int {
 /// Test that effect row polymorphism works correctly.
 /// The function `run_state` should handle `State(s)` and propagate remaining effects `e`.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_effect_row_polymorphism() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -244,10 +243,10 @@ fn test_effect_row_polymorphism() {
 }
 
 ability Console {
-    fn print(msg: Text) -> Nil
+    fn print(msg: String) -> Nil
 }
 
-fn stateful_print() ->{State(Int), Console} Int {
+fn stateful_print() ->{State(Nat), Console} Nat {
     Console::print("hello")
     let n = State::get()
     State::set(n + 1)
