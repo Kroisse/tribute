@@ -94,14 +94,13 @@ fn main() -> Nat { 0 }
 
 /// Test ability operations with effect annotations.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_ability_operation_with_effect() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn counter() ->{State(Int)} Int {
+fn counter() ->{State(Nat)} Nat {
     let n = State::get()
     State::set(n + 1)
     n

@@ -218,19 +218,33 @@ fn lower_function<'db>(
     let func_name = func.name;
 
     // Use TypeScheme from type checking if available, otherwise fall back to annotations
-    let (param_ir_types, return_ty) =
+    let (param_ir_types, return_ty, effect_ir) =
         if let Some(scheme) = ctx.lookup_function_type(func_name).cloned() {
             let body = scheme.body(ctx.db);
             match body.kind(ctx.db) {
-                TypeKind::Func { params, result, .. } => {
+                TypeKind::Func {
+                    params,
+                    result,
+                    effect,
+                } => {
                     let p: Vec<_> = params.iter().map(|t| ctx.convert_type(*t)).collect();
                     let r = ctx.convert_type(*result);
-                    (p, r)
+                    // Convert effect row to IR type, but only include if non-pure
+                    let e = if effect.is_pure(ctx.db) {
+                        None
+                    } else {
+                        Some(ctx.convert_effect_row(*effect))
+                    };
+                    (p, r, e)
                 }
-                _ => fallback_from_annotations(ctx, &func),
+                _ => {
+                    let (p, r) = fallback_from_annotations(ctx, &func);
+                    (p, r, None)
+                }
             }
         } else {
-            fallback_from_annotations(ctx, &func)
+            let (p, r) = fallback_from_annotations(ctx, &func);
+            (p, r, None)
         };
 
     let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = param_ir_types
@@ -247,7 +261,7 @@ fn lower_function<'db>(
         None,
         params.clone(),
         return_ty,
-        None,
+        effect_ir,
         |body, arg_values| {
             ctx.enter_scope();
 

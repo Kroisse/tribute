@@ -286,6 +286,42 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn bool_type(&self) -> Type<'db> {
         core::I1::new(self.db).as_type()
     }
+
+    /// Convert an AST EffectRow to a TrunkIR effect type.
+    ///
+    /// The effect row contains abilities (effects) and possibly an open tail variable.
+    /// We convert this to a `core.effect_row` type for the IR.
+    pub fn convert_effect_row(&self, row: crate::ast::EffectRow<'db>) -> Type<'db> {
+        let effects = row.effects(self.db);
+        let rest = row.rest(self.db);
+
+        // Convert each Effect to an AbilityRefType
+        let ability_types: trunk_ir::IdVec<Type<'db>> = effects
+            .iter()
+            .map(|effect| {
+                // Build qualified name for the ability
+                let ability_name = effect.ability_id.qualified_name(self.db).to_string();
+                let ability_sym = Symbol::from_dynamic(&ability_name);
+
+                // Convert type arguments
+                let params: trunk_ir::IdVec<Type<'db>> = effect
+                    .args
+                    .iter()
+                    .map(|ty| self.convert_type(*ty))
+                    .collect();
+
+                if params.is_empty() {
+                    core::AbilityRefType::simple(self.db, ability_sym).as_type()
+                } else {
+                    core::AbilityRefType::with_params(self.db, ability_sym, params).as_type()
+                }
+            })
+            .collect();
+
+        // Create EffectRowType with tail variable if present
+        let tail_var_id = rest.map(|v| v.id).unwrap_or(0);
+        core::EffectRowType::new(self.db, ability_types, tail_var_id).as_type()
+    }
 }
 
 #[cfg(test)]
