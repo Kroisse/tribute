@@ -819,6 +819,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 ability: ability.name(self.db),
                 op: *op,
             },
+            ResolvedRef::Ability { id } => ResolvedTarget::Type {
+                name: id.name(self.db),
+            },
         }
     }
 }

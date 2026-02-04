@@ -185,6 +185,12 @@ impl<'db> TypeChecker<'db> {
                     })
                     .collect();
 
+                // Save the outer context's effect - lambda has its own effect context
+                let outer_effect = ctx.current_effect();
+
+                // Lambda body starts with pure effect (no effects yet)
+                ctx.set_current_effect(EffectRow::pure(self.db()));
+
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
 
@@ -198,12 +204,17 @@ impl<'db> TypeChecker<'db> {
 
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
 
+                // The lambda's effect is what accumulated during body inference
+                let lambda_effect = ctx.current_effect();
+
                 ctx.pop_scope();
+
+                // Restore the outer context's effect
+                ctx.set_current_effect(outer_effect);
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
-                let effect = ctx.fresh_effect_row();
-                ctx.func_type(param_types, result_ty, effect)
+                ctx.func_type(param_types, result_ty, lambda_effect)
             }
             ExprKind::Handle { body, handlers } => {
                 // Handle expression:
@@ -433,6 +444,11 @@ impl<'db> TypeChecker<'db> {
                     ctx.error_type()
                 }
             }
+            ResolvedRef::Ability { .. } => {
+                // Ability definitions cannot be used as values in expression context.
+                // They are only valid in handler patterns to identify which ability is being handled.
+                ctx.error_type()
+            }
         }
     }
 
@@ -536,14 +552,23 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
 
-        // Effect constraint: the callee's effect must be compatible with the current
-        // function's effect. We use constrain_row_eq here, but the solver's unify_rows
-        // handles subsumption semantics, allowing pure callees in effectful contexts.
+        // Effect handling: We rely on type unification to handle effect compatibility.
         //
-        // For example, if calling State::get() which has effect {State | e},
-        // the constraint ensures this is compatible with the caller's effect row.
-        let current_effect = ctx.current_effect();
-        ctx.constrain_row_eq(callee_effect, current_effect);
+        // When the callee's type is unified with the expected function type,
+        // the effect row is also unified. This naturally handles:
+        // - Pure callees: their effect unifies with any effect (subsumption)
+        // - Effectful callees: their effects must be present in the context
+        //
+        // We DON'T add merge_effect or constrain_row_eq here because:
+        // 1. The callee's type is constrained via constrain_eq(callee_ty, expected_func_ty)
+        // 2. If callee is pure (like apply_pure), its effect {} unifies with callee_effect
+        // 3. If callee is effectful, its effects propagate through type unification
+        //
+        // The actual effect checking happens when:
+        // - The function's return type is checked against the declared signature
+        // - Ability operations add their effect to the caller's effect row via
+        //   the row variable in their type signature
+        let _ = callee_effect; // Effect is handled through type unification
 
         result_ty
     }

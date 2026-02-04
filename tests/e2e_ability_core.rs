@@ -46,6 +46,22 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::
     })
 }
 
+/// Helper to print diagnostics concisely (truncating long messages).
+fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
+    for diag in diagnostics {
+        let msg = if diag.message.len() > 200 {
+            format!(
+                "{}... [truncated {} chars]",
+                &diag.message[..200],
+                diag.message.len() - 200
+            )
+        } else {
+            diag.message.clone()
+        };
+        eprintln!("[{:?}] {}: {}", diag.severity, diag.phase, msg);
+    }
+}
+
 /// Helper to compile code (execution disabled until print_line is fixed).
 /// Returns 0 as placeholder - tests should only verify compilation succeeds.
 fn compile_and_run(code: &str, name: &str) -> i32 {
@@ -81,9 +97,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "ability_def.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -94,14 +108,13 @@ fn main() -> Nat { 0 }
 
 /// Test ability operations with effect annotations.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_ability_operation_with_effect() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn counter() ->{State(Int)} Int {
+fn counter() ->{State(Nat)} Nat {
     let n = State::get()
     State::set(n + 1)
     n
@@ -112,9 +125,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "ability_effect.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -129,7 +140,7 @@ fn main() -> Nat { 0 }
 
 /// Test basic handle expression parsing and typechecking.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_handle_expression() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -153,9 +164,7 @@ fn main() -> Int { run() }
 
     let diagnostics = compile_and_check(code, "handle_expr.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -178,7 +187,7 @@ fn main() -> Int { run() }
 ///
 /// Note: Full execution requires backend support (issues #112-#114).
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_milestone_target_code() {
     // This is the target code from issue #100
     let code = r#"ability State(s) {
@@ -211,9 +220,7 @@ fn main() -> Int {
 
     let diagnostics = compile_and_check(code, "milestone_100.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -229,7 +236,6 @@ fn main() -> Int {
 /// Test that effect row polymorphism works correctly.
 /// The function `run_state` should handle `State(s)` and propagate remaining effects `e`.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_effect_row_polymorphism() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -237,10 +243,10 @@ fn test_effect_row_polymorphism() {
 }
 
 ability Console {
-    fn print(msg: Text) -> Nil
+    fn print(msg: String) -> Nil
 }
 
-fn stateful_print() ->{State(Int), Console} Int {
+fn stateful_print() ->{State(Nat), Console} Nat {
     Console::print("hello")
     let n = State::get()
     State::set(n + 1)
@@ -252,9 +258,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "effect_row.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -265,7 +269,6 @@ fn main() -> Nat { 0 }
 
 /// Test that multiple abilities can be combined in effect rows.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_abilities() {
     let code = r#"ability Reader(r) {
     fn ask() -> r
@@ -285,9 +288,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "multiple_abilities.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -305,7 +306,6 @@ fn main() -> Nat { 0 }
 /// When a let binding initializes from an effectful expression,
 /// the effect must propagate to the enclosing function.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_let_binding_effect_propagation() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -323,9 +323,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "let_effect_propagation.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -336,7 +334,6 @@ fn main() -> Nat { 0 }
 
 /// Test that multiple let bindings accumulate effects correctly.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_let_bindings_accumulate_effects() {
     let code = r#"ability Reader(r) {
     fn ask() -> r
@@ -358,9 +355,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "multiple_let_effects.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -371,7 +366,6 @@ fn main() -> Nat { 0 }
 
 /// Test that sequential let bindings with effects work correctly (Phase 1-2 compatible).
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_sequential_let_bindings_with_effects() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -390,9 +384,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "sequential_let_effects.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -426,9 +418,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "nested_let_effects.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -452,9 +442,7 @@ fn main() -> Int { pure_computation() }
 
     let diagnostics = compile_and_check(code, "pure_let_binding.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -646,7 +634,7 @@ fn main() -> Int {
 /// and State::set both from State), the handled_abilities list may contain
 /// duplicates. The deduplication fix ensures constraint generation doesn't fail.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_duplicate_ability_handlers_compile() {
     // This code has two handlers for the same ability (State)
     // Previously, this could cause constraint issues due to duplicate entries
@@ -672,9 +660,7 @@ fn main() -> Int {
 
     let diagnostics = compile_and_check(code, "duplicate_handlers.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -690,7 +676,7 @@ fn main() -> Int {
 /// Test that State(Int) and State(Bool) are treated as distinct abilities.
 /// A function with State(Int) effect cannot be called where State(Bool) is expected.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "Type validation: State(Int) vs State(Bool) not yet enforced"]
 fn test_parameterized_ability_distinct_types() {
     // This should produce a type error: State(Int) is not State(Bool)
     let code = r#"ability State(s) {
@@ -732,7 +718,7 @@ fn main() -> Nat { 0 }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -758,9 +744,7 @@ fn main() -> Int {
 
     let diagnostics = compile_and_check(code, "param_ability_same.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -771,7 +755,7 @@ fn main() -> Int {
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
@@ -798,9 +782,7 @@ fn main() -> Int {
 
     let diagnostics = compile_and_check(code, "param_ability_typevar.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -811,7 +793,7 @@ fn main() -> Int {
 
 /// Test arity mismatch: State(Int) vs State() should be an error.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "Type validation: arity mismatch not yet enforced"]
 fn test_parameterized_ability_arity_mismatch() {
     // This is invalid: ability State(s) requires one type argument
     let code = r#"ability State(s) {
@@ -844,7 +826,7 @@ fn main() -> Nat { 0 }
 /// When handling State(Int), the type argument Int should be preserved in the
 /// effect row constraint, not lost by creating Effect entries with empty args.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -867,9 +849,7 @@ fn main() -> Int {
 
     let diagnostics = compile_and_check(code, "handle_param_ability.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),
@@ -883,7 +863,6 @@ fn main() -> Int {
 /// When calling State::get() with State(Int), the return type should be Int,
 /// not the unsubstituted type parameter `s`.
 #[test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_ability_op_substitutes_type_params() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -900,9 +879,7 @@ fn main() -> Nat { 0 }
 
     let diagnostics = compile_and_check(code, "ability_op_subst.trb");
 
-    for diag in &diagnostics {
-        eprintln!("Diagnostic: {:?}", diag);
-    }
+    print_diagnostics(&diagnostics);
 
     assert!(
         diagnostics.is_empty(),

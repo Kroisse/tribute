@@ -345,6 +345,14 @@ pub enum ResolvedRef<'db> {
         /// The operation name (e.g., "get").
         op: Symbol,
     },
+
+    /// Reference to an ability definition.
+    ///
+    /// Used in handler patterns to identify which ability is being handled.
+    Ability {
+        /// The ability identifier.
+        id: AbilityId<'db>,
+    },
 }
 
 impl<'db> ResolvedRef<'db> {
@@ -376,6 +384,11 @@ impl<'db> ResolvedRef<'db> {
     /// Create an ability operation reference.
     pub fn ability_op(ability: AbilityId<'db>, op: Symbol) -> Self {
         Self::AbilityOp { ability, op }
+    }
+
+    /// Create an ability reference.
+    pub fn ability(id: AbilityId<'db>) -> Self {
+        Self::Ability { id }
     }
 }
 

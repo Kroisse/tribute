@@ -149,6 +149,10 @@ fn collect_definition<'db>(
         Decl::Ability(a) => {
             // Create AbilityId for this ability
             let ability_id = AbilityId::new(db, path_vec.clone(), a.name);
+
+            // Register the ability itself (for handler pattern resolution)
+            env.add_ability(a.name, ability_id);
+
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
                 let binding = Binding::AbilityOp {

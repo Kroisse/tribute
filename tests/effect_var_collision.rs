@@ -37,7 +37,6 @@ fn source_from_str(path: &str, text: &str) -> SourceCst {
 /// 2. A lambda `fn(x: Int) { x + 1 }` inside that function should be pure
 /// 3. The lambda's effect variable should NOT be the same as the function's effect variable
 #[salsa_test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_lambda_effect_var_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -70,7 +69,6 @@ fn main() -> Nat { 0 }
 
 /// Test that multiple lambdas in the same function get independent effect variables.
 #[salsa_test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_multiple_lambdas_independence(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
@@ -202,7 +200,6 @@ fn main() -> Nat { 0 }
 
 /// Test nested lambdas - each should have independent effect variables.
 #[salsa_test]
-#[ignore = "Ability operation name resolution fails in test environment (#317)"]
 fn test_nested_lambda_effects(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {

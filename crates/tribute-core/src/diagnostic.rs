@@ -41,3 +41,17 @@ impl std::fmt::Display for DiagnosticSeverity {
         }
     }
 }
+
+impl std::fmt::Display for CompilationPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompilationPhase::Parsing => write!(f, "Parsing"),
+            CompilationPhase::AstGeneration => write!(f, "AST Generation"),
+            CompilationPhase::TirGeneration => write!(f, "TIR Generation"),
+            CompilationPhase::NameResolution => write!(f, "Name Resolution"),
+            CompilationPhase::TypeChecking => write!(f, "Type Checking"),
+            CompilationPhase::Lowering => write!(f, "Lowering"),
+            CompilationPhase::Optimization => write!(f, "Optimization"),
+        }
+    }
+}

@@ -103,9 +103,15 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<Unresolve
         .map(|n| lower_param_list(ctx, n))
         .unwrap_or_default();
 
-    let return_ty = func_node
-        .child_by_field_name("return_type")
-        .and_then(|n| lower_type_annotation(ctx, n));
+    // return_type is a return_type_annotation node: -> optional(abilities) type
+    let return_type_node = func_node.child_by_field_name("return_type");
+    let return_ty = return_type_node.and_then(|n| lower_type_annotation(ctx, n));
+
+    // Extract effects from the abilities field of return_type_annotation
+    let effects = return_type_node.and_then(|rta| {
+        rta.child_by_field_name("abilities")
+            .map(|abilities_node| lower_ability_row(ctx, abilities_node))
+    });
 
     if is_extern {
         // For extern functions, return type defaults to Nil when omitted.
@@ -145,7 +151,7 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<Unresolve
         type_params: Vec::new(), // TODO: parse type params
         params,
         return_ty,
-        effects: None, // TODO: parse effects
+        effects,
         body,
     }))
 }
@@ -166,12 +172,16 @@ fn extract_function_name(ctx: &AstLoweringCtx, name_node: Node) -> Symbol {
 }
 
 /// Lower a parameter list.
+///
+/// Handles both `parameter_list` (with `parameter` children) and
+/// `typed_parameter_list` (with `typed_parameter` children).
 fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
     let mut params = Vec::new();
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "parameter"
+        // Handle both parameter kinds: "parameter" (optional type) and "typed_parameter" (required type)
+        if (child.kind() == "parameter" || child.kind() == "typed_parameter")
             && let Some(name_node) = child.child_by_field_name("name")
         {
             let id = ctx.fresh_id_with_span(&child);
@@ -605,13 +615,19 @@ fn lower_ability(ctx: &mut AstLoweringCtx, node: Node) -> Option<AbilityDecl> {
 
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
+
+    let type_params = node
+        .child_by_field_name("type_params")
+        .map(|n| lower_type_parameters(ctx, n))
+        .unwrap_or_default();
+
     let operations = lower_ability_operations(ctx, body_node);
 
     Some(AbilityDecl {
         id,
         is_pub: false, // TODO: parse visibility
         name,
-        type_params: Vec::new(), // TODO: parse type params
+        type_params,
         operations,
     })
 }
@@ -656,7 +672,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
-    let params = find_child_by_kind(node, "parameter_list")
+    let params = find_child_by_kind(node, "typed_parameter_list")
         .map(|n| lower_param_list(ctx, n))
         .unwrap_or_default();
 
