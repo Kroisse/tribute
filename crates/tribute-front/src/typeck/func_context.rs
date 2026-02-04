@@ -92,7 +92,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             node_types: HashMap::new(),
             constraints: ConstraintSet::new(),
             next_type_var: 0,
-            next_row_var: 0,
+            // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
+            // used in collect.rs for function signature effect rows
+            next_row_var: 1,
             current_effect: EffectRow::pure(db),
         }
     }
@@ -770,8 +772,9 @@ mod merge_effect_tests {
         let console = simple_effect(db, test_ability_id(db, "Console"));
         let state = simple_effect(db, test_ability_id(db, "State"));
 
-        let e1 = EffectVar { id: 1 };
-        let e2 = EffectVar { id: 2 };
+        // Use IDs that won't collide with fresh_row_var (which starts at 1)
+        let e1 = EffectVar { id: 100 };
+        let e2 = EffectVar { id: 101 };
 
         let row1 = EffectRow::new(db, vec![console.clone()], Some(e1));
         let row2 = EffectRow::new(db, vec![state.clone()], Some(e2));
@@ -840,7 +843,8 @@ mod merge_effect_tests {
         let console = simple_effect(db, test_ability_id(db, "Console"));
         let state = simple_effect(db, test_ability_id(db, "State"));
 
-        let e1 = EffectVar { id: 1 };
+        // Use ID that won't collide with fresh_row_var (which starts at 1)
+        let e1 = EffectVar { id: 100 };
 
         let closed_row = EffectRow::single(db, console.clone());
         let open_row = EffectRow::new(db, vec![state.clone()], Some(e1));
@@ -870,7 +874,8 @@ mod merge_effect_tests {
         let state = simple_effect(db, test_ability_id(db, "State"));
 
         // Both rows share the same rest variable
-        let shared_var = EffectVar { id: 1 };
+        // Use ID that won't collide with fresh_row_var (which starts at 1)
+        let shared_var = EffectVar { id: 100 };
 
         let row1 = EffectRow::new(db, vec![console.clone()], Some(shared_var));
         let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
@@ -903,7 +908,8 @@ mod merge_effect_tests {
         let state = simple_effect(db, test_ability_id(db, "State"));
 
         // Both rows share the same rest variable and have overlapping effects
-        let shared_var = EffectVar { id: 1 };
+        // Use ID that won't collide with fresh_row_var (which starts at 1)
+        let shared_var = EffectVar { id: 100 };
 
         let row1 = EffectRow::new(db, vec![console.clone(), state.clone()], Some(shared_var));
         let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
