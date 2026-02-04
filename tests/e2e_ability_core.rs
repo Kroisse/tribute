@@ -16,6 +16,16 @@
 //! Tests are organized in two categories:
 //! 1. **Frontend tests**: Verify parsing, name resolution, and type checking
 //! 2. **Execution tests**: Compile to WASM and run with wasmtime CLI
+//!
+//! ## Blocking Issues
+//!
+//! Many tests are blocked by:
+//! - **WASM backend: unrealized_conversion_cast failures**: The WASM lowering
+//!   pipeline cannot resolve certain type casts (especially `core.array` types).
+//! - **Type validation not enforced**: Parameterized ability type argument
+//!   validation (e.g., `State(Int)` vs `State(Bool)`) is not yet implemented.
+//! - **Effect checking not enforced**: Missing effect annotations don't produce
+//!   errors yet (see #112).
 
 mod common;
 
@@ -394,10 +404,8 @@ fn main() -> Nat { 0 }
 }
 
 /// Test that nested block let bindings with effects work correctly.
-/// Currently ignored: Phase 1-2 only supports sequential code without nested blocks containing shifts.
-/// TODO: Enable in Phase 3 when nested control flow with shifts is supported.
+/// Note: This now compiles successfully with the current pipeline.
 #[test]
-#[ignore = "Phase 3: nested blocks with shifts not yet supported"]
 fn test_nested_let_bindings_with_effects() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -497,7 +505,7 @@ fn main() -> Nat { 0 }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "Handler dispatch type mismatch - see plan file for details"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let result = compile_and_run(code, "ability_core.trb");
@@ -506,7 +514,7 @@ fn test_ability_core_execution() {
 
 /// Test simple State::get handler that returns a constant.
 #[test]
-#[ignore = "Handler dispatch type mismatch - see plan file for details"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_state_get_simple() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -531,7 +539,7 @@ fn main() -> Int {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "Handler dispatch type mismatch - see plan file for details"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -561,7 +569,7 @@ fn main() -> Int {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "Handler dispatch type mismatch - see plan file for details"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -597,7 +605,7 @@ fn main() -> Int {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "Handler dispatch type mismatch - see plan file for details"]
+#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s
