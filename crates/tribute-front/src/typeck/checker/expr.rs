@@ -528,7 +528,7 @@ impl<'db> TypeChecker<'db> {
     /// This method:
     /// 1. Creates fresh type variables for parameter and result types
     /// 2. Creates a fresh effect row for the callee's effect
-    /// 3. Constrains the callee to have the expected function type
+    /// 3. Constrains the callee to have the expected function type (or continuation type)
     /// 4. Constrains the callee's effect to be a subset of the current function's effect
     ///
     /// Effect propagation ensures that if we call `State::get()`, the `State`
@@ -539,11 +539,61 @@ impl<'db> TypeChecker<'db> {
         callee_ty: Type<'db>,
         arg_types: &[Type<'db>],
     ) -> Type<'db> {
-        // Create expected function type
+        // Create expected type - could be either a function or continuation type.
+        // We create fresh type variables and let unification determine the actual type.
         let param_types: Vec<Type<'db>> = arg_types.iter().map(|_| ctx.fresh_type_var()).collect();
         let result_ty = ctx.fresh_type_var();
-        let callee_effect = ctx.fresh_effect_row();
 
+        // Create both a function type and a continuation type expectation.
+        // One will unify successfully depending on what the callee actually is.
+        //
+        // For functions: fn(params) -> result with effects
+        // For continuations: Continuation { arg, result } (single-arg resume)
+        if arg_types.len() == 1 {
+            // Single argument: could be either a function call or continuation resume.
+            // Create a continuation type for potential unification.
+            let cont_arg_ty = ctx.fresh_type_var();
+            let cont_result_ty = ctx.fresh_type_var();
+            let expected_cont_ty = Type::new(
+                self.db(),
+                TypeKind::Continuation {
+                    arg: cont_arg_ty,
+                    result: cont_result_ty,
+                },
+            );
+
+            // Also create function type for the normal case
+            let callee_effect = ctx.fresh_effect_row();
+            let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
+
+            // Try to match the callee type: if it's already a concrete Continuation type,
+            // use continuation semantics; otherwise use function semantics.
+            // We check the callee type directly rather than relying on unification to choose.
+            if matches!(callee_ty.kind(self.db()), TypeKind::Continuation { .. }) {
+                // Callee is a continuation - constrain as continuation call
+                ctx.constrain_eq(callee_ty, expected_cont_ty);
+                ctx.constrain_eq(cont_arg_ty, arg_types[0]);
+                return cont_result_ty;
+            } else if matches!(callee_ty.kind(self.db()), TypeKind::UniVar { .. }) {
+                // Callee is an unknown type variable - default to function semantics
+                // This handles cases like higher-order functions with unknown callees
+                ctx.constrain_eq(callee_ty, expected_func_ty);
+                for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
+                    ctx.constrain_eq(*param_ty, *arg_ty);
+                }
+                return result_ty;
+            } else {
+                // Callee is a concrete function type or other - use function semantics
+                ctx.constrain_eq(callee_ty, expected_func_ty);
+                for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
+                    ctx.constrain_eq(*param_ty, *arg_ty);
+                }
+                return result_ty;
+            }
+        }
+
+        // Multiple arguments (or zero): must be a function call
+        let callee_effect = ctx.fresh_effect_row();
         let expected_func_ty = ctx.func_type(param_types.clone(), result_ty, callee_effect);
         ctx.constrain_eq(callee_ty, expected_func_ty);
 
@@ -1341,16 +1391,37 @@ impl<'db> TypeChecker<'db> {
                 params,
                 continuation,
                 continuation_local_id,
-            } => HandlerKind::Effect {
-                ability: self.convert_ref_with_ctx(ctx, ability),
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                    .collect(),
-                continuation,
-                continuation_local_id,
-            },
+            } => {
+                // Bind continuation variable with Continuation type if named
+                if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
+                    // Create a Continuation type for the continuation variable.
+                    // The arg type is the type passed when resuming (effect operation's return type),
+                    // and the result type is the handler's result type.
+                    // For now, use fresh type variables since we don't have precise type info.
+                    let arg_ty = ctx.fresh_type_var();
+                    let result_ty = ctx.fresh_type_var();
+                    let cont_ty = Type::new(
+                        self.db(),
+                        TypeKind::Continuation {
+                            arg: arg_ty,
+                            result: result_ty,
+                        },
+                    );
+                    ctx.bind_local(k_local_id, cont_ty);
+                    ctx.bind_local_by_name(k_name, cont_ty);
+                }
+
+                HandlerKind::Effect {
+                    ability: self.convert_ref_with_ctx(ctx, ability),
+                    op,
+                    params: params
+                        .into_iter()
+                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                        .collect(),
+                    continuation,
+                    continuation_local_id,
+                }
+            }
         };
         HandlerArm {
             id: arm.id,

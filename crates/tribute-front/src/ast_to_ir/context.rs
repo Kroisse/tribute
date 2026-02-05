@@ -269,6 +269,13 @@ impl<'db> IrLoweringCtx<'db> {
                 tribute_rt::any_type(self.db)
             }
             TypeKind::App { ctor, .. } => self.convert_type(*ctor),
+            TypeKind::Continuation { arg, result } => {
+                use trunk_ir::dialect::cont;
+                let ir_arg = self.convert_type(*arg);
+                let ir_result = self.convert_type(*result);
+                let effect = tribute_rt::any_type(self.db);
+                cont::Continuation::new(self.db, ir_arg, ir_result, effect).as_type()
+            }
         }
     }
 
