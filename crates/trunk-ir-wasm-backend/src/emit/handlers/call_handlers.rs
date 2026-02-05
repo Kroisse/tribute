@@ -67,14 +67,15 @@ pub(crate) fn handle_call_indirect<'db>(
     let first_operand_ty = value_type(db, first_operand, &module_info.block_arg_types);
 
     // All call_indirect operations must use i32 table index
-    debug_assert!(
-        first_operand_ty.is_some_and(|ty| core::I32::from_type(db, ty).is_some()),
-        "call_indirect first operand must be i32 table index, got {:?}",
-        first_operand_ty.map(|ty| {
-            ty.dialect(db)
-                .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
-        })
-    );
+    if first_operand_ty.is_none_or(|ty| core::I32::from_type(db, ty).is_none()) {
+        return Err(CompilationError::invalid_module(format!(
+            "call_indirect first operand must be i32 table index, got {:?}",
+            first_operand_ty.map(|ty| {
+                ty.dialect(db)
+                    .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+            })
+        )));
+    }
 
     debug!(
         "call_indirect: first_operand_ty={:?}",

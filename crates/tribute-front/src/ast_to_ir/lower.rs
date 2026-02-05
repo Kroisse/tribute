@@ -537,10 +537,13 @@ fn lower_expr<'db>(
                             typed_ref.ty.kind(builder.db())
                         {
                             // Generate cont.resume instead of call_indirect
-                            let resume_value = arg_values
-                                .first()
-                                .copied()
-                                .unwrap_or_else(|| builder.emit_nil(location));
+                            assert_eq!(
+                                arg_values.len(),
+                                1,
+                                "ICE: continuation resume expects exactly 1 argument, got {}",
+                                arg_values.len()
+                            );
+                            let resume_value = arg_values[0];
                             let result_ty = builder.ctx.convert_type(*result);
                             let op = builder.block.op(cont::resume(
                                 builder.db(),

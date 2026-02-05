@@ -2578,4 +2578,50 @@ mod tests {
             "Row variable not present should not be detected"
         );
     }
+
+    #[test]
+    fn test_types_unifiable_continuation() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        // Same continuation types should be unifiable
+        let cont1 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: bool_ty,
+            },
+        );
+        let cont2 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: bool_ty,
+            },
+        );
+        assert!(solver.types_unifiable(cont1, cont2));
+
+        // Different arg types should not be unifiable
+        let cont3 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: bool_ty,
+                result: bool_ty,
+            },
+        );
+        assert!(!solver.types_unifiable(cont1, cont3));
+
+        // Different result types should not be unifiable
+        let cont4 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: int_ty,
+            },
+        );
+        assert!(!solver.types_unifiable(cont1, cont4));
+    }
 }

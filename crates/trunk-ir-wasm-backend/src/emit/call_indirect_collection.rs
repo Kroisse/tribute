@@ -135,23 +135,20 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     };
 
                     // Callee (i32 table index) is FIRST operand, params are operands[1..]
-                    let param_types: IdVec<Type<'db>> = if callee_is_first {
-                        operands
-                            .iter()
-                            .skip(1)
-                            .filter_map(|v| value_type(db, *v, block_arg_types))
-                            .map(normalize_param_type)
-                            .collect()
-                    } else {
-                        // Fallback: callee is LAST operand, params are operands[..n-1]
-                        // This shouldn't happen after the migration, but keep for safety
-                        operands
-                            .iter()
-                            .take(operands.len() - 1)
-                            .filter_map(|v| value_type(db, *v, block_arg_types))
-                            .map(normalize_param_type)
-                            .collect()
-                    };
+                    assert!(
+                        callee_is_first,
+                        "call_indirect first operand must be i32 table index or closure struct, got {:?}",
+                        first_operand_ty.map(|ty| {
+                            ty.dialect(db)
+                                .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+                        })
+                    );
+                    let param_types: IdVec<Type<'db>> = operands
+                        .iter()
+                        .skip(1)
+                        .filter_map(|v| value_type(db, *v, block_arg_types))
+                        .map(normalize_param_type)
+                        .collect();
 
                     // Result type - use enclosing function's return type if it's funcref
                     // and the call_indirect has anyref result. This is needed because

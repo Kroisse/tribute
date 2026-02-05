@@ -574,16 +574,9 @@ impl<'db> TypeChecker<'db> {
                 ctx.constrain_eq(callee_ty, expected_cont_ty);
                 ctx.constrain_eq(cont_arg_ty, arg_types[0]);
                 return cont_result_ty;
-            } else if matches!(callee_ty.kind(self.db()), TypeKind::UniVar { .. }) {
-                // Callee is an unknown type variable - default to function semantics
-                // This handles cases like higher-order functions with unknown callees
-                ctx.constrain_eq(callee_ty, expected_func_ty);
-                for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
-                    ctx.constrain_eq(*param_ty, *arg_ty);
-                }
-                return result_ty;
             } else {
-                // Callee is a concrete function type or other - use function semantics
+                // Callee is a UniVar, concrete function type, or other - use function semantics
+                // This handles cases like higher-order functions with unknown callees
                 ctx.constrain_eq(callee_ty, expected_func_ty);
                 for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
                     ctx.constrain_eq(*param_ty, *arg_ty);
