@@ -22,7 +22,8 @@ pub mod type_converter;
 pub mod wasm;
 
 // Re-exports
-pub use boxing::insert_boxing;
+#[allow(deprecated)]
+pub use boxing::insert_boxing; // DEPRECATED: kept for compatibility
 pub use closure_lower::lower_closures;
 pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
