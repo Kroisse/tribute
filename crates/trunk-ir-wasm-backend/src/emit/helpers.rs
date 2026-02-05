@@ -77,7 +77,11 @@ pub(crate) fn type_to_valtype<'db>(
     ty: Type<'db>,
     type_idx_by_type: &HashMap<Type<'db>, u32>,
 ) -> CompilationResult<ValType> {
-    if core::I32::from_type(db, ty).is_some() || core::I1::from_type(db, ty).is_some() {
+    if core::I32::from_type(db, ty).is_some()
+        || core::I1::from_type(db, ty).is_some()
+        || cont::PromptTag::from_type(db, ty).is_some()
+    {
+        // cont.prompt_tag is represented as i32 at runtime (prompt tag index)
         Ok(ValType::I32)
     } else if core::I64::from_type(db, ty).is_some() {
         Ok(ValType::I64)
@@ -130,12 +134,31 @@ pub(crate) fn type_to_valtype<'db>(
                 nullable: true,
                 heap_type: HeapType::Concrete(STEP_IDX),
             }))
+        } else if name == Symbol::new("arrayref") {
+            // Abstract array reference type (ref null array)
+            Ok(ValType::Ref(RefType {
+                nullable: true,
+                heap_type: HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Array,
+                },
+            }))
         } else {
             Err(CompilationError::type_error(format!(
                 "unsupported wasm type: wasm.{}",
                 name
             )))
         }
+    } else if core::Array::from_type(db, ty).is_some() {
+        // core.array maps to abstract array reference type
+        // This handles array types that reach emit phase without conversion
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Array,
+            },
+        }))
     } else if core::Func::from_type(db, ty).is_some() {
         // Function types map to funcref for call_indirect operations.
         // The function signature is preserved in the IR and registered

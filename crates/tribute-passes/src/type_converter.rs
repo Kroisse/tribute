@@ -168,6 +168,10 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::single(unbox_op.as_operation());
             }
 
+            // Note: any → trampoline.resume_wrapper and any → core.array conversions
+            // are handled by wasm_type_converter, not here, because they require
+            // wasm.ref_cast operations that are only available after WASM lowering.
+
             MaterializeResult::Skip
         })
 }

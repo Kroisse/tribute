@@ -24,7 +24,7 @@
 
 use tribute_ir::dialect::{ability, closure, tribute_rt};
 use trunk_ir::Symbol;
-use trunk_ir::dialect::{adt, trampoline};
+use trunk_ir::dialect::{adt, cont, trampoline};
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::rewrite::{MaterializeResult, OpVec, TypeConverter};
 use trunk_ir::{DialectOp, DialectType, Type};
@@ -170,6 +170,15 @@ pub fn wasm_type_converter() -> TypeConverter {
                 None
             }
         })
+        // Convert generic core.array → wasm.arrayref
+        // This handles array types that are not evidence types (e.g., user arrays)
+        .add_conversion(|db, ty| {
+            core::Array::from_type(db, ty).map(|_| wasm::Arrayref::new(db).as_type())
+        })
+        // Convert cont.prompt_tag → core.i32 (same representation at runtime)
+        .add_conversion(|db, ty| {
+            cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+        })
         // Convert marker ADT type → pass through (already standard ADT struct)
         // This conversion is a no-op since marker_adt_type() returns a standard adt.struct
         .add_conversion(|db, ty| {
@@ -292,6 +301,11 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
+            // adt.struct → wasm.anyref (GC struct is a subtype of anyref)
+            // This handles _Continuation and other ADT structs that need to be passed as anyref
+            if adt::is_struct_type(db, from_ty) && wasm::Anyref::from_type(db, to_ty).is_some() {
+                return MaterializeResult::NoOp;
+            }
             // closure.closure → adt.struct(name="_closure") (same representation)
             if closure::Closure::from_type(db, from_ty).is_some() && to_ty == closure_adt_type(db) {
                 return MaterializeResult::NoOp;
@@ -384,6 +398,31 @@ pub fn wasm_type_converter() -> TypeConverter {
                 && wasm::Structref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
+            }
+            // cont.prompt_tag → core.i32 (same representation at runtime)
+            if cont::PromptTag::from_type(db, from_ty).is_some()
+                && core::I32::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // core.array → wasm.arrayref (same representation)
+            if core::Array::from_type(db, from_ty).is_some()
+                && wasm::Arrayref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            MaterializeResult::Skip
+        })
+        // anyref → arrayref materialization (requires ref_cast)
+        .add_materialization(|db, location, value, from_ty, to_ty| {
+            let from_is_any = wasm::Anyref::from_type(db, from_ty).is_some()
+                || tribute_rt::Any::from_type(db, from_ty).is_some();
+            if from_is_any && wasm::Arrayref::from_type(db, to_ty).is_some() {
+                let arrayref_ty = wasm::Arrayref::new(db).as_type();
+                let cast_op = wasm::ref_cast(db, location, value, arrayref_ty, arrayref_ty, None);
+                let mut ops = OpVec::new();
+                ops.push(cast_op.as_operation());
+                return MaterializeResult::Ops(ops);
             }
             MaterializeResult::Skip
         })
