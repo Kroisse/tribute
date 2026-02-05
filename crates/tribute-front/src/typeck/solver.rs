@@ -142,6 +142,11 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 Type::new(db, TypeKind::App { ctor, args })
             }
+            TypeKind::Continuation { arg, result } => {
+                let arg = self.apply_with_rows(db, *arg, row_subst);
+                let result = self.apply_with_rows(db, *result, row_subst);
+                Type::new(db, TypeKind::Continuation { arg, result })
+            }
             _ => ty,
         }
     }
@@ -295,6 +300,10 @@ impl<'db> TypeSubst<'db> {
                     self.collect_unresolved_univars(db, *a, row_subst, out);
                 }
             }
+            TypeKind::Continuation { arg, result } => {
+                self.collect_unresolved_univars(db, *arg, row_subst, out);
+                self.collect_unresolved_univars(db, *result, row_subst, out);
+            }
             _ => {}
         }
     }
@@ -396,6 +405,18 @@ impl<'db> TypeSubst<'db> {
                     TypeKind::App {
                         ctor: new_ctor,
                         args: new_args,
+                    },
+                )
+            }
+            TypeKind::Continuation { arg, result } => {
+                let new_arg = self.replace_univars_with_bound(db, *arg, row_subst, var_to_index);
+                let new_result =
+                    self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
+                Type::new(
+                    db,
+                    TypeKind::Continuation {
+                        arg: new_arg,
+                        result: new_result,
                     },
                 )
             }
@@ -635,6 +656,21 @@ impl<'db> TypeSolver<'db> {
                 Ok(())
             }
 
+            (
+                &TypeKind::Continuation {
+                    arg: a1,
+                    result: r1,
+                },
+                &TypeKind::Continuation {
+                    arg: a2,
+                    result: r2,
+                },
+            ) => {
+                self.unify_types(a1, a2)?;
+                self.unify_types(r1, r2)?;
+                Ok(())
+            }
+
             // Primitive types must match exactly
             _ => Err(SolveError::TypeMismatch {
                 expected: t1,
@@ -673,6 +709,9 @@ impl<'db> TypeSolver<'db> {
             TypeKind::Tuple(elements) => elements.iter().any(|e| self.occurs_in(var, *e)),
             TypeKind::App { ctor, args } => {
                 self.occurs_in(var, *ctor) || args.iter().any(|a| self.occurs_in(var, *a))
+            }
+            TypeKind::Continuation { arg, result } => {
+                self.occurs_in(var, *arg) || self.occurs_in(var, *result)
             }
             _ => false,
         }
@@ -734,6 +773,9 @@ impl<'db> TypeSolver<'db> {
             TypeKind::App { ctor, args } => {
                 self.row_occurs_in_type(var, *ctor)
                     || args.iter().any(|a| self.row_occurs_in_type(var, *a))
+            }
+            TypeKind::Continuation { arg, result } => {
+                self.row_occurs_in_type(var, *arg) || self.row_occurs_in_type(var, *result)
             }
             TypeKind::UniVar { id } => {
                 if let Some(subst_ty) = self.type_subst.get(*id) {
@@ -1030,6 +1072,16 @@ impl<'db> TypeSolver<'db> {
                         .zip(a2.iter())
                         .all(|(x, y)| self.types_unifiable(*x, *y))
             }
+            (
+                TypeKind::Continuation {
+                    arg: a1,
+                    result: r1,
+                },
+                TypeKind::Continuation {
+                    arg: a2,
+                    result: r2,
+                },
+            ) => self.types_unifiable(*a1, *a2) && self.types_unifiable(*r1, *r2),
             _ => false,
         }
     }
@@ -2525,5 +2577,51 @@ mod tests {
             !solver.row_occurs_in_type(row_var, func),
             "Row variable not present should not be detected"
         );
+    }
+
+    #[test]
+    fn test_types_unifiable_continuation() {
+        let db = test_db();
+        let solver = TypeSolver::new(&db);
+
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        // Same continuation types should be unifiable
+        let cont1 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: bool_ty,
+            },
+        );
+        let cont2 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: bool_ty,
+            },
+        );
+        assert!(solver.types_unifiable(cont1, cont2));
+
+        // Different arg types should not be unifiable
+        let cont3 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: bool_ty,
+                result: bool_ty,
+            },
+        );
+        assert!(!solver.types_unifiable(cont1, cont3));
+
+        // Different result types should not be unifiable
+        let cont4 = Type::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: int_ty,
+            },
+        );
+        assert!(!solver.types_unifiable(cont1, cont4));
     }
 }

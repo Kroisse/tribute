@@ -113,6 +113,13 @@ pub enum TypeKind<'db> {
         args: Vec<Type<'db>>,
     },
 
+    /// Continuation type for effect handlers.
+    ///
+    /// Represents a captured continuation that can be resumed with a value.
+    /// - `arg`: The type of value passed when resuming
+    /// - `result`: The type returned after resuming
+    Continuation { arg: Type<'db>, result: Type<'db> },
+
     /// Error type (used when type checking fails).
     ///
     /// This propagates through the type system to prevent cascading errors.

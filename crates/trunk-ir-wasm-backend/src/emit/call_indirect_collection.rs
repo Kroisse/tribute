@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use tracing::debug;
-use trunk_ir::dialect::{cont, core, func, wasm};
+use trunk_ir::dialect::{core, func, wasm};
 use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, IdVec, Region, Symbol, Type};
 
 use crate::errors::CompilationResult;
@@ -23,7 +23,6 @@ trunk_ir::symbols! {
 /// their function types in the type section. It handles:
 /// - Polymorphic function types (anyref params/results)
 /// - Result type upgrade (anyref → funcref/Step based on enclosing function)
-/// - Legacy vs new operand order (funcref first vs last)
 ///
 /// Returns a vector of (type_idx, func_type) pairs sorted by type index.
 pub(crate) fn collect_call_indirect_types<'db>(
@@ -31,6 +30,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
     module: core::Module<'db>,
     type_idx_by_type: &mut HashMap<Type<'db>, u32>,
     block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+    gc_type_count: usize,
     func_type_count: usize,
 ) -> CompilationResult<Vec<(u32, core::Func<'db>)>> {
     fn collect_from_region<'db>(
@@ -109,20 +109,14 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         continue; // Skip invalid call_indirect
                     }
 
-                    // Check if first operand is a ref type (funcref/anyref/core.func/core.ptr/closure struct)
-                    // or i32 (function table index for closure calls).
-                    // If so, the callee identifier is FIRST and we skip it for params.
-                    // Otherwise, the callee is LAST (legacy order).
+                    // The callee (i32 table index) is the FIRST operand, followed by args.
+                    // All indirect calls use table-based call_indirect.
                     let first_operand = operands.first().copied().unwrap();
                     let first_operand_ty = value_type(db, first_operand, block_arg_types);
-                    let funcref_is_first = first_operand_ty.is_some_and(|ty| {
-                        wasm::Funcref::from_type(db, ty).is_some()
-                            || wasm::Anyref::from_type(db, ty).is_some()
-                            || core::Func::from_type(db, ty).is_some()
-                            || core::Ptr::from_type(db, ty).is_some()
-                            || core::I32::from_type(db, ty).is_some() // i32 table index for closures
-                            || is_closure_struct_type(db, ty)
-                            || cont::Continuation::from_type(db, ty).is_some() // cont.continuation is funcref-like
+                    let callee_is_first = first_operand_ty.is_some_and(|ty| {
+                        // First operand should be i32 table index or closure struct
+                        // (closure struct's first field is the i32 table index)
+                        core::I32::from_type(db, ty).is_some() || is_closure_struct_type(db, ty)
                     });
 
                     // Helper to normalize IR types to wasm types for call_indirect.
@@ -140,23 +134,21 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         }
                     };
 
-                    let param_types: IdVec<Type<'db>> = if funcref_is_first {
-                        // Funcref is FIRST operand, params are operands[1..]
-                        operands
-                            .iter()
-                            .skip(1)
-                            .filter_map(|v| value_type(db, *v, block_arg_types))
-                            .map(normalize_param_type)
-                            .collect()
-                    } else {
-                        // Funcref is LAST operand (legacy), params are operands[..n-1]
-                        operands
-                            .iter()
-                            .take(operands.len() - 1)
-                            .filter_map(|v| value_type(db, *v, block_arg_types))
-                            .map(normalize_param_type)
-                            .collect()
-                    };
+                    // Callee (i32 table index) is FIRST operand, params are operands[1..]
+                    assert!(
+                        callee_is_first,
+                        "call_indirect first operand must be i32 table index or closure struct, got {:?}",
+                        first_operand_ty.map(|ty| {
+                            ty.dialect(db)
+                                .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+                        })
+                    );
+                    let param_types: IdVec<Type<'db>> = operands
+                        .iter()
+                        .skip(1)
+                        .filter_map(|v| value_type(db, *v, block_arg_types))
+                        .map(normalize_param_type)
+                        .collect();
 
                     // Result type - use enclosing function's return type if it's funcref
                     // and the call_indirect has anyref result. This is needed because
@@ -257,12 +249,7 @@ pub(crate) fn collect_call_indirect_types<'db>(
     // GC types are indices 0..gc_type_count
     // Function definition types are indices gc_type_count..gc_type_count+func_type_count
     // call_indirect types should start after that
-    let gc_type_count = type_idx_by_type
-        .values()
-        .max()
-        .map(|&idx| idx + 1)
-        .unwrap_or(0);
-    let mut next_type_idx = gc_type_count + func_type_count as u32;
+    let mut next_type_idx = (gc_type_count + func_type_count) as u32;
     let mut new_types = Vec::new();
 
     collect_from_region(

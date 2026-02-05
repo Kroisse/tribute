@@ -531,15 +531,40 @@ fn lower_expr<'db>(
                     }
                     ResolvedRef::Local { id, .. } => {
                         let callee_val = builder.ctx.lookup(*id)?;
-                        let result_ty = builder.call_result_type(&typed_ref.ty);
-                        let op = builder.block.op(func::call_indirect(
-                            builder.db(),
-                            location,
-                            callee_val,
-                            arg_values,
-                            result_ty,
-                        ));
-                        Some(op.result(builder.db()))
+
+                        // Check if callee is a continuation type
+                        if let TypeKind::Continuation { result, .. } =
+                            typed_ref.ty.kind(builder.db())
+                        {
+                            // Generate cont.resume instead of call_indirect
+                            assert_eq!(
+                                arg_values.len(),
+                                1,
+                                "ICE: continuation resume expects exactly 1 argument, got {}",
+                                arg_values.len()
+                            );
+                            let resume_value = arg_values[0];
+                            let result_ty = builder.ctx.convert_type(*result);
+                            let op = builder.block.op(cont::resume(
+                                builder.db(),
+                                location,
+                                callee_val,
+                                resume_value,
+                                result_ty,
+                            ));
+                            Some(op.result(builder.db()))
+                        } else {
+                            // Regular call_indirect for closures
+                            let result_ty = builder.call_result_type(&typed_ref.ty);
+                            let op = builder.block.op(func::call_indirect(
+                                builder.db(),
+                                location,
+                                callee_val,
+                                arg_values,
+                                result_ty,
+                            ));
+                            Some(op.result(builder.db()))
+                        }
                     }
                     ResolvedRef::Constructor { variant, .. } => {
                         let result_ty = builder.call_result_type(&typed_ref.ty);
@@ -2065,8 +2090,14 @@ fn build_suspend_handler_block<'db>(
         unreachable!("build_suspend_handler_block called with non-effect handler");
     };
 
-    // Get the continuation
-    let cont_ty = tribute_rt::any_type(db); // Continuation is opaque at this level
+    // Get the continuation with proper cont::Continuation type
+    let cont_ty = cont::Continuation::new(
+        db,
+        tribute_rt::any_type(db), // arg type
+        tribute_rt::any_type(db), // result type
+        tribute_rt::any_type(db), // effect
+    )
+    .as_type();
     let get_cont_op = block_builder.op(cont::get_continuation(db, location, cont_ty));
     let cont_value = get_cont_op.as_operation().result(db, 0);
 
