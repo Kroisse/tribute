@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
-    UniVarSource,
+    CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
+    UniVarId, UniVarSource,
 };
 
 use super::constraint::ConstraintSet;
@@ -352,8 +352,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///   - `e1 = {B | e3}`
     ///   - `e2 = {A | e3}`
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
-        use super::effect_row;
-
         let db = self.db;
         let current = self.current_effect;
 
@@ -368,21 +366,43 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             return;
         }
 
-        match (current.rest(db), effect.rest(db)) {
-            (None, None) | (Some(_), None) | (None, Some(_)) => {
-                // At most one row is open: simple union
-                self.current_effect = effect_row::union(db, current, effect, || {
-                    unreachable!("fresh var not needed when at most one row is open")
-                });
-            }
-            (Some(e1), Some(e2)) if e1 == e2 => {
-                // Both open with the same rest variable: simple union, no constraints needed
-                let mut effects = current.effects(db).clone();
-                for e in effect.effects(db) {
-                    if !effects.contains(e) {
-                        effects.push(e.clone());
+        // Helper closure to merge effects with unification of type args for same ability
+        let merge_effects_with_unification =
+            |ctx: &mut Self, base: &[Effect<'db>], incoming: &[Effect<'db>]| -> Vec<Effect<'db>> {
+                let mut result = base.to_vec();
+                for e in incoming {
+                    // Check if there's already an effect with the same ability_id
+                    if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
+                        // Same ability: unify type args instead of adding duplicate
+                        for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
+                        {
+                            ctx.constrain_eq(*existing_arg, *incoming_arg);
+                        }
+                        // Don't add the effect since it's already present (with unified args)
+                    } else {
+                        // Different ability: add to result
+                        result.push(e.clone());
                     }
                 }
+                result
+            };
+
+        match (current.rest(db), effect.rest(db)) {
+            (None, None) | (Some(_), None) | (None, Some(_)) => {
+                // At most one row is open: union with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
+                let rest = match (current.rest(db), effect.rest(db)) {
+                    (None, None) => None,
+                    (Some(v), None) | (None, Some(v)) => Some(v),
+                    (Some(_), Some(_)) => unreachable!(),
+                };
+                self.current_effect = EffectRow::new(db, effects, rest);
+            }
+            (Some(e1), Some(e2)) if e1 == e2 => {
+                // Both open with the same rest variable: union with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e1));
             }
             (Some(e1), Some(e2)) => {
@@ -397,13 +417,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 let row_for_e2 = EffectRow::new(db, current.effects(db).clone(), Some(e3));
                 self.constrain_row_eq(EffectRow::open(db, e2), row_for_e2);
 
-                // Result: {current effects ∪ effect effects | e3}
-                let mut effects = current.effects(db).clone();
-                for e in effect.effects(db) {
-                    if !effects.contains(e) {
-                        effects.push(e.clone());
-                    }
-                }
+                // Result: {current effects ∪ effect effects | e3} with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e3));
             }
         }
