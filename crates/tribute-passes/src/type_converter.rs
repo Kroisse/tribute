@@ -107,17 +107,20 @@ pub fn generic_type_converter() -> TypeConverter {
 
             let any_ty = tribute_rt::Any::new(db).as_type();
 
-            // Int/Nat/I32 → any: use tribute_rt.box_int
+            // Int/Nat/I32/I64 → any: use tribute_rt.box_int
             if tribute_rt::Int::from_type(db, from_ty).is_some()
                 || tribute_rt::Nat::from_type(db, from_ty).is_some()
                 || core::I32::from_type(db, from_ty).is_some()
+                || core::I64::from_type(db, from_ty).is_some()
             {
                 let box_op = tribute_rt::box_int(db, location, value, any_ty);
                 return MaterializeResult::single(box_op.as_operation());
             }
 
-            // Bool → any: use tribute_rt.box_bool
-            if tribute_rt::Bool::from_type(db, from_ty).is_some() {
+            // Bool/I1 → any: use tribute_rt.box_bool
+            if tribute_rt::Bool::from_type(db, from_ty).is_some()
+                || core::I1::from_type(db, from_ty).is_some()
+            {
                 let box_op = tribute_rt::box_bool(db, location, value, any_ty);
                 return MaterializeResult::single(box_op.as_operation());
             }
@@ -140,9 +143,10 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::Skip;
             }
 
-            // any → Int/I32: use tribute_rt.unbox_int
+            // any → Int/I32/I64: use tribute_rt.unbox_int
             if tribute_rt::Int::from_type(db, to_ty).is_some()
                 || core::I32::from_type(db, to_ty).is_some()
+                || core::I64::from_type(db, to_ty).is_some()
             {
                 let unbox_op = tribute_rt::unbox_int(db, location, value, to_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
@@ -154,8 +158,10 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::single(unbox_op.as_operation());
             }
 
-            // any → Bool: use tribute_rt.unbox_bool
-            if tribute_rt::Bool::from_type(db, to_ty).is_some() {
+            // any → Bool/I1: use tribute_rt.unbox_bool
+            if tribute_rt::Bool::from_type(db, to_ty).is_some()
+                || core::I1::from_type(db, to_ty).is_some()
+            {
                 let unbox_op = tribute_rt::unbox_bool(db, location, value, to_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
             }

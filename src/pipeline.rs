@@ -32,9 +32,6 @@
 //!     ▼ tdnr
 //! Module (UFCS resolved)
 //!     │
-//!     ▼ boxing
-//! Module (boxing explicit)
-//!     │
 //!     ├─────────────── Evidence & Closure Processing ─┤
 //!     ▼ evidence_params (Phase 1)
 //! Module (evidence params added to signatures)
@@ -70,7 +67,6 @@ use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
-use tribute_passes::boxing::insert_boxing;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
@@ -295,16 +291,6 @@ pub struct CompilationResult<'db> {
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
 
-/// Insert explicit boxing/unboxing operations.
-///
-/// This pass inserts `tribute_rt.box_*` and `tribute_rt.unbox_*` operations
-/// at call sites where polymorphic parameters or results need boxing/unboxing.
-/// This makes boxing explicit in the IR, removing the need for emit-time type inference.
-#[salsa::tracked]
-pub fn stage_boxing<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    insert_boxing(db, module)
-}
-
 /// Lambda Lifting.
 ///
 /// Closure Lowering.
@@ -499,7 +485,7 @@ pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
 #[salsa::tracked]
 pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     let module = parse_and_lower_ast(db, source);
-    let module = stage_boxing(db, module);
+    // Boxing removed - now handled via unrealized_conversion_cast in ast_to_ir
     stage_evidence_params(db, module)
 }
 

@@ -53,9 +53,12 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     /// Emit a nil value (Tribute's unit type).
     fn emit_nil(&mut self, location: Location<'db>) -> trunk_ir::Value<'db> {
         let ty = self.ctx.nil_type();
-        self.block
+        let result = self
+            .block
             .op(arith::r#const(self.db(), location, ty, Attribute::Unit))
-            .result(self.db())
+            .result(self.db());
+        self.ctx.track_value_type(result, ty);
+        result
     }
 
     /// Emit diagnostic for unimplemented expression and return nil placeholder.
@@ -80,6 +83,57 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
             TypeKind::Func { result, .. } => self.ctx.convert_type(*result),
             _ => self.ctx.convert_type(*ty),
         }
+    }
+
+    /// Insert an unrealized_conversion_cast if the value's type differs from target_ty.
+    ///
+    /// Returns the casted value if a cast was needed, or the original value if types match.
+    /// This is used to insert casts for polymorphic function calls, which are later
+    /// materialized by `resolve_casts` into box/unbox operations.
+    fn cast_if_needed(
+        &mut self,
+        location: Location<'db>,
+        value: trunk_ir::Value<'db>,
+        target_ty: trunk_ir::Type<'db>,
+    ) -> trunk_ir::Value<'db> {
+        use trunk_ir::ValueDef;
+
+        // Get the current type of the value from its definition
+        let value_ty = match value.def(self.db()) {
+            ValueDef::OpResult(op) => {
+                let results = op.results(self.db());
+                let index = value.index(self.db());
+                results.get(index).copied()
+            }
+            ValueDef::BlockArg(_) => {
+                // Block arguments: try to get from tracked types
+                self.ctx.get_value_type(value)
+            }
+        };
+
+        // If we couldn't determine the value's type, or types match, no cast needed
+        if let Some(value_ty) = value_ty {
+            if value_ty == target_ty {
+                return value;
+            }
+        } else {
+            // No type information available - conservatively skip cast
+            return value;
+        }
+
+        // Insert unrealized_conversion_cast
+        let cast_op = self.block.op(core::unrealized_conversion_cast(
+            self.db(),
+            location,
+            value,
+            target_ty,
+        ));
+        let casted = cast_op.result(self.db());
+
+        // Track the new value's type
+        self.ctx.track_value_type(casted, target_ty);
+
+        casted
     }
 
     /// Lower arguments and propagate errors properly.
@@ -247,6 +301,9 @@ fn lower_function<'db>(
             (p, r, None)
         };
 
+    // Clone param_ir_types before consuming it, so we can use it in the closure
+    let param_ir_types_for_tracking = param_ir_types.clone();
+
     let params: Vec<(trunk_ir::Type<'db>, Option<Symbol>)> = param_ir_types
         .into_iter()
         .zip(func.params.iter())
@@ -270,6 +327,10 @@ fn lower_function<'db>(
             for (i, param) in func.params.iter().enumerate() {
                 if let Some(local_id) = param.local_id {
                     ctx.bind(local_id, param.name, arg_values[i]);
+                    // Track the parameter value's type
+                    if i < param_ir_types_for_tracking.len() {
+                        ctx.track_value_type(arg_values[i], param_ir_types_for_tracking[i]);
+                    }
                 }
             }
 
@@ -378,7 +439,11 @@ fn lower_expr<'db>(
                 let op = builder
                     .block
                     .op(arith::Const::i64(builder.db(), location, n as i64));
-                Some(op.result(builder.db()))
+                let result = op.result(builder.db());
+                builder
+                    .ctx
+                    .track_value_type(result, core::I64::new(builder.db()).as_type());
+                Some(result)
             }
         }
 
@@ -404,7 +469,11 @@ fn lower_expr<'db>(
                 let op = builder
                     .block
                     .op(arith::Const::i64(builder.db(), location, n));
-                Some(op.result(builder.db()))
+                let result = op.result(builder.db());
+                builder
+                    .ctx
+                    .track_value_type(result, core::I64::new(builder.db()).as_type());
+                Some(result)
             }
         }
 
@@ -415,14 +484,22 @@ fn lower_expr<'db>(
             let op = builder
                 .block
                 .op(arith::Const::i32(builder.db(), location, c as i32));
-            Some(op.result(builder.db()))
+            let result = op.result(builder.db());
+            builder
+                .ctx
+                .track_value_type(result, core::I32::new(builder.db()).as_type());
+            Some(result)
         }
 
         ExprKind::FloatLit(f) => {
             let op = builder
                 .block
                 .op(arith::Const::f64(builder.db(), location, f.value()));
-            Some(op.result(builder.db()))
+            let result = op.result(builder.db());
+            builder
+                .ctx
+                .track_value_type(result, core::F64::new(builder.db()).as_type());
+            Some(result)
         }
 
         ExprKind::BoolLit(b) => {
@@ -430,7 +507,9 @@ fn lower_expr<'db>(
             let op = builder
                 .block
                 .op(arith::r#const(builder.db(), location, ty, b.into()));
-            Some(op.result(builder.db()))
+            let result = op.result(builder.db());
+            builder.ctx.track_value_type(result, ty);
+            Some(result)
         }
 
         ExprKind::StringLit(ref s) => {
@@ -438,7 +517,9 @@ fn lower_expr<'db>(
             let op = builder
                 .block
                 .op(adt::string_const(builder.db(), location, ty, s.clone()));
-            Some(op.result(builder.db()))
+            let result = op.result(builder.db());
+            builder.ctx.track_value_type(result, ty);
+            Some(result)
         }
 
         ExprKind::BytesLit(ref _bytes) => builder.emit_unsupported(location, "bytes literal"),
@@ -454,7 +535,9 @@ fn lower_expr<'db>(
                     builder
                         .block
                         .op(func::constant(builder.db(), location, func_ty, func_name));
-                Some(op.result(builder.db()))
+                let result = op.result(builder.db());
+                builder.ctx.track_value_type(result, func_ty);
+                Some(result)
             }
             ResolvedRef::Constructor { variant, .. } => {
                 let func_ty = builder.ctx.convert_type(typed_ref.ty);
@@ -462,7 +545,9 @@ fn lower_expr<'db>(
                     builder
                         .block
                         .op(func::constant(builder.db(), location, func_ty, *variant));
-                Some(op.result(builder.db()))
+                let result = op.result(builder.db());
+                builder.ctx.track_value_type(result, func_ty);
+                Some(result)
             }
             ResolvedRef::Builtin(_)
             | ResolvedRef::Module { .. }
@@ -512,13 +597,32 @@ fn lower_expr<'db>(
 
         ExprKind::Call { callee, args } => {
             // Lower arguments first, propagating errors properly
-            let arg_values = builder.collect_args(args)?;
+            let mut arg_values = builder.collect_args(args)?;
 
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
                         let callee_name =
                             Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
+
+                        // Get function type scheme to extract parameter types
+                        let func_scheme = builder.ctx.lookup_function_type(callee_name);
+
+                        // Insert casts for arguments if we have type scheme information
+                        if let Some(scheme) = func_scheme
+                            && let TypeKind::Func { params, .. } =
+                                scheme.body(builder.db()).kind(builder.db())
+                        {
+                            // Cast each argument to its expected parameter type
+                            for (i, param_ty) in params.iter().enumerate() {
+                                if i < arg_values.len() {
+                                    let target_ty = builder.ctx.convert_type(*param_ty);
+                                    arg_values[i] =
+                                        builder.cast_if_needed(location, arg_values[i], target_ty);
+                                }
+                            }
+                        }
+
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op = builder.block.op(func::call(
                             builder.db(),
@@ -527,7 +631,12 @@ fn lower_expr<'db>(
                             result_ty,
                             callee_name,
                         ));
-                        Some(op.result(builder.db()))
+                        let result = op.result(builder.db());
+
+                        // Track the result type
+                        builder.ctx.track_value_type(result, result_ty);
+
+                        Some(result)
                     }
                     ResolvedRef::Local { id, .. } => {
                         let callee_val = builder.ctx.lookup(*id)?;
@@ -552,9 +661,25 @@ fn lower_expr<'db>(
                                 resume_value,
                                 result_ty,
                             ));
-                            Some(op.result(builder.db()))
+                            let result = op.result(builder.db());
+                            builder.ctx.track_value_type(result, result_ty);
+                            Some(result)
                         } else {
                             // Regular call_indirect for closures
+                            // Insert casts for indirect calls if function type is available
+                            if let TypeKind::Func { params, .. } = typed_ref.ty.kind(builder.db()) {
+                                for (i, param_ty) in params.iter().enumerate() {
+                                    if i < arg_values.len() {
+                                        let target_ty = builder.ctx.convert_type(*param_ty);
+                                        arg_values[i] = builder.cast_if_needed(
+                                            location,
+                                            arg_values[i],
+                                            target_ty,
+                                        );
+                                    }
+                                }
+                            }
+
                             let result_ty = builder.call_result_type(&typed_ref.ty);
                             let op = builder.block.op(func::call_indirect(
                                 builder.db(),
@@ -563,7 +688,9 @@ fn lower_expr<'db>(
                                 arg_values,
                                 result_ty,
                             ));
-                            Some(op.result(builder.db()))
+                            let result = op.result(builder.db());
+                            builder.ctx.track_value_type(result, result_ty);
+                            Some(result)
                         }
                     }
                     ResolvedRef::Constructor { variant, .. } => {
@@ -576,7 +703,9 @@ fn lower_expr<'db>(
                             result_ty,
                             *variant,
                         ));
-                        Some(op.result(builder.db()))
+                        let result = op.result(builder.db());
+                        builder.ctx.track_value_type(result, result_ty);
+                        Some(result)
                     }
                     ResolvedRef::AbilityOp { ability, op } => {
                         // Lower ability operation directly to cont.shift
@@ -599,7 +728,9 @@ fn lower_expr<'db>(
                         arg_values,
                         result_ty,
                     ));
-                    Some(op.result(builder.db()))
+                    let result = op.result(builder.db());
+                    builder.ctx.track_value_type(result, result_ty);
+                    Some(result)
                 }
             }
         }
@@ -619,7 +750,9 @@ fn lower_expr<'db>(
                         result_ty,
                         *variant,
                     ));
-                    Some(op.result(builder.db()))
+                    let result = op.result(builder.db());
+                    builder.ctx.track_value_type(result, result_ty);
+                    Some(result)
                 }
                 _ => builder.emit_unsupported(location, "non-constructor in Cons"),
             }
@@ -636,7 +769,9 @@ fn lower_expr<'db>(
             let op = builder
                 .block
                 .op(adt::struct_new(db, location, values, result_ty, result_ty));
-            Some(op.result(db))
+            let result = op.result(db);
+            builder.ctx.track_value_type(result, result_ty);
+            Some(result)
         }
 
         ExprKind::Record {
@@ -964,7 +1099,10 @@ fn lower_lambda<'db>(
             // Bind lambda parameters (skip env at index 0)
             for (i, param) in params.iter().enumerate() {
                 if let Some(local_id) = param.local_id {
-                    builder.ctx.bind(local_id, param.name, arg_values[i + 1]);
+                    let arg_val = arg_values[i + 1];
+                    builder.ctx.bind(local_id, param.name, arg_val);
+                    // Track parameter type (all parameters are any_ty in lifted lambdas)
+                    builder.ctx.track_value_type(arg_val, any_ty);
                 }
             }
 
@@ -976,6 +1114,8 @@ fn lower_lambda<'db>(
                     ))
                     .result(db);
                 builder.ctx.bind(cap.local_id, cap.name, extracted);
+                // Track extracted capture value type
+                builder.ctx.track_value_type(extracted, cap.ty);
             }
 
             // Lower the lambda body

@@ -49,6 +49,9 @@ pub struct IrLoweringCtx<'db> {
     /// Stack of active prompt tags for nested handlers.
     /// The top of the stack is the currently active prompt tag.
     active_prompt_tag_stack: Vec<u32>,
+    /// Track IR types of SSA values for cast insertion.
+    /// Maps each generated Value to its IR type.
+    value_types: HashMap<Value<'db>, Type<'db>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -73,6 +76,7 @@ impl<'db> IrLoweringCtx<'db> {
             struct_fields: HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
+            value_types: HashMap::new(),
         }
     }
 
@@ -222,6 +226,20 @@ impl<'db> IrLoweringCtx<'db> {
     /// Get struct field order (for lowering Record → adt.struct_new).
     pub fn get_struct_field_order(&self, ctor_id: CtorId<'db>) -> Option<&Vec<Symbol>> {
         self.struct_fields.get(&ctor_id)
+    }
+
+    /// Track the IR type of a generated SSA value.
+    ///
+    /// This is used by `cast_if_needed` to determine if a cast is required.
+    pub fn track_value_type(&mut self, value: Value<'db>, ty: Type<'db>) {
+        self.value_types.insert(value, ty);
+    }
+
+    /// Get the tracked IR type of a value.
+    ///
+    /// Returns `None` if the value's type was not tracked.
+    pub fn get_value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
+        self.value_types.get(&value).copied()
     }
 
     /// Get all bindings visible in the current scope (for capture analysis).
