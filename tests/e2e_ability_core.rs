@@ -29,7 +29,7 @@
 
 mod common;
 
-// TODO: Re-enable once print_line is fixed for wasmtime output
+// TODO: Re-enable once WASM backend issues are resolved
 #[allow(unused_imports)]
 use common::run_wasm;
 use ropey::Rope;
@@ -72,7 +72,7 @@ fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
     }
 }
 
-/// Helper to compile code (execution disabled until print_line is fixed).
+/// Helper to compile code (execution disabled until WASM backend issues are resolved).
 /// Returns 0 as placeholder - tests should only verify compilation succeeds.
 fn compile_and_run(code: &str, name: &str) -> i32 {
     let source_code = Rope::from_str(code);
@@ -84,7 +84,7 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
         let _wasm_binary =
             compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
-        // TODO: Re-enable once print_line is fixed for wasmtime output
+        // TODO: Re-enable once WASM backend issues are resolved
         // run_wasm::<i32>(wasm_binary.bytes(db))
         0 // Placeholder - compilation succeeded
     })

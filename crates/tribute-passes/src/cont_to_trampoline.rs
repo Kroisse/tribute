@@ -2823,6 +2823,15 @@ fn build_arm_region<'db>(
                 false
             };
 
+            // Detect cont.resume - it gets lowered to func.call_indirect and returns Step
+            let is_resume = cont::Resume::from_operation(db, *op).is_ok();
+            if is_resume {
+                tracing::debug!("build_arm_region: found cont.resume, will produce Step");
+            }
+
+            // Either effectful call or resume produces Step
+            let produces_step = is_effectful_call || is_resume;
+
             // Remap operands if needed
             let operands = op.operands(db);
             let remapped_operands: IdVec<Value<'db>> = operands
@@ -2831,8 +2840,8 @@ fn build_arm_region<'db>(
                 .collect::<Vec<_>>()
                 .into();
 
-            // Determine result types - effectful calls need Step type
-            let result_types = if is_effectful_call {
+            // Determine result types - effectful calls and resume need Step type
+            let result_types = if produces_step {
                 // Replace the first result type with Step
                 let mut types = op.results(db).clone();
                 if !types.is_empty() {
@@ -2844,7 +2853,7 @@ fn build_arm_region<'db>(
             };
 
             // If operands or result types changed, create new operation
-            if remapped_operands != *operands || is_effectful_call {
+            if remapped_operands != *operands || produces_step {
                 let new_op = Operation::new(
                     db,
                     op.location(db),
@@ -2857,8 +2866,8 @@ fn build_arm_region<'db>(
                     op.successors(db).clone(),
                 );
                 ops.push(new_op);
-                if is_effectful_call {
-                    // Effectful call returns Step at runtime - subsequent ops are handled by continuation
+                if produces_step {
+                    // Effectful call or resume returns Step at runtime - subsequent ops are handled by continuation
                     last_step_value = Some(new_op.result(db, 0));
                     break;
                 }
