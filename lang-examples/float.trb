@@ -1,0 +1,18 @@
+// Float type example
+// Demonstrates basic Float operations
+
+fn double(x: Float) ->{} Float {
+    x * 2.0
+}
+
+fn main() ->{} Float {
+    let a = 3.14
+    let b = 2.0
+    let product = a * b
+    let sum = a + b
+    let diff = a - b
+    let quot = a / b
+
+    // Combined operations
+    double(product) + sum - diff + quot
+}
