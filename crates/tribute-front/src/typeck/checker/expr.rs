@@ -282,8 +282,17 @@ impl<'db> TypeChecker<'db> {
 
                 // Use the expected effect if provided, otherwise use the inferred effect.
                 // When expected effect is given, it means the lambda is being checked against
-                // a known function type, so we use the expected effect directly.
-                let lambda_effect = expected_effect.unwrap_or(inferred_effect);
+                // a known function type. We must constrain the inferred effect to match the
+                // expected effect so that any UniVars created during body checking get resolved.
+                let lambda_effect = if let Some(expected) = expected_effect {
+                    // Constrain the inferred effect (fresh_effect after body checking)
+                    // to match the expected effect. This ensures UniVars in the body's
+                    // types that reference fresh_effect get properly resolved.
+                    ctx.constrain_row_eq(inferred_effect, expected);
+                    expected
+                } else {
+                    inferred_effect
+                };
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
