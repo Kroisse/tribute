@@ -26,7 +26,7 @@
 //! and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
-use tribute_ir::dialect::tribute_rt;
+use tribute_ir::dialect::{closure, tribute_rt};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
@@ -34,7 +34,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::{Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Type};
 
-use super::type_converter::wasm_type_converter;
+use super::type_converter::{closure_adt_type, wasm_type_converter};
 
 /// Normalize tribute_rt primitive types to core types.
 ///
@@ -107,6 +107,11 @@ fn is_illegal_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -
         return true;
     }
 
+    // Check closure.closure type (should be converted to adt.struct before emit)
+    if closure::Closure::from_type(db, ty).is_some() {
+        return true;
+    }
+
     false
 }
 
@@ -149,6 +154,11 @@ fn convert_primitive_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> O
     // tribute_rt.intref -> wasm.i31ref
     if tribute_rt::Intref::from_type(db, ty).is_some() {
         return Some(wasm::I31ref::new(db).as_type());
+    }
+
+    // closure.closure -> adt.struct(name="_closure")
+    if closure::Closure::from_type(db, ty).is_some() {
+        return Some(closure_adt_type(db));
     }
 
     None

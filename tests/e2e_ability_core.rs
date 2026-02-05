@@ -150,7 +150,6 @@ fn main() -> Nat { 0 }
 
 /// Test basic handle expression parsing and typechecking.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_handle_expression() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -197,7 +196,6 @@ fn main() -> Int { run() }
 ///
 /// Note: Full execution requires backend support (issues #112-#114).
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
 fn test_milestone_target_code() {
     // This is the target code from issue #100
     let code = r#"ability State(s) {
@@ -505,7 +503,7 @@ fn main() -> Nat { 0 }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let result = compile_and_run(code, "ability_core.trb");
@@ -514,7 +512,7 @@ fn test_ability_core_execution() {
 
 /// Test simple State::get handler that returns a constant.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_state_get_simple() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -539,7 +537,7 @@ fn main() -> Int {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -569,7 +567,7 @@ fn main() -> Int {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -605,7 +603,7 @@ fn main() -> Int {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -642,7 +640,7 @@ fn main() -> Int {
 /// and State::set both from State), the handled_abilities list may contain
 /// duplicates. The deduplication fix ensures constraint generation doesn't fail.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_duplicate_ability_handlers_compile() {
     // This code has two handlers for the same ability (State)
     // Previously, this could cause constraint issues due to duplicate entries
@@ -726,7 +724,7 @@ fn main() -> Nat { 0 }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -763,7 +761,7 @@ fn main() -> Int {
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
@@ -834,7 +832,7 @@ fn main() -> Nat { 0 }
 /// When handling State(Int), the type argument Int should be preserved in the
 /// effect row constraint, not lost by creating Effect entries with empty args.
 #[test]
-#[ignore = "WASM backend: unrealized_conversion_cast failures"]
+#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
     fn get() -> s

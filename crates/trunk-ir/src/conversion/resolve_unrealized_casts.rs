@@ -244,7 +244,13 @@ impl<'db, 'a> CastResolver<'db, 'a> {
 
         // Get the input value and types
         let input_value = operands[0];
-        let to_type = results[0]; // Target type is stored in the result type
+        let original_to_type = results[0]; // Target type is stored in the result type
+
+        // Convert the target type if needed (e.g., core.array -> wasm.arrayref)
+        let to_type = self
+            .type_converter
+            .convert_type(self.db, original_to_type)
+            .unwrap_or(original_to_type);
 
         // Get the source type from the input value
         let from_type = self.get_value_type(input_value);
