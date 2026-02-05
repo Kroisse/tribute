@@ -640,7 +640,6 @@ fn main() -> Int {
 /// and State::set both from State), the handled_abilities list may contain
 /// duplicates. The deduplication fix ensures constraint generation doesn't fail.
 #[test]
-#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_duplicate_ability_handlers_compile() {
     // This code has two handlers for the same ability (State)
     // Previously, this could cause constraint issues due to duplicate entries
@@ -832,7 +831,6 @@ fn main() -> Nat { 0 }
 /// When handling State(Int), the type argument Int should be preserved in the
 /// effect row constraint, not lost by creating Effect entries with empty args.
 #[test]
-#[ignore = "WASM backend: ability runtime not yet functional"]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
     fn get() -> s
