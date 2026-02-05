@@ -18,7 +18,7 @@
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{adt, core};
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
 use trunk_ir::{DialectOp, DialectType, Type};
 
@@ -133,6 +133,11 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::single(box_op.as_operation());
             }
 
+            // adt.struct/adt.typeref → any: no-op (already a reference type)
+            if adt::is_struct_type(db, from_ty) || adt::is_typeref(db, from_ty) {
+                return MaterializeResult::NoOp;
+            }
+
             MaterializeResult::Skip
         })
         // Unboxing: tribute_rt.any → primitive types
@@ -172,6 +177,11 @@ pub fn generic_type_converter() -> TypeConverter {
             {
                 let unbox_op = tribute_rt::unbox_float(db, location, value, to_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            // any → adt.struct/adt.typeref: no-op (already a reference type)
+            if adt::is_struct_type(db, to_ty) || adt::is_typeref(db, to_ty) {
+                return MaterializeResult::NoOp;
             }
 
             // Note: any → trampoline.resume_wrapper and any → core.array conversions

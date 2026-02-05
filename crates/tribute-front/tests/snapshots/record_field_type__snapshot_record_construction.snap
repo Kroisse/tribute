@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 194
 expression: ir_module
 ---
 Module(test) {
@@ -23,6 +24,8 @@ Module(test) {
         func @make_point() -> tribute_rt.any {
             body: [
                 "arith.const",
+                "arith.const",
+                "adt.struct_new",
                 "func.return",
             ],
         },

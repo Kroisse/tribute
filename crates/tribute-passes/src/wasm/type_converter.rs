@@ -67,6 +67,23 @@ pub fn evidence_wasm_type(db: &dyn salsa::Database) -> Type<'_> {
     wasm::Arrayref::new(db).as_type()
 }
 
+/// Helper to generate i31 boxing operations (ref_i31 + implicit upcast to anyref).
+///
+/// This is used when converting i32/i64 values to anyref for polymorphic function calls.
+/// WasmGC's i31ref is a subtype of anyref, so the boxing is implicit.
+fn box_via_i31<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    value: trunk_ir::Value<'db>,
+) -> MaterializeResult<'db> {
+    let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+    // Create i31ref from i32 value (truncates to 31 bits)
+    let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
+
+    MaterializeResult::single(new_op.as_operation())
+}
+
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
 ///
 /// This is used when converting anyref-typed values back to i32, such as
@@ -294,6 +311,32 @@ pub fn wasm_type_converter() -> TypeConverter {
                 && wasm::Anyref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
+            }
+            // core.i32 → wasm.anyref (box via i31)
+            // This handles boxing of integers for polymorphic function calls
+            // after the generic type converter's casts have been converted to wasm types.
+            if core::I32::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return box_via_i31(db, location, value);
+            }
+            // core.i64 → wasm.anyref (box via i31, with truncation)
+            // Note: This truncates i64 to 31 bits, which may lose data.
+            // For full i64 support, we would need a boxed struct.
+            if core::I64::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return box_via_i31(db, location, value);
+            }
+            // core.nil → wasm.anyref (nil is represented as null reference)
+            // This is used for polymorphic functions that return nil.
+            if core::Nil::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                // Nil is represented as a null reference in WasmGC
+                let anyref_ty = wasm::Anyref::new(db).as_type();
+                let null_op = wasm::ref_null(db, location, anyref_ty, anyref_ty, None);
+                return MaterializeResult::single(null_op.as_operation());
             }
             // wasm.structref → wasm.anyref (structref is a subtype of anyref)
             if wasm::Structref::from_type(db, from_ty).is_some()

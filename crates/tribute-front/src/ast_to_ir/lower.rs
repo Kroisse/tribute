@@ -112,12 +112,30 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         };
 
         // If we couldn't determine the value's type, or types match, no cast needed
-        if let Some(value_ty) = value_ty {
-            if value_ty == target_ty {
-                return value;
-            }
-        } else {
+        let Some(value_ty) = value_ty else {
             // No type information available - conservatively skip cast
+            return value;
+        };
+
+        if value_ty == target_ty {
+            return value;
+        }
+
+        // Skip cast for closure → func conversions
+        // Closures and function types have the same calling convention in the runtime.
+        // The closure lowering pass will unify these types later.
+        if closure::Closure::from_type(self.db(), value_ty).is_some()
+            && core::Func::from_type(self.db(), target_ty).is_some()
+        {
+            return value;
+        }
+
+        // Skip cast for func → func conversions with compatible signatures
+        // These arise when polymorphic function parameters get different instantiations
+        // but have the same structural type (e.g., fn() -> Int vs fn() -> tribute_rt.any)
+        if core::Func::from_type(self.db(), value_ty).is_some()
+            && core::Func::from_type(self.db(), target_ty).is_some()
+        {
             return value;
         }
 
