@@ -54,11 +54,11 @@ fn parse_empty_attr(attr: ProcTokenStream) -> Result<(), Box<unsynn::Error>> {
 fn transform_fn(input: TokenStream) -> Result<TokenStream, Box<unsynn::Error>> {
     let mut tokens = input.to_token_iter();
     let func: SalsaTestFn = SalsaTestFn::parser(&mut tokens).map_err(Box::new)?;
-    let db_ident = db_ident_from_params(&func.params)?;
+    let (db_ident, db_type) = db_ident_and_type_from_params(&func.params)?;
     let body_group: Group = func.body.into();
 
     let wrapped_body = quote!({
-        salsa::Database::attach(&salsa::DatabaseImpl::default(), |#db_ident| {
+        salsa::Database::attach(&#db_type::default(), |#db_ident| {
             #body_group
         });
     });
@@ -81,17 +81,44 @@ impl ParamName {
     }
 }
 
-fn db_ident_from_params(params: &ParamsGroup) -> Result<proc_macro2::Ident, Box<unsynn::Error>> {
+fn db_ident_and_type_from_params(
+    params: &ParamsGroup,
+) -> Result<(proc_macro2::Ident, proc_macro2::TokenStream), Box<unsynn::Error>> {
+    let default_type = quote!(salsa::DatabaseImpl);
     match &params.content.0 {
-        None => Ok(format_ident!("db")),
+        None => Ok((format_ident!("db"), default_type)),
         Some(param) => {
             let ident = param.name.ident();
             if ident == "_" {
                 return other_error("salsa_test expects a named parameter, not `_`");
             }
-            Ok(ident.clone())
+            let db_type = extract_db_type(&param.ty).unwrap_or(default_type);
+            Ok((ident.clone(), db_type))
         }
     }
+}
+
+/// Extract the database type from a parameter type like `&salsa::DatabaseImpl` or `&TributeDatabaseImpl`.
+/// Returns `None` for trait objects (e.g., `&dyn salsa::Database`) since they cannot be instantiated.
+fn extract_db_type(ty: &TokenStream) -> Option<proc_macro2::TokenStream> {
+    let tokens: Vec<_> = ty.clone().into_iter().collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    // Skip leading `&` if present
+    let mut start = 0;
+    if matches!(&tokens[0], proc_macro2::TokenTree::Punct(p) if p.as_char() == '&') {
+        start = 1;
+    }
+    if start >= tokens.len() {
+        return None;
+    }
+    // If the type is a trait object (`dyn ...`), return None to use the default type
+    if matches!(&tokens[start], proc_macro2::TokenTree::Ident(i) if i == "dyn") {
+        return None;
+    }
+    let type_tokens: proc_macro2::TokenStream = tokens[start..].iter().cloned().collect();
+    Some(type_tokens)
 }
 
 fn other_error<T>(message: &str) -> Result<T, Box<unsynn::Error>> {
@@ -191,6 +218,48 @@ mod tests {
         assert!(
             output.contains("my_special_test"),
             "Should preserve function name"
+        );
+    }
+
+    #[test]
+    fn test_transform_fn_with_dyn_trait_uses_default() {
+        let input = make_token_stream(quote!(
+            fn test_with_dyn(db: &dyn salsa::Database) {
+                let _ = db;
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(result.is_ok(), "transform_fn should succeed with dyn trait");
+
+        let output = result.unwrap().to_string();
+        // Should use default DatabaseImpl, not `dyn salsa::Database`
+        assert!(
+            output.contains("salsa :: DatabaseImpl :: default"),
+            "Should use default DatabaseImpl for dyn trait: {}",
+            output
+        );
+    }
+
+    #[test]
+    fn test_transform_fn_with_custom_db_type() {
+        let input = make_token_stream(quote!(
+            fn test_custom(db: &TributeDatabaseImpl) {
+                let _ = db;
+            }
+        ));
+
+        let result = transform_fn(input);
+        assert!(
+            result.is_ok(),
+            "transform_fn should succeed with custom type"
+        );
+
+        let output = result.unwrap().to_string();
+        assert!(
+            output.contains("TributeDatabaseImpl :: default"),
+            "Should use custom database type: {}",
+            output
         );
     }
 }
