@@ -1,7 +1,7 @@
 //! End-to-end tests for Float type operations.
 //!
 //! These tests verify Float type functionality including:
-//! - Arithmetic operations (*, /, -)
+//! - Arithmetic operations (+, -, *, /)
 //! - Comparison operations (<, >, <=, >=, ==)
 //! - WASM compilation
 
@@ -10,14 +10,13 @@ mod common;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
+use tribute::database::parse_with_thread_local;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
 
 /// Test Float multiplication operation.
 #[test]
 fn test_float_multiply() {
-    use tribute::database::parse_with_thread_local;
-
     // 3.0 * 2.0 = 6.0
     let source_code = Rope::from_str(
         r#"
@@ -39,8 +38,6 @@ fn main() ->{} Float {
 /// Test Float subtraction operation.
 #[test]
 fn test_float_subtraction() {
-    use tribute::database::parse_with_thread_local;
-
     // 5.5 - 2.5 = 3.0
     let source_code = Rope::from_str(
         r#"
@@ -63,8 +60,6 @@ fn main() ->{} Float {
 /// Test Float division operation.
 #[test]
 fn test_float_division() {
-    use tribute::database::parse_with_thread_local;
-
     // 10.0 / 4.0 = 2.5
     let source_code = Rope::from_str(
         r#"
@@ -86,8 +81,6 @@ fn main() ->{} Float {
 /// Test Float comparison operations (<, >, ==).
 #[test]
 fn test_float_comparison_less_than() {
-    use tribute::database::parse_with_thread_local;
-
     // 1.5 < 2.5 == True
     let source_code = Rope::from_str(
         r#"
@@ -110,8 +103,6 @@ fn main() ->{} Bool {
 /// Test Float greater-than comparison.
 #[test]
 fn test_float_comparison_greater_than() {
-    use tribute::database::parse_with_thread_local;
-
     // 2.5 > 1.5 == True
     let source_code = Rope::from_str(
         r#"
@@ -134,8 +125,6 @@ fn main() ->{} Bool {
 /// Test Float equality comparison.
 #[test]
 fn test_float_comparison_equality() {
-    use tribute::database::parse_with_thread_local;
-
     // 1.5 == 1.5 == True
     let source_code = Rope::from_str(
         r#"
@@ -157,8 +146,6 @@ fn main() ->{} Bool {
 /// Test Float less-than-or-equal comparison.
 #[test]
 fn test_float_comparison_lte() {
-    use tribute::database::parse_with_thread_local;
-
     let source_code = Rope::from_str(
         r#"
 fn main() ->{} Bool {
@@ -179,8 +166,6 @@ fn main() ->{} Bool {
 /// Test Float greater-than-or-equal comparison.
 #[test]
 fn test_float_comparison_gte() {
-    use tribute::database::parse_with_thread_local;
-
     let source_code = Rope::from_str(
         r#"
 fn main() ->{} Bool {
@@ -201,8 +186,6 @@ fn main() ->{} Bool {
 /// Test Float combined arithmetic operations.
 #[test]
 fn test_float_combined_arithmetic() {
-    use tribute::database::parse_with_thread_local;
-
     // (3.0 * 2.0) + (10.0 / 2.0) - 1.0 = 6.0 + 5.0 - 1.0 = 10.0
     let source_code = Rope::from_str(
         r#"
@@ -226,8 +209,6 @@ fn main() ->{} Float {
 /// Test Float literal WASM compilation.
 #[test]
 fn test_float_literal_compiles() {
-    use tribute::database::parse_with_thread_local;
-
     let source_code = Rope::from_str(
         r#"
 fn main() ->{} Float {
@@ -248,8 +229,6 @@ fn main() ->{} Float {
 /// Test negative Float literal.
 #[test]
 fn test_negative_float_literal() {
-    use tribute::database::parse_with_thread_local;
-
     let source_code = Rope::from_str(
         r#"
 fn main() ->{} Float {
@@ -270,8 +249,6 @@ fn main() ->{} Float {
 /// Test Float in function parameter and return.
 #[test]
 fn test_float_function_param_and_return() {
-    use tribute::database::parse_with_thread_local;
-
     let source_code = Rope::from_str(
         r#"
 fn double(x: Float) ->{} Float {
