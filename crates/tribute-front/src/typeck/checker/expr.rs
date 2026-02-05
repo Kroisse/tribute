@@ -19,6 +19,56 @@ use super::super::func_context::FunctionInferenceContext;
 use super::super::subst;
 use super::{Mode, TypeChecker};
 
+/// Check if a type contains any unification variables (UniVar).
+///
+/// This is used to determine if it's safe to use Mode::Check with the type.
+/// If the type contains UniVars, using Mode::Check can cause ICE with
+/// row-polymorphic effect types.
+fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    match ty.kind(db) {
+        TypeKind::UniVar { .. } => true,
+        TypeKind::Named { args, .. } => args.iter().any(|a| type_contains_univar(db, *a)),
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+        } => {
+            params.iter().any(|p| type_contains_univar(db, *p))
+                || type_contains_univar(db, *result)
+                || effect_row_contains_univar(db, *effect)
+        }
+        TypeKind::Tuple(elems) => elems.iter().any(|e| type_contains_univar(db, *e)),
+        TypeKind::App { ctor, args } => {
+            type_contains_univar(db, *ctor) || args.iter().any(|a| type_contains_univar(db, *a))
+        }
+        TypeKind::Continuation { arg, result } => {
+            type_contains_univar(db, *arg) || type_contains_univar(db, *result)
+        }
+        TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::String
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::BoundVar { .. }
+        | TypeKind::Error => false,
+    }
+}
+
+/// Check if an effect row contains any unification variables.
+fn effect_row_contains_univar<'db>(db: &'db dyn salsa::Database, row: EffectRow<'db>) -> bool {
+    for effect in row.effects(db) {
+        for arg in &effect.args {
+            if type_contains_univar(db, *arg) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Expression checking
@@ -306,8 +356,14 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Error => ctx.error_type(),
         };
 
-        // Check mode
-        if let Mode::Check(expected) = mode {
+        // Check mode: constrain inferred type to match expected type.
+        // Exception: For lambdas, we only use the expected type to extract the effect type,
+        // not to constrain the whole type. The lambda's type already reflects the expected
+        // effect through lambda_effect = expected_effect.unwrap_or(inferred_effect).
+        // Adding a full type constraint here can cause ICE with row-polymorphic types.
+        if let Mode::Check(expected) = mode
+            && !matches!(&*expr.kind, ExprKind::Lambda { .. })
+        {
             ctx.constrain_eq(ty, expected);
         }
 
@@ -780,13 +836,49 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
             ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved)),
-            ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.check_expr_with_ctx(ctx, callee, Mode::Infer),
-                args: args
+            ExprKind::Call { callee, args } => {
+                // First, process callee so its type gets recorded
+                let converted_callee = self.check_expr_with_ctx(ctx, callee, Mode::Infer);
+
+                // Now get callee's type (recorded during check_expr_with_ctx)
+                let callee_ty = ctx.get_node_type(converted_callee.id);
+
+                // Extract param types if callee is a function type.
+                // This enables propagating expected types to lambda arguments,
+                // which is crucial for effect type inference.
+                let param_types: Vec<Option<Type<'db>>> = match callee_ty {
+                    Some(ty) => {
+                        if let TypeKind::Func { params, .. } = ty.kind(self.db()) {
+                            params.iter().map(|p| Some(*p)).collect()
+                        } else {
+                            vec![None; args.len()]
+                        }
+                    }
+                    None => vec![None; args.len()],
+                };
+
+                let converted_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
-                    .collect(),
-            },
+                    .enumerate()
+                    .map(|(i, a)| {
+                        // Use Mode::Check only if param type is available and doesn't contain
+                        // unification variables. Using Check mode with UniVar-containing types
+                        // can cause ICE with row-polymorphic effect types.
+                        let mode = match param_types.get(i) {
+                            Some(Some(ty)) if !type_contains_univar(self.db(), *ty) => {
+                                Mode::Check(*ty)
+                            }
+                            _ => Mode::Infer,
+                        };
+                        self.check_expr_with_ctx(ctx, a, mode)
+                    })
+                    .collect();
+
+                ExprKind::Call {
+                    callee: converted_callee,
+                    args: converted_args,
+                }
+            }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
                 ctor: self.convert_ref_with_ctx(ctx, ctor),
                 args: args

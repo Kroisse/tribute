@@ -152,14 +152,15 @@ pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> 
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let (typed_ast, function_types_vec, node_types_vec) = checker.check_module(resolved);
+    let result = checker.check_module(resolved);
 
     // TDNR
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, typed_ast);
+    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
 
     // AST → TrunkIR
-    let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
-    let node_types: std::collections::HashMap<_, _> = node_types_vec.into_iter().collect();
+    let function_types: std::collections::HashMap<_, _> =
+        result.function_types.into_iter().collect();
+    let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let source_uri = prelude_source.uri(db).as_str();
     Some(ast_to_ir::lower_ast_to_ir(
         db,
@@ -603,14 +604,15 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     if let Some(p_exports) = prelude_exports(db) {
         checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
     }
-    let (typed_ast, function_types_vec, node_types_vec) = checker.check_module(resolved_ast);
+    let result = checker.check_module(resolved_ast);
 
     // Phase 5: TDNR (Type-Directed Name Resolution)
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, typed_ast);
+    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
 
     // Phase 6: AST → TrunkIR
-    let function_types: std::collections::HashMap<_, _> = function_types_vec.into_iter().collect();
-    let node_types: std::collections::HashMap<_, _> = node_types_vec.into_iter().collect();
+    let function_types: std::collections::HashMap<_, _> =
+        result.function_types.into_iter().collect();
+    let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let source_uri = source.uri(db).as_str();
     let user_module = ast_to_ir::lower_ast_to_ir(
         db,

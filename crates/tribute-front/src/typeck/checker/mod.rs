@@ -35,6 +35,16 @@ use crate::ast::{
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
 
+/// Result of module type checking.
+pub struct ModuleCheckResult<'db> {
+    /// The typed module AST.
+    pub module: Module<TypedRef<'db>>,
+    /// Function type schemes (name → polymorphic type).
+    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    /// Node types for IR lowering (NodeId → monomorphic type).
+    pub node_types: Vec<(NodeId, Type<'db>)>,
+}
+
 /// Type checking mode.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -103,14 +113,7 @@ impl<'db> TypeChecker<'db> {
     /// Type check a module.
     ///
     /// Returns the typed module, function type schemes, and node types.
-    pub fn check_module(
-        self,
-        module: Module<ResolvedRef<'db>>,
-    ) -> (
-        Module<TypedRef<'db>>,
-        Vec<(Symbol, TypeScheme<'db>)>,
-        Vec<(NodeId, Type<'db>)>,
-    ) {
+    pub fn check_module(self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         self.check_module_inner(module)
     }
 
@@ -128,14 +131,7 @@ impl<'db> TypeChecker<'db> {
     /// 2. For each function, create an isolated FunctionInferenceContext
     /// 3. Check the function body, solve constraints, and apply substitution
     /// 4. No global solve needed - each function's UniVars are resolved independently
-    fn check_module_inner(
-        mut self,
-        module: Module<ResolvedRef<'db>>,
-    ) -> (
-        Module<TypedRef<'db>>,
-        Vec<(Symbol, TypeScheme<'db>)>,
-        Vec<(NodeId, Type<'db>)>,
-    ) {
+    fn check_module_inner(mut self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
@@ -158,13 +154,15 @@ impl<'db> TypeChecker<'db> {
         // Convert node_types HashMap to Vec for Salsa compatibility
         let node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
 
-        let typed_module = Module {
-            id: module.id,
-            name: module.name,
-            decls,
-        };
-
-        (typed_module, function_types, node_types)
+        ModuleCheckResult {
+            module: Module {
+                id: module.id,
+                name: module.name,
+                decls,
+            },
+            function_types,
+            node_types,
+        }
     }
 
     /// Internal implementation for prelude module type checking.

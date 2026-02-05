@@ -45,12 +45,13 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
     let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    let (typed_ast, function_types, node_types) = checker.check_module(resolved);
+    let result = checker.check_module(resolved);
 
-    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, typed_ast);
+    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module);
 
-    let function_types_map: std::collections::HashMap<_, _> = function_types.into_iter().collect();
-    let node_types_map: std::collections::HashMap<_, _> = node_types.into_iter().collect();
+    let function_types_map: std::collections::HashMap<_, _> =
+        result.function_types.into_iter().collect();
+    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
         tdnr_ast,

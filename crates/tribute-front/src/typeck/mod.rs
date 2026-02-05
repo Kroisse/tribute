@@ -101,6 +101,6 @@ pub fn typecheck_module<'db>(
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map);
-    let (typed_module, function_types, node_types) = checker.check_module(module);
-    TypeCheckOutput::new(db, typed_module, function_types, node_types)
+    let result = checker.check_module(module);
+    TypeCheckOutput::new(db, result.module, result.function_types, result.node_types)
 }
