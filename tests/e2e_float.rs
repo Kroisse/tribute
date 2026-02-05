@@ -3,7 +3,6 @@
 //! These tests verify Float type functionality including:
 //! - Arithmetic operations (*, /, -)
 //! - Comparison operations (<, >, <=, >=, ==)
-//! - Pattern matching
 //! - WASM compilation
 
 mod common;
@@ -14,9 +13,9 @@ use tribute::TributeDatabaseImpl;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
 
-/// Test Float multiplication and division operations.
+/// Test Float multiplication operation.
 #[test]
-fn test_float_multiply_divide() {
+fn test_float_multiply() {
     use tribute::database::parse_with_thread_local;
 
     // 3.0 * 2.0 = 6.0
