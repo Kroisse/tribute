@@ -229,6 +229,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.node_types.get(&node).copied()
     }
 
+    /// Take ownership of the node_types map.
+    ///
+    /// This consumes the node_types, leaving an empty map.
+    /// Used for collecting all node types after type checking a function.
+    pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
+        std::mem::take(&mut self.node_types)
+    }
+
     // =========================================================================
     // Module-level lookups (delegated to ModuleTypeEnv)
     // =========================================================================
@@ -300,6 +308,20 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Add an effect row equality constraint.
     pub fn constrain_row_eq(&mut self, r1: EffectRow<'db>, r2: EffectRow<'db>) {
         self.constraints.add_row_eq(r1, r2);
+    }
+
+    /// Constrain that inferred_effect is subsumed by expected_effect.
+    ///
+    /// In row-polymorphic effect systems, this means the inferred effects
+    /// should be a subset of the expected effects. For now, we use equality
+    /// constraint which is more restrictive but simpler.
+    ///
+    /// This is used when checking lambdas against expected function types:
+    /// if the expected type has effects, the lambda's effect should match.
+    pub fn constrain_effect_subtype(&mut self, inferred: EffectRow<'db>, expected: EffectRow<'db>) {
+        // For simplicity, use row equality.
+        // A more sophisticated system would handle row extension/subsumption.
+        self.constraints.add_row_eq(inferred, expected);
     }
 
     /// Take the constraint set, leaving an empty set.

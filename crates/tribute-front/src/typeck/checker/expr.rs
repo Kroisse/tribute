@@ -177,6 +177,18 @@ impl<'db> TypeChecker<'db> {
                 result_ty
             }
             ExprKind::Lambda { params, body } => {
+                // Extract expected effect from mode if checking against a function type.
+                // This is crucial for lambdas passed to higher-order functions with effects.
+                let expected_effect = if let Mode::Check(expected_ty) = &mode {
+                    if let TypeKind::Func { effect, .. } = expected_ty.kind(self.db()) {
+                        Some(*effect)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let param_types: Vec<Type<'db>> = params
                     .iter()
                     .map(|p| match &p.ty {
@@ -188,8 +200,14 @@ impl<'db> TypeChecker<'db> {
                 // Save the outer context's effect - lambda has its own effect context
                 let outer_effect = ctx.current_effect();
 
-                // Lambda body starts with pure effect (no effects yet)
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                // Lambda body starts with a fresh effect row variable.
+                // This is open (can be extended via unification), allowing the lambda's
+                // effect to be determined by the context where it's used.
+                // For example, if passed to `run_state(fn() { ... })` where the parameter
+                // type is `fn() ->{e, State(s)} a`, unification will constrain the
+                // lambda's effect to include State(s).
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
@@ -205,12 +223,17 @@ impl<'db> TypeChecker<'db> {
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
 
                 // The lambda's effect is what accumulated during body inference
-                let lambda_effect = ctx.current_effect();
+                let inferred_effect = ctx.current_effect();
 
                 ctx.pop_scope();
 
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
+
+                // Use the expected effect if provided, otherwise use the inferred effect.
+                // When expected effect is given, it means the lambda is being checked against
+                // a known function type, so we use the expected effect directly.
+                let lambda_effect = expected_effect.unwrap_or(inferred_effect);
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
@@ -286,6 +309,13 @@ impl<'db> TypeChecker<'db> {
         // Check mode
         if let Mode::Check(expected) = mode {
             ctx.constrain_eq(ty, expected);
+        }
+
+        // If a type was already recorded for this node (e.g., by infer_expr_type_with_ctx),
+        // add a constraint to ensure consistency. This handles cases like Lambda where
+        // type inference may occur twice (once in infer_* and once in check_*).
+        if let Some(existing_ty) = ctx.get_node_type(expr.id) {
+            ctx.constrain_eq(ty, existing_ty);
         }
 
         // Record node type
@@ -581,6 +611,12 @@ impl<'db> TypeChecker<'db> {
                 for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
                     ctx.constrain_eq(*param_ty, *arg_ty);
                 }
+
+                // Effect propagation: merge callee's effect into current effect.
+                // This directly adds the callee's effects to the caller's effect row
+                // using row-polymorphic union semantics.
+                ctx.merge_effect(callee_effect);
+
                 return result_ty;
             }
         }
@@ -595,23 +631,10 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
 
-        // Effect handling: We rely on type unification to handle effect compatibility.
-        //
-        // When the callee's type is unified with the expected function type,
-        // the effect row is also unified. This naturally handles:
-        // - Pure callees: their effect unifies with any effect (subsumption)
-        // - Effectful callees: their effects must be present in the context
-        //
-        // We DON'T add merge_effect or constrain_row_eq here because:
-        // 1. The callee's type is constrained via constrain_eq(callee_ty, expected_func_ty)
-        // 2. If callee is pure (like apply_pure), its effect {} unifies with callee_effect
-        // 3. If callee is effectful, its effects propagate through type unification
-        //
-        // The actual effect checking happens when:
-        // - The function's return type is checked against the declared signature
-        // - Ability operations add their effect to the caller's effect row via
-        //   the row variable in their type signature
-        let _ = callee_effect; // Effect is handled through type unification
+        // Effect propagation: merge callee's effect into current effect.
+        // This directly adds the callee's effects to the caller's effect row
+        // using row-polymorphic union semantics.
+        ctx.merge_effect(callee_effect);
 
         result_ty
     }

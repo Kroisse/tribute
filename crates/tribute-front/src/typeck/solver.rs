@@ -511,6 +511,35 @@ impl<'db> TypeSolver<'db> {
         EffectVar { id }
     }
 
+    /// Apply type substitution to effect arguments in a row.
+    ///
+    /// This ensures that UniVars in effect args (like `State(s)` where `s` is a UniVar)
+    /// are resolved before row comparison. Without this, two rows with the same ability
+    /// but different (unresolved vs resolved) args would fail to unify.
+    fn apply_type_subst_to_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
+        let effects = row.effects(self.db);
+        let new_effects: Vec<_> = effects
+            .iter()
+            .map(|e| {
+                let new_args: Vec<_> = e
+                    .args
+                    .iter()
+                    .map(|a| self.type_subst.apply(self.db, *a))
+                    .collect();
+                crate::ast::Effect {
+                    ability_id: e.ability_id,
+                    args: new_args,
+                }
+            })
+            .collect();
+
+        if new_effects != *effects {
+            EffectRow::new(self.db, new_effects, row.rest(self.db))
+        } else {
+            row
+        }
+    }
+
     /// Solve a set of constraints.
     ///
     /// Processes all constraints even if some fail, so that as many type
@@ -813,6 +842,13 @@ impl<'db> TypeSolver<'db> {
         // Apply current row substitution first
         let r1 = self.row_subst.apply(self.db, r1);
         let r2 = self.row_subst.apply(self.db, r2);
+
+        // Apply type substitution to effect args
+        // This is important because effect args may contain UniVars that have been
+        // resolved by previous type constraints. For example, State(s) where s was
+        // already unified with Int should become State(Int) before row comparison.
+        let r1 = self.apply_type_subst_to_row(r1);
+        let r2 = self.apply_type_subst_to_row(r2);
 
         // Same row: done
         if r1 == r2 {

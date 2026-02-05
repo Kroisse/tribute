@@ -18,8 +18,8 @@ use super::context::CaptureInfo;
 
 use crate::ast::{
     Arm, CtorId, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm, HandlerKind,
-    LiteralPattern, LocalId, Module, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    StructDecl, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
+    LiteralPattern, LocalId, Module, NodeId, Param, Pattern, PatternKind, ResolvedRef, SpanMap,
+    Stmt, StructDecl, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::context::IrLoweringCtx;
@@ -213,6 +213,7 @@ pub fn lower_module<'db>(
     span_map: SpanMap,
     module: Module<TypedRef<'db>>,
     function_types: HashMap<Symbol, TypeScheme<'db>>,
+    node_types: HashMap<NodeId, Type<'db>>,
 ) -> core::Module<'db> {
     // Use module's NodeId to get location
     let module_location = span_map.get_or_default(module.id);
@@ -221,7 +222,14 @@ pub fn lower_module<'db>(
     let module_path = smallvec::smallvec![module_name];
 
     // Create context outside the build closure so we can access lifted_functions after
-    let mut ctx = IrLoweringCtx::new(db, path, span_map.clone(), function_types, module_path);
+    let mut ctx = IrLoweringCtx::new(
+        db,
+        path,
+        span_map.clone(),
+        function_types,
+        module_path,
+        node_types,
+    );
 
     // Pre-scan: register all struct field orders before lowering any declarations.
     // This ensures Record expressions can be lowered regardless of declaration order.
@@ -908,7 +916,32 @@ fn lower_expr<'db>(
                 &arms,
             )
         }
-        ExprKind::Lambda { params, body } => lower_lambda(builder, location, &params, &body),
+        ExprKind::Lambda { params, body } => {
+            // Extract effect type from the lambda's inferred type.
+            // This ensures lifted lambda functions preserve their effect information,
+            // which is needed for evidence parameter insertion in later passes.
+            let effect_ty = builder.ctx.get_node_type(expr.id).and_then(|ty| {
+                if let TypeKind::Func { effect, .. } = ty.kind(builder.db()) {
+                    // Debug: print the effect row
+                    let effects = effect.effects(builder.db());
+                    let rest = effect.rest(builder.db());
+                    tracing::debug!(
+                        "Lambda effect row: effects={:?}, rest={:?}, is_pure={}",
+                        effects,
+                        rest,
+                        effect.is_pure(builder.db())
+                    );
+                    if !effect.is_pure(builder.db()) {
+                        Some(builder.ctx.convert_effect_row(*effect))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            });
+            lower_lambda(builder, location, &params, &body, effect_ty)
+        }
         ExprKind::Handle { body, handlers } => lower_handle(builder, location, &body, &handlers),
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
@@ -1053,11 +1086,16 @@ fn analyze_captures<'db>(
 /// 2. Create a lifted function at module level
 /// 3. Create an env struct with captured values
 /// 4. Return a closure.new with the env and function reference
+///
+/// The `effect` parameter is the lambda's effect type extracted from type checking.
+/// If the lambda is effectful (non-pure), this effect type will be set on the
+/// lifted function, enabling the evidence pass to add evidence parameters.
 fn lower_lambda<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location<'db>,
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
+    effect: Option<trunk_ir::Type<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
     let db = builder.db();
     let any_ty = tribute_rt::any_type(db);
@@ -1108,7 +1146,7 @@ fn lower_lambda<'db>(
             param_specs
         },
         any_ty, // return type
-        None,   // effect type
+        effect, // effect type - propagated from type checking
         |body_block, arg_values| {
             // arg_values[0] is env, arg_values[1..] are params
             let env_value = arg_values[0];
@@ -2460,7 +2498,7 @@ mod tests {
         span_map: SpanMap,
         module: Module<TypedRef<'db>>,
     ) -> core::Module<'db> {
-        lower_module(db, path, span_map, module, HashMap::new())
+        lower_module(db, path, span_map, module, HashMap::new(), HashMap::new())
     }
 
     /// Get operations from a module's body.
@@ -3048,7 +3086,7 @@ mod tests {
     ) -> core::Module<'db> {
         let function_types: HashMap<Symbol, crate::ast::TypeScheme<'db>> =
             scheme_entries.into_iter().collect();
-        lower_module(db, path, span_map, module, function_types)
+        lower_module(db, path, span_map, module, function_types, HashMap::new())
     }
 
     #[salsa_test]
@@ -3187,6 +3225,7 @@ mod tests {
             span_map,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // Test Int annotation
@@ -3224,6 +3263,7 @@ mod tests {
             span_map,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // No annotation should default to int
@@ -3797,7 +3837,14 @@ mod tests {
         let scheme = crate::ast::TypeScheme::new(db, vec![], func_ty);
         let function_types: HashMap<Symbol, crate::ast::TypeScheme<'db>> =
             [(callee_name, scheme)].into();
-        lower_module(db, path, SpanMap::default(), module, function_types)
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            function_types,
+            HashMap::new(),
+        )
     }
 
     /// Tracked helper: build a constructor (Cons) module and lower it.
@@ -3828,7 +3875,14 @@ mod tests {
         let arg_exprs: Vec<_> = args.into_iter().map(int_lit_expr).collect();
         let cons = cons_expr(ctor_ref, arg_exprs);
         let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), cons))]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     /// Tracked helper: build a Call with Constructor callee and lower it.
@@ -3858,7 +3912,14 @@ mod tests {
         let callee = var_expr(callee_ref);
         let call = call_expr(callee, vec![int_lit_expr(42)]);
         let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), call))]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4284,7 +4345,14 @@ mod tests {
             body: case,
         };
         let module = simple_module(vec![Decl::Function(func)]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4607,7 +4675,14 @@ mod tests {
         let call = call_expr(callee, vec![int_lit_expr(1), nat_lit_expr(exceeds_i31)]);
 
         let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), call))]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4657,7 +4732,14 @@ mod tests {
         let cons = cons_expr(ctor_ref, vec![int_lit_expr(1), nat_lit_expr(exceeds_i31)]);
 
         let module = simple_module(vec![Decl::Function(simple_func(Symbol::new("main"), cons))]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4775,7 +4857,14 @@ mod tests {
             body: case,
         };
         let module = simple_module(vec![Decl::Function(func)]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4867,7 +4956,14 @@ mod tests {
             body: case,
         };
         let module = simple_module(vec![Decl::Function(func)]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -4972,7 +5068,14 @@ mod tests {
             body: case,
         };
         let module = simple_module(vec![Decl::Function(func)]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]
@@ -5043,7 +5146,14 @@ mod tests {
             body: case,
         };
         let module = simple_module(vec![Decl::Function(func)]);
-        lower_module(db, path, SpanMap::default(), module, HashMap::new())
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            HashMap::new(),
+        )
     }
 
     #[salsa_test]

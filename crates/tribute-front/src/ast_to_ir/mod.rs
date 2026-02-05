@@ -33,7 +33,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core;
 use trunk_ir::{PathId, Symbol};
 
-use crate::ast::{Module, SpanMap, TypeScheme, TypedRef};
+use crate::ast::{Module, NodeId, SpanMap, Type, TypeScheme, TypedRef};
 
 pub use context::IrLoweringCtx;
 pub use lower::lower_module;
@@ -48,15 +48,17 @@ pub use lower::lower_module;
 /// - `span_map`: SpanMap for looking up source locations
 /// - `source_uri`: URI of the source file
 /// - `function_types`: Function type schemes from type checking
+/// - `node_types`: Node types from type checking (NodeId → Type)
 pub fn lower_ast_to_ir<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
     span_map: SpanMap,
     source_uri: &str,
     function_types: HashMap<Symbol, TypeScheme<'db>>,
+    node_types: HashMap<NodeId, Type<'db>>,
 ) -> core::Module<'db> {
     let path = PathId::new(db, source_uri.to_owned());
-    lower_module(db, path, span_map, module, function_types)
+    lower_module(db, path, span_map, module, function_types, node_types)
 }
 
 #[cfg(test)]
@@ -79,6 +81,7 @@ mod tests {
             span_map,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // Verify context provides expected types
@@ -103,6 +106,7 @@ mod tests {
             span_map,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // Initially no binding
@@ -127,6 +131,7 @@ mod tests {
             span_map,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // Verify location creation doesn't panic

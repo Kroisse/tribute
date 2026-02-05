@@ -81,12 +81,9 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        let _wasm_binary =
-            compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
 
-        // TODO: Re-enable once WASM backend issues are resolved
-        // run_wasm::<i32>(wasm_binary.bytes(db))
-        0 // Placeholder - compilation succeeded
+        run_wasm::<i32>(wasm_binary.bytes(db))
     })
 }
 

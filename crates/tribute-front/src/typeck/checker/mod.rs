@@ -24,9 +24,13 @@ mod collect;
 mod expr;
 mod func_check;
 
+use std::collections::HashMap;
+
 use trunk_ir::{Span, Symbol, SymbolVec, smallvec::SmallVec};
 
-use crate::ast::{Decl, FuncDefId, Module, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef};
+use crate::ast::{
+    Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
+};
 
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
@@ -52,6 +56,9 @@ pub struct TypeChecker<'db> {
     pub(crate) module_path: Vec<Symbol>,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: SpanMap,
+    /// Accumulated node types from all functions.
+    /// Collects NodeId → Type mappings during type checking.
+    node_types: HashMap<NodeId, Type<'db>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -61,6 +68,7 @@ impl<'db> TypeChecker<'db> {
             env: ModuleTypeEnv::new(db),
             module_path: Vec::new(),
             span_map,
+            node_types: HashMap::new(),
         }
     }
 
@@ -94,11 +102,15 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check a module.
     ///
-    /// Returns the typed module and a list of exported function type schemes.
+    /// Returns the typed module, function type schemes, and node types.
     pub fn check_module(
         self,
         module: Module<ResolvedRef<'db>>,
-    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
+    ) -> (
+        Module<TypedRef<'db>>,
+        Vec<(Symbol, TypeScheme<'db>)>,
+        Vec<(NodeId, Type<'db>)>,
+    ) {
         self.check_module_inner(module)
     }
 
@@ -119,7 +131,11 @@ impl<'db> TypeChecker<'db> {
     fn check_module_inner(
         mut self,
         module: Module<ResolvedRef<'db>>,
-    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
+    ) -> (
+        Module<TypedRef<'db>>,
+        Vec<(Symbol, TypeScheme<'db>)>,
+        Vec<(NodeId, Type<'db>)>,
+    ) {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
@@ -139,13 +155,16 @@ impl<'db> TypeChecker<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
 
+        // Convert node_types HashMap to Vec for Salsa compatibility
+        let node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
+
         let typed_module = Module {
             id: module.id,
             name: module.name,
             decls,
         };
 
-        (typed_module, function_types)
+        (typed_module, function_types, node_types)
     }
 
     /// Internal implementation for prelude module type checking.
