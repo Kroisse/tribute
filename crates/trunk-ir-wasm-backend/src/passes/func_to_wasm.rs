@@ -372,21 +372,13 @@ impl<'db> RewritePattern<'db> for FuncConstantPattern {
 
         let func_ref = const_op.func_ref(db);
 
-        // Look up the table index for this function
-        let Some(&table_idx) = self.table_indices.get(&func_ref) else {
-            // If not in table_indices, this is a func.constant not used in closures
-            // (e.g., in element segment generation). Keep as-is or convert to ref_func.
-            // For element segments we still need ref_func.
-            let funcref_ty = wasm::Funcref::new(db).as_type();
-            let new_op = op
-                .modify(db)
-                .dialect_str("wasm")
-                .name_str("ref_func")
-                .attr("func_name", Attribute::Symbol(func_ref))
-                .results(IdVec::from(vec![funcref_ty]))
-                .build();
-            return RewriteResult::Replace(new_op);
-        };
+        // All func.constant operations must be registered in the function table.
+        // They are collected by collect_func_constant_refs before pattern application.
+        let table_idx = self
+            .table_indices
+            .get(&func_ref)
+            .copied()
+            .expect("All func.constant must be registered in table");
 
         // Transform to wasm.i32_const with table index
         let i32_ty = core::I32::new(db).as_type();

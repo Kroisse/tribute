@@ -701,13 +701,15 @@ fn collect_module_info<'db>(
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
-    // Pass the count of function definitions so call_indirect types get indices after them
+    // Pass the counts so call_indirect types get indices after GC types and function definitions
+    let gc_type_count = info.gc_types.len();
     let func_type_count = info.imports.len() + info.funcs.len();
     let call_indirect_types = collect_call_indirect_types(
         db,
         module,
         &mut type_idx_by_type,
         &info.block_arg_types,
+        gc_type_count,
         func_type_count,
     )?;
 

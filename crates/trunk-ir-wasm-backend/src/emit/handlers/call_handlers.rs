@@ -2,13 +2,13 @@
 //!
 //! This module handles WebAssembly function call operations:
 //! - wasm.call (direct function call)
-//! - wasm.call_indirect (indirect function call via funcref or table)
+//! - wasm.call_indirect (indirect function call via i32 table index)
 //! - wasm.return_call (tail call)
 
 use tracing::debug;
 use trunk_ir::dialect::{core, wasm};
 use trunk_ir::{DialectType, IdVec, Symbol, ValueDef};
-use wasm_encoder::{Function, HeapType, Instruction};
+use wasm_encoder::{Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -51,24 +51,31 @@ pub(crate) fn handle_call_indirect<'db>(
 ) -> CompilationResult<()> {
     let operands = op.operands(db);
 
-    // wasm.call_indirect: indirect function call
-    // Operands: [arg1, arg2, ..., argN, funcref]
-    // The funcref is the last operand (on top of stack in WebAssembly)
-    //
-    // If the last operand is a reference type (funcref/anyref), we use call_ref.
-    // If it's an i32 (table index), we use the traditional call_indirect.
+    // wasm.call_indirect: indirect function call via i32 table index
+    // All indirect calls use table-based call_indirect (no call_ref).
+    // Operands: [table_idx, arg1, arg2, ..., argN]
+    // WebAssembly expects: [arg1, arg2, ..., argN, table_idx]
 
     if operands.is_empty() {
         return Err(CompilationError::invalid_module(
-            "wasm.call_indirect requires at least a funcref operand",
+            "wasm.call_indirect requires at least a table index operand",
         ));
     }
 
-    // In func.call_indirect IR, the callee (funcref) is the FIRST operand, followed by args.
-    // But WebAssembly expects: [args..., funcref/table_idx] with the call target last on stack.
-    // Check the first operand to determine if we have a funcref (use call_ref) or i32 (use call_indirect).
+    // The callee (i32 table index) is the FIRST operand, followed by args.
     let first_operand = operands.first().copied().unwrap();
     let first_operand_ty = value_type(db, first_operand, &module_info.block_arg_types);
+
+    // All call_indirect operations must use i32 table index
+    debug_assert!(
+        first_operand_ty.is_some_and(|ty| core::I32::from_type(db, ty).is_some()),
+        "call_indirect first operand must be i32 table index, got {:?}",
+        first_operand_ty.map(|ty| {
+            ty.dialect(db)
+                .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
+        })
+    );
+
     debug!(
         "call_indirect: first_operand_ty={:?}",
         first_operand_ty.map(|ty| {
@@ -102,24 +109,6 @@ pub(crate) fn handle_call_indirect<'db>(
             );
         }
     }
-
-    let is_ref_type = first_operand_ty.is_some_and(|ty| {
-        let is_funcref = wasm::Funcref::from_type(db, ty).is_some();
-        let is_anyref = wasm::Anyref::from_type(db, ty).is_some();
-        let is_core_func = core::Func::from_type(db, ty).is_some();
-        // core.ptr is used for function pointers in the IR, lowered to funcref in wasm
-        let is_core_ptr = core::Ptr::from_type(db, ty).is_some();
-        // Note: cont.continuation now uses call_indirect (table-based) for consistency
-        // with lambda calls. The continuation struct holds a table index, not a funcref.
-        // Note: i32 (function table index) is NOT included here - it should use
-        // call_indirect, not call_ref. Closure calls go through the call_indirect path.
-        debug!(
-            "call_indirect: is_funcref={}, is_anyref={}, is_core_func={}, is_core_ptr={}",
-            is_funcref, is_anyref, is_core_func, is_core_ptr
-        );
-        is_funcref || is_anyref || is_core_func || is_core_ptr
-    });
-    debug!("call_indirect: is_ref_type={}", is_ref_type);
 
     // Build parameter types (all operands except first which is funcref/table_idx)
     // After normalize_primitive_types pass, anyref types are already wasm.anyref.
@@ -218,76 +207,23 @@ pub(crate) fn handle_call_indirect<'db>(
         }
     };
 
-    if is_ref_type {
-        // Use call_ref for typed function references
-        // IR operand order: [funcref, arg1, arg2, ...]
-        // WebAssembly stack order: [arg1, arg2, ..., funcref]
-        // So we emit args first (operands[1..]), then funcref (operands[0])
+    // call_indirect with i32 table index
+    // IR operand order: [table_idx, arg1, arg2, ...]
+    // WebAssembly stack order: [arg1, arg2, ..., table_idx]
+    let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
 
-        // Emit arguments (all operands except first funcref)
-        for (i, operand) in operands.iter().skip(1).enumerate() {
-            debug!(
-                "call_indirect: emitting arg {} of type {:?}",
-                i,
-                value_type(db, *operand, &module_info.block_arg_types).map(|t| t
-                    .dialect(db)
-                    .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n))))
-            );
-            match operand.def(db) {
-                ValueDef::OpResult(def_op) => {
-                    debug!(
-                        "  arg {} defined by {}.{}",
-                        i,
-                        def_op.dialect(db),
-                        def_op.name(db)
-                    );
-                }
-                ValueDef::BlockArg(block_id) => {
-                    debug!("  arg {} is block arg from {:?}", i, block_id);
-                }
-            }
-            emit_value(db, *operand, ctx, function)?;
-        }
-
-        // Emit the funcref (first operand)
-        emit_value(db, first_operand, ctx, function)?;
-
-        // Cast funcref/anyref or generic func type to typed function reference if needed.
-        // wasm.funcref needs to be cast since call_ref requires typed function reference.
-        // When the IR type is anyref or core.func, we need to cast to the concrete
-        // function type before call_ref.
-        // Note: closure structs are NOT handled here anymore - they use i32 table index
-        // and go through the call_indirect path instead of call_ref.
-        if let Some(ty) = first_operand_ty
-            && (wasm::Funcref::from_type(db, ty).is_some()
-                || wasm::Anyref::from_type(db, ty).is_some()
-                || core::Func::from_type(db, ty).is_some())
-        {
-            // Cast to (ref null func_type)
-            function.instruction(&Instruction::RefCastNullable(HeapType::Concrete(type_idx)));
-        }
-
-        // Emit call_ref with the function type index
-        function.instruction(&Instruction::CallRef(type_idx));
-    } else {
-        // Traditional call_indirect with i32 table index
-        // IR operand order: [table_idx, arg1, arg2, ...]
-        // WebAssembly stack order: [arg1, arg2, ..., table_idx]
-        let table = attr_u32(op.attributes(db), Symbol::new("table")).unwrap_or(0);
-
-        // Emit arguments first (operands[1..])
-        for operand in operands.iter().skip(1) {
-            emit_value(db, *operand, ctx, function)?;
-        }
-
-        // Emit the table index (operands[0])
-        emit_value(db, operands[0], ctx, function)?;
-
-        function.instruction(&Instruction::CallIndirect {
-            type_index: type_idx,
-            table_index: table,
-        });
+    // Emit arguments first (operands[1..])
+    for operand in operands.iter().skip(1) {
+        emit_value(db, *operand, ctx, function)?;
     }
+
+    // Emit the table index (operands[0])
+    emit_value(db, operands[0], ctx, function)?;
+
+    function.instruction(&Instruction::CallIndirect {
+        type_index: type_idx,
+        table_index: table,
+    });
 
     set_result_local(db, op, ctx, function)?;
     Ok(())
