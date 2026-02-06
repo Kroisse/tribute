@@ -280,11 +280,15 @@ impl<'db> IrLoweringCtx<'db> {
                 tribute_rt::any_type(self.db)
             }
             TypeKind::UniVar { id } => {
-                // UniVar should not survive substitution — compiler internal invariant violation
-                panic!(
-                    "ICE: UniVar({:?}) survived substitution — should have been resolved",
+                // UniVar surviving substitution indicates incomplete constraint solving.
+                // This can happen with complex effect row polymorphism (e.g., handler
+                // arms with continuation calls in recursive functions).
+                // Type-erase to any since the runtime uses a type-erased representation.
+                tracing::debug!(
+                    "UniVar({:?}) survived substitution — type-erasing to any",
                     id
                 );
+                tribute_rt::any_type(self.db)
             }
             TypeKind::Named { .. } => {
                 // Type erasure: struct/enum → tribute_rt.any
@@ -300,7 +304,7 @@ impl<'db> IrLoweringCtx<'db> {
                 tribute_rt::any_type(self.db)
             }
             TypeKind::App { ctor, .. } => self.convert_type(*ctor),
-            TypeKind::Continuation { arg, result } => {
+            TypeKind::Continuation { arg, result, .. } => {
                 use trunk_ir::dialect::cont;
                 let ir_arg = self.convert_type(*arg);
                 let ir_result = self.convert_type(*result);

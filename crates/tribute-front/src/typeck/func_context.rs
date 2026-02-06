@@ -22,6 +22,14 @@ use super::constraint::ConstraintSet;
 use super::context::ModuleTypeEnv;
 use super::subst;
 
+/// Context for the handle expression currently being type-checked.
+///
+/// Captures the body type and body effect row so that handler arms
+/// can assign proper effect information to continuation variables.
+pub(crate) struct HandleContext<'db> {
+    pub body_effect: EffectRow<'db>,
+}
+
 /// Function-level type inference context.
 ///
 /// Each function body is type-checked with its own `FunctionInferenceContext`,
@@ -70,6 +78,13 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
+
+    /// Stack of handle expression contexts.
+    ///
+    /// Pushed during the infer phase of a handle expression and
+    /// popped during the convert phase, so that handler arms can
+    /// assign the body's effect row to continuation variables.
+    handle_ctx_stack: Vec<HandleContext<'db>>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -96,6 +111,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             current_effect: EffectRow::pure(db),
+            handle_ctx_stack: Vec::new(),
         }
     }
 
@@ -341,6 +357,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Set the current effect row.
     pub fn set_current_effect(&mut self, effect: EffectRow<'db>) {
         self.current_effect = effect;
+    }
+
+    /// Push a handle context onto the stack.
+    pub(crate) fn push_handle_ctx(&mut self, ctx: HandleContext<'db>) {
+        self.handle_ctx_stack.push(ctx);
+    }
+
+    /// Pop the most recent handle context from the stack.
+    pub(crate) fn pop_handle_ctx(&mut self) -> Option<HandleContext<'db>> {
+        self.handle_ctx_stack.pop()
     }
 
     /// Merge an effect into the current effect row.

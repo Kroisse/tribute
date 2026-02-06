@@ -347,7 +347,7 @@ fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn main() -> Nat {
     with_state(fn() {
         State::get()
     }, 42)

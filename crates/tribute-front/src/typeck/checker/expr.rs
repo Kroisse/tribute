@@ -41,8 +41,14 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         TypeKind::App { ctor, args } => {
             type_contains_univar(db, *ctor) || args.iter().any(|a| type_contains_univar(db, *a))
         }
-        TypeKind::Continuation { arg, result } => {
-            type_contains_univar(db, *arg) || type_contains_univar(db, *result)
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            type_contains_univar(db, *arg)
+                || type_contains_univar(db, *result)
+                || effect_row_contains_univar(db, *effect)
         }
         TypeKind::Int
         | TypeKind::Nat
@@ -339,6 +345,14 @@ impl<'db> TypeChecker<'db> {
                     // Remove handled effects from the body's effect row
                     self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
                 };
+
+                // Push handle context with the result effect (handled effects removed).
+                // When a continuation is resumed, it runs inside the handler's scope,
+                // so the handled effects are re-caught. From the caller's perspective,
+                // only the unhandled effects propagate.
+                ctx.push_handle_ctx(super::super::func_context::HandleContext {
+                    body_effect: result_effect,
+                });
 
                 // Merge the result effect with the effect before body
                 // (The outer function's effect now includes the unhandled effects)
@@ -649,11 +663,13 @@ impl<'db> TypeChecker<'db> {
             // Create a continuation type for potential unification.
             let cont_arg_ty = ctx.fresh_type_var();
             let cont_result_ty = ctx.fresh_type_var();
+            let cont_effect = ctx.fresh_effect_row();
             let expected_cont_ty = Type::new(
                 self.db(),
                 TypeKind::Continuation {
                     arg: cont_arg_ty,
                     result: cont_result_ty,
+                    effect: cont_effect,
                 },
             );
 
@@ -668,6 +684,12 @@ impl<'db> TypeChecker<'db> {
                 // Callee is a continuation - constrain as continuation call
                 ctx.constrain_eq(callee_ty, expected_cont_ty);
                 ctx.constrain_eq(cont_arg_ty, arg_types[0]);
+                // Note: We do NOT merge the continuation's effect into the current
+                // effect here. The effect propagation is handled by the constraint
+                // system: when the lambda containing this continuation call is unified
+                // with the expected function type, the effect rows are unified.
+                // Directly merging the continuation's body effect would introduce
+                // complex row constraints that can leave UniVars unresolved.
                 return cont_result_ty;
             } else {
                 // Callee is a UniVar, concrete function type, or other - use function semantics
@@ -990,13 +1012,16 @@ impl<'db> TypeChecker<'db> {
                 params,
                 body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
             },
-            ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
-                handlers: handlers
-                    .into_iter()
-                    .map(|h| self.convert_handler_arm_with_ctx(ctx, h))
-                    .collect(),
-            },
+            ExprKind::Handle { body, handlers } => {
+                let handle_ctx = ctx.pop_handle_ctx();
+                ExprKind::Handle {
+                    body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
+                    handlers: handlers
+                        .into_iter()
+                        .map(|h| self.convert_handler_arm_with_ctx(ctx, h, handle_ctx.as_ref()))
+                        .collect(),
+                }
+            }
             ExprKind::Tuple(elements) => ExprKind::Tuple(
                 elements
                     .into_iter()
@@ -1512,6 +1537,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
+        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Result { binding } => HandlerKind::Result {
@@ -1529,14 +1555,19 @@ impl<'db> TypeChecker<'db> {
                     // Create a Continuation type for the continuation variable.
                     // The arg type is the type passed when resuming (effect operation's return type),
                     // and the result type is the handler's result type.
-                    // For now, use fresh type variables since we don't have precise type info.
+                    // Use the handle body's effect row so that continuation calls
+                    // propagate the correct effects.
                     let arg_ty = ctx.fresh_type_var();
                     let result_ty = ctx.fresh_type_var();
+                    let cont_effect = handle_ctx
+                        .map(|hc| hc.body_effect)
+                        .unwrap_or_else(|| ctx.fresh_effect_row());
                     let cont_ty = Type::new(
                         self.db(),
                         TypeKind::Continuation {
                             arg: arg_ty,
                             result: result_ty,
+                            effect: cont_effect,
                         },
                     );
                     ctx.bind_local(k_local_id, cont_ty);
