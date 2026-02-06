@@ -254,8 +254,8 @@ impl<'db> IrLoweringCtx<'db> {
     /// Convert an AST type to a TrunkIR type.
     pub fn convert_type(&self, ty: crate::ast::Type<'db>) -> Type<'db> {
         match ty.kind(self.db) {
-            TypeKind::Int => core::I64::new(self.db).as_type(),
-            TypeKind::Nat => core::I64::new(self.db).as_type(),
+            TypeKind::Int => core::I32::new(self.db).as_type(),
+            TypeKind::Nat => core::I32::new(self.db).as_type(),
             TypeKind::Float => core::F64::new(self.db).as_type(),
             TypeKind::Bool => core::I1::new(self.db).as_type(),
             TypeKind::String => core::String::new(self.db).as_type(),
@@ -304,7 +304,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the int type.
     pub fn int_type(&self) -> Type<'db> {
-        core::I64::new(self.db).as_type()
+        core::I32::new(self.db).as_type()
     }
 
     /// Get the bool type.
@@ -456,9 +456,9 @@ mod tests {
             smallvec::smallvec![Symbol::new("test")],
         );
 
-        // Int → I64
+        // Int → I32
         let int_ty = AstType::new(db, TypeKind::Int);
-        assert_eq!(ctx.convert_type(int_ty), core::I64::new(db).as_type());
+        assert_eq!(ctx.convert_type(int_ty), core::I32::new(db).as_type());
 
         // Bool → I1
         let bool_ty = AstType::new(db, TypeKind::Bool);

@@ -4,7 +4,7 @@ expression: ir_module
 ---
 Module(test) {
     operations: [
-        func @main(core.i64) -> core.nil {
+        func @main(core.i32) -> core.nil {
             body: [
                 "adt.variant_is",
                 "scf.if",

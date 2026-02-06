@@ -1,19 +1,18 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 212
 expression: ir_module
 ---
 Module(test) {
     operations: [
         Module(Point) {
             operations: [
-                func @test::Point::x(adt.typeref) -> core.i64 {
+                func @test::Point::x(adt.typeref) -> core.i32 {
                     body: [
                         "adt.struct_get",
                         "func.return",
                     ],
                 },
-                func @test::Point::y(adt.typeref) -> core.i64 {
+                func @test::Point::y(adt.typeref) -> core.i32 {
                     body: [
                         "adt.struct_get",
                         "func.return",

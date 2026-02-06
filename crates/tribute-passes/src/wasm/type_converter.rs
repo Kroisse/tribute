@@ -71,12 +71,23 @@ pub fn evidence_wasm_type(db: &dyn salsa::Database) -> Type<'_> {
 ///
 /// This is used when converting i32/i64 values to anyref for polymorphic function calls.
 /// WasmGC's i31ref is a subtype of anyref, so the boxing is implicit.
+/// If the input is i64, an `i32_wrap_i64` truncation is emitted first.
 fn box_via_i31<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
     value: trunk_ir::Value<'db>,
+    from_ty: trunk_ir::Type<'db>,
 ) -> MaterializeResult<'db> {
     let i31ref_ty = wasm::I31ref::new(db).as_type();
+
+    // If the source is i64, wrap to i32 first (ref_i31 requires an i32 operand)
+    if core::I64::from_type(db, from_ty).is_some() {
+        let i32_ty = core::I32::new(db).as_type();
+        let wrap_op = wasm::i32_wrap_i64(db, location, value, i32_ty);
+        let wrapped = wrap_op.as_operation().result(db, 0);
+        let ref_op = wasm::ref_i31(db, location, wrapped, i31ref_ty);
+        return MaterializeResult::ops([wrap_op.as_operation(), ref_op.as_operation()]);
+    }
 
     // Create i31ref from i32 value (truncates to 31 bits)
     let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
@@ -318,15 +329,15 @@ pub fn wasm_type_converter() -> TypeConverter {
             if core::I32::from_type(db, from_ty).is_some()
                 && wasm::Anyref::from_type(db, to_ty).is_some()
             {
-                return box_via_i31(db, location, value);
+                return box_via_i31(db, location, value, from_ty);
             }
-            // core.i64 → wasm.anyref (box via i31, with truncation)
+            // core.i64 → wasm.anyref (box via i31, with i32 truncation)
             // Note: This truncates i64 to 31 bits, which may lose data.
             // For full i64 support, we would need a boxed struct.
             if core::I64::from_type(db, from_ty).is_some()
                 && wasm::Anyref::from_type(db, to_ty).is_some()
             {
-                return box_via_i31(db, location, value);
+                return box_via_i31(db, location, value, from_ty);
             }
             // core.nil → wasm.anyref (nil is represented as null reference)
             // This is used for polymorphic functions that return nil.
@@ -674,6 +685,44 @@ mod tests {
             evidence_ty, expected,
             "evidence_wasm_type should return wasm.arrayref"
         );
+    }
+
+    /// Test that core.i64 → wasm.anyref materialization emits i32_wrap_i64 + ref_i31.
+    #[salsa::tracked]
+    fn do_materialize_i64_to_anyref_test(
+        db: &dyn salsa::Database,
+    ) -> Option<Vec<(trunk_ir::Symbol, trunk_ir::Symbol)>> {
+        use trunk_ir::rewrite::MaterializeResult;
+        use trunk_ir::{Attribute, Location, PathId, Span, Value, ValueDef};
+
+        let converter = wasm_type_converter();
+        let path = PathId::new(db, "test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+
+        let i64_ty = core::I64::new(db).as_type();
+        let const_op = arith::r#const(db, location, i64_ty, Attribute::IntBits(42));
+        let value = Value::new(db, ValueDef::OpResult(const_op.as_operation()), 0);
+
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let result = converter.materialize(db, location, value, i64_ty, anyref_ty);
+
+        match result {
+            Some(MaterializeResult::Ops(ops)) => {
+                Some(ops.iter().map(|op| (op.dialect(db), op.name(db))).collect())
+            }
+            _ => None,
+        }
+    }
+
+    #[salsa_test]
+    fn test_materialize_i64_to_anyref_emits_wrap_and_ref_i31(db: &salsa::DatabaseImpl) {
+        let ops = do_materialize_i64_to_anyref_test(db);
+        let ops = ops.expect("core.i64 → wasm.anyref should produce Ops");
+        assert_eq!(ops.len(), 2, "should emit 2 ops: i32_wrap_i64 + ref_i31");
+        assert_eq!(ops[0].0, wasm::DIALECT_NAME());
+        assert_eq!(ops[0].1, Symbol::new("i32_wrap_i64"));
+        assert_eq!(ops[1].0, wasm::DIALECT_NAME());
+        assert_eq!(ops[1].1, Symbol::new("ref_i31"));
     }
 
     #[salsa_test]

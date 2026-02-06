@@ -133,8 +133,10 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         // Skip cast for func → func conversions with compatible signatures
         // These arise when polymorphic function parameters get different instantiations
         // but have the same structural type (e.g., fn() -> Int vs fn() -> tribute_rt.any)
-        if core::Func::from_type(self.db(), value_ty).is_some()
-            && core::Func::from_type(self.db(), target_ty).is_some()
+        if let (Some(value_func), Some(target_func)) = (
+            core::Func::from_type(self.db(), value_ty),
+            core::Func::from_type(self.db(), target_ty),
+        ) && value_func.params(self.db()).len() == target_func.params(self.db()).len()
         {
             return value;
         }
@@ -456,11 +458,11 @@ fn lower_expr<'db>(
             } else {
                 let op = builder
                     .block
-                    .op(arith::Const::i64(builder.db(), location, n as i64));
+                    .op(arith::Const::i32(builder.db(), location, n as i32));
                 let result = op.result(builder.db());
                 builder
                     .ctx
-                    .track_value_type(result, core::I64::new(builder.db()).as_type());
+                    .track_value_type(result, core::I32::new(builder.db()).as_type());
                 Some(result)
             }
         }
@@ -486,11 +488,11 @@ fn lower_expr<'db>(
             } else {
                 let op = builder
                     .block
-                    .op(arith::Const::i64(builder.db(), location, n));
+                    .op(arith::Const::i32(builder.db(), location, n as i32));
                 let result = op.result(builder.db());
                 builder
                     .ctx
-                    .track_value_type(result, core::I64::new(builder.db()).as_type());
+                    .track_value_type(result, core::I32::new(builder.db()).as_type());
                 Some(result)
             }
         }
@@ -2394,7 +2396,7 @@ fn convert_annotation_to_ir_type<'db>(
     match &ann.kind {
         TypeAnnotationKind::Named(name) => {
             // Map well-known type names using Symbol's PartialEq<&str>
-            // Note: Both Int and Nat map to i64 in IR
+            // Note: Both Int and Nat map to i32 in IR
             if *name == "Int" || *name == "Nat" {
                 ctx.int_type()
             } else if *name == "Float" {
@@ -3162,12 +3164,12 @@ mod tests {
         let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
         let func_typed = func::Func::from_operation(db, *func_op).unwrap();
 
-        // Without annotations, params default to int (i64), return defaults to unit (nil)
+        // Without annotations, params default to int (i32), return defaults to unit (nil)
         let func_ir_ty = func_typed.r#type(db);
-        let i64_ty = trunk_ir::dialect::core::I64::new(db).as_type();
+        let i32_ty = trunk_ir::dialect::core::I32::new(db).as_type();
         let nil_ty = trunk_ir::dialect::core::Nil::new(db).as_type();
         let expected_ty =
-            trunk_ir::dialect::core::Func::new(db, vec![i64_ty, i64_ty].into(), nil_ty).as_type();
+            trunk_ir::dialect::core::Func::new(db, vec![i32_ty, i32_ty].into(), nil_ty).as_type();
         assert_eq!(func_ir_ty, expected_ty);
     }
 
@@ -3499,11 +3501,11 @@ mod tests {
         let func_op = ops.iter().find(|op| op.name(db) == "func").unwrap();
         let func_typed = func::Func::from_operation(db, *func_op).unwrap();
 
-        // Verify the function type: fn(i64) -> i64
+        // Verify the function type: fn(i32) -> i32
         let func_ir_ty = func_typed.r#type(db);
-        let i64_ty = trunk_ir::dialect::core::I64::new(db).as_type();
+        let i32_ty = trunk_ir::dialect::core::I32::new(db).as_type();
         let expected_ty =
-            trunk_ir::dialect::core::Func::new(db, vec![i64_ty].into(), i64_ty).as_type();
+            trunk_ir::dialect::core::Func::new(db, vec![i32_ty].into(), i32_ty).as_type();
         assert_eq!(func_ir_ty, expected_ty);
     }
 
