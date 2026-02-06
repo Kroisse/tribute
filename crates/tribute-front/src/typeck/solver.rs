@@ -512,12 +512,22 @@ impl<'db> TypeSolver<'db> {
     }
 
     /// Solve a set of constraints.
+    ///
+    /// Processes all constraints even if some fail, so that as many type
+    /// variables as possible are resolved.  Returns the first error (if any)
+    /// after all constraints have been attempted.
     pub fn solve(&mut self, constraints: ConstraintSet<'db>) -> Result<(), SolveError<'db>> {
         let constraints_vec = constraints.into_constraints();
+        let mut first_error: Option<SolveError<'db>> = None;
         for constraint in constraints_vec.into_iter() {
-            self.solve_constraint(constraint)?;
+            if let Err(e) = self.solve_constraint(constraint) {
+                first_error.get_or_insert(e);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// Solve a single constraint.
