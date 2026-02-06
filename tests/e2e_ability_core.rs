@@ -200,7 +200,7 @@ fn test_milestone_target_code() {
     fn set(value: s) -> Nil
 }
 
-fn counter() ->{State(Int)} Int {
+fn counter() ->{State(Nat)} Nat {
     let n = State::get()
     State::set(n + 1)
     n
@@ -214,7 +214,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn main() -> Nat {
     run_state(fn() {
         counter()
         counter()
@@ -377,7 +377,7 @@ fn test_sequential_let_bindings_with_effects() {
     fn set(value: s) -> Nil
 }
 
-fn sequential_state() ->{State(Int)} Int {
+fn sequential_state() ->{State(Nat)} Nat {
     let a = State::get()
     let b = State::get()
     let c = a + b
@@ -407,7 +407,7 @@ fn test_nested_let_bindings_with_effects() {
     fn set(value: s) -> Nil
 }
 
-fn nested_state() ->{State(Int)} Int {
+fn nested_state() ->{State(Nat)} Nat {
     let a = State::get()
     let b = {
         let c = State::get()
@@ -645,13 +645,13 @@ fn test_duplicate_ability_handlers_compile() {
     fn set(value: s) -> Nil
 }
 
-fn use_state() ->{State(Int)} Int {
+fn use_state() ->{State(Nat)} Nat {
     let n = State::get()
     State::set(n + 1)
     n
 }
 
-fn main() -> Int {
+fn main() -> Nat {
     handle use_state() {
         { result } -> result
         { State::get() -> k } -> k(42)
@@ -834,12 +834,12 @@ fn test_handle_preserves_parameterized_ability_type_args() {
     fn set(value: s) -> Nil
 }
 
-fn use_state() ->{State(Int)} Int {
+fn use_state() ->{State(Nat)} Nat {
     State::set(10)
     State::get()
 }
 
-fn main() -> Int {
+fn main() -> Nat {
     handle use_state() {
         { result } -> result
         { State::get() -> k } -> k(42)
@@ -870,7 +870,7 @@ fn test_ability_op_substitutes_type_params() {
     fn set(value: s) -> Nil
 }
 
-fn use_state() ->{State(Int)} Int {
+fn use_state() ->{State(Nat)} Nat {
     let x = State::get()
     x + 1
 }
