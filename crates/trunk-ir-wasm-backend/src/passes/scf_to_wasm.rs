@@ -24,8 +24,9 @@ pub fn lower<'db>(
     module: Module<'db>,
     type_converter: TypeConverter,
 ) -> Module<'db> {
-    // No specific conversion target - scf lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("scf");
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)

@@ -55,8 +55,9 @@ pub fn lower<'db>(
     module: Module<'db>,
     type_converter: TypeConverter,
 ) -> Module<'db> {
-    // No specific conversion target - adt lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("adt");
     PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)

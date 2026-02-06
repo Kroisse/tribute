@@ -26,8 +26,9 @@ pub fn lower<'db>(
     module: Module<'db>,
     type_converter: TypeConverter,
 ) -> Module<'db> {
-    // No specific conversion target - arith lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("arith");
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)

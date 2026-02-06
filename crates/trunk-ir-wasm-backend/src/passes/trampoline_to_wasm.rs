@@ -70,8 +70,9 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerYieldContinuationAccessPattern)
         .add_pattern(LowerYieldGlobalGetPattern);
 
-    // No specific conversion target - trampoline lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("trampoline");
     applicator.apply_partial(db, module, target).module
 }
 
