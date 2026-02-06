@@ -154,7 +154,7 @@ impl<'db> PatternApplicator<'db> {
     /// Apply all patterns to a module until fixpoint, then verify conversion.
     ///
     /// This method:
-    /// 1. Skips pattern matching for operations that are already legal
+    /// 1. Skips pattern matching and cast insertion for operations that are already legal
     /// 2. Applies patterns until fixpoint is reached
     /// 3. Verifies that no illegal operations remain
     ///
@@ -360,8 +360,8 @@ impl<'db> PatternApplicator<'db> {
     ///
     /// This is the core rewrite loop:
     /// 1. Remap operands using the current value map
-    /// 2. Insert unrealized_conversion_cast for type mismatches
-    /// 3. Skip pattern matching if operation is already legal (but keep casts)
+    /// 2. Skip if operation is already legal (remap + region recursion only, NO casts)
+    /// 3. Insert unrealized_conversion_cast for type mismatches (illegal ops only)
     /// 4. Compute converted operand types using the type converter
     /// 5. Create OpAdaptor with remapped operands and pre-converted types
     /// 6. Try each pattern in order
@@ -377,11 +377,22 @@ impl<'db> PatternApplicator<'db> {
     ) -> Vec<Operation<'db>> {
         // Step 1: Remap operands from previous transformations
         let remapped_op = ctx.remap_operands(db, op);
-        let location = remapped_op.location(db);
 
-        // Step 2: Insert conversion casts for type mismatches
+        // Step 2: Skip pattern matching and cast insertion for legal operations
+        // Legal ops only need operand remapping and region recursion - no casts.
+        // Only skip if target has constraints - otherwise try all patterns.
+        if target.has_constraints() && Self::is_op_legal(db, &remapped_op, target) {
+            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
+            if final_op != *op {
+                ctx.map_results(db, op, &final_op);
+            }
+            return vec![final_op];
+        }
+
+        // Step 3: Insert conversion casts for type mismatches (illegal ops only)
         // Skip inserting casts for unrealized_conversion_cast itself to avoid infinite loops.
         // The cast op is the type conversion boundary - its operands keep the original type.
+        let location = remapped_op.location(db);
         let remapped_operands = remapped_op.operands(db).clone();
         let (casted_operands, cast_ops) = if remapped_op.dialect(db) == core::DIALECT_NAME()
             && remapped_op.name(db) == core::UNREALIZED_CONVERSION_CAST()
@@ -401,19 +412,6 @@ impl<'db> PatternApplicator<'db> {
         } else {
             remapped_op
         };
-
-        // Step 3: Skip pattern matching for legal operations
-        // (still need to remap operands and process nested regions, and keep any casts)
-        // Only skip if target has constraints - otherwise try all patterns
-        if target.has_constraints() && Self::is_op_legal(db, &remapped_op, target) {
-            let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
-            if final_op != *op {
-                ctx.map_results(db, op, &final_op);
-            }
-            let mut result = cast_ops;
-            result.push(final_op);
-            return result;
-        }
 
         // Step 4: Compute converted operand types (now using casted operands)
         let operand_types: Vec<Option<Type<'db>>> = casted_operands

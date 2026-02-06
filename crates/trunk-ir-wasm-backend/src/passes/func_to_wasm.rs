@@ -37,8 +37,9 @@ pub fn lower<'db>(
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(db, &module);
 
-    // No specific conversion target - func lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("func");
 
     if func_refs.is_empty() {
         // No func.constant operations - just apply patterns without table generation
