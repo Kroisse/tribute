@@ -323,6 +323,49 @@ impl<'db> Block<'db> {
     pub fn arg_types(self, db: &'db dyn salsa::Database) -> IdVec<Type<'db>> {
         self.args(db).iter().map(|arg| arg.ty(db)).collect()
     }
+
+    /// Prepend a new argument to this block and remap all existing block arg
+    /// references in the operations (and nested regions) to their shifted indices.
+    ///
+    /// Returns `(new_block, new_arg_value)` where `new_arg_value` is the `Value`
+    /// for the prepended argument at index 0.
+    pub fn prepend_arg(
+        self,
+        db: &'db dyn salsa::Database,
+        new_arg: BlockArg<'db>,
+    ) -> (Block<'db>, Value<'db>) {
+        let block_id = self.id(db);
+        let old_args = self.args(db);
+
+        // Build new args list: new_arg at index 0, then all old args
+        let mut new_args = IdVec::with_capacity(old_args.len() + 1);
+        new_args.push(new_arg);
+        new_args.extend(old_args.iter().copied());
+
+        // Build value remapping: old index N → new index N+1
+        let mut remap_ctx = crate::rewrite::RewriteContext::new();
+        for old_idx in 0..old_args.len() {
+            let old_value = Value::new(db, ValueDef::BlockArg(block_id), old_idx);
+            let new_value = Value::new(db, ValueDef::BlockArg(block_id), old_idx + 1);
+            remap_ctx.map_value(old_value, new_value);
+        }
+
+        // Remap direct operands of operations only. We intentionally do NOT
+        // recurse into nested regions: remap_operation_deep would rebuild
+        // operations inside nested regions, changing their identity, which
+        // breaks intra-region result→operand chains (causes stale SSA values).
+        // Downstream passes handle nested region references independently.
+        let remapped_ops: IdVec<Operation<'db>> = self
+            .operations(db)
+            .iter()
+            .map(|op| remap_ctx.remap_operands(db, op))
+            .collect();
+
+        let new_block = Block::new(db, block_id, self.location(db), new_args, remapped_ops);
+        let new_arg_value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        (new_block, new_arg_value)
+    }
 }
 
 #[salsa::tracked(debug)]

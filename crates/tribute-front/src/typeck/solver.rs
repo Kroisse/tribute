@@ -464,7 +464,10 @@ impl<'db> RowSubst<'db> {
             }
             // Use the substituted row's rest
             let rest = subst_row.rest(db);
-            return EffectRow::new(db, effects, rest);
+            let result = EffectRow::new(db, effects, rest);
+            // Transitively apply: follow substitution chains to fixpoint.
+            // Termination is guaranteed because occurs check prevents cyclic chains.
+            return self.apply(db, result);
         }
         row
     }
