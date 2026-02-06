@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use trunk_ir::smallvec::SmallVec;
+
 use crate::ast::{EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
 
 use super::constraint::{Constraint, ConstraintSet};
@@ -451,23 +453,25 @@ impl<'db> RowSubst<'db> {
 
     /// Apply substitution to an effect row.
     pub fn apply(&self, db: &'db dyn salsa::Database, row: EffectRow<'db>) -> EffectRow<'db> {
-        // Check if the row has a rest variable that needs substitution
-        if let Some(var) = row.rest(db)
-            && let Some(subst_row) = self.get(var.id)
-        {
-            // Combine the concrete effects with the substituted row
+        let mut row = row;
+        let mut visited = SmallVec::<[u64; 8]>::new();
+        while let Some(var) = row.rest(db) {
+            let Some(subst_row) = self.get(var.id) else {
+                break;
+            };
+            if visited.contains(&var.id) {
+                break; // cycle detected — return current row as-is
+            }
+            visited.push(var.id);
+
             let mut effects = row.effects(db).clone();
             for effect in subst_row.effects(db) {
                 if !effects.contains(effect) {
                     effects.push(effect.clone());
                 }
             }
-            // Use the substituted row's rest
             let rest = subst_row.rest(db);
-            let result = EffectRow::new(db, effects, rest);
-            // Transitively apply: follow substitution chains to fixpoint.
-            // Termination is guaranteed because occurs check prevents cyclic chains.
-            return self.apply(db, result);
+            row = EffectRow::new(db, effects, rest);
         }
         row
     }
@@ -568,10 +572,16 @@ impl<'db> TypeSolver<'db> {
             Constraint::TypeEq(t1, t2) => self.unify_types(t1, t2),
             Constraint::RowEq(r1, r2) => self.unify_rows(r1, r2),
             Constraint::And(cs) => {
+                let mut first_error: Option<SolveError<'db>> = None;
                 for c in cs {
-                    self.solve_constraint(c)?;
+                    if let Err(e) = self.solve_constraint(c) {
+                        first_error.get_or_insert(e);
+                    }
                 }
-                Ok(())
+                match first_error {
+                    Some(e) => Err(e),
+                    None => Ok(()),
+                }
             }
         }
     }
