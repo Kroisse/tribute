@@ -4,7 +4,7 @@ expression: ir_module
 ---
 Module(test) {
     operations: [
-        func @classify(core.i64) -> core.i64 {
+        func @classify(core.i32) -> core.i32 {
             body: [
                 "arith.const",
                 "arith.cmp_eq",

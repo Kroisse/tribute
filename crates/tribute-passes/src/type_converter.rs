@@ -18,7 +18,7 @@
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{adt, core};
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
 use trunk_ir::{DialectOp, DialectType, Type};
 
@@ -108,6 +108,7 @@ pub fn generic_type_converter() -> TypeConverter {
             let any_ty = tribute_rt::Any::new(db).as_type();
 
             // Int/Nat/I32 → any: use tribute_rt.box_int
+            // TODO: Add I64 support when 64-bit integers are introduced
             if tribute_rt::Int::from_type(db, from_ty).is_some()
                 || tribute_rt::Nat::from_type(db, from_ty).is_some()
                 || core::I32::from_type(db, from_ty).is_some()
@@ -116,8 +117,10 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::single(box_op.as_operation());
             }
 
-            // Bool → any: use tribute_rt.box_bool
-            if tribute_rt::Bool::from_type(db, from_ty).is_some() {
+            // Bool/I1 → any: use tribute_rt.box_bool
+            if tribute_rt::Bool::from_type(db, from_ty).is_some()
+                || core::I1::from_type(db, from_ty).is_some()
+            {
                 let box_op = tribute_rt::box_bool(db, location, value, any_ty);
                 return MaterializeResult::single(box_op.as_operation());
             }
@@ -128,6 +131,11 @@ pub fn generic_type_converter() -> TypeConverter {
             {
                 let box_op = tribute_rt::box_float(db, location, value, any_ty);
                 return MaterializeResult::single(box_op.as_operation());
+            }
+
+            // adt.struct/adt.typeref → any: no-op (already a reference type)
+            if adt::is_struct_type(db, from_ty) || adt::is_typeref(db, from_ty) {
+                return MaterializeResult::NoOp;
             }
 
             MaterializeResult::Skip
@@ -141,6 +149,7 @@ pub fn generic_type_converter() -> TypeConverter {
             }
 
             // any → Int/I32: use tribute_rt.unbox_int
+            // TODO: Add I64 support when 64-bit integers are introduced
             if tribute_rt::Int::from_type(db, to_ty).is_some()
                 || core::I32::from_type(db, to_ty).is_some()
             {
@@ -154,8 +163,10 @@ pub fn generic_type_converter() -> TypeConverter {
                 return MaterializeResult::single(unbox_op.as_operation());
             }
 
-            // any → Bool: use tribute_rt.unbox_bool
-            if tribute_rt::Bool::from_type(db, to_ty).is_some() {
+            // any → Bool/I1: use tribute_rt.unbox_bool
+            if tribute_rt::Bool::from_type(db, to_ty).is_some()
+                || core::I1::from_type(db, to_ty).is_some()
+            {
                 let unbox_op = tribute_rt::unbox_bool(db, location, value, to_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
             }
@@ -166,6 +177,11 @@ pub fn generic_type_converter() -> TypeConverter {
             {
                 let unbox_op = tribute_rt::unbox_float(db, location, value, to_ty);
                 return MaterializeResult::single(unbox_op.as_operation());
+            }
+
+            // any → adt.struct/adt.typeref: no-op (already a reference type)
+            if adt::is_struct_type(db, to_ty) || adt::is_typeref(db, to_ty) {
+                return MaterializeResult::NoOp;
             }
 
             // Note: any → trampoline.resume_wrapper and any → core.array conversions

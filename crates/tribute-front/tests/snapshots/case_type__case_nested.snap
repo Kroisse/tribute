@@ -4,7 +4,7 @@ expression: ir_module
 ---
 Module(test) {
     operations: [
-        func @nested(core.i64, core.i1) -> core.i64 {
+        func @nested(core.i32, core.i1) -> core.i32 {
             body: [
                 "arith.const",
                 "arith.cmp_eq",

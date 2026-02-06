@@ -314,7 +314,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
         let mut cursor = fields_node.walk();
         for child in fields_node.named_children(&mut cursor) {
             match child.kind() {
-                "field_initializer" => {
+                "record_field" | "field_initializer" => {
                     if let Some((name, value)) = lower_field_initializer(ctx, child) {
                         fields.push((name, value));
                     }

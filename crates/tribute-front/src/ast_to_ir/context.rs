@@ -49,6 +49,9 @@ pub struct IrLoweringCtx<'db> {
     /// Stack of active prompt tags for nested handlers.
     /// The top of the stack is the currently active prompt tag.
     active_prompt_tag_stack: Vec<u32>,
+    /// Track IR types of SSA values for cast insertion.
+    /// Maps each generated Value to its IR type.
+    value_types: HashMap<Value<'db>, Type<'db>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -73,6 +76,7 @@ impl<'db> IrLoweringCtx<'db> {
             struct_fields: HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
+            value_types: HashMap::new(),
         }
     }
 
@@ -224,6 +228,20 @@ impl<'db> IrLoweringCtx<'db> {
         self.struct_fields.get(&ctor_id)
     }
 
+    /// Track the IR type of a generated SSA value.
+    ///
+    /// This is used by `cast_if_needed` to determine if a cast is required.
+    pub fn track_value_type(&mut self, value: Value<'db>, ty: Type<'db>) {
+        self.value_types.insert(value, ty);
+    }
+
+    /// Get the tracked IR type of a value.
+    ///
+    /// Returns `None` if the value's type was not tracked.
+    pub fn get_value_type(&self, value: Value<'db>) -> Option<Type<'db>> {
+        self.value_types.get(&value).copied()
+    }
+
     /// Get all bindings visible in the current scope (for capture analysis).
     /// Returns bindings from all scopes, innermost first.
     pub fn all_bindings(&self) -> impl Iterator<Item = (LocalId, Symbol, Value<'db>)> + '_ {
@@ -236,8 +254,8 @@ impl<'db> IrLoweringCtx<'db> {
     /// Convert an AST type to a TrunkIR type.
     pub fn convert_type(&self, ty: crate::ast::Type<'db>) -> Type<'db> {
         match ty.kind(self.db) {
-            TypeKind::Int => core::I64::new(self.db).as_type(),
-            TypeKind::Nat => core::I64::new(self.db).as_type(),
+            TypeKind::Int => core::I32::new(self.db).as_type(),
+            TypeKind::Nat => core::I32::new(self.db).as_type(),
             TypeKind::Float => core::F64::new(self.db).as_type(),
             TypeKind::Bool => core::I1::new(self.db).as_type(),
             TypeKind::String => core::String::new(self.db).as_type(),
@@ -286,7 +304,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the int type.
     pub fn int_type(&self) -> Type<'db> {
-        core::I64::new(self.db).as_type()
+        core::I32::new(self.db).as_type()
     }
 
     /// Get the bool type.
@@ -438,9 +456,9 @@ mod tests {
             smallvec::smallvec![Symbol::new("test")],
         );
 
-        // Int → I64
+        // Int → I32
         let int_ty = AstType::new(db, TypeKind::Int);
-        assert_eq!(ctx.convert_type(int_ty), core::I64::new(db).as_type());
+        assert_eq!(ctx.convert_type(int_ty), core::I32::new(db).as_type());
 
         // Bool → I1
         let bool_ty = AstType::new(db, TypeKind::Bool);

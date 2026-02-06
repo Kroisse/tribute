@@ -6,13 +6,13 @@ Module(test) {
     operations: [
         Module(Point) {
             operations: [
-                func @test::Point::x(adt.typeref) -> core.i64 {
+                func @test::Point::x(adt.typeref) -> core.i32 {
                     body: [
                         "adt.struct_get",
                         "func.return",
                     ],
                 },
-                func @test::Point::y(adt.typeref) -> core.i64 {
+                func @test::Point::y(adt.typeref) -> core.i32 {
                     body: [
                         "adt.struct_get",
                         "func.return",
@@ -22,6 +22,7 @@ Module(test) {
         },
         func @update_x(tribute_rt.any) -> tribute_rt.any {
             body: [
+                "arith.const",
                 "arith.const",
                 "func.return",
             ],
