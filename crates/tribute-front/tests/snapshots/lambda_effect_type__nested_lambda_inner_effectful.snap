@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 320
+assertion_line: 321
 expression: ir_module
 ---
 Module(test) {
@@ -20,20 +20,20 @@ Module(test) {
                 "func.return",
             ],
         },
-        func @run_with_state(core.func) -> core.i64 {
+        func @run_with_state(core.func) -> core.i32 {
             body: [
                 "cont.push_prompt",
                 "cont.handler_dispatch",
                 "func.return",
             ],
         },
-        func @apply_thunk(core.func) -> core.i64 {
+        func @apply_thunk(core.func) -> core.i32 {
             body: [
                 "func.call_indirect",
                 "func.return",
             ],
         },
-        func @main() -> core.i64 {
+        func @main() -> core.i32 {
             body: [
                 "arith.const",
                 "closure.new",

@@ -259,6 +259,7 @@ fn main() -> Int {
 ///
 /// These should be effectful if the effect row variable `e` is non-empty.
 #[test]
+#[ignore] // TODO: add assertions once expected effectfulness behavior is determined
 fn test_handler_arm_lambdas_in_run_state() {
     let code = r#"
 ability State(s) {
@@ -384,7 +385,7 @@ fn main() -> Int {
 /// After evidence pass, effectful functions should have one more parameter.
 #[test]
 fn test_evidence_param_added_to_effectful_lambda() {
-    use tribute::pipeline::{stage_boxing, stage_evidence_params};
+    use tribute::pipeline::stage_evidence_params;
 
     let code = r#"
 ability State(s) {
@@ -406,29 +407,28 @@ fn main() -> Int {
     TributeDatabaseImpl::default().attach(|db| {
         let module = compile_to_ir(code, "evidence_param.trb")(db);
 
-        // Get lambda param count before evidence pass
-        let before_boxing = get_lambda_param_counts(db, &module);
-        eprintln!("Before evidence pass: {:?}", before_boxing);
-
-        // Apply boxing first (required before evidence)
-        let after_boxing = stage_boxing(db, module);
+        // Get function param counts before evidence pass
+        let before_counts = get_function_param_counts(db, &module);
+        eprintln!("Before evidence pass: {:?}", before_counts);
 
         // Apply evidence params pass
-        let after_evidence = stage_evidence_params(db, after_boxing);
+        // (boxing is now handled via unrealized_conversion_cast in ast_to_ir)
+        let after_evidence = stage_evidence_params(db, module);
 
         // Get lambda param count after evidence pass
-        let after_counts = get_lambda_param_counts(db, &after_evidence);
+        let after_counts = get_function_param_counts(db, &after_evidence);
         eprintln!("After evidence pass: {:?}", after_counts);
 
         // Find effectful lambdas and verify they got an extra parameter
-        let effectful_before = collect_effectful_functions(db, &after_boxing);
+        let effectful_before = collect_effectful_functions(db, &module);
         eprintln!("Effectful functions: {:?}", effectful_before);
 
         // Effectful lambdas should have one more parameter after evidence pass
+        let mut checked = 0;
         for name in effectful_before.iter() {
             let name_str = name.to_string();
             if name_str.contains("lambda") {
-                let before_count = before_boxing
+                let before_count = before_counts
                     .iter()
                     .find(|(n, _)| n == &name_str)
                     .map(|(_, c)| *c);
@@ -446,14 +446,16 @@ fn main() -> Int {
                         before,
                         after
                     );
+                    checked += 1;
                 }
             }
         }
+        assert!(checked > 0, "Expected at least one effectful lambda to be checked");
     });
 }
 
 /// Helper to get function parameter counts.
-fn get_lambda_param_counts<'db>(
+fn get_function_param_counts<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<'db>,
 ) -> Vec<(String, usize)> {

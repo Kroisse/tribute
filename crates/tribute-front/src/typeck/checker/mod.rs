@@ -152,7 +152,9 @@ impl<'db> TypeChecker<'db> {
         let function_types = self.env.export_function_types();
 
         // Convert node_types HashMap to Vec for Salsa compatibility
-        let node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
+        // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
+        let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
+        node_types.sort_by_key(|(id, _)| *id);
 
         ModuleCheckResult {
             module: Module {

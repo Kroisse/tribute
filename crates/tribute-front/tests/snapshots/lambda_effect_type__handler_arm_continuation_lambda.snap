@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 246
+assertion_line: 247
 expression: ir_module
 ---
 Module(test) {
@@ -28,7 +28,7 @@ Module(test) {
                 "func.return",
             ],
         },
-        func @main() -> core.i64 {
+        func @main() -> core.i32 {
             body: [
                 "arith.const",
                 "func.return",

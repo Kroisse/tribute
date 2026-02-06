@@ -72,8 +72,7 @@ fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
     }
 }
 
-/// Helper to compile code (execution disabled until WASM backend issues are resolved).
-/// Returns 0 as placeholder - tests should only verify compilation succeeds.
+/// Helper to compile code to WASM and run it.
 fn compile_and_run(code: &str, name: &str) -> i32 {
     let source_code = Rope::from_str(code);
 
