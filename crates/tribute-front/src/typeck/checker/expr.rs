@@ -346,18 +346,21 @@ impl<'db> TypeChecker<'db> {
                     self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
                 };
 
-                // Push handle context with the result effect (handled effects removed).
-                // When a continuation is resumed, it runs inside the handler's scope,
-                // so the handled effects are re-caught. From the caller's perspective,
-                // only the unhandled effects propagate.
+                // Push handle context with the ORIGINAL body effect (including handled effects).
+                // The continuation `k` represents the rest of the original computation,
+                // which can still perform the handled effects. When `k(x)` is called
+                // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
+                // row `{e, State(s)}` so it matches the expected `comp` parameter type.
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
-                    body_effect: result_effect,
+                    body_effect: body_effect_after,
                 });
 
-                // Merge the result effect with the effect before body
-                // (The outer function's effect now includes the unhandled effects)
+                // The unhandled effects from the handle body should be consistent
+                // with the enclosing function's effect. Use constraint instead of
+                // merge to avoid creating spurious variable linkages that lead to
+                // RowMismatch when the solver chains substitutions.
+                ctx.constrain_row_eq(result_effect, effect_before_body);
                 ctx.set_current_effect(effect_before_body);
-                ctx.merge_effect(result_effect);
 
                 body_ty
             }
@@ -684,12 +687,6 @@ impl<'db> TypeChecker<'db> {
                 // Callee is a continuation - constrain as continuation call
                 ctx.constrain_eq(callee_ty, expected_cont_ty);
                 ctx.constrain_eq(cont_arg_ty, arg_types[0]);
-                // Note: We do NOT merge the continuation's effect into the current
-                // effect here. The effect propagation is handled by the constraint
-                // system: when the lambda containing this continuation call is unified
-                // with the expected function type, the effect rows are unified.
-                // Directly merging the continuation's body effect would introduce
-                // complex row constraints that can leave UniVars unresolved.
                 return cont_result_ty;
             } else {
                 // Callee is a UniVar, concrete function type, or other - use function semantics
@@ -1008,14 +1005,33 @@ impl<'db> TypeChecker<'db> {
                     arms: converted_arms,
                 }
             }
-            ExprKind::Lambda { params, body } => ExprKind::Lambda {
-                params,
-                body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
-            },
+            ExprKind::Lambda { params, body } => {
+                // Save and restore effect context for lambda body,
+                // just like in the infer phase. This prevents lambda
+                // body effects from leaking into the enclosing scope.
+                let outer_effect = ctx.current_effect();
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
+                let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                ctx.set_current_effect(outer_effect);
+                ExprKind::Lambda {
+                    params,
+                    body: converted_body,
+                }
+            }
             ExprKind::Handle { body, handlers } => {
                 let handle_ctx = ctx.pop_handle_ctx();
+                // Save and restore effect context for handle body conversion,
+                // just like in the infer phase. The body has its own effect
+                // context; without isolation, the body's effects would leak
+                // into the enclosing scope during convert-phase re-inference.
+                let outer_effect = ctx.current_effect();
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
+                let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                ctx.set_current_effect(outer_effect);
                 ExprKind::Handle {
-                    body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
+                    body: converted_body,
                     handlers: handlers
                         .into_iter()
                         .map(|h| self.convert_handler_arm_with_ctx(ctx, h, handle_ctx.as_ref()))
@@ -1880,6 +1896,7 @@ impl<'db> TypeChecker<'db> {
     fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
+            ResolvedRef::Ability { id } => Some(*id),
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same module path and name
@@ -1904,11 +1921,11 @@ impl<'db> TypeChecker<'db> {
     /// `State(Int)` and `State(Bool)` are now correctly distinguished.
     fn remove_handled_effects(
         &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        _ctx: &mut FunctionInferenceContext<'_, 'db>,
         row: EffectRow<'db>,
         handled_ability_ids: &[AbilityId<'db>],
     ) -> EffectRow<'db> {
-        let db = ctx.db();
+        let db = self.db();
         let effects = row.effects(db);
 
         // Filter out effects whose ability_id is in the handled list
@@ -1918,35 +1935,12 @@ impl<'db> TypeChecker<'db> {
             .cloned()
             .collect();
 
-        // If there's a row variable tail, we need to constrain it
-        if let Some(tail_var) = row.rest(db) {
-            // Create a fresh row variable for the result (the "unhandled" portion of the tail)
-            let result_var = ctx.fresh_row_var();
-
-            // Collect Effect entries from the original effects list, preserving type args.
-            // Use full Effect equality (including args) for proper deduplication of
-            // parameterized abilities like State(Int) vs State(Bool).
-            let mut seen_effects: HashSet<Effect<'db>> = HashSet::new();
-            let handled_effects: Vec<crate::ast::Effect<'db>> = effects
-                .iter()
-                .filter(|effect| handled_ability_ids.contains(&effect.ability_id))
-                .filter(|effect| seen_effects.insert((*effect).clone()))
-                .cloned()
-                .collect();
-
-            // Add constraint: tail_var = {handled_effects | result_var}
-            // This decomposes the tail into the handled effects plus the result,
-            // ensuring result_var cannot contain any of the handled abilities.
-            let tail_row = EffectRow::open(db, tail_var);
-            let decomposed_row = EffectRow::new(db, handled_effects, Some(result_var));
-            ctx.constrain_row_eq(tail_row, decomposed_row);
-
-            // Return the remaining effects with the fresh result variable
-            EffectRow::new(db, remaining_effects, Some(result_var))
-        } else {
-            // Closed row: just return the remaining effects
-            EffectRow::new(db, remaining_effects, None)
-        }
+        // Keep the same tail variable. The handled effects were explicitly
+        // listed in the effect row's effect list, so they are NOT in the tail.
+        // The tail represents the row-polymorphic remainder (e.g., `e` in
+        // `fn() ->{e, State(s)} a`), which by definition does not contain
+        // the handled effects.
+        EffectRow::new(db, remaining_effects, row.rest(db))
     }
 }
 
