@@ -155,11 +155,6 @@ fn main() -> Int {
     TributeDatabaseImpl::default().attach(|db| {
         let module = compile_to_ir(code, "direct_ability.trb")(db);
 
-        // Debug: print detailed effect info
-        eprintln!("\n=== Debug: Function Effects ===");
-        debug_function_effects(db, &module);
-        eprintln!("=== End Debug ===\n");
-
         let functions = get_function_effectfulness(db, &module);
 
         // Find the lifted lambda function

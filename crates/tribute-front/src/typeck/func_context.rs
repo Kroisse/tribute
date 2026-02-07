@@ -334,6 +334,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///
     /// This is used when checking lambdas against expected function types:
     /// if the expected type has effects, the lambda's effect should match.
+    ///
+    /// TODO: Implement proper row subsumption for higher-order effects.
     pub fn constrain_effect_subtype(&mut self, inferred: EffectRow<'db>, expected: EffectRow<'db>) {
         // For simplicity, use row equality.
         // A more sophisticated system would handle row extension/subsumption.
@@ -400,6 +402,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     // Check if there's already an effect with the same ability_id
                     if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
                         // Same ability: unify type args instead of adding duplicate
+                        debug_assert_eq!(
+                            existing.args.len(),
+                            e.args.len(),
+                            "ability {:?} arity mismatch: existing has {} args, incoming has {}",
+                            e.ability_id,
+                            existing.args.len(),
+                            e.args.len()
+                        );
                         for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
                         {
                             ctx.constrain_eq(*existing_arg, *incoming_arg);

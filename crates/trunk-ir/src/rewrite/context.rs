@@ -252,7 +252,7 @@ impl<'db> RewriteContext<'db> {
                 };
 
                 // Recursively remap nested regions
-                let final_op = if !op.regions(db).is_empty() {
+                let final_op = if !remapped.regions(db).is_empty() {
                     let new_regions: IdVec<crate::Region<'db>> = remapped
                         .regions(db)
                         .iter()

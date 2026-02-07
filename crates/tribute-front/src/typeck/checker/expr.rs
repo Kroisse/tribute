@@ -383,14 +383,33 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Check mode: constrain inferred type to match expected type.
-        // Exception: For lambdas, we only use the expected type to extract the effect type,
-        // not to constrain the whole type. The lambda's type already reflects the expected
-        // effect through lambda_effect = expected_effect.unwrap_or(inferred_effect).
-        // Adding a full type constraint here can cause ICE with row-polymorphic types.
-        if let Mode::Check(expected) = mode
-            && !matches!(&*expr.kind, ExprKind::Lambda { .. })
-        {
-            ctx.constrain_eq(ty, expected);
+        // For lambdas, we split the expected function type and constrain param/return types
+        // individually, skipping only the effect portion (which is already constrained via
+        // constrain_row_eq during lambda body checking). Constraining the full type can cause
+        // ICE with row-polymorphic effect types.
+        if let Mode::Check(expected) = mode {
+            if matches!(&*expr.kind, ExprKind::Lambda { .. }) {
+                if let (
+                    TypeKind::Func {
+                        params: exp_params,
+                        result: exp_result,
+                        ..
+                    },
+                    TypeKind::Func {
+                        params: inf_params,
+                        result: inf_result,
+                        ..
+                    },
+                ) = (expected.kind(self.db()), ty.kind(self.db()))
+                {
+                    for (inf_p, exp_p) in inf_params.iter().zip(exp_params.iter()) {
+                        ctx.constrain_eq(*inf_p, *exp_p);
+                    }
+                    ctx.constrain_eq(*inf_result, *exp_result);
+                }
+            } else {
+                ctx.constrain_eq(ty, expected);
+            }
         }
 
         // If a type was already recorded for this node (e.g., by infer_expr_type_with_ctx),
@@ -684,7 +703,12 @@ impl<'db> TypeChecker<'db> {
             // use continuation semantics; otherwise use function semantics.
             // We check the callee type directly rather than relying on unification to choose.
             if matches!(callee_ty.kind(self.db()), TypeKind::Continuation { .. }) {
-                // Callee is a continuation - constrain as continuation call
+                // Callee is a continuation - constrain as continuation call.
+                // Note: We intentionally do NOT merge cont_effect into the current effect
+                // context here, unlike the function call path below. The continuation's
+                // effect row is already the handler body's effect row (assigned in
+                // convert_handler_arm_with_ctx), so it's already accounted for in the
+                // enclosing handle expression's effect propagation.
                 ctx.constrain_eq(callee_ty, expected_cont_ty);
                 ctx.constrain_eq(cont_arg_ty, arg_types[0]);
                 return cont_result_ty;
@@ -1021,6 +1045,10 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Handle { body, handlers } => {
                 let handle_ctx = ctx.pop_handle_ctx();
+                debug_assert!(
+                    handle_ctx.is_some(),
+                    "pop_handle_ctx should match a corresponding push_handle_ctx in infer phase"
+                );
                 // Save and restore effect context for handle body conversion,
                 // just like in the infer phase. The body has its own effect
                 // context; without isolation, the body's effects would leak

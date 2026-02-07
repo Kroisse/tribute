@@ -922,15 +922,6 @@ fn lower_expr<'db>(
             // which is needed for evidence parameter insertion in later passes.
             let effect_ty = builder.ctx.get_node_type(expr.id).and_then(|ty| {
                 if let TypeKind::Func { effect, .. } = ty.kind(builder.db()) {
-                    // Debug: print the effect row
-                    let effects = effect.effects(builder.db());
-                    let rest = effect.rest(builder.db());
-                    tracing::debug!(
-                        "Lambda effect row: effects={:?}, rest={:?}, is_pure={}",
-                        effects,
-                        rest,
-                        effect.is_pure(builder.db())
-                    );
                     if !effect.is_pure(builder.db()) {
                         Some(builder.ctx.convert_effect_row(*effect))
                     } else {

@@ -29,8 +29,6 @@
 
 mod common;
 
-// TODO: Re-enable once WASM backend issues are resolved
-#[allow(unused_imports)]
 use common::run_wasm;
 use ropey::Rope;
 use salsa::Database;
