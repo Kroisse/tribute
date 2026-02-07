@@ -438,12 +438,16 @@ fn compile_to_wasm<'db>(
     let lowered = lower_to_wasm(db, module);
 
     // Phase 2 - Resolve unrealized_conversion_cast operations (Tribute-specific type converter)
-    let type_converter = wasm_type_converter();
-    let lowered = resolve_unrealized_casts(db, lowered, &type_converter)
-        .map(|r| r.module)
-        .map_err(CompilationError::unresolved_casts)?;
+    let lowered = {
+        let _span = tracing::info_span!("resolve_unrealized_casts").entered();
+        let type_converter = wasm_type_converter();
+        resolve_unrealized_casts(db, lowered, &type_converter)
+            .map(|r| r.module)
+            .map_err(CompilationError::unresolved_casts)?
+    };
 
     // Phase 3 - Validate and emit (language-agnostic, delegated to trunk-ir-wasm-backend)
+    let _span = tracing::info_span!("emit_module_to_wasm").entered();
     trunk_ir_wasm_backend::emit_module_to_wasm(db, lowered)
 }
 

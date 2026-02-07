@@ -60,8 +60,9 @@ fn create_i31_unbox<'db>(
 
 /// Lower tribute_rt dialect to wasm dialect.
 pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // No specific conversion target - tribute_rt lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("tribute_rt");
     PatternApplicator::new(wasm_type_converter())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)

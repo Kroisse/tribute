@@ -415,30 +415,34 @@ pub fn assign_gc_type_indices<'db>(
         registry.signature_to_idx.len()
     );
 
-    // No specific conversion target - these are optimization passes
-    let target = ConversionTarget::new();
-
     // Phase 2: Update struct_new operations
+    let target_struct_new = ConversionTarget::new().illegal_op("wasm", "struct_new");
     let applicator =
         PatternApplicator::new(wasm_type_converter()).add_pattern(UpdateStructNewPattern {
             registry: registry.clone(),
         });
-    let module = applicator.apply_partial(db, module, target.clone()).module;
+    let module = applicator
+        .apply_partial(db, module, target_struct_new)
+        .module;
 
     // Phase 3: Re-collect with updated struct_new to get value->type_idx mapping
     let registry = collect_struct_types(db, module);
 
     // Phase 4: Update struct_get operations
+    let target_struct_get = ConversionTarget::new().illegal_op("wasm", "struct_get");
     let applicator =
         PatternApplicator::new(wasm_type_converter()).add_pattern(UpdateStructGetPattern {
             registry: registry.clone(),
         });
-    let module = applicator.apply_partial(db, module, target.clone()).module;
+    let module = applicator
+        .apply_partial(db, module, target_struct_get)
+        .module;
 
     // Phase 5: Update ref_cast operations
+    let target_ref_cast = ConversionTarget::new().illegal_op("wasm", "ref_cast");
     let applicator = PatternApplicator::new(wasm_type_converter())
         .add_pattern(UpdateRefCastPattern { registry });
-    applicator.apply_partial(db, module, target).module
+    applicator.apply_partial(db, module, target_ref_cast).module
 }
 
 #[cfg(test)]
