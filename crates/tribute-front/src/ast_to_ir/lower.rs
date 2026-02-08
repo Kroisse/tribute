@@ -920,7 +920,12 @@ fn lower_expr<'db>(
             // Extract effect type from the lambda's inferred type.
             // This ensures lifted lambda functions preserve their effect information,
             // which is needed for evidence parameter insertion in later passes.
-            let effect_ty = builder.ctx.get_node_type(expr.id).and_then(|ty| {
+            let node_ty = builder.ctx.get_node_type(expr.id);
+            debug_assert!(
+                node_ty.is_some(),
+                "lambda node type should be populated by typeck"
+            );
+            let effect_ty = node_ty.and_then(|ty| {
                 if let TypeKind::Func { effect, .. } = ty.kind(builder.db()) {
                     if !effect.is_pure(builder.db()) {
                         Some(builder.ctx.convert_effect_row(*effect))
@@ -2462,8 +2467,8 @@ fn convert_annotation_to_ir_type<'db>(
 mod tests {
     use super::*;
     use crate::ast::{
-        AbilityId, BinOpKind, CtorId, Decl, Expr, ExprKind, FloatBits, FuncDecl, FuncDefId,
-        LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt,
+        AbilityId, BinOpKind, CtorId, Decl, EffectRow, Expr, ExprKind, FloatBits, FuncDecl,
+        FuncDefId, LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt,
         Type as AstType, TypeKind, TypedRef,
     };
     use insta::assert_debug_snapshot;
@@ -2490,6 +2495,19 @@ mod tests {
         module: Module<TypedRef<'db>>,
     ) -> core::Module<'db> {
         lower_module(db, path, span_map, module, HashMap::new(), HashMap::new())
+    }
+
+    /// Tracked wrapper for lower_module with node_types.
+    #[salsa::tracked]
+    fn test_lower_with_node_types<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+        span_map: SpanMap,
+        module: Module<TypedRef<'db>>,
+        node_type_entries: Vec<(NodeId, AstType<'db>)>,
+    ) -> core::Module<'db> {
+        let node_types: HashMap<NodeId, AstType<'db>> = node_type_entries.into_iter().collect();
+        lower_module(db, path, span_map, module, HashMap::new(), node_types)
     }
 
     /// Get operations from a module's body.
@@ -5282,8 +5300,9 @@ mod tests {
         let body = binop_expr(BinOpKind::Add, var_expr(x_ref), nat_lit_expr(1));
 
         // Lambda: fn(x) { x + 1 }
+        let lambda_id = NodeId::from_raw(100);
         let lambda = Expr::new(
-            fresh_node_id(),
+            lambda_id,
             ExprKind::Lambda {
                 params: vec![Param {
                     id: fresh_node_id(),
@@ -5295,12 +5314,28 @@ mod tests {
             },
         );
 
+        // Register the lambda's function type in node_types (as typeck would)
+        let pure_effect = EffectRow::pure(db);
+        let lambda_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty],
+                result: int_ty,
+                effect: pure_effect,
+            },
+        );
         // Function that returns the lambda
         let func_decl = simple_func(Symbol::new("make_adder"), lambda);
 
         let module = simple_module(vec![Decl::Function(func_decl)]);
 
-        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ir_module = test_lower_with_node_types(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            vec![(lambda_id, lambda_ty)],
+        );
         let ops = get_module_ops(db, &ir_module);
 
         // Should have the original function
@@ -5362,8 +5397,9 @@ mod tests {
         let body = binop_expr(BinOpKind::Add, add_ab, var_expr(c_ref));
 
         // Lambda: fn(a, b, c) { a + b + c }
+        let lambda_id = NodeId::from_raw(100);
         let lambda = Expr::new(
-            fresh_node_id(),
+            lambda_id,
             ExprKind::Lambda {
                 params: vec![
                     Param {
@@ -5389,12 +5425,28 @@ mod tests {
             },
         );
 
+        // Register the lambda's function type in node_types (as typeck would)
+        let pure_effect = EffectRow::pure(db);
+        let lambda_ty = AstType::new(
+            db,
+            TypeKind::Func {
+                params: vec![int_ty, int_ty, int_ty],
+                result: int_ty,
+                effect: pure_effect,
+            },
+        );
         // Function that returns the lambda
         let func_decl = simple_func(Symbol::new("triple_sum"), lambda);
 
         let module = simple_module(vec![Decl::Function(func_decl)]);
 
-        let ir_module = test_lower(db, path, SpanMap::default(), module);
+        let ir_module = test_lower_with_node_types(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            vec![(lambda_id, lambda_ty)],
+        );
         let ops = get_module_ops(db, &ir_module);
 
         // Find all func operations

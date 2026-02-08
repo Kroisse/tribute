@@ -720,18 +720,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.constrain_eq(*param_ty, *arg_ty);
                 }
 
-                // Effect propagation: merge callee's effect into current effect.
-                // For ability ops (e.g., State::get), callee_ty already has the concrete
-                // effect {State(?s) | ?row}. Merging this against current_effect {State(Nat)}
-                // unifies ?s = Nat via merge_effects_with_unification.
-                // For UniVar callees (type not yet resolved), fall back to the fresh effect.
-                let effect_to_merge =
-                    if let TypeKind::Func { effect, .. } = callee_ty.kind(self.db()) {
-                        *effect
-                    } else {
-                        callee_effect
-                    };
-                ctx.merge_effect(effect_to_merge);
+                ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
 
                 return result_ty;
             }
@@ -747,19 +736,25 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
 
-        // Effect propagation: merge callee's effect into current effect.
-        // For ability ops (e.g., State::get), callee_ty already has the concrete
-        // effect {State(?s) | ?row}. Merging this against current_effect {State(Nat)}
-        // unifies ?s = Nat via merge_effects_with_unification.
-        // For UniVar callees (type not yet resolved), fall back to the fresh effect.
-        let effect_to_merge = if let TypeKind::Func { effect, .. } = callee_ty.kind(self.db()) {
-            *effect
-        } else {
-            callee_effect
-        };
-        ctx.merge_effect(effect_to_merge);
+        ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
 
         result_ty
+    }
+
+    /// Resolve the effect row to merge for a function call.
+    ///
+    /// If the callee type is already a concrete function type, uses that function's
+    /// effect row directly. Otherwise, falls back to the fresh effect row.
+    fn resolve_callee_effect(
+        &self,
+        callee_ty: Type<'db>,
+        fallback: EffectRow<'db>,
+    ) -> EffectRow<'db> {
+        if let TypeKind::Func { effect, .. } = callee_ty.kind(self.db()) {
+            *effect
+        } else {
+            fallback
+        }
     }
 
     /// Extract struct name and type arguments from a type.

@@ -7,7 +7,7 @@
 //!
 //! The ability system should support:
 //! - Ability definitions with type parameters (`ability State(s) { ... }`)
-//! - Effect annotations in function signatures (`->{State(Int)}`)
+//! - Effect annotations in function signatures (`->{State(Nat)}`)
 //! - Handler expressions (`handle ... { ... }`)
 //! - Handler patterns (`{ State::get() -> k }`)
 //!
