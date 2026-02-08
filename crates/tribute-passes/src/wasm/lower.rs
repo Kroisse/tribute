@@ -23,62 +23,91 @@ use super::type_converter::wasm_type_converter;
 
 /// Entry point for lowering mid-level IR to wasm dialect.
 #[salsa::tracked]
+#[tracing::instrument(skip_all)]
 pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
-    tracing::debug!("=== BEFORE arith_to_wasm ===\n{:?}", module);
-    let module =
-        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(db, module, wasm_type_converter());
-    tracing::debug!("=== AFTER arith_to_wasm ===\n{:?}", module);
-    let module =
-        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(db, module, wasm_type_converter());
+    let module = {
+        let _span = tracing::info_span!("arith_to_wasm").entered();
+        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(db, module, wasm_type_converter())
+    };
+    let module = {
+        let _span = tracing::info_span!("scf_to_wasm").entered();
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(db, module, wasm_type_converter())
+    };
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
     // BEFORE trampoline_to_wasm so downstream passes don't need to handle tribute_rt
-    let module = super::normalize_primitive_types::lower(db, module);
-    tracing::debug!("=== AFTER normalize_primitive_types ===\n{:?}", module);
+    let module = {
+        let _span = tracing::info_span!("normalize_primitive_types").entered();
+        super::normalize_primitive_types::lower(db, module)
+    };
 
     // NOTE: resolve_type_references is called in pipeline.rs before compile_to_wasm
 
     // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
     // have ADT types (not trampoline.Step) when converted to wasm.func
-    let module = trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(db, module);
-    tracing::debug!("=== AFTER trampoline_to_wasm ===\n{:?}", module);
+    let module = {
+        let _span = tracing::info_span!("trampoline_to_wasm").entered();
+        trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(db, module)
+    };
 
-    let module =
-        trunk_ir_wasm_backend::passes::func_to_wasm::lower(db, module, wasm_type_converter());
-    tracing::debug!("=== AFTER func_to_wasm ===\n{:?}", module);
+    let module = {
+        let _span = tracing::info_span!("func_to_wasm").entered();
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(db, module, wasm_type_converter())
+    };
     debug_func_params(db, &module, "after func_to_wasm");
 
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
-    let module =
-        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(db, module, wasm_type_converter());
+    let module = {
+        let _span = tracing::info_span!("adt_to_wasm").entered();
+        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(db, module, wasm_type_converter())
+    };
     debug_func_params(db, &module, "after adt_to_wasm");
 
     // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
-    let module = super::tribute_rt_to_wasm::lower(db, module);
+    let module = {
+        let _span = tracing::info_span!("tribute_rt_to_wasm").entered();
+        super::tribute_rt_to_wasm::lower(db, module)
+    };
     debug_func_params(db, &module, "after tribute_rt_to_wasm");
 
     // Lower evidence runtime function stubs (prepare for inline WASM operations)
-    let module = super::evidence_to_wasm::lower_evidence_to_wasm(db, module);
+    let module = {
+        let _span = tracing::info_span!("evidence_to_wasm").entered();
+        super::evidence_to_wasm::lower_evidence_to_wasm(db, module)
+    };
 
     // Lower ability.handler_table to wasm.table + wasm.elem for table-based dispatch
-    let module = super::handler_table_to_wasm::lower_handler_table(db, module);
+    let module = {
+        let _span = tracing::info_span!("handler_table_to_wasm").entered();
+        super::handler_table_to_wasm::lower_handler_table(db, module)
+    };
 
     // NOTE: wasm_type_concrete pass removed - type variables are now resolved
     // at AST level and converted to concrete types in ast_to_ir
 
     // Const analysis and lowering (string/bytes constants to data segments)
-    let const_analysis = super::const_to_wasm::analyze_consts(db, module);
-    let module = super::const_to_wasm::lower(db, module, const_analysis);
+    let (const_analysis, module) = {
+        let _span = tracing::info_span!("const_to_wasm").entered();
+        let const_analysis = super::const_to_wasm::analyze_consts(db, module);
+        let module = super::const_to_wasm::lower(db, module, const_analysis);
+        (const_analysis, module)
+    };
 
     // Intrinsic analysis and lowering (print_line -> fd_write)
     let intrinsic_analysis =
         super::intrinsic_to_wasm::analyze_intrinsics(db, module, const_analysis.total_size(db));
-    let module = super::intrinsic_to_wasm::lower(db, module, intrinsic_analysis);
+    let module = {
+        let _span = tracing::info_span!("intrinsic_to_wasm").entered();
+        super::intrinsic_to_wasm::lower(db, module, intrinsic_analysis)
+    };
 
     // Phase 2: Remaining lowering via WasmLowerer
-    let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
-    let lowered = lowerer.lower_module(module);
+    let lowered = {
+        let _span = tracing::info_span!("wasm_lowerer").entered();
+        let mut lowerer = WasmLowerer::new(db, const_analysis, intrinsic_analysis);
+        lowerer.lower_module(module)
+    };
 
     // Debug: Verify all operations are now in wasm dialect
     if cfg!(debug_assertions) {
@@ -86,6 +115,7 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     }
 
     // Phase 3: Assign unique type_idx to GC struct operations before emit
+    let _span = tracing::info_span!("assign_gc_type_indices").entered();
     super::wasm_gc_type_assign::assign_gc_type_indices(db, lowered)
 }
 

@@ -1,0 +1,48 @@
+---
+source: crates/tribute-front/tests/lambda_effect_type.rs
+expression: ir_module
+---
+Module(test) {
+    operations: [
+        func @test::__lambda_0(adt.struct) -> tribute_rt.any {
+            body: [
+                "adt.struct_get",
+                "adt.struct_get",
+                "cont.resume",
+                "func.return",
+            ],
+        },
+        func @test::__lambda_1(adt.struct) -> tribute_rt.any {
+            body: [
+                "adt.struct_get",
+                "arith.const",
+                "cont.resume",
+                "func.return",
+            ],
+        },
+        func @test::__lambda_2(core.nil) -> tribute_rt.any {
+            body: [
+                "arith.const",
+                "cont.shift",
+                "func.return",
+            ],
+        },
+        func @with_state(core.func, tribute_rt.any) -> tribute_rt.any {
+            body: [
+                "cont.push_prompt",
+                "cont.handler_dispatch",
+                "func.return",
+            ],
+        },
+        func @main() -> core.i32 {
+            body: [
+                "arith.const",
+                "closure.new",
+                "arith.const",
+                "core.unrealized_conversion_cast",
+                "func.call",
+                "func.return",
+            ],
+        },
+    ],
+}

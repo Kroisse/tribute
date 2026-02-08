@@ -19,6 +19,62 @@ use super::super::func_context::FunctionInferenceContext;
 use super::super::subst;
 use super::{Mode, TypeChecker};
 
+/// Check if a type contains any unification variables (UniVar).
+///
+/// This is used to determine if it's safe to use Mode::Check with the type.
+/// If the type contains UniVars, using Mode::Check can cause ICE with
+/// row-polymorphic effect types.
+fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    match ty.kind(db) {
+        TypeKind::UniVar { .. } => true,
+        TypeKind::Named { args, .. } => args.iter().any(|a| type_contains_univar(db, *a)),
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+        } => {
+            params.iter().any(|p| type_contains_univar(db, *p))
+                || type_contains_univar(db, *result)
+                || effect_row_contains_univar(db, *effect)
+        }
+        TypeKind::Tuple(elems) => elems.iter().any(|e| type_contains_univar(db, *e)),
+        TypeKind::App { ctor, args } => {
+            type_contains_univar(db, *ctor) || args.iter().any(|a| type_contains_univar(db, *a))
+        }
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            type_contains_univar(db, *arg)
+                || type_contains_univar(db, *result)
+                || effect_row_contains_univar(db, *effect)
+        }
+        TypeKind::Int
+        | TypeKind::Nat
+        | TypeKind::Float
+        | TypeKind::Bool
+        | TypeKind::String
+        | TypeKind::Bytes
+        | TypeKind::Rune
+        | TypeKind::Nil
+        | TypeKind::BoundVar { .. }
+        | TypeKind::Error => false,
+    }
+}
+
+/// Check if an effect row contains any unification variables.
+fn effect_row_contains_univar<'db>(db: &'db dyn salsa::Database, row: EffectRow<'db>) -> bool {
+    for effect in row.effects(db) {
+        for arg in &effect.args {
+            if type_contains_univar(db, *arg) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 impl<'db> TypeChecker<'db> {
     // =========================================================================
     // Expression checking
@@ -177,6 +233,18 @@ impl<'db> TypeChecker<'db> {
                 result_ty
             }
             ExprKind::Lambda { params, body } => {
+                // Extract expected effect from mode if checking against a function type.
+                // This is crucial for lambdas passed to higher-order functions with effects.
+                let expected_effect = if let Mode::Check(expected_ty) = &mode {
+                    if let TypeKind::Func { effect, .. } = expected_ty.kind(self.db()) {
+                        Some(*effect)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 let param_types: Vec<Type<'db>> = params
                     .iter()
                     .map(|p| match &p.ty {
@@ -188,8 +256,14 @@ impl<'db> TypeChecker<'db> {
                 // Save the outer context's effect - lambda has its own effect context
                 let outer_effect = ctx.current_effect();
 
-                // Lambda body starts with pure effect (no effects yet)
-                ctx.set_current_effect(EffectRow::pure(self.db()));
+                // Lambda body starts with a fresh effect row variable.
+                // This is open (can be extended via unification), allowing the lambda's
+                // effect to be determined by the context where it's used.
+                // For example, if passed to `run_state(fn() { ... })` where the parameter
+                // type is `fn() ->{e, State(s)} a`, unification will constrain the
+                // lambda's effect to include State(s).
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
 
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
@@ -205,12 +279,26 @@ impl<'db> TypeChecker<'db> {
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
 
                 // The lambda's effect is what accumulated during body inference
-                let lambda_effect = ctx.current_effect();
+                let inferred_effect = ctx.current_effect();
 
                 ctx.pop_scope();
 
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
+
+                // Use the expected effect if provided, otherwise use the inferred effect.
+                // When expected effect is given, it means the lambda is being checked against
+                // a known function type. We must constrain the inferred effect to match the
+                // expected effect so that any UniVars created during body checking get resolved.
+                let lambda_effect = if let Some(expected) = expected_effect {
+                    // Constrain the inferred effect (fresh_effect after body checking)
+                    // to match the expected effect. This ensures UniVars in the body's
+                    // types that reference fresh_effect get properly resolved.
+                    ctx.constrain_row_eq(inferred_effect, expected);
+                    expected
+                } else {
+                    inferred_effect
+                };
 
                 let result_ty = ctx.fresh_type_var();
                 ctx.constrain_eq(result_ty, body_ty);
@@ -258,10 +346,21 @@ impl<'db> TypeChecker<'db> {
                     self.remove_handled_effects(ctx, body_effect_after, &handled_ability_ids)
                 };
 
-                // Merge the result effect with the effect before body
-                // (The outer function's effect now includes the unhandled effects)
+                // Push handle context with the ORIGINAL body effect (including handled effects).
+                // The continuation `k` represents the rest of the original computation,
+                // which can still perform the handled effects. When `k(x)` is called
+                // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
+                // row `{e, State(s)}` so it matches the expected `comp` parameter type.
+                ctx.push_handle_ctx(super::super::func_context::HandleContext {
+                    body_effect: body_effect_after,
+                });
+
+                // The unhandled effects from the handle body should be consistent
+                // with the enclosing function's effect. Use constraint instead of
+                // merge to avoid creating spurious variable linkages that lead to
+                // RowMismatch when the solver chains substitutions.
+                ctx.constrain_row_eq(result_effect, effect_before_body);
                 ctx.set_current_effect(effect_before_body);
-                ctx.merge_effect(result_effect);
 
                 body_ty
             }
@@ -283,9 +382,41 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Error => ctx.error_type(),
         };
 
-        // Check mode
+        // Check mode: constrain inferred type to match expected type.
+        // For lambdas, we split the expected function type and constrain param/return types
+        // individually, skipping only the effect portion (which is already constrained via
+        // constrain_row_eq during lambda body checking). Constraining the full type can cause
+        // ICE with row-polymorphic effect types.
         if let Mode::Check(expected) = mode {
-            ctx.constrain_eq(ty, expected);
+            if matches!(&*expr.kind, ExprKind::Lambda { .. }) {
+                if let (
+                    TypeKind::Func {
+                        params: exp_params,
+                        result: exp_result,
+                        ..
+                    },
+                    TypeKind::Func {
+                        params: inf_params,
+                        result: inf_result,
+                        ..
+                    },
+                ) = (expected.kind(self.db()), ty.kind(self.db()))
+                {
+                    for (inf_p, exp_p) in inf_params.iter().zip(exp_params.iter()) {
+                        ctx.constrain_eq(*inf_p, *exp_p);
+                    }
+                    ctx.constrain_eq(*inf_result, *exp_result);
+                }
+            } else {
+                ctx.constrain_eq(ty, expected);
+            }
+        }
+
+        // If a type was already recorded for this node (e.g., by infer_expr_type_with_ctx),
+        // add a constraint to ensure consistency. This handles cases like Lambda where
+        // type inference may occur twice (once in infer_* and once in check_*).
+        if let Some(existing_ty) = ctx.get_node_type(expr.id) {
+            ctx.constrain_eq(ty, existing_ty);
         }
 
         // Record node type
@@ -554,11 +685,13 @@ impl<'db> TypeChecker<'db> {
             // Create a continuation type for potential unification.
             let cont_arg_ty = ctx.fresh_type_var();
             let cont_result_ty = ctx.fresh_type_var();
+            let cont_effect = ctx.fresh_effect_row();
             let expected_cont_ty = Type::new(
                 self.db(),
                 TypeKind::Continuation {
                     arg: cont_arg_ty,
                     result: cont_result_ty,
+                    effect: cont_effect,
                 },
             );
 
@@ -570,7 +703,12 @@ impl<'db> TypeChecker<'db> {
             // use continuation semantics; otherwise use function semantics.
             // We check the callee type directly rather than relying on unification to choose.
             if matches!(callee_ty.kind(self.db()), TypeKind::Continuation { .. }) {
-                // Callee is a continuation - constrain as continuation call
+                // Callee is a continuation - constrain as continuation call.
+                // Note: We intentionally do NOT merge cont_effect into the current effect
+                // context here, unlike the function call path below. The continuation's
+                // effect row is already the handler body's effect row (assigned in
+                // convert_handler_arm_with_ctx), so it's already accounted for in the
+                // enclosing handle expression's effect propagation.
                 ctx.constrain_eq(callee_ty, expected_cont_ty);
                 ctx.constrain_eq(cont_arg_ty, arg_types[0]);
                 return cont_result_ty;
@@ -581,6 +719,9 @@ impl<'db> TypeChecker<'db> {
                 for (param_ty, arg_ty) in param_types.iter().zip(arg_types.iter()) {
                     ctx.constrain_eq(*param_ty, *arg_ty);
                 }
+
+                ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
+
                 return result_ty;
             }
         }
@@ -595,25 +736,25 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_eq(*param_ty, *arg_ty);
         }
 
-        // Effect handling: We rely on type unification to handle effect compatibility.
-        //
-        // When the callee's type is unified with the expected function type,
-        // the effect row is also unified. This naturally handles:
-        // - Pure callees: their effect unifies with any effect (subsumption)
-        // - Effectful callees: their effects must be present in the context
-        //
-        // We DON'T add merge_effect or constrain_row_eq here because:
-        // 1. The callee's type is constrained via constrain_eq(callee_ty, expected_func_ty)
-        // 2. If callee is pure (like apply_pure), its effect {} unifies with callee_effect
-        // 3. If callee is effectful, its effects propagate through type unification
-        //
-        // The actual effect checking happens when:
-        // - The function's return type is checked against the declared signature
-        // - Ability operations add their effect to the caller's effect row via
-        //   the row variable in their type signature
-        let _ = callee_effect; // Effect is handled through type unification
+        ctx.merge_effect(self.resolve_callee_effect(callee_ty, callee_effect));
 
         result_ty
+    }
+
+    /// Resolve the effect row to merge for a function call.
+    ///
+    /// If the callee type is already a concrete function type, uses that function's
+    /// effect row directly. Otherwise, falls back to the fresh effect row.
+    fn resolve_callee_effect(
+        &self,
+        callee_ty: Type<'db>,
+        fallback: EffectRow<'db>,
+    ) -> EffectRow<'db> {
+        if let TypeKind::Func { effect, .. } = callee_ty.kind(self.db()) {
+            *effect
+        } else {
+            fallback
+        }
     }
 
     /// Extract struct name and type arguments from a type.
@@ -757,13 +898,49 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Nil => ExprKind::Nil,
             ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
             ExprKind::Var(resolved) => ExprKind::Var(self.convert_ref_with_ctx(ctx, resolved)),
-            ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.check_expr_with_ctx(ctx, callee, Mode::Infer),
-                args: args
+            ExprKind::Call { callee, args } => {
+                // First, process callee so its type gets recorded
+                let converted_callee = self.check_expr_with_ctx(ctx, callee, Mode::Infer);
+
+                // Now get callee's type (recorded during check_expr_with_ctx)
+                let callee_ty = ctx.get_node_type(converted_callee.id);
+
+                // Extract param types if callee is a function type.
+                // This enables propagating expected types to lambda arguments,
+                // which is crucial for effect type inference.
+                let param_types: Vec<Option<Type<'db>>> = match callee_ty {
+                    Some(ty) => {
+                        if let TypeKind::Func { params, .. } = ty.kind(self.db()) {
+                            params.iter().map(|p| Some(*p)).collect()
+                        } else {
+                            vec![None; args.len()]
+                        }
+                    }
+                    None => vec![None; args.len()],
+                };
+
+                let converted_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
-                    .collect(),
-            },
+                    .enumerate()
+                    .map(|(i, a)| {
+                        // Use Mode::Check only if param type is available and doesn't contain
+                        // unification variables. Using Check mode with UniVar-containing types
+                        // can cause ICE with row-polymorphic effect types.
+                        let mode = match param_types.get(i) {
+                            Some(Some(ty)) if !type_contains_univar(self.db(), *ty) => {
+                                Mode::Check(*ty)
+                            }
+                            _ => Mode::Infer,
+                        };
+                        self.check_expr_with_ctx(ctx, a, mode)
+                    })
+                    .collect();
+
+                ExprKind::Call {
+                    callee: converted_callee,
+                    args: converted_args,
+                }
+            }
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
                 ctor: self.convert_ref_with_ctx(ctx, ctor),
                 args: args
@@ -847,17 +1024,43 @@ impl<'db> TypeChecker<'db> {
                     arms: converted_arms,
                 }
             }
-            ExprKind::Lambda { params, body } => ExprKind::Lambda {
-                params,
-                body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
-            },
-            ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.check_expr_with_ctx(ctx, body, Mode::Infer),
-                handlers: handlers
-                    .into_iter()
-                    .map(|h| self.convert_handler_arm_with_ctx(ctx, h))
-                    .collect(),
-            },
+            ExprKind::Lambda { params, body } => {
+                // Save and restore effect context for lambda body,
+                // just like in the infer phase. This prevents lambda
+                // body effects from leaking into the enclosing scope.
+                let outer_effect = ctx.current_effect();
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
+                let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                ctx.set_current_effect(outer_effect);
+                ExprKind::Lambda {
+                    params,
+                    body: converted_body,
+                }
+            }
+            ExprKind::Handle { body, handlers } => {
+                let handle_ctx = ctx.pop_handle_ctx();
+                debug_assert!(
+                    handle_ctx.is_some(),
+                    "pop_handle_ctx should match a corresponding push_handle_ctx in infer phase"
+                );
+                // Save and restore effect context for handle body conversion,
+                // just like in the infer phase. The body has its own effect
+                // context; without isolation, the body's effects would leak
+                // into the enclosing scope during convert-phase re-inference.
+                let outer_effect = ctx.current_effect();
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
+                let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                ctx.set_current_effect(outer_effect);
+                ExprKind::Handle {
+                    body: converted_body,
+                    handlers: handlers
+                        .into_iter()
+                        .map(|h| self.convert_handler_arm_with_ctx(ctx, h, handle_ctx.as_ref()))
+                        .collect(),
+                }
+            }
             ExprKind::Tuple(elements) => ExprKind::Tuple(
                 elements
                     .into_iter()
@@ -1373,6 +1576,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
+        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Result { binding } => HandlerKind::Result {
@@ -1390,14 +1594,19 @@ impl<'db> TypeChecker<'db> {
                     // Create a Continuation type for the continuation variable.
                     // The arg type is the type passed when resuming (effect operation's return type),
                     // and the result type is the handler's result type.
-                    // For now, use fresh type variables since we don't have precise type info.
+                    // Use the handle body's effect row so that continuation calls
+                    // propagate the correct effects.
                     let arg_ty = ctx.fresh_type_var();
                     let result_ty = ctx.fresh_type_var();
+                    let cont_effect = handle_ctx
+                        .map(|hc| hc.body_effect)
+                        .unwrap_or_else(|| ctx.fresh_effect_row());
                     let cont_ty = Type::new(
                         self.db(),
                         TypeKind::Continuation {
                             arg: arg_ty,
                             result: result_ty,
+                            effect: cont_effect,
                         },
                     );
                     ctx.bind_local(k_local_id, cont_ty);
@@ -1710,6 +1919,7 @@ impl<'db> TypeChecker<'db> {
     fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),
+            ResolvedRef::Ability { id } => Some(*id),
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same module path and name
@@ -1734,11 +1944,11 @@ impl<'db> TypeChecker<'db> {
     /// `State(Int)` and `State(Bool)` are now correctly distinguished.
     fn remove_handled_effects(
         &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        _ctx: &mut FunctionInferenceContext<'_, 'db>,
         row: EffectRow<'db>,
         handled_ability_ids: &[AbilityId<'db>],
     ) -> EffectRow<'db> {
-        let db = ctx.db();
+        let db = self.db();
         let effects = row.effects(db);
 
         // Filter out effects whose ability_id is in the handled list
@@ -1748,35 +1958,12 @@ impl<'db> TypeChecker<'db> {
             .cloned()
             .collect();
 
-        // If there's a row variable tail, we need to constrain it
-        if let Some(tail_var) = row.rest(db) {
-            // Create a fresh row variable for the result (the "unhandled" portion of the tail)
-            let result_var = ctx.fresh_row_var();
-
-            // Collect Effect entries from the original effects list, preserving type args.
-            // Use full Effect equality (including args) for proper deduplication of
-            // parameterized abilities like State(Int) vs State(Bool).
-            let mut seen_effects: HashSet<Effect<'db>> = HashSet::new();
-            let handled_effects: Vec<crate::ast::Effect<'db>> = effects
-                .iter()
-                .filter(|effect| handled_ability_ids.contains(&effect.ability_id))
-                .filter(|effect| seen_effects.insert((*effect).clone()))
-                .cloned()
-                .collect();
-
-            // Add constraint: tail_var = {handled_effects | result_var}
-            // This decomposes the tail into the handled effects plus the result,
-            // ensuring result_var cannot contain any of the handled abilities.
-            let tail_row = EffectRow::open(db, tail_var);
-            let decomposed_row = EffectRow::new(db, handled_effects, Some(result_var));
-            ctx.constrain_row_eq(tail_row, decomposed_row);
-
-            // Return the remaining effects with the fresh result variable
-            EffectRow::new(db, remaining_effects, Some(result_var))
-        } else {
-            // Closed row: just return the remaining effects
-            EffectRow::new(db, remaining_effects, None)
-        }
+        // Keep the same tail variable. The handled effects were explicitly
+        // listed in the effect row's effect list, so they are NOT in the tail.
+        // The tail represents the row-polymorphic remainder (e.g., `e` in
+        // `fn() ->{e, State(s)} a`), which by definition does not contain
+        // the handled effects.
+        EffectRow::new(db, remaining_effects, row.rest(db))
     }
 }
 

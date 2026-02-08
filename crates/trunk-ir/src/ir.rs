@@ -323,6 +323,99 @@ impl<'db> Block<'db> {
     pub fn arg_types(self, db: &'db dyn salsa::Database) -> IdVec<Type<'db>> {
         self.args(db).iter().map(|arg| arg.ty(db)).collect()
     }
+
+    /// Prepend a new argument to this block and remap all existing block arg
+    /// references in the operations and their nested regions to their shifted
+    /// indices.
+    ///
+    /// Returns `(new_block, new_arg_value)` where `new_arg_value` is the `Value`
+    /// for the prepended argument at index 0.
+    pub fn prepend_arg(
+        self,
+        db: &'db dyn salsa::Database,
+        new_arg: BlockArg<'db>,
+    ) -> (Block<'db>, Value<'db>) {
+        let block_id = self.id(db);
+        let old_args = self.args(db);
+
+        // Build new args list: new_arg at index 0, then all old args
+        let mut new_args = IdVec::with_capacity(old_args.len() + 1);
+        new_args.push(new_arg);
+        new_args.extend(old_args.iter().copied());
+
+        // Build value remapping for block args: old index N → new index N+1
+        //
+        // We use two separate contexts:
+        // - `block_arg_only_ctx`: Contains ONLY block arg mappings, used for
+        //   nested region remapping with `lookup_direct` to avoid chain-following.
+        //   (Chain-following would cause 0→1→2 instead of 0→1 when both
+        //   0→1 and 1→2 are in the map.)
+        // - `remap_ctx`: Accumulates block arg mappings AND operation result
+        //   mappings from rebuilt ops. Used for direct operand remapping of
+        //   the current block's operations (chain-following is safe here since
+        //   result mappings don't overlap with block arg mappings).
+        let mut block_arg_only_ctx = crate::rewrite::RewriteContext::new();
+        let mut remap_ctx = crate::rewrite::RewriteContext::new();
+        for old_idx in 0..old_args.len() {
+            let old_value = Value::new(db, ValueDef::BlockArg(block_id), old_idx);
+            let new_value = Value::new(db, ValueDef::BlockArg(block_id), old_idx + 1);
+            block_arg_only_ctx.map_value(old_value, new_value);
+            remap_ctx.map_value(old_value, new_value);
+        }
+
+        // Deep remap: remap operands in operations AND their nested regions.
+        // We process operations sequentially, tracking old→new result mappings
+        // so that intra-block result→operand chains remain valid when operations
+        // get rebuilt due to nested region remapping.
+        let remapped_ops: IdVec<Operation<'db>> = self
+            .operations(db)
+            .iter()
+            .map(|op| {
+                // First remap direct operands using remap_ctx (block arg + result mappings)
+                let remapped = remap_ctx.remap_operands(db, op);
+
+                // Deep remap nested regions using block_arg_only_ctx (no chain-following)
+                if !op.regions(db).is_empty() {
+                    let new_regions: IdVec<crate::Region<'db>> = remapped
+                        .regions(db)
+                        .iter()
+                        .map(|r| block_arg_only_ctx.remap_region_operands_direct(db, r))
+                        .collect();
+                    // Check if any region actually changed
+                    if new_regions != *remapped.regions(db) {
+                        let rebuilt = remapped.modify(db).regions(new_regions).build();
+                        // Track old→new result mapping so subsequent operations
+                        // referencing this op's results use the rebuilt version
+                        for i in 0..op.results(db).len() {
+                            remap_ctx.map_value(op.result(db, i), rebuilt.result(db, i));
+                        }
+                        rebuilt
+                    } else {
+                        // Regions unchanged, but operands may have changed
+                        if remapped != *op {
+                            for i in 0..op.results(db).len() {
+                                remap_ctx.map_value(op.result(db, i), remapped.result(db, i));
+                            }
+                        }
+                        remapped
+                    }
+                } else {
+                    // No nested regions — only operand remapping
+                    if remapped != *op {
+                        for i in 0..op.results(db).len() {
+                            remap_ctx.map_value(op.result(db, i), remapped.result(db, i));
+                        }
+                    }
+                    remapped
+                }
+            })
+            .collect();
+
+        let new_block = Block::new(db, block_id, self.location(db), new_args, remapped_ops);
+        let new_arg_value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+
+        (new_block, new_arg_value)
+    }
 }
 
 #[salsa::tracked(debug)]

@@ -4,6 +4,8 @@
 
 use std::collections::HashMap;
 
+use trunk_ir::smallvec::SmallVec;
+
 use crate::ast::{EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
 
 use super::constraint::{Constraint, ConstraintSet};
@@ -142,10 +144,43 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 Type::new(db, TypeKind::App { ctor, args })
             }
-            TypeKind::Continuation { arg, result } => {
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
                 let arg = self.apply_with_rows(db, *arg, row_subst);
                 let result = self.apply_with_rows(db, *result, row_subst);
-                Type::new(db, TypeKind::Continuation { arg, result })
+                // Apply row substitution to the continuation's effect row
+                let row_applied = row_subst.apply(db, *effect);
+                let effects = row_applied.effects(db);
+                let new_effects: Vec<_> = effects
+                    .iter()
+                    .map(|e| {
+                        let new_args: Vec<_> = e
+                            .args
+                            .iter()
+                            .map(|a| self.apply_with_rows(db, *a, row_subst))
+                            .collect();
+                        crate::ast::Effect {
+                            ability_id: e.ability_id,
+                            args: new_args,
+                        }
+                    })
+                    .collect();
+                let effect = if new_effects != *effects {
+                    EffectRow::new(db, new_effects, row_applied.rest(db))
+                } else {
+                    row_applied
+                };
+                Type::new(
+                    db,
+                    TypeKind::Continuation {
+                        arg,
+                        result,
+                        effect,
+                    },
+                )
             }
             _ => ty,
         }
@@ -300,9 +335,20 @@ impl<'db> TypeSubst<'db> {
                     self.collect_unresolved_univars(db, *a, row_subst, out);
                 }
             }
-            TypeKind::Continuation { arg, result } => {
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
                 self.collect_unresolved_univars(db, *arg, row_subst, out);
                 self.collect_unresolved_univars(db, *result, row_subst, out);
+                // Also collect from effect row type arguments
+                let applied = row_subst.apply(db, *effect);
+                for e in applied.effects(db) {
+                    for a in &e.args {
+                        self.collect_unresolved_univars(db, *a, row_subst, out);
+                    }
+                }
             }
             _ => {}
         }
@@ -408,15 +454,44 @@ impl<'db> TypeSubst<'db> {
                     },
                 )
             }
-            TypeKind::Continuation { arg, result } => {
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
                 let new_arg = self.replace_univars_with_bound(db, *arg, row_subst, var_to_index);
                 let new_result =
                     self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
+                // Apply row substitution and generalize effect type args
+                let applied_row = row_subst.apply(db, *effect);
+                let new_effects: Vec<_> = applied_row
+                    .effects(db)
+                    .iter()
+                    .map(|e| {
+                        let new_args: Vec<_> = e
+                            .args
+                            .iter()
+                            .map(|a| {
+                                self.replace_univars_with_bound(db, *a, row_subst, var_to_index)
+                            })
+                            .collect();
+                        crate::ast::Effect {
+                            ability_id: e.ability_id,
+                            args: new_args,
+                        }
+                    })
+                    .collect();
+                let new_effect = if new_effects != *applied_row.effects(db) {
+                    EffectRow::new(db, new_effects, applied_row.rest(db))
+                } else {
+                    applied_row
+                };
                 Type::new(
                     db,
                     TypeKind::Continuation {
                         arg: new_arg,
                         result: new_result,
+                        effect: new_effect,
                     },
                 )
             }
@@ -451,20 +526,25 @@ impl<'db> RowSubst<'db> {
 
     /// Apply substitution to an effect row.
     pub fn apply(&self, db: &'db dyn salsa::Database, row: EffectRow<'db>) -> EffectRow<'db> {
-        // Check if the row has a rest variable that needs substitution
-        if let Some(var) = row.rest(db)
-            && let Some(subst_row) = self.get(var.id)
-        {
-            // Combine the concrete effects with the substituted row
+        let mut row = row;
+        let mut visited = SmallVec::<[u64; 8]>::new();
+        while let Some(var) = row.rest(db) {
+            let Some(subst_row) = self.get(var.id) else {
+                break;
+            };
+            if visited.contains(&var.id) {
+                break; // cycle detected — return current row as-is
+            }
+            visited.push(var.id);
+
             let mut effects = row.effects(db).clone();
             for effect in subst_row.effects(db) {
                 if !effects.contains(effect) {
                     effects.push(effect.clone());
                 }
             }
-            // Use the substituted row's rest
             let rest = subst_row.rest(db);
-            return EffectRow::new(db, effects, rest);
+            row = EffectRow::new(db, effects, rest);
         }
         row
     }
@@ -511,6 +591,35 @@ impl<'db> TypeSolver<'db> {
         EffectVar { id }
     }
 
+    /// Apply type substitution to effect arguments in a row.
+    ///
+    /// This ensures that UniVars in effect args (like `State(s)` where `s` is a UniVar)
+    /// are resolved before row comparison. Without this, two rows with the same ability
+    /// but different (unresolved vs resolved) args would fail to unify.
+    fn apply_type_subst_to_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
+        let effects = row.effects(self.db);
+        let new_effects: Vec<_> = effects
+            .iter()
+            .map(|e| {
+                let new_args: Vec<_> = e
+                    .args
+                    .iter()
+                    .map(|a| self.type_subst.apply(self.db, *a))
+                    .collect();
+                crate::ast::Effect {
+                    ability_id: e.ability_id,
+                    args: new_args,
+                }
+            })
+            .collect();
+
+        if new_effects != *effects {
+            EffectRow::new(self.db, new_effects, row.rest(self.db))
+        } else {
+            row
+        }
+    }
+
     /// Solve a set of constraints.
     ///
     /// Processes all constraints even if some fail, so that as many type
@@ -536,10 +645,16 @@ impl<'db> TypeSolver<'db> {
             Constraint::TypeEq(t1, t2) => self.unify_types(t1, t2),
             Constraint::RowEq(r1, r2) => self.unify_rows(r1, r2),
             Constraint::And(cs) => {
+                let mut first_error: Option<SolveError<'db>> = None;
                 for c in cs {
-                    self.solve_constraint(c)?;
+                    if let Err(e) = self.solve_constraint(c) {
+                        first_error.get_or_insert(e);
+                    }
                 }
-                Ok(())
+                match first_error {
+                    Some(e) => Err(e),
+                    None => Ok(()),
+                }
             }
         }
     }
@@ -670,14 +785,17 @@ impl<'db> TypeSolver<'db> {
                 &TypeKind::Continuation {
                     arg: a1,
                     result: r1,
+                    effect: e1,
                 },
                 &TypeKind::Continuation {
                     arg: a2,
                     result: r2,
+                    effect: e2,
                 },
             ) => {
                 self.unify_types(a1, a2)?;
                 self.unify_types(r1, r2)?;
+                self.unify_rows(e1, e2)?;
                 Ok(())
             }
 
@@ -720,8 +838,17 @@ impl<'db> TypeSolver<'db> {
             TypeKind::App { ctor, args } => {
                 self.occurs_in(var, *ctor) || args.iter().any(|a| self.occurs_in(var, *a))
             }
-            TypeKind::Continuation { arg, result } => {
-                self.occurs_in(var, *arg) || self.occurs_in(var, *result)
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                self.occurs_in(var, *arg)
+                    || self.occurs_in(var, *result)
+                    || effect
+                        .effects(self.db)
+                        .iter()
+                        .any(|e| e.args.iter().any(|a| self.occurs_in(var, *a)))
             }
             _ => false,
         }
@@ -784,8 +911,14 @@ impl<'db> TypeSolver<'db> {
                 self.row_occurs_in_type(var, *ctor)
                     || args.iter().any(|a| self.row_occurs_in_type(var, *a))
             }
-            TypeKind::Continuation { arg, result } => {
-                self.row_occurs_in_type(var, *arg) || self.row_occurs_in_type(var, *result)
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => {
+                self.row_occurs_in_type(var, *arg)
+                    || self.row_occurs_in_type(var, *result)
+                    || self.row_occurs_in(var, *effect)
             }
             TypeKind::UniVar { id } => {
                 if let Some(subst_ty) = self.type_subst.get(*id) {
@@ -813,6 +946,13 @@ impl<'db> TypeSolver<'db> {
         // Apply current row substitution first
         let r1 = self.row_subst.apply(self.db, r1);
         let r2 = self.row_subst.apply(self.db, r2);
+
+        // Apply type substitution to effect args
+        // This is important because effect args may contain UniVars that have been
+        // resolved by previous type constraints. For example, State(s) where s was
+        // already unified with Int should become State(Int) before row comparison.
+        let r1 = self.apply_type_subst_to_row(r1);
+        let r2 = self.apply_type_subst_to_row(r2);
 
         // Same row: done
         if r1 == r2 {
@@ -1086,10 +1226,12 @@ impl<'db> TypeSolver<'db> {
                 TypeKind::Continuation {
                     arg: a1,
                     result: r1,
+                    ..
                 },
                 TypeKind::Continuation {
                     arg: a2,
                     result: r2,
+                    ..
                 },
             ) => self.types_unifiable(*a1, *a2) && self.types_unifiable(*r1, *r2),
             _ => false,
@@ -2597,12 +2739,15 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
         let bool_ty = Type::new(&db, TypeKind::Bool);
 
+        let pure = EffectRow::pure(&db);
+
         // Same continuation types should be unifiable
         let cont1 = Type::new(
             &db,
             TypeKind::Continuation {
                 arg: int_ty,
                 result: bool_ty,
+                effect: pure,
             },
         );
         let cont2 = Type::new(
@@ -2610,6 +2755,7 @@ mod tests {
             TypeKind::Continuation {
                 arg: int_ty,
                 result: bool_ty,
+                effect: pure,
             },
         );
         assert!(solver.types_unifiable(cont1, cont2));
@@ -2620,6 +2766,7 @@ mod tests {
             TypeKind::Continuation {
                 arg: bool_ty,
                 result: bool_ty,
+                effect: pure,
             },
         );
         assert!(!solver.types_unifiable(cont1, cont3));
@@ -2630,6 +2777,7 @@ mod tests {
             TypeKind::Continuation {
                 arg: int_ty,
                 result: int_ty,
+                effect: pure,
             },
         );
         assert!(!solver.types_unifiable(cont1, cont4));

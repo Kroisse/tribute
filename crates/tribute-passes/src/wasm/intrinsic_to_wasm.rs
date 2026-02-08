@@ -255,8 +255,9 @@ pub fn lower<'db>(
         .add_pattern(BytesSliceOrPanicPattern)
         .add_pattern(BytesConcatPattern);
 
-    // No specific conversion target - intrinsic lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_op("wasm", "call");
     applicator.apply_partial(db, module, target).module
 }
 

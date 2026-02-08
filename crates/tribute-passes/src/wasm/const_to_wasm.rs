@@ -177,8 +177,10 @@ pub fn lower<'db>(
     let string_allocations = analysis.string_allocations(db).clone();
     let bytes_allocations = analysis.bytes_allocations(db).clone();
 
-    // No specific conversion target - const lowering is a dialect transformation
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_op("adt", "string_const")
+        .illegal_op("adt", "bytes_const");
     PatternApplicator::new(wasm_type_converter())
         .add_pattern(StringConstPattern::new(string_allocations))
         .add_pattern(BytesConstPattern::new(bytes_allocations))

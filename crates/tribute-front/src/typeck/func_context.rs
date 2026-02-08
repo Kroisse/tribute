@@ -14,13 +14,21 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    CtorId, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme, UniVarId,
-    UniVarSource,
+    CtorId, Effect, EffectRow, EffectVar, FuncDefId, LocalId, NodeId, Type, TypeKind, TypeScheme,
+    UniVarId, UniVarSource,
 };
 
 use super::constraint::ConstraintSet;
 use super::context::ModuleTypeEnv;
 use super::subst;
+
+/// Context for the handle expression currently being type-checked.
+///
+/// Captures the body type and body effect row so that handler arms
+/// can assign proper effect information to continuation variables.
+pub(crate) struct HandleContext<'db> {
+    pub body_effect: EffectRow<'db>,
+}
 
 /// Function-level type inference context.
 ///
@@ -70,6 +78,13 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
+
+    /// Stack of handle expression contexts.
+    ///
+    /// Pushed during the infer phase of a handle expression and
+    /// popped during the convert phase, so that handler arms can
+    /// assign the body's effect row to continuation variables.
+    handle_ctx_stack: Vec<HandleContext<'db>>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -96,6 +111,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
             current_effect: EffectRow::pure(db),
+            handle_ctx_stack: Vec::new(),
         }
     }
 
@@ -229,6 +245,14 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.node_types.get(&node).copied()
     }
 
+    /// Take ownership of the node_types map.
+    ///
+    /// This consumes the node_types, leaving an empty map.
+    /// Used for collecting all node types after type checking a function.
+    pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
+        std::mem::take(&mut self.node_types)
+    }
+
     // =========================================================================
     // Module-level lookups (delegated to ModuleTypeEnv)
     // =========================================================================
@@ -302,6 +326,22 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.constraints.add_row_eq(r1, r2);
     }
 
+    /// Constrain that inferred_effect is subsumed by expected_effect.
+    ///
+    /// In row-polymorphic effect systems, this means the inferred effects
+    /// should be a subset of the expected effects. For now, we use equality
+    /// constraint which is more restrictive but simpler.
+    ///
+    /// This is used when checking lambdas against expected function types:
+    /// if the expected type has effects, the lambda's effect should match.
+    ///
+    /// TODO: Implement proper row subsumption for higher-order effects.
+    pub fn constrain_effect_subtype(&mut self, inferred: EffectRow<'db>, expected: EffectRow<'db>) {
+        // For simplicity, use row equality.
+        // A more sophisticated system would handle row extension/subsumption.
+        self.constraints.add_row_eq(inferred, expected);
+    }
+
     /// Take the constraint set, leaving an empty set.
     pub fn take_constraints(&mut self) -> ConstraintSet<'db> {
         std::mem::take(&mut self.constraints)
@@ -321,6 +361,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.current_effect = effect;
     }
 
+    /// Push a handle context onto the stack.
+    pub(crate) fn push_handle_ctx(&mut self, ctx: HandleContext<'db>) {
+        self.handle_ctx_stack.push(ctx);
+    }
+
+    /// Pop the most recent handle context from the stack.
+    pub(crate) fn pop_handle_ctx(&mut self) -> Option<HandleContext<'db>> {
+        self.handle_ctx_stack.pop()
+    }
+
     /// Merge an effect into the current effect row.
     ///
     /// Implements row-polymorphic effect union:
@@ -330,8 +380,6 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///   - `e1 = {B | e3}`
     ///   - `e2 = {A | e3}`
     pub fn merge_effect(&mut self, effect: EffectRow<'db>) {
-        use super::effect_row;
-
         let db = self.db;
         let current = self.current_effect;
 
@@ -346,21 +394,51 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             return;
         }
 
-        match (current.rest(db), effect.rest(db)) {
-            (None, None) | (Some(_), None) | (None, Some(_)) => {
-                // At most one row is open: simple union
-                self.current_effect = effect_row::union(db, current, effect, || {
-                    unreachable!("fresh var not needed when at most one row is open")
-                });
-            }
-            (Some(e1), Some(e2)) if e1 == e2 => {
-                // Both open with the same rest variable: simple union, no constraints needed
-                let mut effects = current.effects(db).clone();
-                for e in effect.effects(db) {
-                    if !effects.contains(e) {
-                        effects.push(e.clone());
+        // Helper closure to merge effects with unification of type args for same ability
+        let merge_effects_with_unification =
+            |ctx: &mut Self, base: &[Effect<'db>], incoming: &[Effect<'db>]| -> Vec<Effect<'db>> {
+                let mut result = base.to_vec();
+                for e in incoming {
+                    // Check if there's already an effect with the same ability_id
+                    if let Some(existing) = result.iter().find(|r| r.ability_id == e.ability_id) {
+                        // Same ability: unify type args instead of adding duplicate
+                        debug_assert_eq!(
+                            existing.args.len(),
+                            e.args.len(),
+                            "ability {:?} arity mismatch: existing has {} args, incoming has {}",
+                            e.ability_id,
+                            existing.args.len(),
+                            e.args.len()
+                        );
+                        for (existing_arg, incoming_arg) in existing.args.iter().zip(e.args.iter())
+                        {
+                            ctx.constrain_eq(*existing_arg, *incoming_arg);
+                        }
+                        // Don't add the effect since it's already present (with unified args)
+                    } else {
+                        // Different ability: add to result
+                        result.push(e.clone());
                     }
                 }
+                result
+            };
+
+        match (current.rest(db), effect.rest(db)) {
+            (None, None) | (Some(_), None) | (None, Some(_)) => {
+                // At most one row is open: union with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
+                let rest = match (current.rest(db), effect.rest(db)) {
+                    (None, None) => None,
+                    (Some(v), None) | (None, Some(v)) => Some(v),
+                    (Some(_), Some(_)) => unreachable!(),
+                };
+                self.current_effect = EffectRow::new(db, effects, rest);
+            }
+            (Some(e1), Some(e2)) if e1 == e2 => {
+                // Both open with the same rest variable: union with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e1));
             }
             (Some(e1), Some(e2)) => {
@@ -375,13 +453,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 let row_for_e2 = EffectRow::new(db, current.effects(db).clone(), Some(e3));
                 self.constrain_row_eq(EffectRow::open(db, e2), row_for_e2);
 
-                // Result: {current effects ∪ effect effects | e3}
-                let mut effects = current.effects(db).clone();
-                for e in effect.effects(db) {
-                    if !effects.contains(e) {
-                        effects.push(e.clone());
-                    }
-                }
+                // Result: {current effects ∪ effect effects | e3} with unification
+                let effects =
+                    merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e3));
             }
         }

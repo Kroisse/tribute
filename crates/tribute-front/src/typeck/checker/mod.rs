@@ -24,12 +24,26 @@ mod collect;
 mod expr;
 mod func_check;
 
+use std::collections::HashMap;
+
 use trunk_ir::{Span, Symbol, SymbolVec, smallvec::SmallVec};
 
-use crate::ast::{Decl, FuncDefId, Module, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef};
+use crate::ast::{
+    Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
+};
 
 use super::PreludeExports;
 use super::context::ModuleTypeEnv;
+
+/// Result of module type checking.
+pub struct ModuleCheckResult<'db> {
+    /// The typed module AST.
+    pub module: Module<TypedRef<'db>>,
+    /// Function type schemes (name → polymorphic type).
+    pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    /// Node types for IR lowering (NodeId → monomorphic type).
+    pub node_types: Vec<(NodeId, Type<'db>)>,
+}
 
 /// Type checking mode.
 #[derive(Clone, Debug)]
@@ -52,6 +66,9 @@ pub struct TypeChecker<'db> {
     pub(crate) module_path: Vec<Symbol>,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: SpanMap,
+    /// Accumulated node types from all functions.
+    /// Collects NodeId → Type mappings during type checking.
+    node_types: HashMap<NodeId, Type<'db>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -61,6 +78,7 @@ impl<'db> TypeChecker<'db> {
             env: ModuleTypeEnv::new(db),
             module_path: Vec::new(),
             span_map,
+            node_types: HashMap::new(),
         }
     }
 
@@ -94,11 +112,8 @@ impl<'db> TypeChecker<'db> {
 
     /// Type check a module.
     ///
-    /// Returns the typed module and a list of exported function type schemes.
-    pub fn check_module(
-        self,
-        module: Module<ResolvedRef<'db>>,
-    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
+    /// Returns the typed module, function type schemes, and node types.
+    pub fn check_module(self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         self.check_module_inner(module)
     }
 
@@ -116,10 +131,7 @@ impl<'db> TypeChecker<'db> {
     /// 2. For each function, create an isolated FunctionInferenceContext
     /// 3. Check the function body, solve constraints, and apply substitution
     /// 4. No global solve needed - each function's UniVars are resolved independently
-    fn check_module_inner(
-        mut self,
-        module: Module<ResolvedRef<'db>>,
-    ) -> (Module<TypedRef<'db>>, Vec<(Symbol, TypeScheme<'db>)>) {
+    fn check_module_inner(mut self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
@@ -139,13 +151,20 @@ impl<'db> TypeChecker<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
 
-        let typed_module = Module {
-            id: module.id,
-            name: module.name,
-            decls,
-        };
+        // Convert node_types HashMap to Vec for Salsa compatibility
+        // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
+        let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
+        node_types.sort_by_key(|(id, _)| *id);
 
-        (typed_module, function_types)
+        ModuleCheckResult {
+            module: Module {
+                id: module.id,
+                name: module.name,
+                decls,
+            },
+            function_types,
+            node_types,
+        }
     }
 
     /// Internal implementation for prelude module type checking.

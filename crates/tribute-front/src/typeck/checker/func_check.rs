@@ -65,6 +65,11 @@ impl<'db> TypeChecker<'db> {
 
         // 4. Solve constraints for this function only
         let constraints = ctx.take_constraints();
+        // Take node_types now while ctx is still alive, before we need mutable self access
+        let func_node_types = ctx.take_node_types();
+        // Drop ctx now to release the borrow of self.env
+        drop(ctx);
+
         let mut solver = TypeSolver::new(self.db());
 
         if let Err(error) = solver.solve(constraints) {
@@ -117,6 +122,14 @@ impl<'db> TypeChecker<'db> {
 
         // 6. Apply substitution and generalization to all TypedRef types in the body
         let body = self.apply_subst_to_body(body, type_subst, row_subst, &var_to_index);
+
+        // 7. Collect node types from this function's context and apply substitution.
+        // Note: We apply substitution but NOT generalization, because these types
+        // are used for IR lowering which needs concrete types, not polymorphic ones.
+        for (node_id, ty) in func_node_types {
+            let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
+            self.node_types.insert(node_id, substituted);
+        }
 
         FuncDecl {
             id: func.id,

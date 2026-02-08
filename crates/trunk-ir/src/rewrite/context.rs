@@ -58,6 +58,15 @@ impl<'db> RewriteContext<'db> {
         current
     }
 
+    /// Look up the mapped value for an old value without following chains.
+    /// Returns the directly mapped value if one exists, otherwise the original.
+    /// Use this for parallel substitution where chain-following would cause
+    /// double remapping (e.g., block arg shift: 0→1, 1→2 should NOT make
+    /// lookup(0) return 2).
+    pub fn lookup_direct(&self, old: Value<'db>) -> Value<'db> {
+        self.value_map.get(&old).copied().unwrap_or(old)
+    }
+
     /// Register a value mapping from old to new.
     pub fn map_value(&mut self, old: Value<'db>, new: Value<'db>) {
         self.value_map.insert(old, new);
@@ -164,6 +173,24 @@ impl<'db> RewriteContext<'db> {
         crate::Region::new(db, region.location(db), new_blocks)
     }
 
+    /// Recursively remap all operands in a region using direct (non-chaining) lookup.
+    ///
+    /// This variant uses `lookup_direct` instead of `lookup`, making it safe
+    /// for parallel substitution scenarios like block arg shifting where
+    /// chain-following would cause double remapping.
+    pub fn remap_region_operands_direct(
+        &self,
+        db: &'db dyn salsa::Database,
+        region: &crate::Region<'db>,
+    ) -> crate::Region<'db> {
+        let new_blocks: IdVec<crate::Block<'db>> = region
+            .blocks(db)
+            .iter()
+            .map(|block| self.remap_block_operands_direct(db, block))
+            .collect();
+        crate::Region::new(db, region.location(db), new_blocks)
+    }
+
     /// Remap all operands in a block and its operations' nested regions.
     fn remap_block_operands(
         &self,
@@ -174,6 +201,81 @@ impl<'db> RewriteContext<'db> {
             .operations(db)
             .iter()
             .map(|op| self.remap_operation_deep(db, op))
+            .collect();
+        crate::Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
+    }
+
+    /// Remap all operands in a block using direct (non-chaining) lookup for
+    /// the pre-registered mappings (block arg shifts), while also tracking
+    /// intra-block result remappings from rebuilt operations.
+    fn remap_block_operands_direct(
+        &self,
+        db: &'db dyn salsa::Database,
+        block: &crate::Block<'db>,
+    ) -> crate::Block<'db> {
+        // Local map for tracking result remappings within this block.
+        // When an operation is rebuilt (due to operand change or nested region
+        // remapping), its results get new identity. Subsequent operations that
+        // reference those results need to use the new values.
+        let mut local_result_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+
+        let new_ops: IdVec<Operation<'db>> = block
+            .operations(db)
+            .iter()
+            .map(|op| {
+                // Remap operands: check local result map first, then block arg map
+                let operands = op.operands(db);
+                let mut new_operands: IdVec<Value<'db>> = IdVec::new();
+                let mut changed = false;
+                for &operand in operands.iter() {
+                    let mapped = if let Some(&local) = local_result_map.get(&operand) {
+                        local
+                    } else {
+                        self.lookup_direct(operand)
+                    };
+                    new_operands.push(mapped);
+                    if mapped != operand {
+                        changed = true;
+                    }
+                }
+
+                let remapped = if changed {
+                    op.modify(db).operands(new_operands).build()
+                } else {
+                    *op
+                };
+
+                // Recursively remap nested regions
+                let final_op = if !remapped.regions(db).is_empty() {
+                    let new_regions: IdVec<crate::Region<'db>> = remapped
+                        .regions(db)
+                        .iter()
+                        .map(|r| self.remap_region_operands_direct(db, r))
+                        .collect();
+                    if new_regions != *remapped.regions(db) {
+                        remapped.modify(db).regions(new_regions).build()
+                    } else {
+                        remapped
+                    }
+                } else {
+                    remapped
+                };
+
+                // Track result mappings if operation was rebuilt
+                if final_op != *op {
+                    for i in 0..op.results(db).len() {
+                        local_result_map.insert(op.result(db, i), final_op.result(db, i));
+                    }
+                }
+
+                final_op
+            })
             .collect();
         crate::Block::new(
             db,

@@ -51,19 +51,22 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
 
     // Type check - this is where field type constraints are applied
     let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    let (typed_ast, function_types) = checker.check_module(resolved);
+    let result = checker.check_module(resolved);
 
     // TDNR
-    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, typed_ast);
+    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module);
 
     // Lower to IR
-    let function_types_map: std::collections::HashMap<_, _> = function_types.into_iter().collect();
+    let function_types_map: std::collections::HashMap<_, _> =
+        result.function_types.into_iter().collect();
+    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
         tdnr_ast,
         span_map,
         source.uri(db).as_str(),
         function_types_map,
+        node_types_map,
     )
 }
 

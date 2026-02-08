@@ -51,7 +51,9 @@ pub fn lower_evidence_to_wasm<'db>(
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
 
-    let target = ConversionTarget::new();
+    let target = ConversionTarget::new()
+        .legal_dialect("wasm")
+        .illegal_dialect("ability");
     applicator.apply_partial(db, module, target).module
 }
 

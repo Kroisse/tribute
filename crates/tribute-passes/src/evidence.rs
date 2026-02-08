@@ -441,20 +441,10 @@ impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
             .enumerate()
             .map(|(i, block)| {
                 if i == 0 {
-                    // Entry block: add evidence as first argument
-                    let old_args = block.args(db);
-                    let mut new_args = IdVec::with_capacity(old_args.len() + 1);
-                    new_args.push(BlockArg::of_type(db, ev_ty));
-                    new_args.extend(old_args.iter().copied());
-
-                    // Preserve original BlockId to maintain any inter-block references
-                    Block::new(
-                        db,
-                        block.id(db),
-                        block.location(db),
-                        new_args,
-                        block.operations(db).clone(),
-                    )
+                    // Entry block: prepend evidence arg and remap existing block arg references
+                    let ev_arg = BlockArg::of_type(db, ev_ty);
+                    let (new_block, _ev_value) = block.prepend_arg(db, ev_arg);
+                    new_block
                 } else {
                     *block
                 }

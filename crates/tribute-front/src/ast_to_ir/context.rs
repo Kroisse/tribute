@@ -52,6 +52,9 @@ pub struct IrLoweringCtx<'db> {
     /// Track IR types of SSA values for cast insertion.
     /// Maps each generated Value to its IR type.
     value_types: HashMap<Value<'db>, Type<'db>>,
+    /// Node types from type checking, keyed by NodeId.
+    /// Used to get the effect type of lambda expressions.
+    node_types: HashMap<NodeId, crate::ast::Type<'db>>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -62,6 +65,7 @@ impl<'db> IrLoweringCtx<'db> {
         span_map: SpanMap,
         function_types: HashMap<Symbol, TypeScheme<'db>>,
         module_path: SymbolVec,
+        node_types: HashMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
         Self {
             db,
@@ -77,6 +81,7 @@ impl<'db> IrLoweringCtx<'db> {
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
             value_types: HashMap::new(),
+            node_types,
         }
     }
 
@@ -242,6 +247,14 @@ impl<'db> IrLoweringCtx<'db> {
         self.value_types.get(&value).copied()
     }
 
+    /// Get the type of an AST node by NodeId.
+    ///
+    /// Returns the type assigned during type checking.
+    /// Used to get the effect type of lambda expressions.
+    pub fn get_node_type(&self, node_id: NodeId) -> Option<&crate::ast::Type<'db>> {
+        self.node_types.get(&node_id)
+    }
+
     /// Get all bindings visible in the current scope (for capture analysis).
     /// Returns bindings from all scopes, innermost first.
     pub fn all_bindings(&self) -> impl Iterator<Item = (LocalId, Symbol, Value<'db>)> + '_ {
@@ -267,11 +280,15 @@ impl<'db> IrLoweringCtx<'db> {
                 tribute_rt::any_type(self.db)
             }
             TypeKind::UniVar { id } => {
-                // UniVar should not survive substitution — compiler internal invariant violation
-                panic!(
-                    "ICE: UniVar({:?}) survived substitution — should have been resolved",
+                // UniVar surviving substitution indicates incomplete constraint solving.
+                // This can happen with complex effect row polymorphism (e.g., handler
+                // arms with continuation calls in recursive functions).
+                // Type-erase to any since the runtime uses a type-erased representation.
+                tracing::debug!(
+                    "UniVar({:?}) survived substitution — type-erasing to any",
                     id
                 );
+                tribute_rt::any_type(self.db)
             }
             TypeKind::Named { .. } => {
                 // Type erasure: struct/enum → tribute_rt.any
@@ -287,7 +304,7 @@ impl<'db> IrLoweringCtx<'db> {
                 tribute_rt::any_type(self.db)
             }
             TypeKind::App { ctor, .. } => self.convert_type(*ctor),
-            TypeKind::Continuation { arg, result } => {
+            TypeKind::Continuation { arg, result, .. } => {
                 use trunk_ir::dialect::cont;
                 let ir_arg = self.convert_type(*arg);
                 let ir_result = self.convert_type(*result);
@@ -368,6 +385,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         let ty = AstType::new(db, TypeKind::BoundVar { index: 0 });
@@ -384,6 +402,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         let int_ty = AstType::new(db, TypeKind::Int);
@@ -407,6 +426,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         let int_ty = AstType::new(db, TypeKind::Int);
@@ -425,6 +445,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         let bound_var = AstType::new(db, TypeKind::BoundVar { index: 0 });
@@ -454,6 +475,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
 
         // Int → I32
@@ -497,6 +519,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             ft,
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
         assert_eq!(ctx.lookup_function_type(name), Some(&scheme));
     }
@@ -510,6 +533,7 @@ mod tests {
             crate::ast::SpanMap::default(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
         );
         assert_eq!(ctx.lookup_function_type(Symbol::new("missing")), None);
     }

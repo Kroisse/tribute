@@ -50,6 +50,7 @@ fn init_tracing(log_filter: &str) {
     });
     tracing_subscriber::fmt()
         .with_env_filter(env_filter)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_writer(std::io::stderr)
         .init();
 }

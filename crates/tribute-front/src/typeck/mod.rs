@@ -36,7 +36,9 @@ pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, FuncDefId, Module, ResolvedRef, Type, TypeParam, TypeScheme, TypedRef};
+use crate::ast::{
+    CtorId, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeParam, TypeScheme, TypedRef,
+};
 
 /// Salsa-tracked struct holding the complete type checking output.
 ///
@@ -50,6 +52,12 @@ pub struct TypeCheckOutput<'db> {
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
     #[returns(ref)]
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
+    /// Node types collected during type checking.
+    /// Maps NodeId to its inferred type (after substitution but before generalization).
+    /// Used by IR lowering to get lambda effect types.
+    /// Stored as Vec for Salsa compatibility (HashMap doesn't implement Hash).
+    #[returns(ref)]
+    pub node_types: Vec<(NodeId, Type<'db>)>,
 }
 
 /// Prelude's exported type information.
@@ -93,6 +101,6 @@ pub fn typecheck_module<'db>(
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map);
-    let (typed_module, function_types) = checker.check_module(module);
-    TypeCheckOutput::new(db, typed_module, function_types)
+    let result = checker.check_module(module);
+    TypeCheckOutput::new(db, result.module, result.function_types, result.node_types)
 }

@@ -118,7 +118,12 @@ pub enum TypeKind<'db> {
     /// Represents a captured continuation that can be resumed with a value.
     /// - `arg`: The type of value passed when resuming
     /// - `result`: The type returned after resuming
-    Continuation { arg: Type<'db>, result: Type<'db> },
+    /// - `effect`: The effect row of the continuation body
+    Continuation {
+        arg: Type<'db>,
+        result: Type<'db>,
+        effect: EffectRow<'db>,
+    },
 
     /// Error type (used when type checking fails).
     ///
