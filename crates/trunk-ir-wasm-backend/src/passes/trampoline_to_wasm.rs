@@ -761,35 +761,10 @@ impl<'db> RewritePattern<'db> for LowerBuildStatePattern {
         let location = op.location(db);
         let operands = adaptor.operands();
 
-        // Get state type from attribute and update field types to anyref
-        // since all operands are cast to anyref
-        let original_state_type = build_state.state_type(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-
-        // Create updated state type with all fields as anyref
-        let state_type =
-            if let Some(original_fields) = adt::get_struct_fields(db, original_state_type) {
-                let state_name = original_state_type
-                    .get_attr(db, Symbol::new("name"))
-                    .and_then(|attr| {
-                        if let Attribute::Symbol(name) = attr {
-                            Some(*name)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_else(|| Symbol::new("_State"));
-
-                // Update all field types to anyref
-                let new_fields: Vec<(Symbol, Type<'db>)> = original_fields
-                    .iter()
-                    .map(|(name, _ty)| (*name, anyref_ty))
-                    .collect();
-
-                adt::struct_type(db, state_name, new_fields)
-            } else {
-                original_state_type
-            };
+        // Use the original state type directly. State fields are already set to
+        // anyref (tribute_rt.any) in cont_to_trampoline, ensuring the same nominal
+        // type is used for both creation (build_state) and extraction (struct_get).
+        let state_type = build_state.state_type(db);
 
         let mut ops = Vec::new();
         let mut fields = Vec::new();

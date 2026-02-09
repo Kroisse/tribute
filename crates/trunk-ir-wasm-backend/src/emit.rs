@@ -704,6 +704,23 @@ fn collect_module_info<'db>(
     // Pass the counts so call_indirect types get indices after GC types and function definitions
     let gc_type_count = info.gc_types.len();
     let func_type_count = info.imports.len() + info.funcs.len();
+
+    // Register function definition types in type_idx_by_type so that
+    // call_indirect can reuse existing type indices instead of allocating
+    // duplicate entries for structurally identical function signatures.
+    for (i, import_def) in info.imports.iter().enumerate() {
+        let func_type = import_def.ty.as_type();
+        type_idx_by_type
+            .entry(func_type)
+            .or_insert(gc_type_count as u32 + i as u32);
+    }
+    for (i, func_def) in info.funcs.iter().enumerate() {
+        let func_type = func_def.ty.as_type();
+        type_idx_by_type
+            .entry(func_type)
+            .or_insert(gc_type_count as u32 + info.imports.len() as u32 + i as u32);
+    }
+
     let call_indirect_types = collect_call_indirect_types(
         db,
         module,

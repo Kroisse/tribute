@@ -78,7 +78,16 @@ fn compile_and_run(code: &str, name: &str) -> i32 {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
 
-        let wasm_binary = compile_to_wasm_binary(db, source_file).expect("WASM compilation failed");
+        let wasm_binary = compile_to_wasm_binary(db, source_file).unwrap_or_else(|| {
+            use tribute_passes::diagnostic::Diagnostic;
+            let diags: Vec<Diagnostic> =
+                compile_to_wasm_binary::accumulated::<Diagnostic>(db, source_file)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+            print_diagnostics(&diags);
+            panic!("WASM compilation failed - see diagnostics above");
+        });
 
         run_wasm::<i32>(wasm_binary.bytes(db))
     })
@@ -497,7 +506,7 @@ fn main() -> Nat { 0 }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "WASM backend: continuation resume result type mismatch (anyref vs i32)"]
+#[ignore = "requires effectful call-site continuation support (#326)"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let result = compile_and_run(code, "ability_core.trb");
@@ -530,7 +539,6 @@ fn main() -> Int {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "WASM backend: uninitialized handler table element (missing handler function defs)"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -560,7 +568,7 @@ fn main() -> Int {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "WASM backend: continuation resume result type mismatch (anyref vs i32)"]
+#[ignore = "requires effectful call-site continuation support (#326)"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -596,7 +604,6 @@ fn main() -> Int {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "WASM backend: uninitialized handler table element (missing handler function defs)"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s

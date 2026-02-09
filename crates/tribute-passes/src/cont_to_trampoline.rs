@@ -60,8 +60,11 @@ struct ResumeFuncSpec<'db> {
     name: String,
     /// State struct type (used to extract captured values)
     state_type: Type<'db>,
-    /// Fields in the state struct (field_name, field_type)
+    /// Fields in the state struct (field_name, field_type) — field types are anyref
+    /// to match the WASM lowering (LowerBuildStatePattern converts all fields to anyref).
     state_fields: Vec<(Symbol, Type<'db>)>,
+    /// Original (pre-anyref) field types for casting extracted values back
+    original_field_types: Vec<Type<'db>>,
     /// Original values that were captured (for value remapping)
     original_live_values: Vec<Value<'db>>,
     /// The original shift result value (maps to resume_value)
@@ -796,6 +799,39 @@ fn truncate_block_after_shift<'db>(
             continue;
         }
 
+        // Check if this is a call_indirect (indirect function call through closure).
+        // In effectful functions, call_indirect may invoke effectful closures, so we
+        // must treat the result as Step to avoid double-wrapping in step_done.
+        if func::CallIndirect::from_operation(db, *op).is_ok() {
+            let step_ty = trampoline::Step::new(db).as_type();
+            let new_result_types = if !op.results(db).is_empty() {
+                IdVec::from(vec![step_ty])
+            } else {
+                op.results(db).clone()
+            };
+            let new_op = Operation::new(
+                db,
+                op.location(db),
+                op.dialect(db),
+                op.name(db),
+                op.operands(db).clone(),
+                new_result_types,
+                op.attributes(db).clone(),
+                op.regions(db).clone(),
+                op.successors(db).clone(),
+            );
+            new_ops.push(new_op);
+            found_effect_point = true;
+            if !new_op.results(db).is_empty() {
+                effect_result = Some(new_op.result(db, 0));
+            }
+            effect_location = Some(op.location(db));
+            tracing::debug!(
+                "truncate_block_after_shift: found call_indirect, changed result type to Step"
+            );
+            continue;
+        }
+
         // Check if this is a scf.if that contains effectful code or returns Step
         if scf::If::from_operation(db, *op).is_ok() {
             // Check if result type is Step (from push_prompt/check_yield)
@@ -1211,17 +1247,27 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         };
         let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
 
-        // Get live values and their types from analysis
-        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-            shift_point_info
-                .live_values
-                .iter()
-                .enumerate()
-                .map(|(i, (v, ty))| {
-                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                    (*v, (field_name, *ty))
-                })
-                .unzip();
+        // Get live values and their types from analysis.
+        // State fields use anyref as field type to match the WASM lowering
+        // (LowerBuildStatePattern converts all fields to anyref). This ensures
+        // the state struct's nominal type is consistent between creation and extraction.
+        let anyref_ty = tribute_rt::any_type(db);
+        let state_values: Vec<Value<'db>> = shift_point_info
+            .live_values
+            .iter()
+            .map(|(v, _ty)| *v)
+            .collect();
+        let original_field_types: Vec<Type<'db>> = shift_point_info
+            .live_values
+            .iter()
+            .map(|(_v, ty)| *ty)
+            .collect();
+        let state_fields: Vec<(Symbol, Type<'db>)> = (0..shift_point_info.live_values.len())
+            .map(|i| {
+                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                (field_name, anyref_ty)
+            })
+            .collect();
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -1253,6 +1299,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             name: resume_name.clone(),
             state_type: state_adt_ty,
             state_fields,
+            original_field_types,
             original_live_values: state_values.clone(),
             shift_result_value: shift_point_info.shift_result_value,
             shift_result_type: shift_point_info.shift_result_type,
@@ -1325,26 +1372,19 @@ fn create_resume_function_with_continuation<'db>(
     let location = spec.location;
     let name = Symbol::from_dynamic(&spec.name);
 
-    // Resume functions take (evidence, wrapper as anyref) for calling convention consistency
-    // with lifted lambdas. Using anyref allows uniform call_indirect type.
-    // The function casts anyref to the specific wrapper_ty at the start.
+    // Resume functions take (evidence, wrapper) where wrapper is
+    // trampoline.resume_wrapper. ConvertFuncTypePattern will later convert
+    // this to _ResumeWrapper ADT, matching the call_indirect signature.
     let func_op = Func::build(
         db,
         location,
         name,
-        IdVec::from(vec![evidence_ty, anyref_ty]),
+        IdVec::from(vec![evidence_ty, wrapper_ty]),
         step_ty,
         |builder| {
             // Evidence is at index 0 (unused but required for calling convention)
-            // Wrapper is at index 1 as anyref, needs cast to specific type
-            let wrapper_anyref = builder.block_arg(db, 1);
-            let wrapper_cast = builder.op(core::unrealized_conversion_cast(
-                db,
-                location,
-                wrapper_anyref,
-                wrapper_ty,
-            ));
-            let wrapper_arg = wrapper_cast.result(db);
+            // Wrapper is at index 1, already the correct type
+            let wrapper_arg = builder.block_arg(db, 1);
 
             // Build value map for remapping
             let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
@@ -1387,17 +1427,16 @@ fn create_resume_function_with_continuation<'db>(
                 ));
                 let state_val = get_state.result(db);
 
-                // Extract each captured local from state and map to original value
-                // Note: State fields are stored as anyref after lowering (in trampoline_to_wasm),
-                // so we use anyref as the field type here and add a cast to the original type.
+                // Extract each captured local from state and map to original value.
+                // State fields are all anyref (matching LowerBuildStatePattern in WASM lowering).
+                // We cast each extracted anyref value to the original field type.
                 let anyref_ty = tribute_rt::any_type(db);
-                for (i, ((_field_name, field_type), original_value)) in spec
-                    .state_fields
+                for (i, (original_field_type, original_value)) in spec
+                    .original_field_types
                     .iter()
                     .zip(spec.original_live_values.iter())
                     .enumerate()
                 {
-                    // Get field as anyref (consistent with how LowerBuildStatePattern stores it)
                     let get_field = builder.op(adt::struct_get(
                         db,
                         location,
@@ -1408,12 +1447,12 @@ fn create_resume_function_with_continuation<'db>(
                     ));
                     let anyref_value = get_field.result(db);
 
-                    // Cast anyref to the expected field type
+                    // Cast anyref to the original field type
                     let cast_op = builder.op(core::unrealized_conversion_cast(
                         db,
                         location,
                         anyref_value,
-                        *field_type,
+                        *original_field_type,
                     ));
                     let extracted_value = cast_op.result(db);
                     value_map.insert(*original_value, extracted_value);
@@ -1461,10 +1500,15 @@ fn create_resume_function_with_continuation<'db>(
                         });
 
                     // Get shift properties
+                    // Use op_offset from the shift operation if available (set by resolve_evidence)
+                    // Otherwise fall back to hash-based op_idx for backwards compatibility
                     let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
                         .and_then(|ar| ar.name(db));
                     let op_name = Some(op_name_sym);
-                    let op_idx = compute_op_idx(ability_name, op_name);
+                    let op_idx = match shift_op.op_offset(db) {
+                        Some(offset) => offset,
+                        None => compute_op_idx(ability_name, op_name),
+                    };
 
                     // Build state struct with current live values (remapped)
                     let shift_index = next_shift_info.index;
@@ -1476,17 +1520,19 @@ fn create_resume_function_with_continuation<'db>(
                         shift_index,
                     };
                     let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
-                    let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-                        next_shift_info
-                            .live_values
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (v, ty))| {
-                                let remapped_v = *value_map.get(v).unwrap_or(v);
+                    let anyref_ty = tribute_rt::any_type(db);
+                    let state_values: Vec<Value<'db>> = next_shift_info
+                        .live_values
+                        .iter()
+                        .map(|(v, _ty)| *value_map.get(v).unwrap_or(v))
+                        .collect();
+                    let state_fields: Vec<(Symbol, Type<'db>)> =
+                        (0..next_shift_info.live_values.len())
+                            .map(|i| {
                                 let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                (remapped_v, (field_name, *ty))
+                                (field_name, anyref_ty)
                             })
-                            .unzip();
+                            .collect();
 
                     let state_adt_ty = adt::struct_type(db, state_name, state_fields);
                     let state_op = builder.op(trampoline::build_state(
@@ -1653,8 +1699,7 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         ops.push(wrapper_op.as_operation());
 
         // === 5. Call resume function ===
-        // Resume functions take (evidence, wrapper) for calling convention consistency
-        // with lifted lambdas. We pass null evidence since we're inside a handler arm.
+        // Resume functions take (evidence, wrapper) where wrapper is the resume_wrapper type.
         let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
         let null_evidence = adt::ref_null(db, location, evidence_ty, evidence_ty);
         ops.push(null_evidence.as_operation());

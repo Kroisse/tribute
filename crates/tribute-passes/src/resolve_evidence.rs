@@ -197,9 +197,6 @@ pub fn resolve_evidence_dispatch_with_registry<'db>(
         .expect("OpTableRegistry should have no other references")
         .into_inner();
 
-    // Emit handler_table operation to capture the handler dispatch table structure
-    let module = emit_handler_table(db, module, &final_registry);
-
     (module, final_registry)
 }
 
@@ -632,6 +629,37 @@ fn transform_block_with_evidence<'db>(
                     changed = true;
                     continue;
                 }
+            }
+        }
+
+        // Handle func.call_indirect: replace evidence argument with current ev_value.
+        // After closure_lower, call_indirect args are: (table_idx, evidence, env, args...).
+        // The evidence at index 1 may be null (from closure_lower for non-effectful functions)
+        // or stale. Replace it with the current evidence from the handler root.
+        if func::CallIndirect::from_operation(db, *op).is_ok() && remapped_operands.len() >= 2 {
+            // Check if the second operand (index 1) is evidence-typed or null evidence
+            // that should be replaced with the current ev_value.
+            let current_ev = remapped_operands[1];
+            if current_ev != ev_value {
+                let location = op.location(db);
+                let result_ty = op
+                    .results(db)
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| *core::Nil::new(db));
+
+                let table_idx = remapped_operands[0];
+                let mut new_args: Vec<Value<'db>> = vec![ev_value];
+                new_args.extend(remapped_operands[2..].iter().copied());
+
+                let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
+                let new_call_op = new_call.as_operation();
+                if !op.results(db).is_empty() {
+                    value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
+                }
+                new_ops.push(new_call_op);
+                changed = true;
+                continue;
             }
         }
 
@@ -1218,6 +1246,34 @@ fn transform_shifts_in_block_with_remap<'db>(
             }
         }
 
+        // Handle func.call_indirect: replace evidence argument with current ev_value.
+        // After closure_lower, call_indirect args are: (table_idx, evidence, env, args...).
+        // The evidence at index 1 may be null or stale — replace with current evidence.
+        if func::CallIndirect::from_operation(db, *op).is_ok() && remapped_operands.len() >= 2 {
+            let current_ev = remapped_operands[1];
+            if current_ev != ev_value {
+                let location = op.location(db);
+                let result_ty = op
+                    .results(db)
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| *core::Nil::new(db));
+
+                let table_idx = remapped_operands[0];
+                let mut new_args: Vec<Value<'db>> = vec![ev_value];
+                new_args.extend(remapped_operands[2..].iter().copied());
+
+                let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
+                let new_call_op = new_call.as_operation();
+                if !op.results(db).is_empty() {
+                    value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
+                }
+                new_ops.push(new_call_op);
+                changed = true;
+                continue;
+            }
+        }
+
         // Recursively transform nested regions
         let regions = op.regions(db);
         if !regions.is_empty() {
@@ -1573,15 +1629,15 @@ fn hash_type(db: &dyn salsa::Database, ty: Type<'_>) -> u32 {
 
 /// Maximum number of operations per handler for table sizing.
 /// This constant determines the stride in the flattened handler dispatch table.
-pub const MAX_OPS_PER_HANDLER: u32 = 8;
+#[cfg(test)]
+pub(crate) const MAX_OPS_PER_HANDLER: u32 = 8;
 
 /// Emit `ability.handler_table` operation to capture the handler dispatch table structure.
 ///
-/// This operation is emitted at module level and later lowered to `wasm.table` + `wasm.elem`
-/// for table-based handler dispatch.
-///
-/// If the registry is empty, the module is returned unchanged.
-pub fn emit_handler_table<'db>(
+/// No longer called in the main pipeline — handler dispatch is done via
+/// inline `scf.if` chains in `cont_to_trampoline`. Kept for tests.
+#[cfg(test)]
+pub(crate) fn emit_handler_table<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
     registry: &OpTableRegistry<'db>,

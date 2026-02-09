@@ -1,18 +1,17 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 321
 expression: ir_module
 ---
 Module(test) {
     operations: [
-        func @test::__lambda_1(core.nil) -> tribute_rt.any {
+        func @test::__lambda_1(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "arith.const",
                 "cont.shift",
                 "func.return",
             ],
         },
-        func @test::__lambda_0(core.nil) -> tribute_rt.any {
+        func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "arith.const",
                 "closure.new",

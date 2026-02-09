@@ -12,7 +12,7 @@ use trunk_ir::{
 };
 
 use tribute_ir::ModulePathExt;
-use tribute_ir::dialect::{closure, tribute_rt};
+use tribute_ir::dialect::{ability, closure, tribute_rt};
 
 use super::context::CaptureInfo;
 
@@ -443,7 +443,8 @@ fn lower_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
 ) -> Option<trunk_ir::Value<'db>> {
-    let location = builder.location(expr.id);
+    let expr_node_id = expr.id;
+    let location = builder.location(expr_node_id);
 
     match *expr.kind {
         ExprKind::NatLit(n) => {
@@ -741,7 +742,23 @@ fn lower_expr<'db>(
                         // disambiguation across modules (consistent with function handling)
                         let qualified_name = ability.qualified_name(builder.db()).to_string();
                         let ability_name = Symbol::from_dynamic(&qualified_name);
-                        lower_ability_op_call(builder, location, ability_name, *op, arg_values)
+                        // Use node_type from the call expression (monomorphized by type
+                        // checker) to get the concrete result type. The callee's
+                        // typed_ref.ty may still contain BoundVars from the ability
+                        // definition, which would incorrectly erase to anyref.
+                        let result_ty = builder
+                            .ctx
+                            .get_node_type(expr_node_id)
+                            .map(|t| builder.ctx.convert_type(*t))
+                            .unwrap_or_else(|| builder.call_result_type(&typed_ref.ty));
+                        lower_ability_op_call(
+                            builder,
+                            location,
+                            ability_name,
+                            *op,
+                            arg_values,
+                            result_ty,
+                        )
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
                 },
@@ -1122,24 +1139,31 @@ fn lower_lambda<'db>(
     let lifted_name = builder.ctx.gen_lambda_name();
 
     // Step 3: Build the lifted function
-    // Signature: (env, param1, param2, ...) -> result
-    // All types are erased to any for simplicity
+    // Signature: (evidence, env, param1, param2, ...) -> result
+    // All types are erased to any for simplicity.
+    // Evidence is added as the first parameter for ALL lifted lambdas to ensure
+    // uniform calling convention at call_indirect sites (WASM requires exact type match).
     let mut all_param_types: trunk_ir::IdVec<trunk_ir::Type<'db>> = trunk_ir::IdVec::new();
 
-    // First param is env (or nil if no captures)
-    let env_ty = if captures.is_empty() {
-        builder.ctx.nil_type()
+    // First param is evidence (for uniform calling convention)
+    let evidence_ty = ability::evidence_adt_type(db);
+    all_param_types.push(evidence_ty);
+
+    // Second param is env — always anyref in the function signature for uniform
+    // calling convention (WASM call_indirect requires exact type match).
+    // When captures exist, the body will cast anyref to the concrete env struct.
+    let concrete_env_ty = if captures.is_empty() {
+        None
     } else {
-        // Create env struct type
         let fields: Vec<(Symbol, trunk_ir::Type<'db>)> = captures
             .iter()
             .enumerate()
             .map(|(i, cap)| (Symbol::from_dynamic(&format!("_{}", i)), cap.ty))
             .collect();
         let env_name = lifted_name.join_path(Symbol::new("env"));
-        adt::struct_type(db, env_name, fields)
+        Some(adt::struct_type(db, env_name, fields))
     };
-    all_param_types.push(env_ty);
+    all_param_types.push(any_ty);
 
     // Then the original lambda params
     for _ in params {
@@ -1154,7 +1178,8 @@ fn lower_lambda<'db>(
         None, // visibility
         {
             let mut param_specs = Vec::new();
-            param_specs.push((env_ty, Some(Symbol::new("__env"))));
+            param_specs.push((evidence_ty, Some(Symbol::new("__evidence"))));
+            param_specs.push((any_ty, Some(Symbol::new("__env"))));
             for param in params {
                 param_specs.push((any_ty, Some(param.name)));
             }
@@ -1163,16 +1188,33 @@ fn lower_lambda<'db>(
         any_ty, // return type
         effect, // effect type - propagated from type checking
         |body_block, arg_values| {
-            // arg_values[0] is env, arg_values[1..] are params
-            let env_value = arg_values[0];
+            // arg_values[0] is evidence (unused by non-effectful lambdas),
+            // arg_values[1] is env (anyref, cast to concrete type if captures exist),
+            // arg_values[2..] are params
+            let raw_env_value = arg_values[1];
+
+            // Cast env from anyref to concrete struct type if captures exist
+            let env_value = if let Some(env_struct_ty) = concrete_env_ty {
+                body_block
+                    .op(trunk_ir::dialect::adt::ref_cast(
+                        db,
+                        location,
+                        raw_env_value,
+                        env_struct_ty,
+                        env_struct_ty,
+                    ))
+                    .result(db)
+            } else {
+                raw_env_value
+            };
 
             // Create a new context for the lambda body
             builder.ctx.enter_scope();
 
-            // Bind lambda parameters (skip env at index 0)
+            // Bind lambda parameters (skip evidence and env at indices 0 and 1)
             for (i, param) in params.iter().enumerate() {
                 if let Some(local_id) = param.local_id {
-                    let arg_val = arg_values[i + 1];
+                    let arg_val = arg_values[i + 2];
                     builder.ctx.bind(local_id, param.name, arg_val);
                     // Track parameter type (all parameters are any_ty in lifted lambdas)
                     builder.ctx.track_value_type(arg_val, any_ty);
@@ -1180,10 +1222,16 @@ fn lower_lambda<'db>(
             }
 
             // Extract captured values from env and bind them
+            let struct_env_ty = concrete_env_ty.unwrap_or(any_ty);
             for (i, cap) in captures.iter().enumerate() {
                 let extracted = body_block
                     .op(adt::struct_get(
-                        db, location, env_value, cap.ty, env_ty, i as u64,
+                        db,
+                        location,
+                        env_value,
+                        cap.ty,
+                        struct_env_ty,
+                        i as u64,
                     ))
                     .result(db);
                 builder.ctx.bind(cap.local_id, cap.name, extracted);
@@ -1219,14 +1267,15 @@ fn lower_lambda<'db>(
         // No captures - create nil value
         builder.emit_nil(location)
     } else {
+        let struct_ty = concrete_env_ty.unwrap();
         builder
             .block
             .op(adt::struct_new(
                 db,
                 location,
                 capture_values,
-                env_ty,
-                env_ty,
+                struct_ty,
+                struct_ty,
             ))
             .result(db)
     };
@@ -1996,6 +2045,7 @@ fn lower_ability_op_call<'db>(
     ability: Symbol,
     op: Symbol,
     args: Vec<trunk_ir::Value<'db>>,
+    result_type: trunk_ir::Type<'db>,
 ) -> Option<trunk_ir::Value<'db>> {
     let db = builder.db();
 
@@ -2007,8 +2057,8 @@ fn lower_ability_op_call<'db>(
     // Create ability reference type for cont.shift
     let ability_ref = core::AbilityRefType::simple(db, ability).as_type();
 
-    // Result type - use any_type for now (type-erased)
-    let result_ty = tribute_rt::any_type(db);
+    // Result type from the caller's type information
+    let result_ty = result_type;
 
     // Create empty handler region (not used for shift generated from ability ops)
     let empty_block = trunk_ir::Block::new(
@@ -5491,12 +5541,12 @@ mod tests {
         let body = lifted_func.body(db);
         let entry_block = body.blocks(db)[0];
 
-        // Check that the lifted function has 4 block arguments: env + 3 params
+        // Check that the lifted function has 5 block arguments: evidence + env + 3 params
         let args = entry_block.args(db);
         assert_eq!(
             args.len(),
-            4,
-            "Lifted lambda with 3 params should have 4 block arguments (env + 3 params)"
+            5,
+            "Lifted lambda with 3 params should have 5 block arguments (evidence + env + 3 params)"
         );
     }
 
