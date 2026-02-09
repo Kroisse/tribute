@@ -74,18 +74,16 @@ pub(crate) fn handle_global_get<'db>(
 
     // Check if the global's actual type is anyref but the IR result type is more specific.
     // If so, insert a ref.cast to narrow the type.
-    if let Some(global_def) = module_info.globals.get(index as usize) {
-        if is_anyref_valtype(&global_def.valtype) {
-            let op = global_op.operation();
-            if let Some(result_ty) = op.results(db).first().copied() {
-                if let Ok(result_valtype) =
-                    super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
-                {
-                    if let Some(heap_type) = concrete_heap_type(&result_valtype) {
-                        function.instruction(&Instruction::RefCastNullable(heap_type));
-                    }
-                }
-            }
+    if let Some(global_def) = module_info.globals.get(index as usize)
+        && is_anyref_valtype(&global_def.valtype)
+    {
+        let op = global_op.operation();
+        if let Some(result_ty) = op.results(db).first().copied()
+            && let Ok(result_valtype) =
+                super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
+            && let Some(heap_type) = concrete_heap_type(&result_valtype)
+        {
+            function.instruction(&Instruction::RefCastNullable(heap_type));
         }
     }
 
@@ -111,7 +109,7 @@ fn is_anyref_valtype(vt: &wasm_encoder::ValType) -> bool {
 fn concrete_heap_type(vt: &wasm_encoder::ValType) -> Option<wasm_encoder::HeapType> {
     match vt {
         wasm_encoder::ValType::Ref(rt) => match &rt.heap_type {
-            ht @ wasm_encoder::HeapType::Concrete(_) => Some(ht.clone()),
+            ht @ wasm_encoder::HeapType::Concrete(_) => Some(*ht),
             _ => None,
         },
         _ => None,

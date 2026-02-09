@@ -170,19 +170,15 @@ pub(crate) fn handle_struct_get<'db>(
             })
             .unwrap_or(false);
 
-        if field_is_anyref {
-            if let Some(result_ty) = op.results(db).first().copied() {
-                if let Ok(result_valtype) =
-                    super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
-                {
-                    if let ValType::Ref(rt) = &result_valtype {
-                        if let ht @ HeapType::Concrete(_) = &rt.heap_type {
-                            debug!("struct_get: casting anyref field to concrete type {:?}", ht);
-                            function.instruction(&Instruction::RefCastNullable(ht.clone()));
-                        }
-                    }
-                }
-            }
+        if field_is_anyref
+            && let Some(result_ty) = op.results(db).first().copied()
+            && let Ok(result_valtype) =
+                super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
+            && let ValType::Ref(rt) = &result_valtype
+            && let ht @ HeapType::Concrete(_) = &rt.heap_type
+        {
+            debug!("struct_get: casting anyref field to concrete type {:?}", ht);
+            function.instruction(&Instruction::RefCastNullable(*ht));
         }
     }
 

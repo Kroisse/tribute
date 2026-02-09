@@ -387,7 +387,7 @@ fn function_contains_push_prompt<'db>(
 }
 
 /// Recursively check if a region contains `cont.push_prompt`.
-fn region_contains_push_prompt<'db>(db: &'db dyn salsa::Database, region: &Region) -> bool {
+fn region_contains_push_prompt(db: &dyn salsa::Database, region: &Region) -> bool {
     for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             if cont::PushPrompt::from_operation(db, *op).is_ok() {
@@ -591,12 +591,11 @@ fn transform_block_with_evidence<'db>(
                     new_ops.push(*transformed_op);
                 }
                 // Map old results to new results
-                if !op.results(db).is_empty() {
-                    if let Some(last_op) = transformed.operations(db).last() {
-                        if !last_op.results(db).is_empty() {
-                            value_map.insert(op.result(db, 0), last_op.result(db, 0));
-                        }
-                    }
+                if !op.results(db).is_empty()
+                    && let Some(last_op) = transformed.operations(db).last()
+                    && !last_op.results(db).is_empty()
+                {
+                    value_map.insert(op.result(db, 0), last_op.result(db, 0));
                 }
                 continue;
             }
