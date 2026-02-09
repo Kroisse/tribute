@@ -7,7 +7,7 @@ use trunk_ir::dialect::{adt, cont, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
-use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef};
+use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
@@ -170,7 +170,13 @@ pub(crate) fn handle_struct_get<'db>(
             })
             .unwrap_or(false);
 
+        // Skip concrete ref.cast for Step.value (field_idx=1): it stores
+        // heterogeneous anyref values (i31ref, struct ref, null) by design.
+        // The correct narrowing casts are inserted at the IR level.
+        let is_step_value_field = type_idx == STEP_IDX && field_idx == 1;
+
         if field_is_anyref
+            && !is_step_value_field
             && let Some(result_ty) = op.results(db).first().copied()
             && let Ok(result_valtype) =
                 super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)

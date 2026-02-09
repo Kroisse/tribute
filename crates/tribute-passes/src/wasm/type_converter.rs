@@ -79,6 +79,7 @@ fn box_via_i31<'db>(
     from_ty: trunk_ir::Type<'db>,
 ) -> MaterializeResult<'db> {
     let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     // If the source is i64, wrap to i32 first (ref_i31 requires an i32 operand)
     if core::I64::from_type(db, from_ty).is_some() {
@@ -86,13 +87,22 @@ fn box_via_i31<'db>(
         let wrap_op = wasm::i32_wrap_i64(db, location, value, i32_ty);
         let wrapped = wrap_op.as_operation().result(db, 0);
         let ref_op = wasm::ref_i31(db, location, wrapped, i31ref_ty);
-        return MaterializeResult::ops([wrap_op.as_operation(), ref_op.as_operation()]);
+        let i31ref_val = ref_op.as_operation().result(db, 0);
+        // Upcast i31ref → anyref (needed for IR type correctness)
+        let upcast = wasm::ref_cast(db, location, i31ref_val, anyref_ty, anyref_ty, None);
+        return MaterializeResult::ops([
+            wrap_op.as_operation(),
+            ref_op.as_operation(),
+            upcast.as_operation(),
+        ]);
     }
 
     // Create i31ref from i32 value (truncates to 31 bits)
-    let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-
-    MaterializeResult::single(new_op.as_operation())
+    let ref_op = wasm::ref_i31(db, location, value, i31ref_ty);
+    let i31ref_val = ref_op.as_operation().result(db, 0);
+    // Upcast i31ref → anyref (needed for IR type correctness)
+    let upcast = wasm::ref_cast(db, location, i31ref_val, anyref_ty, anyref_ty, None);
+    MaterializeResult::ops([ref_op.as_operation(), upcast.as_operation()])
 }
 
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
@@ -724,11 +734,17 @@ mod tests {
     fn test_materialize_i64_to_anyref_emits_wrap_and_ref_i31(db: &salsa::DatabaseImpl) {
         let ops = do_materialize_i64_to_anyref_test(db);
         let ops = ops.expect("core.i64 → wasm.anyref should produce Ops");
-        assert_eq!(ops.len(), 2, "should emit 2 ops: i32_wrap_i64 + ref_i31");
+        assert_eq!(
+            ops.len(),
+            3,
+            "should emit 3 ops: i32_wrap_i64 + ref_i31 + ref_cast(anyref)"
+        );
         assert_eq!(ops[0].0, wasm::DIALECT_NAME());
         assert_eq!(ops[0].1, Symbol::new("i32_wrap_i64"));
         assert_eq!(ops[1].0, wasm::DIALECT_NAME());
         assert_eq!(ops[1].1, Symbol::new("ref_i31"));
+        assert_eq!(ops[2].0, wasm::DIALECT_NAME());
+        assert_eq!(ops[2].1, Symbol::new("ref_cast"));
     }
 
     #[salsa_test]

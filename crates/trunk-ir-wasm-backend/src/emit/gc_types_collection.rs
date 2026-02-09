@@ -73,6 +73,30 @@ fn is_builtin_type(idx: u32) -> bool {
     idx < FIRST_USER_TYPE_IDX
 }
 
+/// Check if a type is an abstract WASM heap type that should NOT get a concrete GC type index.
+///
+/// Abstract types (anyref, i31ref, structref, funcref, etc.) are WASM built-in types.
+/// They must NOT be allocated concrete GC struct/array indices because they don't correspond
+/// to user-defined type definitions. If registered, they create spurious empty `(struct)`
+/// definitions that cause `ref.cast` to emit invalid concrete type references instead of
+/// abstract heap type references.
+///
+/// Note: `wasm.arrayref` may be pre-registered as EVIDENCE_IDX — that's handled by the
+/// existing lookup path (which finds it before reaching the allocation code).
+fn is_abstract_wasm_heap_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    let wasm_dialect = Symbol::new("wasm");
+    if ty.dialect(db) != wasm_dialect {
+        return false;
+    }
+    let name = ty.name(db);
+    name == Symbol::new("anyref")
+        || name == Symbol::new("i31ref")
+        || name == Symbol::new("structref")
+        || name == Symbol::new("funcref")
+        || name == Symbol::new("externref")
+        || name == Symbol::new("eqref")
+}
+
 /// Get or create a builder for a user-defined type.
 /// Returns None for built-in types (0-4) which are predefined.
 fn try_get_builder<'db, 'a>(
@@ -349,6 +373,12 @@ pub(crate) fn collect_gc_types<'db>(
                 );
                 return Some(idx);
             }
+            // Don't allocate concrete GC type indices for abstract WASM heap types.
+            // Types like wasm.anyref, wasm.i31ref are built-in abstract types, not
+            // user-defined struct/array definitions.
+            if is_abstract_wasm_heap_type(db, *ty) {
+                return None;
+            }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
             debug!(
@@ -370,6 +400,10 @@ pub(crate) fn collect_gc_types<'db>(
                     idx, ty
                 );
                 return Some(idx);
+            }
+            // Don't allocate concrete GC type indices for abstract WASM heap types.
+            if is_abstract_wasm_heap_type(db, ty) {
+                return None;
             }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
