@@ -5,7 +5,7 @@
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
 //! - `scf.yield` -> `wasm.yield` (tracks region result value)
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
-//! - `scf.break` -> `wasm.br(target=0)` (branch to block)
+//! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
@@ -77,9 +77,10 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
 
 /// Pattern for `scf.loop` -> `wasm.block(wasm.loop(...))`
 ///
-/// The loop is wrapped in a block to provide a break target:
-/// - `wasm.br(target=0)` branches to the block (break)
+/// The loop is wrapped in a block to provide a break target.
+/// From inside a `wasm.if` within the loop body:
 /// - `wasm.br(target=1)` branches to the loop (continue)
+/// - `wasm.br(target=2)` branches to the block (break)
 struct ScfLoopPattern;
 
 impl<'db> RewritePattern<'db> for ScfLoopPattern {
@@ -161,7 +162,9 @@ impl<'db> RewritePattern<'db> for ScfYieldPattern {
 
 /// Pattern for `scf.continue` -> `wasm.br(target=1)`
 ///
-/// Branches to the enclosing wasm.loop (depth 1, since loop is inside block).
+/// Branches to the enclosing wasm.loop. Depth 1 is correct because
+/// `scf.continue` is always inside a `scf.if` (depth 0 = wasm.if,
+/// depth 1 = wasm.loop) within a `scf.loop`.
 struct ScfContinuePattern;
 
 impl<'db> RewritePattern<'db> for ScfContinuePattern {
@@ -175,16 +178,19 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
             return RewriteResult::Unchanged;
         };
 
-        // Branch to loop (depth 1: block=0, loop=1)
+        // Branch to loop (depth 1: if=0, loop=1)
         let br_op = wasm::br(db, op.location(db), 1).as_operation();
 
         RewriteResult::Replace(br_op)
     }
 }
 
-/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=0)`
+/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=2)`
 ///
-/// Branches to the enclosing wasm.block (depth 0) with a result value.
+/// Branches to the enclosing wasm.block with a result value.
+/// `scf.break` is always inside a `scf.if` within a `scf.loop`, so after
+/// lowering the nesting is: wasm.block > wasm.loop > wasm.if. From inside
+/// the wasm.if, depth 2 targets the outer wasm.block (break out of loop).
 ///
 /// According to WASM spec, `br` instruction takes no operands - values are
 /// passed via the stack. We use `wasm.yield` to mark the break value as the
@@ -208,8 +214,8 @@ impl<'db> RewritePattern<'db> for ScfBreakPattern {
         // Emit the break value via wasm.yield (marks it as region result)
         let yield_op = wasm::r#yield(db, location, value).as_operation();
 
-        // Branch to block (depth 0) without operands (WASM spec compliant)
-        let br_op = wasm::br(db, location, 0).as_operation();
+        // Branch to outer block (depth 2: if=0, loop=1, block=2)
+        let br_op = wasm::br(db, location, 2).as_operation();
 
         RewriteResult::Expand(vec![yield_op, br_op])
     }

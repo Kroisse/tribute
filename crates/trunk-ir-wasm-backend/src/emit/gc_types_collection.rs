@@ -12,7 +12,8 @@ use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Sy
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
-    self, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry, STEP_IDX,
+    self, CLOSURE_STRUCT_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
+    MARKER_IDX, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -296,9 +297,16 @@ pub(crate) fn collect_gc_types<'db>(
     );
 
     // Register builtin types in type_idx_by_type:
-    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct
+    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct, 5: Marker, 6: Evidence
     // Step marker type needs to be registered so wasm.if can use it
     type_idx_by_type.insert(crate::gc_types::step_marker_type(db), STEP_IDX);
+    // Evidence (wasm.arrayref) needs to be registered so type_to_valtype resolves to Concrete(EVIDENCE_IDX)
+    type_idx_by_type.insert(wasm::Arrayref::new(db).as_type(), EVIDENCE_IDX);
+    // Marker ADT type needs to be registered so wasm.struct_new for Marker reuses MARKER_IDX
+    // instead of creating a separate user type index.
+    type_idx_by_type.insert(crate::gc_types::marker_adt_type(db), MARKER_IDX);
+    // Evidence ADT type (core.array(Marker)) maps to EVIDENCE_IDX
+    type_idx_by_type.insert(crate::gc_types::evidence_adt_type(db), EVIDENCE_IDX);
 
     // Start at FIRST_USER_TYPE_IDX since indices 0-4 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;

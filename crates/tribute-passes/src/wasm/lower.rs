@@ -8,7 +8,9 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::RewriteContext;
+use trunk_ir::rewrite::{
+    ConversionTarget, PatternApplicator, RewriteContext, WasmFuncSignatureConversionPattern,
+};
 
 use super::const_to_wasm::ConstAnalysis;
 use super::intrinsic_to_wasm::IntrinsicAnalysis;
@@ -56,6 +58,19 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(db, module, wasm_type_converter())
     };
     debug_func_params(db, &module, "after func_to_wasm");
+
+    // Convert wasm.func signature types (e.g., core.array(Marker) → wasm.arrayref)
+    // This must run AFTER func_to_wasm so wasm.func operations exist, and BEFORE
+    // emit so function type attributes have WASM-level types.
+    let module = {
+        let _span = tracing::info_span!("wasm_func_signature_conversion").entered();
+        let target = ConversionTarget::new();
+        PatternApplicator::new(wasm_type_converter())
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(db, module, target)
+            .module
+    };
+    debug_func_params(db, &module, "after wasm_func_signature_conversion");
 
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
     let module = {

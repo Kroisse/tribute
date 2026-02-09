@@ -1126,7 +1126,7 @@ fn emit_op<'db>(
     } else if let Ok(local_op) = wasm::LocalTee::from_operation(db, *op) {
         handle_local_tee(db, local_op, ctx, module_info, function)
     } else if let Ok(global_op) = wasm::GlobalGet::from_operation(db, *op) {
-        handle_global_get(db, global_op, ctx, function)
+        handle_global_get(db, global_op, ctx, module_info, function)
     } else if let Ok(global_op) = wasm::GlobalSet::from_operation(db, *op) {
         handle_global_set(db, global_op, ctx, module_info, function)
     } else if wasm::StructNew::matches(db, *op) {
@@ -1137,8 +1137,8 @@ fn emit_op<'db>(
         handle_struct_set(db, struct_set_op, ctx, module_info, function)
     } else if let Ok(array_new_op) = wasm::ArrayNew::from_operation(db, *op) {
         handle_array_new(db, array_new_op, ctx, module_info, function)
-    } else if let Ok(array_new_default_op) = wasm::ArrayNewDefault::from_operation(db, *op) {
-        handle_array_new_default(db, array_new_default_op, ctx, module_info, function)
+    } else if wasm::ArrayNewDefault::matches(db, *op) {
+        handle_array_new_default(db, op, ctx, module_info, function)
     } else if let Ok(array_get_op) = wasm::ArrayGet::from_operation(db, *op) {
         handle_array_get(db, array_get_op, ctx, module_info, function)
     } else if let Ok(array_get_s_op) = wasm::ArrayGetS::from_operation(db, *op) {
@@ -1222,7 +1222,14 @@ fn emit_op<'db>(
     } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
         handle_i64_store32(db, store_op, ctx, module_info, function)
     } else {
-        tracing::error!("unsupported wasm op: {}", name);
+        tracing::error!(
+            "unsupported wasm op: {} (dialect={}, operands={}, results={}, attrs={:?})",
+            name,
+            op.dialect(db),
+            op.operands(db).len(),
+            op.results(db).len(),
+            op.attributes(db).keys().collect::<Vec<_>>()
+        );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
             name

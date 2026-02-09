@@ -100,10 +100,20 @@ pub(crate) fn type_to_valtype<'db>(
     {
         // String and ptr still use linear memory (i32 pointer)
         Ok(ValType::I32)
+    } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
+        // Registry lookup: types registered in type_idx_by_type get concrete GC type references.
+        // This covers wasm.arrayref (EVIDENCE_IDX), step marker type (STEP_IDX), and ADT types.
+        // Must be checked BEFORE the wasm dialect fallback to ensure registered wasm types
+        // (like wasm.arrayref) get concrete indices instead of abstract heap types.
+        // wasm.structref is safe here because it is NOT registered in type_idx_by_type
+        // (it uses placeholder_struct_type_idx instead).
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(type_idx),
+        }))
     } else if ty.dialect(db) == wasm::DIALECT_NAME() {
-        // WASM dialect types (e.g., wasm.structref for continuation frames)
-        // IMPORTANT: Must check BEFORE type_idx_by_type.get() to avoid returning
-        // incorrect concrete type_idx for placeholder types like wasm.structref
+        // WASM dialect types that are NOT in the registry fall back to abstract types.
+        // wasm.structref is the main case here (placeholder types for continuation frames).
         let name = ty.name(db);
         if name == Symbol::new("structref") {
             Ok(ValType::Ref(RefType {
@@ -127,15 +137,9 @@ pub(crate) fn type_to_valtype<'db>(
                     ty: AbstractHeapType::I31,
                 },
             }))
-        } else if name == Symbol::new("step") {
-            // Step is a builtin GC struct type for trampoline-based effect system
-            // Always uses fixed type index STEP_IDX (3)
-            Ok(ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Concrete(STEP_IDX),
-            }))
         } else if name == Symbol::new("arrayref") {
             // Abstract array reference type (ref null array)
+            // This is the fallback for wasm.arrayref not registered in type_idx_by_type
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -213,12 +217,6 @@ pub(crate) fn type_to_valtype<'db>(
                 shared: false,
                 ty: AbstractHeapType::Struct,
             },
-        }))
-    } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
-        // ADT types (structs, variants) - use concrete GC type reference
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Concrete(type_idx),
         }))
     } else if ty.dialect(db) == adt::DIALECT_NAME() {
         // ADT base types (e.g., adt.Expr) without specific variant type_idx

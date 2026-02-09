@@ -144,16 +144,12 @@ pub(crate) fn handle_ref_cast<'db>(
                 }
             }
         } else {
-            // Non-placeholder type - try attr_heap_type first, then type lookup
-            attr_heap_type(db, attrs, ATTR_TARGET_TYPE())
-                .ok()
-                .or_else(|| {
-                    // Try to look up non-wasm types (adt.struct, tribute_rt.any, etc.) in type_idx_by_type
-                    module_info
-                        .type_idx_by_type
-                        .get(target_ty)
-                        .map(|&idx| HeapType::Concrete(idx))
-                })
+            // Non-placeholder type - try registry first, then attr_heap_type, then inferred type
+            module_info
+                .type_idx_by_type
+                .get(target_ty)
+                .map(|&idx| HeapType::Concrete(idx))
+                .or_else(|| attr_heap_type(db, attrs, ATTR_TARGET_TYPE()).ok())
                 .or_else(|| {
                     // Fall back to using inferred type
                     get_type_idx_from_attrs(db, attrs, inferred_type, &module_info.type_idx_by_type)

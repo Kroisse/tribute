@@ -355,6 +355,12 @@ pub fn wasm_type_converter() -> TypeConverter {
             {
                 return MaterializeResult::NoOp;
             }
+            // wasm.arrayref → wasm.anyref (arrayref is a subtype of anyref in WasmGC)
+            if wasm::Arrayref::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
             // adt.struct → wasm.anyref (GC struct is a subtype of anyref)
             // This handles _Continuation and other ADT structs that need to be passed as anyref
             if adt::is_struct_type(db, from_ty) && wasm::Anyref::from_type(db, to_ty).is_some() {

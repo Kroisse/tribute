@@ -30,6 +30,7 @@ use trunk_ir::{
 };
 
 use super::type_converter::wasm_type_converter;
+use tribute_ir::dialect::ability;
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 /// Lower evidence runtime functions to WASM implementations.
@@ -244,9 +245,9 @@ fn generate_evidence_lookup_function<'db>(
 ) -> Operation<'db> {
     let evidence_ty = evidence_ref_type(db);
     let i32_ty = core::I32::new(db).as_type();
-    let marker_ty = wasm::Structref::new(db).as_type();
+    let marker_sig_ty = ability::marker_adt_type(db);
 
-    let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_ty);
+    let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_sig_ty);
 
     let body_block_id = BlockId::fresh();
 
@@ -310,7 +311,7 @@ fn build_lookup_loop_body<'db>(
     i32_ty: Type<'db>,
 ) -> Region<'db> {
     let nil_ty = core::Nil::new(db).as_type();
-    let marker_ty = wasm::Structref::new(db).as_type();
+    let marker_ty = ability::marker_adt_type(db);
     let block_id = BlockId::fresh();
     let mut ops = Vec::new();
 
@@ -475,15 +476,19 @@ fn generate_evidence_extend_function<'db>(
 ) -> Operation<'db> {
     let evidence_ty = evidence_ref_type(db);
     let i32_ty = core::I32::new(db).as_type();
-    let marker_ty = wasm::Structref::new(db).as_type();
+    let marker_sig_ty = ability::marker_adt_type(db);
 
-    let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, marker_ty]), evidence_ty);
+    let func_ty = core::Func::new(
+        db,
+        IdVec::from(vec![evidence_ty, marker_sig_ty]),
+        evidence_ty,
+    );
 
     let body_block_id = BlockId::fresh();
 
     // Block arguments = function parameters
     let ev_arg = BlockArg::of_type(db, evidence_ty);
-    let marker_arg = BlockArg::of_type(db, marker_ty);
+    let marker_arg = BlockArg::of_type(db, marker_sig_ty);
 
     // References to block arguments
     let ev_val = Value::new(db, ValueDef::BlockArg(body_block_id), 0);
@@ -682,7 +687,7 @@ fn build_extend_search_loop<'db>(
     i32_ty: Type<'db>,
 ) -> Region<'db> {
     let nil_ty = core::Nil::new(db).as_type();
-    let marker_ty = wasm::Structref::new(db).as_type();
+    let marker_ty = ability::marker_adt_type(db);
     let block_id = BlockId::fresh();
     let mut ops = Vec::new();
 
@@ -805,9 +810,9 @@ mod tests {
         // Create a module with __tribute_evidence_lookup declaration
         let evidence_ty = wasm::Anyref::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
-        let marker_ty = wasm::Structref::new(db).as_type();
+        let marker_sig_ty = ability::marker_adt_type(db);
 
-        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_ty);
+        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_sig_ty);
         let unreachable_op = func::unreachable(db, location);
         let body_block = Block::new(
             db,
@@ -922,10 +927,10 @@ mod tests {
         let location = test_location(db);
         let evidence_ty = wasm::Arrayref::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
-        let marker_ty = wasm::Structref::new(db).as_type();
+        let marker_sig_ty = ability::marker_adt_type(db);
 
         // Create a function that calls __tribute_evidence_lookup
-        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_ty);
+        let func_ty = core::Func::new(db, IdVec::from(vec![evidence_ty, i32_ty]), marker_sig_ty);
 
         // Build caller function body
         let body_block_id = BlockId::fresh();
@@ -939,7 +944,7 @@ mod tests {
             db,
             location,
             vec![ev_val, ability_id_val],
-            vec![marker_ty],
+            vec![marker_sig_ty],
             Symbol::new("__tribute_evidence_lookup"),
         );
 

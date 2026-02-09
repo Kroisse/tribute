@@ -434,6 +434,10 @@ pub fn type_to_storage_type<'db>(
     if core::F64::from_type(db, ty).is_some() {
         return StorageType::Val(ValType::F64);
     }
+    // cont.prompt_tag is represented as i32 at runtime (prompt tag index)
+    if cont::PromptTag::from_type(db, ty).is_some() {
+        return StorageType::Val(ValType::I32);
+    }
 
     // Note: tribute_rt types (int, nat, bool, float, any) should be
     // converted to core/wasm types by normalize_primitive_types pass before emit.
@@ -714,6 +718,36 @@ pub const STEP_TAG_DONE: i32 = 0;
 
 /// Tag value for Shift (suspended with continuation, needs handler dispatch).
 pub const STEP_TAG_SHIFT: i32 = 1;
+
+/// Create the canonical Marker ADT type.
+///
+/// This returns the same type as `ability::marker_adt_type()` from `tribute-ir`,
+/// but is constructed directly from `adt::struct_type` since this crate does not
+/// depend on `tribute-ir`.
+///
+/// Layout: (ability_id: i32, prompt_tag: i32, op_table_index: i32)
+pub fn marker_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_Marker",
+        vec![
+            (Symbol::new("ability_id"), i32_ty),
+            (Symbol::new("prompt_tag"), i32_ty),
+            (Symbol::new("op_table_index"), i32_ty),
+        ],
+    )
+}
+
+/// Create the canonical Evidence ADT type (array of Marker) without
+/// depending on `tribute-ir`.
+///
+/// This matches `ability::evidence_adt_type(db)` from `tribute-ir`.
+pub fn evidence_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let marker_ty = marker_adt_type(db);
+    core::Array::new(db, marker_ty).as_type()
+}
 
 /// Create the Step marker type.
 ///
