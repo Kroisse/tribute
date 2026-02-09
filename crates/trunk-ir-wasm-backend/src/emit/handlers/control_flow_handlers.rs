@@ -103,30 +103,16 @@ pub(crate) fn handle_if<'db>(
         .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
 
     // Emit then branch
-    let then_result = if has_result {
-        Some(region_result_value(db, then_region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.if then region missing result value")
-        })?)
-    } else {
-        None
-    };
     emit_region_ops(db, then_region, ctx, module_info, function)?;
-    if let Some(value) = then_result {
+    if has_result && let Some(value) = region_result_value(db, then_region) {
         emit_value_get(db, value, ctx, function)?;
     }
 
     // Emit else branch if present
     if let Some(else_region) = regions.get(1) {
-        let else_result = if has_result {
-            Some(region_result_value(db, else_region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.if else region missing result value")
-            })?)
-        } else {
-            None
-        };
         function.instruction(&Instruction::Else);
         emit_region_ops(db, else_region, ctx, module_info, function)?;
-        if let Some(value) = else_result {
+        if has_result && let Some(value) = region_result_value(db, else_region) {
             emit_value_get(db, value, ctx, function)?;
         }
     } else if has_result {
@@ -234,10 +220,7 @@ pub(crate) fn handle_block<'db>(
         .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
     emit_region_ops(db, region, ctx, module_info, function)?;
 
-    if has_result {
-        let value = region_result_value(db, region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.block body missing result value")
-        })?;
+    if has_result && let Some(value) = region_result_value(db, region) {
         emit_value_get(db, value, ctx, function)?;
     }
 
@@ -270,10 +253,7 @@ pub(crate) fn handle_loop<'db>(
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
     emit_region_ops(db, region, ctx, module_info, function)?;
 
-    if has_result {
-        let value = region_result_value(db, region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.loop body missing result value")
-        })?;
+    if has_result && let Some(value) = region_result_value(db, region) {
         emit_value_get(db, value, ctx, function)?;
     }
 

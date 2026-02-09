@@ -986,10 +986,23 @@ fn emit_region_ops<'db>(
         return Err(CompilationError::unsupported_feature("multi-block regions"));
     }
     let block = &blocks[0];
-    for op in block.operations(db).iter() {
-        // Skip wasm.yield - it's handled by region_result_value + emit_value_get,
-        // not emitted as a real Wasm instruction
-        if wasm::Yield::from_operation(db, *op).is_ok() {
+    let mut ops = block.operations(db).iter().peekable();
+    while let Some(op) = ops.next() {
+        if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
+            // When wasm.yield is followed by wasm.br, emit local.get so the
+            // value is on the stack for br to carry to the target block.
+            // Standalone wasm.yield (region fall-through) is handled by the
+            // caller via region_result_value + emit_value_get.
+            let followed_by_br = ops
+                .peek()
+                .is_some_and(|next| wasm::Br::from_operation(db, **next).is_ok());
+            if followed_by_br {
+                let value = yield_op.value(db);
+                let index = ctx.value_locals.get(&value).ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.yield value missing local")
+                })?;
+                function.instruction(&Instruction::LocalGet(*index));
+            }
             continue;
         }
         emit_op(db, op, ctx, module_info, function)?;
