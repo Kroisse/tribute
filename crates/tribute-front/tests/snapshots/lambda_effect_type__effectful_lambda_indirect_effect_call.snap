@@ -26,6 +26,7 @@ Module(test) {
             body: [
                 "cont.push_prompt",
                 "cont.handler_dispatch",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

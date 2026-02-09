@@ -1656,7 +1656,7 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         // Resume functions take (evidence, wrapper) for calling convention consistency
         // with lifted lambdas. We pass null evidence since we're inside a handler arm.
         let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
-        let null_evidence = adt::ref_null(db, location, evidence_ty, anyref_ty);
+        let null_evidence = adt::ref_null(db, location, evidence_ty, evidence_ty);
         ops.push(null_evidence.as_operation());
         let evidence_val = null_evidence.as_operation().result(db, 0);
 

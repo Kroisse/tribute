@@ -938,7 +938,26 @@ fn lower_expr<'db>(
             });
             lower_lambda(builder, location, &params, &body, effect_ty)
         }
-        ExprKind::Handle { body, handlers } => lower_handle(builder, location, &body, &handlers),
+        ExprKind::Handle { body, handlers } => {
+            let handle_val = lower_handle(builder, location, &body, &handlers)?;
+            // handle returns tribute_rt.any (type-erased). Insert a cast to the
+            // actual result type so downstream passes can unbox properly.
+            let node_ty = builder.ctx.get_node_type(expr.id);
+            if let Some(ty) = node_ty {
+                let ir_ty = builder.ctx.convert_type(*ty);
+                let any_ty = tribute_rt::any_type(builder.db());
+                if ir_ty != any_ty {
+                    let cast_op = builder.block.op(core::unrealized_conversion_cast(
+                        builder.db(),
+                        location,
+                        handle_val,
+                        ir_ty,
+                    ));
+                    return Some(cast_op.as_operation().result(builder.db(), 0));
+                }
+            }
+            Some(handle_val)
+        }
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => {
