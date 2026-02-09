@@ -399,6 +399,13 @@ pub fn stage_cont_to_trampoline<'db>(
 #[salsa::tracked]
 pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let result = eliminate_dead_functions(db, module);
+    if result.removed_count > 0 {
+        tracing::debug!(
+            "DCE removed {} functions: {:?}",
+            result.removed_count,
+            result.removed_functions
+        );
+    }
     result.module
 }
 
@@ -414,13 +421,10 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Modu
 #[salsa::tracked]
 pub fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let type_converter = generic_type_converter();
-    match resolve_unrealized_casts(db, module, &type_converter) {
-        Ok(result) => result.module,
-        Err(_) => {
-            // Some casts couldn't be resolved - leave them for backend-specific handling
-            module
-        }
-    }
+    let result = resolve_unrealized_casts(db, module, &type_converter);
+    // Always use the partially-resolved module; unresolved casts are left for
+    // backend-specific converters to handle.
+    result.module
 }
 
 /// Compile a TrunkIR module to WebAssembly binary.
@@ -441,9 +445,15 @@ fn compile_to_wasm<'db>(
     let lowered = {
         let _span = tracing::info_span!("resolve_unrealized_casts").entered();
         let type_converter = wasm_type_converter();
-        resolve_unrealized_casts(db, lowered, &type_converter)
-            .map(|r| r.module)
-            .map_err(CompilationError::unresolved_casts)?
+        let result = resolve_unrealized_casts(db, lowered, &type_converter);
+        if !result.unresolved.is_empty() {
+            return Err(CompilationError::unresolved_casts(
+                trunk_ir::conversion::UnresolvedCastError {
+                    unresolved: result.unresolved,
+                },
+            ));
+        }
+        result.module
     };
 
     // Phase 3 - Validate and emit (language-agnostic, delegated to trunk-ir-wasm-backend)
@@ -519,14 +529,99 @@ pub fn run_full_pipeline<'db>(
     // Frontend + closure processing
     let module = run_closure_lower(db, source);
 
+    // DEBUG: List all operations and nested modules after closure lower
+    {
+        use trunk_ir::DialectOp;
+        use trunk_ir::dialect::func;
+        let body = module.body(db);
+        let mut func_names = Vec::new();
+        let mut op_summary = Vec::new();
+        for block in body.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                let d = op.dialect(db);
+                let n = op.name(db);
+                op_summary.push(format!("{}.{}", d, n));
+                if let Ok(f) = func::Func::from_operation(db, *op) {
+                    func_names.push(format!("{}", f.sym_name(db)));
+                }
+                // Check nested core.module
+                if d == "core" && n == "module" {
+                    for region in op.regions(db).iter() {
+                        for nested_block in region.blocks(db).iter() {
+                            for nested_op in nested_block.operations(db).iter() {
+                                let nd = nested_op.dialect(db);
+                                let nn = nested_op.name(db);
+                                if let Ok(f) = func::Func::from_operation(db, *nested_op) {
+                                    func_names.push(format!("  nested: {}", f.sym_name(db)));
+                                } else {
+                                    op_summary.push(format!("  nested: {}.{}", nd, nn));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        tracing::debug!(
+            "After closure_lower: {} top ops, {} funcs",
+            op_summary.len(),
+            func_names.len()
+        );
+        tracing::debug!(
+            "  Operations: {:?}",
+            &op_summary[..op_summary.len().min(40)]
+        );
+        tracing::debug!("  Functions: {:?}", func_names);
+    }
+
     // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
     let module = stage_evidence_calls(db, module);
 
     // Evidence-based dispatch resolution - transforms cont.shift to use dynamic tags
     let module = stage_resolve_evidence(db, module);
 
+    // DEBUG: List all functions before cont_to_trampoline
+    {
+        use trunk_ir::DialectOp;
+        use trunk_ir::dialect::func;
+        let body = module.body(db);
+        let mut func_names = Vec::new();
+        for block in body.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if let Ok(f) = func::Func::from_operation(db, *op) {
+                    func_names.push(format!("{}", f.sym_name(db)));
+                }
+            }
+        }
+        tracing::debug!(
+            "Before cont_to_trampoline: {} functions: {:?}",
+            func_names.len(),
+            func_names
+        );
+    }
+
     // Continuation lowering (backend-agnostic trampoline implementation)
     let module = stage_cont_to_trampoline(db, module)?;
+
+    // DEBUG: List all functions before DCE
+    {
+        use trunk_ir::DialectOp;
+        use trunk_ir::dialect::func;
+        let body = module.body(db);
+        let mut func_names = Vec::new();
+        for block in body.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if let Ok(f) = func::Func::from_operation(db, *op) {
+                    func_names.push(format!("{}", f.sym_name(db)));
+                }
+            }
+        }
+        tracing::debug!(
+            "Before DCE: {} functions: {:?}",
+            func_names.len(),
+            func_names
+        );
+    }
 
     let module = stage_dce(db, module);
     Ok(stage_resolve_casts(db, module))
@@ -593,6 +688,10 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
 
     let user_ast = parsed.module(db).clone();
     let span_map = parsed.span_map(db).clone();
+    tracing::debug!(
+        "Phase 1: parsed AST has {} declarations",
+        user_ast.decls.len()
+    );
 
     // Phase 2: Build user env and merge prelude bindings
     let mut user_env = ast_resolve::build_env(db, &user_ast);
@@ -611,7 +710,14 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     let result = checker.check_module(resolved_ast);
 
     // Phase 5: TDNR (Type-Directed Name Resolution)
+    tracing::debug!(
+        "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",
+        result.module.decls.len(),
+        result.function_types.len(),
+        result.node_types.len()
+    );
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
+    tracing::debug!("Phase 5: after TDNR, {} declarations", tdnr_ast.decls.len());
 
     // Phase 6: AST → TrunkIR
     let function_types: std::collections::HashMap<_, _> =
@@ -626,6 +732,32 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
         function_types,
         node_types,
     );
+
+    // DEBUG: List user module functions before prelude merge
+    {
+        use trunk_ir::DialectOp;
+        use trunk_ir::dialect::func;
+        let body = user_module.body(db);
+        let mut func_names = Vec::new();
+        let mut all_ops = Vec::new();
+        for block in body.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                let d = op.dialect(db);
+                let n = op.name(db);
+                all_ops.push(format!("{}.{}", d, n));
+                if let Ok(f) = func::Func::from_operation(db, *op) {
+                    func_names.push(format!("{}", f.sym_name(db)));
+                }
+            }
+        }
+        tracing::debug!(
+            "User module before merge: {} ops, {} funcs",
+            all_ops.len(),
+            func_names.len()
+        );
+        tracing::debug!("  All ops: {:?}", &all_ops[..all_ops.len().min(20)]);
+        tracing::debug!("  Functions: {:?}", func_names);
+    }
 
     // Phase 7: Merge prelude at TrunkIR level
     // Still needed for prelude implementations (function bodies, struct layouts)

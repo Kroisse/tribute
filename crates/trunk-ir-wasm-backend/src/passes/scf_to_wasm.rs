@@ -88,7 +88,7 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(loop_op) = scf::Loop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -104,9 +104,17 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
 
-        // Create wasm.loop with the body region
+        // Remap init operands through the adaptor
+        let init = loop_op.init(db);
+        let remapped_init: Vec<_> = init
+            .iter()
+            .enumerate()
+            .map(|(i, v)| adaptor.operand(i).unwrap_or(*v))
+            .collect();
+
+        // Create wasm.loop with init operands and the body region
         // PatternApplicator will recursively process the body
-        let wasm_loop = wasm::r#loop(db, location, result_ty, body).as_operation();
+        let wasm_loop = wasm::r#loop(db, location, remapped_init, result_ty, body).as_operation();
 
         let block_body_block = Block::new(
             db,
@@ -172,16 +180,29 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(_continue_op) = scf::Continue::from_operation(db, *op) else {
+        let Ok(continue_op) = scf::Continue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Branch to loop (depth 1: if=0, loop=1)
-        let br_op = wasm::br(db, op.location(db), 1).as_operation();
+        let location = op.location(db);
+        let values = continue_op.values(db);
 
-        RewriteResult::Replace(br_op)
+        if values.is_empty() {
+            // No loop-carried values — simple branch
+            let br_op = wasm::br(db, location, 1).as_operation();
+            return RewriteResult::Replace(br_op);
+        }
+
+        // Emit wasm.yield(value) + wasm.br(1) for each loop-carried value.
+        // The emit layer will translate yield+br targeting a loop into
+        // local.set for the loop arg followed by br.
+        let value = adaptor.operand(0).unwrap_or(values[0]);
+        let yield_op = wasm::r#yield(db, location, value).as_operation();
+        let br_op = wasm::br(db, location, 1).as_operation();
+
+        RewriteResult::Expand(vec![yield_op, br_op])
     }
 }
 

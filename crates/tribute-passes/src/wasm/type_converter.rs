@@ -183,6 +183,16 @@ pub fn wasm_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             tribute_rt::Any::from_type(db, ty).map(|_| wasm::Anyref::new(db).as_type())
         })
+        // Convert trampoline.step → _Step ADT
+        .add_conversion(|db, ty| trampoline::Step::from_type(db, ty).map(|_| step_adt_type(db)))
+        // Convert trampoline.continuation → _Continuation ADT
+        .add_conversion(|db, ty| {
+            trampoline::Continuation::from_type(db, ty).map(|_| continuation_adt_type(db))
+        })
+        // Convert trampoline.resume_wrapper → _ResumeWrapper ADT
+        .add_conversion(|db, ty| {
+            trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
+        })
         // Convert adt.typeref → wasm.structref (generic struct reference)
         .add_conversion(|db, ty| {
             if adt::is_typeref(db, ty) {
@@ -500,15 +510,21 @@ pub fn wasm_type_converter() -> TypeConverter {
 
 /// Check if a type is a struct-like reference type.
 ///
-/// This includes `wasm.structref`, `wasm.anyref`, and ADT typeref types.
+/// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
+/// and trampoline types that get lowered to ADT structs.
 fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     // wasm.structref or wasm.anyref
     if wasm::Structref::from_type(db, ty).is_some() || wasm::Anyref::from_type(db, ty).is_some() {
         return true;
     }
 
-    // adt.typeref (struct types)
+    // adt.typeref (generic struct references)
     if adt::is_typeref(db, ty) {
+        return true;
+    }
+
+    // adt.struct (concrete struct types like _ResumeWrapper, _Continuation, _Step)
+    if adt::is_struct_type(db, ty) {
         return true;
     }
 

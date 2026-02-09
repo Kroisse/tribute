@@ -161,16 +161,11 @@ pub fn resolve_evidence_dispatch_with_registry<'db>(
     // Collect functions with evidence parameters
     let fns_with_evidence = collect_functions_with_evidence(db, &module);
 
-    // Transform shifts in functions with evidence (if any)
-    let module = if fns_with_evidence.is_empty() {
-        module
-    } else {
-        transform_shifts_in_module(db, module, &fns_with_evidence, Rc::clone(&registry))
-    };
-
-    // Also handle "handler-root" functions: functions that contain cont.push_prompt
+    // Handle "handler-root" functions first: functions that contain cont.push_prompt
     // but do not have evidence as their first parameter. These are top-level handler
     // functions (e.g., main) that need to create initial empty evidence.
+    // This must run BEFORE transform_shifts so the OpTableRegistry is populated
+    // when shifts look up op_offset.
     let handler_root_fns = collect_handler_root_functions(db, &module, &fns_with_evidence);
     let module = if handler_root_fns.is_empty() {
         module
@@ -182,6 +177,14 @@ pub fn resolve_evidence_dispatch_with_registry<'db>(
             &fns_with_evidence,
             Rc::clone(&registry),
         )
+    };
+
+    // Transform shifts in functions with evidence (if any).
+    // Registry is now populated by handler-root processing above.
+    let module = if fns_with_evidence.is_empty() {
+        module
+    } else {
+        transform_shifts_in_module(db, module, &fns_with_evidence, Rc::clone(&registry))
     };
 
     // Validate that all shifts have been resolved (no sentinel tags remain).
@@ -576,7 +579,9 @@ fn transform_block_with_evidence<'db>(
                 block.args(db).clone(),
                 IdVec::from(vec![*op]),
             );
-            let handled = collect_handled_abilities_by_tag(db, &single_block);
+            // Collect handled abilities from the ORIGINAL block (not single_block),
+            // because handler_dispatch ops are siblings of push_prompt in the parent block.
+            let handled = collect_handled_abilities_by_tag(db, block);
             let (transformed, was_changed) = transform_shifts_in_block_with_remap(
                 db,
                 &single_block,
@@ -584,6 +589,8 @@ fn transform_block_with_evidence<'db>(
                 &handled,
                 value_map.clone(),
                 Rc::clone(&registry),
+                fns_with_evidence,
+                Some(block),
             );
             if was_changed {
                 changed = true;
@@ -853,6 +860,7 @@ fn transform_shifts_in_block<'db>(
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
     registry: SharedOpTableRegistry<'db>,
 ) -> (Block<'db>, bool) {
+    let empty = HashSet::new();
     transform_shifts_in_block_with_remap(
         db,
         block,
@@ -860,6 +868,8 @@ fn transform_shifts_in_block<'db>(
         handled_by_tag,
         ImHashMap::new(),
         registry,
+        &empty,
+        None,
     )
 }
 
@@ -869,6 +879,7 @@ fn transform_shifts_in_block<'db>(
 /// references to be remapped before processing. This is used when processing
 /// push_prompt body/handlers regions to remap the outer evidence to the
 /// extended evidence.
+#[allow(clippy::too_many_arguments)]
 fn transform_shifts_in_block_with_remap<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
@@ -876,6 +887,8 @@ fn transform_shifts_in_block_with_remap<'db>(
     handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
     initial_remap: ImHashMap<Value<'db>, Value<'db>>,
     registry: SharedOpTableRegistry<'db>,
+    fns_with_evidence: &HashSet<Symbol>,
+    dispatch_block: Option<&Block<'db>>,
 ) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut changed = !initial_remap.is_empty(); // If we have remaps, consider it a change
@@ -907,6 +920,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                     ev_value,
                     value_map.clone(),
                     Rc::clone(&registry),
+                    fns_with_evidence,
                 );
                 let (new_handlers, handlers_changed) = transform_shifts_in_region_with_remap(
                     db,
@@ -914,6 +928,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                     ev_value,
                     value_map.clone(),
                     Rc::clone(&registry),
+                    fns_with_evidence,
                 );
 
                 if body_changed || handlers_changed {
@@ -942,8 +957,10 @@ fn transform_shifts_in_block_with_remap<'db>(
             let evidence_ty = ability::evidence_adt_type(db);
             let marker_ty = ability::marker_adt_type(db);
 
-            // Collect operations from the handler_dispatch for this tag
-            let operations = collect_operations_for_tag(db, block, tag);
+            // Collect operations from the handler_dispatch for this tag.
+            // Use dispatch_block if provided (for cases where block is a
+            // single-op slice that doesn't contain handler_dispatch siblings).
+            let operations = collect_operations_for_tag(db, dispatch_block.unwrap_or(block), tag);
 
             // Register this handler in the OpTableRegistry and get the assigned index
             let op_table_idx =
@@ -1025,6 +1042,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                 current_ev,
                 evidence_remap.clone(),
                 Rc::clone(&registry),
+                fns_with_evidence,
             );
             let (new_handlers, _) = transform_shifts_in_region_with_remap(
                 db,
@@ -1032,6 +1050,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                 current_ev,
                 evidence_remap,
                 Rc::clone(&registry),
+                fns_with_evidence,
             );
 
             // Create new push_prompt with transformed regions
@@ -1115,6 +1134,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                 ev_value,
                 value_map.clone(),
                 Rc::clone(&registry),
+                fns_with_evidence,
             );
 
             // Get value operands (skip the old tag operand at index 0)
@@ -1169,6 +1189,35 @@ fn transform_shifts_in_block_with_remap<'db>(
             continue;
         }
 
+        // Handle func.call to effectful functions: prepend evidence
+        if !fns_with_evidence.is_empty()
+            && let Ok(call_op) = func::Call::from_operation(db, *op)
+        {
+            let callee = call_op.callee(db);
+            if fns_with_evidence.contains(&callee) {
+                // Check if evidence is already the first argument
+                let first_arg = remapped_operands.first().copied();
+                if first_arg != Some(ev_value) {
+                    let location = op.location(db);
+                    let result_ty = op
+                        .results(db)
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| *core::Nil::new(db));
+                    let mut new_args = vec![ev_value];
+                    new_args.extend(remapped_operands.iter().copied());
+                    let new_call = func::call(db, location, new_args, result_ty, callee);
+                    let new_call_op = new_call.as_operation();
+                    if !op.results(db).is_empty() {
+                        value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
+                    }
+                    new_ops.push(new_call_op);
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+
         // Recursively transform nested regions
         let regions = op.regions(db);
         if !regions.is_empty() {
@@ -1182,6 +1231,7 @@ fn transform_shifts_in_block_with_remap<'db>(
                         ev_value,
                         value_map.clone(),
                         Rc::clone(&registry),
+                        fns_with_evidence,
                     );
                     if r_changed {
                         region_changed = true;
@@ -1256,6 +1306,7 @@ fn transform_shifts_in_region_with_remap<'db>(
     ev_value: Value<'db>,
     initial_remap: ImHashMap<Value<'db>, Value<'db>>,
     registry: SharedOpTableRegistry<'db>,
+    fns_with_evidence: &HashSet<Symbol>,
 ) -> (Region<'db>, bool) {
     let mut changed = false;
     let new_blocks: IdVec<Block<'db>> = region
@@ -1271,6 +1322,8 @@ fn transform_shifts_in_region_with_remap<'db>(
                 &handled_by_tag,
                 initial_remap.clone(),
                 Rc::clone(&registry),
+                fns_with_evidence,
+                None,
             );
             if block_changed {
                 changed = true;

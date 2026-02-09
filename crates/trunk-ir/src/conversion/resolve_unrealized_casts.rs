@@ -57,6 +57,8 @@ pub struct ResolveResult<'db> {
     pub module: Module<'db>,
     /// Number of casts that were resolved.
     pub resolved_count: usize,
+    /// Casts that could not be resolved (empty if all were resolved).
+    pub unresolved: Vec<UnresolvedCast<'db>>,
 }
 
 /// Resolve all `unrealized_conversion_cast` operations in a module.
@@ -64,9 +66,8 @@ pub struct ResolveResult<'db> {
 /// Uses the provided TypeConverter's materialization functions to generate
 /// actual conversion operations.
 ///
-/// # Errors
-///
-/// Returns `Err(UnresolvedCastError)` if any casts cannot be resolved.
+/// Always returns a `ResolveResult` with the partially-resolved module.
+/// Check `result.unresolved` to see if any casts remain unresolved.
 ///
 /// # Example
 ///
@@ -77,14 +78,15 @@ pub struct ResolveResult<'db> {
 ///         MaterializeResult::single(my_cast_op)
 ///     });
 ///
-/// let result = resolve_unrealized_casts(db, module, &type_converter)?;
+/// let result = resolve_unrealized_casts(db, module, &type_converter);
 /// assert_eq!(result.resolved_count, 2);
+/// assert!(result.unresolved.is_empty());
 /// ```
 pub fn resolve_unrealized_casts<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     type_converter: &TypeConverter,
-) -> Result<ResolveResult<'db>, UnresolvedCastError<'db>> {
+) -> ResolveResult<'db> {
     tracing::debug!("resolve_unrealized_casts: starting resolution for module");
     let mut resolver = CastResolver::new(db, type_converter);
 
@@ -102,17 +104,12 @@ pub fn resolve_unrealized_casts<'db>(
         resolver.unresolved.len()
     );
 
-    if !resolver.unresolved.is_empty() {
-        return Err(UnresolvedCastError {
-            unresolved: resolver.unresolved,
-        });
-    }
-
     let new_module = Module::create(db, module.location(db), module.name(db), new_body);
-    Ok(ResolveResult {
+    ResolveResult {
         module: new_module,
         resolved_count: resolver.resolved_count,
-    })
+        unresolved: resolver.unresolved,
+    }
 }
 
 /// Internal resolver state.
@@ -402,9 +399,11 @@ mod tests {
         module: Module<'db>,
     ) -> (bool, usize, usize) {
         let type_converter = TypeConverter::new();
-        match resolve_unrealized_casts(db, module, &type_converter) {
-            Ok(result) => (true, result.resolved_count, 0),
-            Err(err) => (false, 0, err.unresolved.len()),
+        let result = resolve_unrealized_casts(db, module, &type_converter);
+        if result.unresolved.is_empty() {
+            (true, result.resolved_count, 0)
+        } else {
+            (false, result.resolved_count, result.unresolved.len())
         }
     }
 
@@ -427,10 +426,14 @@ mod tests {
             TypeConverter::new().add_materialization(|_db, _loc, _value, _from_ty, _to_ty| {
                 crate::rewrite::MaterializeResult::NoOp
             });
-        match resolve_unrealized_casts(db, module, &type_converter) {
-            Ok(result) => (true, result.resolved_count, 0, result.module),
-            Err(_) => (false, 0, 0, module),
-        }
+        let result = resolve_unrealized_casts(db, module, &type_converter);
+        let is_ok = result.unresolved.is_empty();
+        (
+            is_ok,
+            result.resolved_count,
+            result.unresolved.len(),
+            result.module,
+        )
     }
 
     #[salsa_test]

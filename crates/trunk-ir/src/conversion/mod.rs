@@ -24,7 +24,8 @@
 //!         MaterializeResult::single(my_cast_op)
 //!     });
 //!
-//! let result = resolve_unrealized_casts(db, module, &type_converter)?;
+//! let result = resolve_unrealized_casts(db, module, &type_converter);
+//! assert!(result.unresolved.is_empty());
 //! println!("Resolved {} casts", result.resolved_count);
 //! ```
 

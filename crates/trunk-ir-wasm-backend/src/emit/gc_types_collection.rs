@@ -12,8 +12,8 @@ use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Sy
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
-    self, CLOSURE_STRUCT_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry,
-    MARKER_IDX, STEP_IDX,
+    self, CLOSURE_STRUCT_IDX, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    GcTypeRegistry, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -188,6 +188,26 @@ fn types_equivalent_for_gc<'db>(
     {
         return true;
     }
+    // anyref is a supertype of all concrete GC reference types (adt.struct,
+    // wasm.structref, wasm.arrayref, etc.). When one code path records a field
+    // as anyref and another records the concrete type, they are compatible —
+    // the field should remain anyref (the wider type).
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    if ty1_norm == anyref_ty || ty2_norm == anyref_ty {
+        let other = if ty1_norm == anyref_ty {
+            ty2_norm
+        } else {
+            ty1_norm
+        };
+        // Accept if the other type is a reference type (adt.struct, adt.enum,
+        // or a wasm heap type that lives behind anyref).
+        let other_dialect = other.dialect(db);
+        let adt_dialect = Symbol::new("adt");
+        let wasm_dialect = Symbol::new("wasm");
+        if other_dialect == adt_dialect || other_dialect == wasm_dialect {
+            return true;
+        }
+    }
     false
 }
 
@@ -331,8 +351,18 @@ pub(crate) fn collect_gc_types<'db>(
     type_idx_by_type.insert(crate::gc_types::marker_adt_type(db), MARKER_IDX);
     // Evidence ADT type (core.array(Marker)) maps to EVIDENCE_IDX
     type_idx_by_type.insert(crate::gc_types::evidence_adt_type(db), EVIDENCE_IDX);
+    // Continuation ADT type (_Continuation) maps to CONTINUATION_IDX
+    type_idx_by_type.insert(
+        crate::passes::trampoline_to_wasm::continuation_adt_type(db),
+        CONTINUATION_IDX,
+    );
+    // ResumeWrapper ADT type (_ResumeWrapper) maps to RESUME_WRAPPER_IDX
+    type_idx_by_type.insert(
+        crate::passes::trampoline_to_wasm::resume_wrapper_adt_type(db),
+        RESUME_WRAPPER_IDX,
+    );
 
-    // Start at FIRST_USER_TYPE_IDX since indices 0-4 are reserved for built-in types
+    // Start at FIRST_USER_TYPE_IDX since indices 0-9 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
     // Helper to get next available type_idx, skipping reserved indices
@@ -366,6 +396,14 @@ pub(crate) fn collect_gc_types<'db>(
             if is_closure_struct_type(db, *ty) {
                 return Some(CLOSURE_STRUCT_IDX);
             }
+            // Special case: continuation types use builtin CONTINUATION_IDX
+            if gc_types::is_continuation_struct_type(db, *ty) {
+                return Some(CONTINUATION_IDX);
+            }
+            // Special case: resume wrapper types use builtin RESUME_WRAPPER_IDX
+            if gc_types::is_resume_wrapper_struct_type(db, *ty) {
+                return Some(RESUME_WRAPPER_IDX);
+            }
             if let Some(&idx) = type_idx_by_type.get(ty) {
                 debug!(
                     "GC: get_type_idx reusing type_idx={} for type {:?}",
@@ -393,6 +431,14 @@ pub(crate) fn collect_gc_types<'db>(
             // Special case: closure types use builtin CLOSURE_STRUCT_IDX
             if is_closure_struct_type(db, ty) {
                 return Some(CLOSURE_STRUCT_IDX);
+            }
+            // Special case: continuation types use builtin CONTINUATION_IDX
+            if gc_types::is_continuation_struct_type(db, ty) {
+                return Some(CONTINUATION_IDX);
+            }
+            // Special case: resume wrapper types use builtin RESUME_WRAPPER_IDX
+            if gc_types::is_resume_wrapper_struct_type(db, ty) {
+                return Some(RESUME_WRAPPER_IDX);
             }
             if let Some(&idx) = type_idx_by_type.get(&ty) {
                 debug!(
@@ -552,12 +598,20 @@ pub(crate) fn collect_gc_types<'db>(
                 })
                 .unwrap_or(false);
 
-            // Check if this is a _closure struct type (should use CLOSURE_STRUCT_IDX)
-            let is_closure_type = attrs.get(&ATTR_TYPE()).is_some_and(|attr| {
+            // Check if this is a builtin struct type
+            let builtin_type_idx = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    is_closure_struct_type(db, *ty)
+                    if is_closure_struct_type(db, *ty) {
+                        Some(CLOSURE_STRUCT_IDX)
+                    } else if gc_types::is_continuation_struct_type(db, *ty) {
+                        Some(CONTINUATION_IDX)
+                    } else if gc_types::is_resume_wrapper_struct_type(db, *ty) {
+                        Some(RESUME_WRAPPER_IDX)
+                    } else {
+                        None
+                    }
                 } else {
-                    false
+                    None
                 }
             });
 
@@ -565,7 +619,11 @@ pub(crate) fn collect_gc_types<'db>(
             // Returns (adt_struct_type, field_count) if it's an adt.struct type
             let adt_struct_info = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    if adt::is_struct_type(db, *ty) && !is_closure_struct_type(db, *ty) {
+                    if adt::is_struct_type(db, *ty)
+                        && !is_closure_struct_type(db, *ty)
+                        && !gc_types::is_continuation_struct_type(db, *ty)
+                        && !gc_types::is_resume_wrapper_struct_type(db, *ty)
+                    {
                         adt::get_struct_fields(db, *ty).map(|fields| (*ty, fields.len()))
                     } else {
                         None
@@ -575,9 +633,8 @@ pub(crate) fn collect_gc_types<'db>(
                 }
             });
 
-            let type_idx = if is_closure_type {
-                // Closure struct types use the builtin CLOSURE_STRUCT_IDX
-                CLOSURE_STRUCT_IDX
+            let type_idx = if let Some(idx) = builtin_type_idx {
+                idx
             } else if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
                 let ty = match attrs.get(&ATTR_TYPE()) {

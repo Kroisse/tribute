@@ -276,7 +276,7 @@ fn generate_evidence_lookup_function<'db>(
     // Build the search loop
     let nil_ty = core::Nil::new(db).as_type();
     let loop_region = build_lookup_loop_body(db, location, ev_val, target_id_val, i32_ty);
-    let loop_op = wasm::r#loop(db, location, nil_ty, loop_region);
+    let loop_op = wasm::r#loop(db, location, vec![], nil_ty, loop_region);
     ops.push(loop_op.as_operation());
 
     // unreachable after loop (should never reach here - loop always returns)
@@ -520,7 +520,7 @@ fn generate_evidence_extend_function<'db>(
     // After loop, LOW contains the insertion index
     let nil_ty = core::Nil::new(db).as_type();
     let search_loop = build_extend_search_loop(db, location, ev_val, marker_id, i32_ty);
-    let loop_op = wasm::r#loop(db, location, nil_ty, search_loop);
+    let loop_op = wasm::r#loop(db, location, vec![], nil_ty, search_loop);
 
     // Wrap loop in block for br_if(..., 1) target
     let loop_block = Block::new(

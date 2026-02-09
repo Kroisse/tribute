@@ -65,8 +65,18 @@ pub const MARKER_IDX: u32 = 5;
 /// Evidence is a sorted array of markers for ability handler lookup.
 pub const EVIDENCE_IDX: u32 = 6;
 
+/// Type index for Continuation (struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref }).
+/// This is always index 7 in the GC type section.
+/// Used for one-shot continuations in the trampoline effect system.
+pub const CONTINUATION_IDX: u32 = 7;
+
+/// Type index for ResumeWrapper (struct { state: anyref, resume_value: anyref }).
+/// This is always index 8 in the GC type section.
+/// Packages captured state and resume value for continuation resume functions.
+pub const RESUME_WRAPPER_IDX: u32 = 8;
+
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 7;
+pub const FIRST_USER_TYPE_IDX: u32 = 9;
 
 /// Check if a type is a closure struct (adt.struct with name "_closure").
 /// Closure structs contain (funcref, anyref) and are used for call_indirect.
@@ -82,6 +92,33 @@ pub fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) 
     ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
         if let Attribute::Symbol(name) = attr {
             name.with_str(|s| s == "_closure")
+        } else {
+            false
+        }
+    })
+}
+
+/// Check if a type is a continuation struct (adt.struct with name "_Continuation").
+pub fn is_continuation_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    is_named_adt_struct(db, ty, "_Continuation")
+}
+
+/// Check if a type is a resume wrapper struct (adt.struct with name "_ResumeWrapper").
+pub fn is_resume_wrapper_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    is_named_adt_struct(db, ty, "_ResumeWrapper")
+}
+
+/// Check if a type is an adt.struct with the given name.
+fn is_named_adt_struct(db: &dyn salsa::Database, ty: Type<'_>, expected_name: &str) -> bool {
+    if ty.dialect(db) != adt::DIALECT_NAME() {
+        return false;
+    }
+    if ty.name(db) != Symbol::new("struct") {
+        return false;
+    }
+    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
+        if let Attribute::Symbol(name) = attr {
+            name.with_str(|s| s == expected_name)
         } else {
             false
         }
@@ -251,6 +288,44 @@ impl<'db> GcTypeRegistry<'db> {
                 })),
                 mutable: true,
             }),
+            // Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref }
+            // Used for one-shot continuations in the trampoline effect system.
+            // func_idx: index into function table (resume function)
+            // env: captured environment (anyref for uniform calling convention)
+            // prompt_tag: handler's prompt tag (for propagation)
+            // state: captured handler state (anyref)
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+            ]),
+            // Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref }
+            // Packages captured state and resume value for continuation resume functions.
+            // state: continuation's captured state
+            // resume_value: value being passed back to the continuation
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+            ]),
         ]
     }
 
@@ -855,7 +930,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = GcTypeRegistry::builtin_types();
-        assert_eq!(builtins.len(), 7);
+        assert_eq!(builtins.len(), 9);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -871,6 +946,10 @@ mod tests {
         assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 3));
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
+        // Continuation (4 fields: func_idx, env, prompt_tag, state)
+        assert!(matches!(&builtins[7], GcTypeDef::Struct(fields) if fields.len() == 4));
+        // ResumeWrapper (2 fields: state, resume_value)
+        assert!(matches!(&builtins[8], GcTypeDef::Struct(fields) if fields.len() == 2));
     }
 
     #[test]
@@ -950,7 +1029,7 @@ mod tests {
         registry.register_type(i32_ty, def);
 
         let all = registry.all_types();
-        assert_eq!(all.len(), 8); // 7 builtins + 1 user type
+        assert_eq!(all.len(), 10); // 9 builtins + 1 user type
     }
 
     #[test]
