@@ -506,7 +506,7 @@ fn main() -> Nat { 0 }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "requires effectful call-site continuation support (#326)"]
+#[ignore = "requires effectful call-site continuation support (#336)"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let result = compile_and_run(code, "ability_core.trb");
@@ -568,7 +568,7 @@ fn main() -> Int {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "requires effectful call-site continuation support (#326)"]
+#[ignore = "requires effectful call-site continuation support (#336)"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
