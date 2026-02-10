@@ -1169,23 +1169,11 @@ fn transform_shifts_in_block_with_remap<'db>(
             let value_operands: Vec<Value<'db>> =
                 remapped_operands.iter().skip(1).copied().collect();
 
-            // Look up op_offset from registry (if available)
-            // The op_table_index is dynamic at runtime, but for static analysis we can
-            // try to determine it from known registrations. If not found, use None.
-            // TODO(#336): first-match heuristic may be unsound when multiple handlers
-            // register the same ability/op at different offsets. Needs proper runtime
-            // dispatch or alignment with collect_suspend_arms' table-based indexing.
-            let op_offset = {
-                let reg = registry.borrow();
-                let mut found_offset = None;
-                for idx in 0..reg.len() {
-                    if let Some(offset) = reg.compute_op_offset(idx as u32, ability_ref, op_name) {
-                        found_offset = Some(offset);
-                        break;
-                    }
-                }
-                found_offset
-            };
+            // op_offset is always None: the actual dispatch index is computed at
+            // the handler side via hash-based `compute_op_idx(ability, op_name)`.
+            // This ensures shift and handler always agree on the op index regardless
+            // of handler registration order.
+            let op_offset = None;
 
             // Note: op_table_index is a runtime value (from Marker), so we pass None here.
             // The actual dispatch will use the runtime value from trampoline.get_yield_op_idx.
@@ -2099,6 +2087,60 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].abilities.len(), 1);
         assert_eq!(entries[0].operations.len(), 1);
+    }
+
+    // ========================================================================
+    // op_offset soundness test
+    // ========================================================================
+
+    /// Demonstrate that two handlers registering the same ability operations
+    /// in different order produce different `compute_op_offset` results.
+    ///
+    /// This is the fundamental reason the first-match heuristic is unsound:
+    /// at compile time we don't know which handler will be active at runtime,
+    /// so picking the offset from an arbitrary handler can be wrong.
+    #[salsa_test]
+    fn test_op_offset_differs_across_handlers(db: &salsa::DatabaseImpl) {
+        let mut registry = OpTableRegistry::new();
+        let location = test_location(db);
+
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+
+        // Handler A: [get, set]
+        let ops_a = vec![
+            (state_ref.as_type(), Symbol::new("get")),
+            (state_ref.as_type(), Symbol::new("set")),
+        ];
+        let idx_a = registry.register(vec![state_ref.as_type()], ops_a, location);
+
+        // Handler B: [set, get] — reversed order
+        let ops_b = vec![
+            (state_ref.as_type(), Symbol::new("set")),
+            (state_ref.as_type(), Symbol::new("get")),
+        ];
+        let idx_b = registry.register(vec![state_ref.as_type()], ops_b, location);
+
+        // get has offset 0 in handler A, but offset 1 in handler B
+        let get_offset_a =
+            registry.compute_op_offset(idx_a, state_ref.as_type(), Symbol::new("get"));
+        let get_offset_b =
+            registry.compute_op_offset(idx_b, state_ref.as_type(), Symbol::new("get"));
+        assert_eq!(get_offset_a, Some(0));
+        assert_eq!(get_offset_b, Some(1));
+        assert_ne!(
+            get_offset_a, get_offset_b,
+            "Same operation 'get' has different offsets across handlers — \
+             first-match heuristic would pick one arbitrarily"
+        );
+
+        // set has offset 1 in handler A, but offset 0 in handler B
+        let set_offset_a =
+            registry.compute_op_offset(idx_a, state_ref.as_type(), Symbol::new("set"));
+        let set_offset_b =
+            registry.compute_op_offset(idx_b, state_ref.as_type(), Symbol::new("set"));
+        assert_eq!(set_offset_a, Some(1));
+        assert_eq!(set_offset_b, Some(0));
+        assert_ne!(set_offset_a, set_offset_b);
     }
 
     // ========================================================================

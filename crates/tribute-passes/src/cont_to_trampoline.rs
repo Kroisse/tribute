@@ -2577,12 +2577,10 @@ struct SuspendArm<'db> {
 
 /// Collect suspend arms from handler blocks with their expected op_idx.
 ///
-/// For table-based dispatch, the op_idx is simply the block index (0-based,
-/// relative to suspend blocks). This matches the op_offset assigned by
-/// resolve_evidence.
-///
-/// For backwards compatibility with hash-based dispatch, if no blocks have
-/// op_offset metadata, we fall back to computing op_idx from ability_ref and op_name.
+/// Uses hash-based dispatch: each arm's op_idx is computed from the ability
+/// name and operation name via `compute_op_idx`. This is handler-independent —
+/// both shift sites and handler dispatch use the same hash function, so the
+/// index matches regardless of handler registration order.
 fn collect_suspend_arms<'db>(
     db: &'db dyn salsa::Database,
     blocks: &IdVec<Block<'db>>,
@@ -2590,7 +2588,7 @@ fn collect_suspend_arms<'db>(
     let mut arms = Vec::new();
 
     // Skip block 0 (done case), process blocks 1+ (suspend cases)
-    for (idx, block) in blocks.iter().skip(1).enumerate() {
+    for block in blocks.iter().skip(1) {
         // Extract ability_ref and op_name from marker block arg
         let block_args = block.args(db);
         if let Some(marker_arg) = block_args.first() {
@@ -2610,19 +2608,11 @@ fn collect_suspend_arms<'db>(
                 }
             });
 
-            // For table-based dispatch, use the block index as op_idx.
-            // This corresponds to the op_offset assigned by resolve_evidence.
-            let expected_op_idx = if ability_ref.is_some() || op_name.is_some() {
-                // Use block index when we have metadata
-                idx as u32
-            } else {
-                // Missing metadata indicates malformed IR - all suspend blocks should
-                // have ability_ref/op_name from resolve_evidence pass.
-                tracing::warn!(
-                    "suspend block missing ability_ref/op_name metadata, using hash fallback"
-                );
-                compute_op_idx(ability_ref, op_name)
-            };
+            // Use hash-based dispatch: compute a stable index from ability+op_name.
+            // This is handler-independent — both shift and handler sides use the
+            // same hash function, so the index matches regardless of handler
+            // registration order.
+            let expected_op_idx = compute_op_idx(ability_ref, op_name);
             arms.push(SuspendArm {
                 expected_op_idx,
                 block: *block,
@@ -3229,13 +3219,10 @@ fn get_region_result_value<'db>(
 
 /// Compute operation index using hash-based dispatch.
 ///
-/// **Deprecated**: This function is kept for backwards compatibility.
-/// New code should use table-based dispatch with `op_offset` from the
-/// `OpTableRegistry` in `resolve_evidence.rs`.
-///
-/// The hash-based approach computes a stable hash from ability name and
-/// operation name, but requires runtime comparison against expected values.
-/// Table-based dispatch uses direct indexing for O(1) lookup.
+/// Computes a stable, handler-independent index from ability name and
+/// operation name. Both shift sites and handler dispatch use this function,
+/// ensuring they always agree on the op index regardless of handler
+/// registration order.
 fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -3696,10 +3683,162 @@ mod tests {
     }
 
     // ========================================================================
-    // Test: Table-based dispatch (collect_suspend_arms)
+    // Test: build_nested_dispatch i1 condition types
     // ========================================================================
 
-    /// Helper tracked function to test table-based indexing.
+    /// Verify that build_nested_dispatch produces i1-typed conditions.
+    ///
+    /// With 2 SuspendArms, the first arm generates arith.cmp_eq (result: i1)
+    /// and the last arm generates arith.const true (result: i1).
+    #[salsa::tracked]
+    fn run_build_nested_dispatch_i1_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I::<1>::new(db).as_type();
+
+        // Create 2 simple suspend arm blocks with marker args
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+
+        let block_get = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("get")),
+            );
+            let marker_arg = BlockArg::new(db, i32_ty, attrs);
+            let mut b = BlockBuilder::new(db, location);
+            let c = b.op(arith::Const::i32(db, location, 0));
+            let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+            b.op(scf::r#yield(db, location, vec![step.result(db)]));
+            let block = b.build();
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg]),
+                block.operations(db).clone(),
+            )
+        };
+
+        let block_set = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("set")),
+            );
+            let marker_arg = BlockArg::new(db, i32_ty, attrs);
+            let mut b = BlockBuilder::new(db, location);
+            let c = b.op(arith::Const::i32(db, location, 0));
+            let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+            b.op(scf::r#yield(db, location, vec![step.result(db)]));
+            let block = b.build();
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg]),
+                block.operations(db).clone(),
+            )
+        };
+
+        let arms = vec![
+            SuspendArm {
+                expected_op_idx: compute_op_idx(
+                    Some(Symbol::new("State")),
+                    Some(Symbol::new("get")),
+                ),
+                block: block_get,
+            },
+            SuspendArm {
+                expected_op_idx: compute_op_idx(
+                    Some(Symbol::new("State")),
+                    Some(Symbol::new("set")),
+                ),
+                block: block_set,
+            },
+        ];
+
+        // Build a dummy current_op_idx value
+        let mut builder = BlockBuilder::new(db, location);
+        let op_idx_const = builder.op(arith::Const::i32(db, location, 0));
+
+        build_nested_dispatch(
+            db,
+            &mut builder,
+            location,
+            step_ty,
+            op_idx_const.result(db),
+            &arms,
+            0,
+            &HashSet::new(),
+        );
+
+        let block = builder.build();
+        let ops = block.operations(db);
+
+        // Find arith.cmp_eq and check its result type is i1
+        let mut found_cmp_eq = false;
+        let mut found_const_i1 = false;
+        for op in ops.iter() {
+            if let Ok(cmp_op) = arith::CmpEq::from_operation(db, *op) {
+                let result_ty = cmp_op.as_operation().results(db);
+                if result_ty.len() == 1 && result_ty[0] == i1_ty {
+                    found_cmp_eq = true;
+                }
+            }
+        }
+
+        // Check the scf.if's then/else regions for the last arm's arith.const with i1 type
+        for op in ops.iter() {
+            if let Ok(if_op) = scf::If::from_operation(db, *op) {
+                // The else region contains the last arm dispatch with arith.const true (i1)
+                let else_region = if_op.r#else(db);
+                for else_block in else_region.blocks(db).iter() {
+                    for else_op in else_block.operations(db).iter() {
+                        if arith::Const::from_operation(db, *else_op).is_ok() {
+                            let results = else_op.results(db);
+                            if results.len() == 1 && results[0] == i1_ty {
+                                found_const_i1 = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !found_cmp_eq {
+            return Err("arith.cmp_eq with i1 result type not found in dispatch".to_string());
+        }
+        if !found_const_i1 {
+            return Err(
+                "arith.const with i1 result type not found in last-arm else region".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_build_nested_dispatch_uses_i1_conditions(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_build_nested_dispatch_i1_test(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: Hash-based dispatch (collect_suspend_arms)
+    // ========================================================================
+
+    /// Helper tracked function to test hash-based indexing.
     #[salsa::tracked]
     fn run_collect_suspend_arms_table_based_test(db: &dyn salsa::Database) -> Result<(), String> {
         let location = test_location(db);
@@ -3789,32 +3928,37 @@ mod tests {
             return Err(format!("Expected 3 suspend arms, got {}", arms.len()));
         }
 
-        // With table-based dispatch, expected_op_idx should be 0, 1, 2 (block indices)
-        if arms[0].expected_op_idx != 0 {
+        // With hash-based dispatch, expected_op_idx is compute_op_idx(ability, op_name)
+        let expected_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let expected_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
+        let expected_modify =
+            compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("modify")));
+
+        if arms[0].expected_op_idx != expected_get {
             return Err(format!(
-                "First arm should have op_idx 0, got {}",
-                arms[0].expected_op_idx
+                "First arm (get) should have op_idx {}, got {}",
+                expected_get, arms[0].expected_op_idx
             ));
         }
-        if arms[1].expected_op_idx != 1 {
+        if arms[1].expected_op_idx != expected_set {
             return Err(format!(
-                "Second arm should have op_idx 1, got {}",
-                arms[1].expected_op_idx
+                "Second arm (set) should have op_idx {}, got {}",
+                expected_set, arms[1].expected_op_idx
             ));
         }
-        if arms[2].expected_op_idx != 2 {
+        if arms[2].expected_op_idx != expected_modify {
             return Err(format!(
-                "Third arm should have op_idx 2, got {}",
-                arms[2].expected_op_idx
+                "Third arm (modify) should have op_idx {}, got {}",
+                expected_modify, arms[2].expected_op_idx
             ));
         }
 
         Ok(())
     }
 
-    /// Test that collect_suspend_arms assigns sequential indices (table-based dispatch).
+    /// Test that collect_suspend_arms assigns hash-based indices.
     #[salsa_test]
-    fn test_collect_suspend_arms_table_based_indexing(db: &salsa::DatabaseImpl) {
+    fn test_collect_suspend_arms_hash_based_indexing(db: &salsa::DatabaseImpl) {
         if let Err(msg) = run_collect_suspend_arms_table_based_test(db) {
             panic!("{}", msg);
         }

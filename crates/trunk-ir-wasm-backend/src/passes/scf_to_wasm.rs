@@ -311,4 +311,150 @@ mod tests {
         assert!(op_names.iter().any(|n| n == "wasm.if"));
         assert!(!op_names.iter().any(|n| n == "scf.if"));
     }
+
+    /// Recursively collect all operation names from a region (including nested regions).
+    fn collect_all_op_names<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+    ) -> Vec<String> {
+        let mut names = Vec::new();
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                names.push(op.full_name(db));
+                for nested_region in op.regions(db).iter() {
+                    names.extend(collect_all_op_names(db, nested_region));
+                }
+            }
+        }
+        names
+    }
+
+    /// Build a module with scf.break inside scf.if inside scf.loop.
+    ///
+    /// Structure: scf.loop { scf.if(cond) { then: scf.break(val) } { else: scf.continue } }
+    #[salsa::tracked]
+    fn make_scf_break_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Value to break with — will be provided as loop init arg
+        // The loop body receives it as block arg
+        let loop_body_block_id = BlockId::fresh();
+
+        // Create a condition value inside the loop body
+        let cond_const = wasm::i32_const(db, location, i32_ty, 1);
+
+        // The loop block arg represents the loop-carried value
+        let loop_arg = trunk_ir::BlockArg::of_type(db, i32_ty);
+        let loop_arg_val =
+            trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(loop_body_block_id), 0);
+
+        // then region: scf.break(loop_arg)
+        let break_op = scf::r#break(db, location, loop_arg_val);
+        let then_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![break_op.as_operation()],
+        );
+        let then_region = Region::new(db, location, idvec![then_block]);
+
+        // else region: scf.continue(loop_arg)
+        let continue_op = scf::r#continue(db, location, vec![loop_arg_val]);
+        let else_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![continue_op.as_operation()],
+        );
+        let else_region = Region::new(db, location, idvec![else_block]);
+
+        // scf.if inside loop body
+        let scf_if = scf::r#if(
+            db,
+            location,
+            cond_const.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        );
+
+        // Loop body block: cond_const + scf.if
+        let loop_body_block = Block::new(
+            db,
+            loop_body_block_id,
+            location,
+            IdVec::from(vec![loop_arg]),
+            idvec![cond_const.operation(), scf_if.as_operation()],
+        );
+        let loop_body_region = Region::new(db, location, idvec![loop_body_block]);
+
+        // Loop init value
+        let init_val = wasm::i32_const(db, location, i32_ty, 42);
+
+        // scf.loop with init and body
+        let scf_loop = scf::r#loop(
+            db,
+            location,
+            vec![init_val.result(db)],
+            i32_ty,
+            loop_body_region,
+        );
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![init_val.operation(), scf_loop.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test_break".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_collect_all(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
+        let lowered = lower(db, module, test_converter());
+        let body = lowered.body(db);
+        collect_all_op_names(db, &body)
+    }
+
+    #[salsa_test]
+    fn test_scf_break_to_wasm_yield_and_br(db: &salsa::DatabaseImpl) {
+        let module = make_scf_break_module(db);
+        let all_ops = lower_and_collect_all(db, module);
+
+        // scf.break should be gone
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.break"),
+            "scf.break should be lowered away, but found in: {:?}",
+            all_ops
+        );
+
+        // wasm.yield and wasm.br should be present (from scf.break lowering)
+        assert!(
+            all_ops.iter().any(|n| n == "wasm.yield"),
+            "Expected wasm.yield from scf.break lowering, got: {:?}",
+            all_ops
+        );
+        assert!(
+            all_ops.iter().any(|n| n == "wasm.br"),
+            "Expected wasm.br from scf.break lowering, got: {:?}",
+            all_ops
+        );
+
+        // scf.if and scf.loop should also be gone
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.if"),
+            "scf.if should be lowered, got: {:?}",
+            all_ops
+        );
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.loop"),
+            "scf.loop should be lowered, got: {:?}",
+            all_ops
+        );
+    }
 }
