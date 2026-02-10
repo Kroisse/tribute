@@ -199,12 +199,19 @@ fn types_equivalent_for_gc<'db>(
         } else {
             ty1_norm
         };
-        // Accept if the other type is a reference type (adt.struct, adt.enum,
-        // or a wasm heap type that lives behind anyref).
+        // Accept if the other type is an ADT reference (adt.struct, adt.enum)
+        // or a wasm heap type that is a subtype of anyref.
+        // Note: funcref and externref are NOT subtypes of anyref.
         let other_dialect = other.dialect(db);
         let adt_dialect = Symbol::new("adt");
-        let wasm_dialect = Symbol::new("wasm");
-        if other_dialect == adt_dialect || other_dialect == wasm_dialect {
+        if other_dialect == adt_dialect {
+            return true;
+        }
+        if wasm::Structref::from_type(db, other).is_some()
+            || wasm::Arrayref::from_type(db, other).is_some()
+            || wasm::Eqref::from_type(db, other).is_some()
+            || wasm::I31ref::from_type(db, other).is_some()
+        {
             return true;
         }
     }

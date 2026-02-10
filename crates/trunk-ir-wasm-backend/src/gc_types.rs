@@ -14,8 +14,8 @@
 //! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
 //! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 } (evidence)
 //! Index 6: Evidence - array (ref Marker) (evidence array)
-//! Index 7: Continuation - struct { resume_fn: funcref, env: anyref } (continuation)
-//! Index 8: ResumeWrapper - struct { continuation: ref Continuation, result: anyref } (resume wrapper)
+//! Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref } (continuation)
+//! Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref } (resume wrapper)
 //! Index 9+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
