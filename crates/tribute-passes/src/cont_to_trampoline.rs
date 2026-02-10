@@ -4027,4 +4027,237 @@ mod tests {
         assert_ne!(idx_none_both, idx_none_ability);
         assert_ne!(idx_none_both, idx_none_op);
     }
+
+    // ========================================================================
+    // Test: truncate_scf_if_block — pure branch regression
+    // ========================================================================
+
+    /// Pure branch (no effectful calls): original ops are preserved, and the
+    /// yield operand is wrapped in `trampoline.step_done` + `scf.yield`.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_pure_branch(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Build a block: arith.const 42 ; scf.yield(%const)
+        let mut builder = BlockBuilder::new(db, location);
+        let c = builder.op(arith::Const::i32(db, location, 42));
+        builder.op(scf::r#yield(db, location, vec![c.result(db)]));
+        let block = builder.build();
+
+        let effectful_funcs: HashSet<Symbol> = HashSet::new();
+        let result = truncate_scf_if_block(db, &block, &effectful_funcs, step_ty);
+
+        let ops: Vec<_> = result.operations(db).iter().copied().collect();
+
+        // Expect 3 ops: arith.const, trampoline.step_done, scf.yield
+        if ops.len() != 3 {
+            return Err(format!(
+                "Expected 3 ops (const + step_done + yield), got {}",
+                ops.len()
+            ));
+        }
+
+        // First op should be the original arith.const
+        if arith::Const::from_operation(db, ops[0]).is_err() {
+            return Err("ops[0] should be arith.const".to_string());
+        }
+
+        // Second op should be trampoline.step_done
+        let step_done = trampoline::StepDone::from_operation(db, ops[1])
+            .map_err(|_| "ops[1] should be trampoline.step_done".to_string())?;
+        let step_done_result_ty = step_done.as_operation().results(db);
+        if step_done_result_ty.first() != Some(&step_ty) {
+            return Err("step_done result type should be Step".to_string());
+        }
+
+        // Third op should be scf.yield whose operand is the step_done result
+        let yield_op = scf::Yield::from_operation(db, ops[2])
+            .map_err(|_| "ops[2] should be scf.yield".to_string())?;
+        let yield_operands = yield_op.as_operation().operands(db);
+        if yield_operands.len() != 1 {
+            return Err(format!(
+                "scf.yield should have 1 operand, got {}",
+                yield_operands.len()
+            ));
+        }
+        if yield_operands[0] != step_done.result(db) {
+            return Err("scf.yield operand should be the step_done result".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_pure_branch(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_pure_branch(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: truncate_scf_if_block — effectful branch
+    // ========================================================================
+
+    /// Effectful branch: call to an effectful function gets its result type
+    /// changed to Step, and ops after the call are truncated.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_effectful_branch(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let step_ty = trampoline::Step::new(db).as_type();
+        let callee = Symbol::new("effectful_fn");
+
+        // Build: func.call @effectful_fn() -> i32 ; arith.const 99 ; scf.yield(%call)
+        let mut builder = BlockBuilder::new(db, location);
+        let call = builder.op(func::call(db, location, vec![], i32_ty, callee));
+        let _dead = builder.op(arith::Const::i32(db, location, 99));
+        builder.op(scf::r#yield(db, location, vec![call.result(db)]));
+        let block = builder.build();
+
+        let mut effectful_funcs: HashSet<Symbol> = HashSet::new();
+        effectful_funcs.insert(callee);
+        let result = truncate_scf_if_block(db, &block, &effectful_funcs, step_ty);
+
+        let ops: Vec<_> = result.operations(db).iter().copied().collect();
+
+        // Expect 2 ops: func.call (with Step result) + scf.yield
+        if ops.len() != 2 {
+            return Err(format!("Expected 2 ops (call + yield), got {}", ops.len()));
+        }
+
+        // First op: func.call with Step result type
+        let new_call = func::Call::from_operation(db, ops[0])
+            .map_err(|_| "ops[0] should be func.call".to_string())?;
+        let call_results = new_call.as_operation().results(db);
+        if call_results.first() != Some(&step_ty) {
+            return Err(format!(
+                "call result should be Step, got {:?}",
+                call_results.first()
+            ));
+        }
+
+        // Second op: scf.yield whose operand is the call's Step result
+        let yield_op = scf::Yield::from_operation(db, ops[1])
+            .map_err(|_| "ops[1] should be scf.yield".to_string())?;
+        let yield_operands = yield_op.as_operation().operands(db);
+        if yield_operands.len() != 1 {
+            return Err(format!(
+                "scf.yield should have 1 operand, got {}",
+                yield_operands.len()
+            ));
+        }
+        if yield_operands[0] != new_call.as_operation().result(db, 0) {
+            return Err("scf.yield operand should be the call's Step result".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_effectful_branch(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_effectful_branch(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: truncate_scf_if_branch — mixed branches (integration)
+    // ========================================================================
+
+    /// Integration test: scf.if with effectful then-branch and pure else-branch.
+    /// Both branches should produce Step-typed yield values after processing.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_mixed_branches(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let step_ty = trampoline::Step::new(db).as_type();
+        let callee = Symbol::new("effectful_fn");
+
+        let mut effectful_funcs: HashSet<Symbol> = HashSet::new();
+        effectful_funcs.insert(callee);
+
+        // Then branch (effectful): func.call @effectful_fn() ; scf.yield(%call)
+        let mut then_builder = BlockBuilder::new(db, location);
+        let call = then_builder.op(func::call(db, location, vec![], i32_ty, callee));
+        then_builder.op(scf::r#yield(db, location, vec![call.result(db)]));
+        let then_block = then_builder.build();
+        let then_region = Region::new(db, location, IdVec::from(vec![then_block]));
+
+        // Else branch (pure): arith.const 7 ; scf.yield(%const)
+        let mut else_builder = BlockBuilder::new(db, location);
+        let c = else_builder.op(arith::Const::i32(db, location, 7));
+        else_builder.op(scf::r#yield(db, location, vec![c.result(db)]));
+        let else_block = else_builder.build();
+        let else_region = Region::new(db, location, IdVec::from(vec![else_block]));
+
+        // Process both branches
+        let new_then = truncate_scf_if_branch(db, &then_region, &effectful_funcs, step_ty);
+        let new_else = truncate_scf_if_branch(db, &else_region, &effectful_funcs, step_ty);
+
+        // --- Verify then branch ---
+        let then_ops: Vec<_> = new_then.blocks(db)[0]
+            .operations(db)
+            .iter()
+            .copied()
+            .collect();
+
+        // Then: call (Step) + yield
+        if then_ops.len() != 2 {
+            return Err(format!(
+                "Then branch: expected 2 ops, got {}",
+                then_ops.len()
+            ));
+        }
+        let then_call = func::Call::from_operation(db, then_ops[0])
+            .map_err(|_| "Then ops[0] should be func.call".to_string())?;
+        if then_call.as_operation().results(db).first() != Some(&step_ty) {
+            return Err("Then call should have Step result".to_string());
+        }
+        let then_yield = scf::Yield::from_operation(db, then_ops[1])
+            .map_err(|_| "Then ops[1] should be scf.yield".to_string())?;
+        // The yield operand should be the call result (which has Step type)
+        if then_yield.as_operation().operands(db)[0] != then_call.as_operation().result(db, 0) {
+            return Err("Then yield operand should be the call's Step result".to_string());
+        }
+
+        // --- Verify else branch ---
+        let else_ops: Vec<_> = new_else.blocks(db)[0]
+            .operations(db)
+            .iter()
+            .copied()
+            .collect();
+
+        // Else: const + step_done + yield
+        if else_ops.len() != 3 {
+            return Err(format!(
+                "Else branch: expected 3 ops, got {}",
+                else_ops.len()
+            ));
+        }
+        if arith::Const::from_operation(db, else_ops[0]).is_err() {
+            return Err("Else ops[0] should be arith.const".to_string());
+        }
+        let else_step_done = trampoline::StepDone::from_operation(db, else_ops[1])
+            .map_err(|_| "Else ops[1] should be trampoline.step_done".to_string())?;
+        let else_yield = scf::Yield::from_operation(db, else_ops[2])
+            .map_err(|_| "Else ops[2] should be scf.yield".to_string())?;
+        // The yield operand should be the step_done result (which has Step type)
+        if else_yield.as_operation().operands(db)[0] != else_step_done.result(db) {
+            return Err("Else yield operand should be the step_done result".to_string());
+        }
+        // Verify step_done result type is Step
+        if else_step_done.as_operation().results(db).first() != Some(&step_ty) {
+            return Err("step_done result type should be Step".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_mixed_branches(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_mixed_branches(db) {
+            panic!("{}", msg);
+        }
+    }
 }
