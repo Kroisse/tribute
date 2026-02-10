@@ -158,6 +158,9 @@ pub fn resolve_evidence_dispatch_with_registry<'db>(
     // First, ensure runtime helper functions are declared
     let module = ensure_runtime_functions(db, module);
 
+    // Validate no ability ID hash collisions before proceeding
+    validate_ability_id_uniqueness(db, &module);
+
     // Collect functions with evidence parameters
     let fns_with_evidence = collect_functions_with_evidence(db, &module);
 
@@ -1202,9 +1205,8 @@ fn transform_shifts_in_block_with_remap<'db>(
             // of handler registration order.
             let op_offset = None;
 
-            // Note: op_table_index is a runtime value (from Marker), so we pass None here.
+            // op_table_index is a runtime value (from Marker), so we pass None here.
             // The actual dispatch will use the runtime value from trampoline.get_yield_op_idx.
-            // op_offset is known statically from the registry.
             let new_shift = cont::shift(
                 db,
                 location,
@@ -1573,6 +1575,50 @@ fn compute_ability_id(db: &dyn salsa::Database, ability_ref: Type<'_>) -> u32 {
     }
 
     hash
+}
+
+/// Validate that all ability IDs in the module are unique (no hash collisions).
+///
+/// Scans all `cont.shift` operations to collect ability references, computes their
+/// IDs, and panics if two distinct ability types map to the same 32-bit hash.
+fn validate_ability_id_uniqueness(db: &dyn salsa::Database, module: &core::Module<'_>) {
+    let mut seen: HashMap<u32, Type<'_>> = HashMap::new();
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(func_op) = func::Func::from_operation(db, *op) {
+                collect_ability_ids_in_region(db, &func_op.body(db), &mut seen);
+            }
+        }
+    }
+}
+
+fn collect_ability_ids_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    seen: &mut HashMap<u32, Type<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if let Ok(shift_op) = cont::Shift::from_operation(db, *op) {
+                let ability_ref = shift_op.ability_ref(db);
+                let id = compute_ability_id(db, ability_ref);
+                if let Some(existing) = seen.get(&id) {
+                    if *existing != ability_ref {
+                        panic!(
+                            "ICE: ability ID hash collision: {existing:?} and {ability_ref:?} \
+                             both hash to {id:#010x}. Consider using sequential IDs."
+                        );
+                    }
+                } else {
+                    seen.insert(id, ability_ref);
+                }
+            }
+            for nested in op.regions(db).iter() {
+                collect_ability_ids_in_region(db, nested, seen);
+            }
+        }
+    }
 }
 
 /// Helper to hash a type for ability ID computation.

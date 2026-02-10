@@ -273,17 +273,16 @@ pub fn wasm_type_converter() -> TypeConverter {
                 || tribute_rt::Any::from_type(db, from_ty).is_some();
             let to_is_abstract_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
             if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
-                // Convert trampoline types to their ADT representation for the cast
-                let target_ty = if trampoline::ResumeWrapper::from_type(db, to_ty).is_some() {
-                    resume_wrapper_adt_type(db)
-                } else if trampoline::Step::from_type(db, to_ty).is_some() {
-                    step_adt_type(db)
-                } else if trampoline::Continuation::from_type(db, to_ty).is_some() {
-                    continuation_adt_type(db)
-                } else {
-                    to_ty
-                };
-                let cast_op = wasm::ref_cast(db, location, value, target_ty, target_ty, None);
+                // Trampoline types must already be converted to ADT types by add_conversion
+                // rules before materialization runs (convert_type is applied to to_ty in
+                // resolve_unrealized_casts before calling materialize).
+                debug_assert!(
+                    trampoline::ResumeWrapper::from_type(db, to_ty).is_none()
+                        && trampoline::Step::from_type(db, to_ty).is_none()
+                        && trampoline::Continuation::from_type(db, to_ty).is_none(),
+                    "ICE: trampoline type {to_ty:?} reached materialization without conversion"
+                );
+                let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty, None);
                 let mut ops = OpVec::new();
                 ops.push(cast_op.as_operation());
                 return MaterializeResult::Ops(ops);
