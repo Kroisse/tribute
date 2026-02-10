@@ -709,13 +709,14 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     }
     let result = checker.check_module(resolved_ast);
 
-    // Phase 5: TDNR (Type-Directed Name Resolution)
     tracing::debug!(
         "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",
         result.module.decls.len(),
         result.function_types.len(),
         result.node_types.len()
     );
+
+    // Phase 5: TDNR (Type-Directed Name Resolution)
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
     tracing::debug!("Phase 5: after TDNR, {} declarations", tdnr_ast.decls.len());
 

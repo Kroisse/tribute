@@ -266,8 +266,15 @@ pub(crate) fn handle_loop<'db>(
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop body has no block"))?;
     let arg_locals: Vec<u32> = (0..body_block.args(db).len())
-        .filter_map(|i| ctx.value_locals.get(&body_block.arg(db, i)).copied())
-        .collect();
+        .map(|i| {
+            ctx.value_locals
+                .get(&body_block.arg(db, i))
+                .copied()
+                .ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.loop block arg missing local")
+                })
+        })
+        .collect::<Result<Vec<u32>, _>>()?;
 
     // Initialize loop-carried variables from init operands
     let init_operands = op.operands(db);

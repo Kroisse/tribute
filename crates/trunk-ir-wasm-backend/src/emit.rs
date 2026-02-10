@@ -1051,8 +1051,8 @@ fn emit_region_ops_nested<'db>(
                     && let NestingKind::Loop { ref arg_locals } = nesting[nesting.len() - 1 - depth]
                 {
                     // Loop target: write to loop arg local, then br (no stack value)
-                    function.instruction(&Instruction::LocalGet(index));
                     for &local in arg_locals.iter() {
+                        function.instruction(&Instruction::LocalGet(index));
                         function.instruction(&Instruction::LocalSet(local));
                     }
                     // Skip the yield, let the next iteration emit the br
@@ -2366,6 +2366,77 @@ mod tests {
         assert!(
             result.is_ok(),
             "ref.cast with concrete type should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: wasm.loop with block argument compiles
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_loop_with_arg_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Init value for the loop-carried variable
+        let init_val = wasm::i32_const(db, location, i32_ty, 42).as_operation();
+
+        // Loop body: one block with a block arg (matching the init operand),
+        // immediately returns from the function
+        let mut body_builder = BlockBuilder::new(db, location).arg(i32_ty);
+        body_builder.op(wasm::r#return(db, location, vec![]));
+        let body_block = body_builder.build();
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        // wasm.loop with one init operand → body block gets one block arg
+        let loop_op = wasm::r#loop(
+            db,
+            location,
+            vec![init_val.result(db, 0)],
+            nil_ty,
+            body_region,
+        )
+        .as_operation();
+
+        // Function return (after loop, unreachable in practice)
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let func_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![init_val, loop_op, func_return],
+        );
+        let func_body_region = Region::new(db, location, idvec![func_body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_loop"),
+            func_ty,
+            func_body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_loop_with_block_arg_compiles(db: &salsa::DatabaseImpl) {
+        let module = make_loop_with_arg_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "wasm.loop with block arg should compile: {:?}",
             result.err()
         );
 

@@ -498,13 +498,12 @@ fn transform_handler_root_function<'db>(
 
     // Transform entry block using the empty evidence.
     // This handles push_prompt -> evidence_extend AND calls to effectful functions.
-    let handled_by_tag = collect_handled_abilities_by_tag(db, entry_block);
     let (new_entry_block, block_changed) = transform_block_with_evidence(
         db,
         entry_block,
         ev_value,
-        &handled_by_tag,
         fns_with_evidence,
+        ImHashMap::new(),
         Rc::clone(&registry),
     );
 
@@ -549,13 +548,13 @@ fn transform_block_with_evidence<'db>(
     db: &'db dyn salsa::Database,
     block: &Block<'db>,
     ev_value: Value<'db>,
-    _handled_by_tag: &HashMap<u32, Vec<Type<'db>>>,
     fns_with_evidence: &HashSet<Symbol>,
+    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
     registry: SharedOpTableRegistry<'db>,
 ) -> (Block<'db>, bool) {
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
-    let mut changed = false;
-    let mut value_map: ImHashMap<Value<'db>, Value<'db>> = ImHashMap::new();
+    let mut changed = !initial_remap.is_empty();
+    let mut value_map: ImHashMap<Value<'db>, Value<'db>> = initial_remap;
 
     for op in block.operations(db).iter() {
         // Remap operands using value map
@@ -738,7 +737,7 @@ fn transform_region_with_evidence<'db>(
     region: &Region<'db>,
     ev_value: Value<'db>,
     fns_with_evidence: &HashSet<Symbol>,
-    _initial_remap: ImHashMap<Value<'db>, Value<'db>>,
+    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
     registry: SharedOpTableRegistry<'db>,
 ) -> (Region<'db>, bool) {
     let mut changed = false;
@@ -746,13 +745,12 @@ fn transform_region_with_evidence<'db>(
         .blocks(db)
         .iter()
         .map(|block| {
-            let handled_by_tag = collect_handled_abilities_by_tag(db, block);
             let (new_block, block_changed) = transform_block_with_evidence(
                 db,
                 block,
                 ev_value,
-                &handled_by_tag,
                 fns_with_evidence,
+                initial_remap.clone(),
                 Rc::clone(&registry),
             );
             if block_changed {
@@ -2321,6 +2319,192 @@ mod tests {
     #[salsa_test]
     fn test_emit_handler_table_empty_registry(db: &salsa::DatabaseImpl) {
         let result = run_emit_handler_table_empty_registry_test(db);
+        if let Err(msg) = result {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // transform_block_with_evidence / transform_region_with_evidence tests
+    // ========================================================================
+
+    /// Test that `transform_block_with_evidence` correctly applies non-empty
+    /// `initial_remap` to operands in the block.
+    #[salsa::tracked]
+    fn run_initial_remap_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+        let evidence_ty = ability::evidence_adt_type(db);
+
+        // Create an evidence value that will serve as ev_value
+        let ev_block_id = BlockId::fresh();
+        let ev_value = Value::new(db, ValueDef::BlockArg(ev_block_id), 0);
+
+        // Create old_val and new_val for the remap
+        let old_val_id = BlockId::fresh();
+        let old_val = Value::new(db, ValueDef::BlockArg(old_val_id), 0);
+        let new_val_id = BlockId::fresh();
+        let new_val = Value::new(db, ValueDef::BlockArg(new_val_id), 0);
+
+        // Create a func.call @some_fn(%old_val) — a non-effectful call
+        let call_op = func::call(db, location, vec![old_val], i64_ty, Symbol::new("some_fn"));
+
+        let ret = func::r#return(db, location, Some(call_op.result(db)));
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![BlockArg::of_type(db, evidence_ty)],
+            idvec![call_op.as_operation(), ret.as_operation()],
+        );
+
+        // Build initial_remap: old_val → new_val
+        let mut initial_remap = ImHashMap::new();
+        initial_remap.insert(old_val, new_val);
+
+        let fns_with_evidence: HashSet<Symbol> = HashSet::new();
+        let registry = Rc::new(RefCell::new(OpTableRegistry::new()));
+
+        let (new_block, changed) = transform_block_with_evidence(
+            db,
+            &block,
+            ev_value,
+            &fns_with_evidence,
+            initial_remap,
+            registry,
+        );
+
+        // changed should be true since initial_remap is non-empty
+        if !changed {
+            return Err("Block should be marked as changed when initial_remap is non-empty".into());
+        }
+
+        // Find the call operation and check its operand was remapped
+        let mut found_remapped = false;
+        for op in new_block.operations(db).iter() {
+            if let Ok(call) = func::Call::from_operation(db, *op)
+                && call.callee(db) == "some_fn"
+            {
+                let operands = op.operands(db);
+                if operands.is_empty() {
+                    return Err("Call should have operands".into());
+                }
+                if operands[0] == old_val {
+                    return Err("Operand should have been remapped from old_val to new_val".into());
+                }
+                if operands[0] != new_val {
+                    return Err(format!("Operand should be new_val, got {:?}", operands[0]));
+                }
+                found_remapped = true;
+            }
+        }
+
+        if !found_remapped {
+            return Err("Should find remapped call to some_fn".into());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_transform_block_with_evidence_uses_initial_remap(db: &salsa::DatabaseImpl) {
+        let result = run_initial_remap_test(db);
+        if let Err(msg) = result {
+            panic!("{}", msg);
+        }
+    }
+
+    /// Test that `transform_region_with_evidence` propagates `initial_remap`
+    /// to each block in the region.
+    #[salsa::tracked]
+    fn run_region_remap_propagation_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+        let evidence_ty = ability::evidence_adt_type(db);
+
+        // Create ev_value
+        let ev_block_id = BlockId::fresh();
+        let ev_value = Value::new(db, ValueDef::BlockArg(ev_block_id), 0);
+
+        // Create old_val / new_val for the remap
+        let old_val_id = BlockId::fresh();
+        let old_val = Value::new(db, ValueDef::BlockArg(old_val_id), 0);
+        let new_val_id = BlockId::fresh();
+        let new_val = Value::new(db, ValueDef::BlockArg(new_val_id), 0);
+
+        // Create a block with func.call @fn(%old_val)
+        let call_op = func::call(db, location, vec![old_val], i64_ty, Symbol::new("fn"));
+        let ret = func::r#return(db, location, Some(call_op.result(db)));
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![BlockArg::of_type(db, evidence_ty)],
+            idvec![call_op.as_operation(), ret.as_operation()],
+        );
+
+        let region = Region::new(db, location, idvec![block]);
+
+        // Build initial_remap: old_val → new_val
+        let mut initial_remap = ImHashMap::new();
+        initial_remap.insert(old_val, new_val);
+
+        let fns_with_evidence: HashSet<Symbol> = HashSet::new();
+        let registry = Rc::new(RefCell::new(OpTableRegistry::new()));
+
+        let (new_region, changed) = transform_region_with_evidence(
+            db,
+            &region,
+            ev_value,
+            &fns_with_evidence,
+            initial_remap,
+            registry,
+        );
+
+        if !changed {
+            return Err("Region should be marked as changed".into());
+        }
+
+        // Verify the first block's call operand was remapped
+        let blocks = new_region.blocks(db);
+        if blocks.is_empty() {
+            return Err("Region should have blocks".into());
+        }
+
+        let first_block = &blocks[0];
+        let mut found_remapped = false;
+        for op in first_block.operations(db).iter() {
+            if let Ok(call) = func::Call::from_operation(db, *op)
+                && call.callee(db) == "fn"
+            {
+                let operands = op.operands(db);
+                if operands.is_empty() {
+                    return Err("Call should have operands".into());
+                }
+                if operands[0] == old_val {
+                    return Err(
+                        "Region should propagate initial_remap to block: operand not remapped"
+                            .into(),
+                    );
+                }
+                if operands[0] != new_val {
+                    return Err(format!("Operand should be new_val, got {:?}", operands[0]));
+                }
+                found_remapped = true;
+            }
+        }
+
+        if !found_remapped {
+            return Err("Should find remapped call in region's block".into());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_transform_region_with_evidence_propagates_remap(db: &salsa::DatabaseImpl) {
+        let result = run_region_remap_propagation_test(db);
         if let Err(msg) = result {
             panic!("{}", msg);
         }
