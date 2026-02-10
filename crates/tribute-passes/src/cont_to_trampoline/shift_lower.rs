@@ -55,6 +55,39 @@ pub(crate) fn state_type_name(key: StateTypeKey) -> String {
     format!("__State_{:012x}", hash & 0xFFFF_FFFF_FFFF)
 }
 
+/// Extract ability name and compute op_idx from a cont.shift operation.
+///
+/// Uses `op_offset` from the shift operation if available (set by resolve_evidence),
+/// otherwise falls back to hash-based `op_idx` for backwards compatibility.
+fn resolve_shift_op_idx<'db>(
+    db: &'db dyn salsa::Database,
+    shift_op: cont::Shift<'db>,
+) -> (Option<Symbol>, Option<Symbol>, u32) {
+    let ability_ref_type = shift_op.ability_ref(db);
+    let op_name_sym = shift_op.op_name(db);
+    let ability_name =
+        core::AbilityRefType::from_type(db, ability_ref_type).and_then(|ar| ar.name(db));
+    let op_name = Some(op_name_sym);
+    let op_idx = match shift_op.op_offset(db) {
+        Some(offset) => offset,
+        None => compute_op_idx(ability_name, op_name),
+    };
+    (ability_name, op_name, op_idx)
+}
+
+/// Create state field descriptors with anyref types for WASM lowering compatibility.
+///
+/// LowerBuildStatePattern converts all fields to anyref, so we use anyref as field type
+/// to ensure the state struct's nominal type is consistent between creation and extraction.
+fn create_state_fields<'db>(count: usize, anyref_ty: Type<'db>) -> Vec<(Symbol, Type<'db>)> {
+    (0..count)
+        .map(|i| {
+            let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+            (field_name, anyref_ty)
+        })
+        .collect()
+}
+
 // ============================================================================
 // Pattern: Lower cont.shift
 // ============================================================================
@@ -81,20 +114,9 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let operands: Vec<_> = adaptor.operands().iter().copied().collect();
         let tag_operand = operands[0]; // First operand is tag
         let value_operands: Vec<Value<'db>> = operands.into_iter().skip(1).collect(); // Rest are values
-        let ability_ref_type = shift_op.ability_ref(db);
-        let op_name_sym = shift_op.op_name(db);
 
         let location = op.location(db);
-
-        // Use op_offset from the shift operation if available (set by resolve_evidence)
-        // Otherwise fall back to hash-based op_idx for backwards compatibility
-        let ability_name =
-            core::AbilityRefType::from_type(db, ability_ref_type).and_then(|ar| ar.name(db));
-        let op_name = Some(op_name_sym);
-        let op_idx = match shift_op.op_offset(db) {
-            Some(offset) => offset,
-            None => compute_op_idx(ability_name, op_name),
-        };
+        let (ability_name, op_name, op_idx) = resolve_shift_op_idx(db, shift_op);
 
         // Look up shift point analysis - fail fast if missing
         let shift_point_info = self.shift_analysis.get(&location.span).unwrap_or_else(|| {
@@ -116,10 +138,6 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         };
         let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
 
-        // Get live values and their types from analysis.
-        // State fields use anyref as field type to match the WASM lowering
-        // (LowerBuildStatePattern converts all fields to anyref). This ensures
-        // the state struct's nominal type is consistent between creation and extraction.
         let anyref_ty = tribute_rt::any_type(db);
         let state_values: Vec<Value<'db>> = shift_point_info
             .live_values
@@ -131,12 +149,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             .iter()
             .map(|(_v, ty)| *ty)
             .collect();
-        let state_fields: Vec<(Symbol, Type<'db>)> = (0..shift_point_info.live_values.len())
-            .map(|i| {
-                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                (field_name, anyref_ty)
-            })
-            .collect();
+        let state_fields = create_state_fields(shift_point_info.live_values.len(), anyref_ty);
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -350,8 +363,6 @@ pub(crate) fn create_resume_function_with_continuation<'db>(
                         .first()
                         .copied()
                         .expect("shift missing tag operand");
-                    let ability_ref_type = shift_op.ability_ref(db);
-                    let op_name_sym = shift_op.op_name(db);
                     let shift_value_operand = operands.get(1).copied(); // Skip tag, get first value operand
                     // Get next resume function name
                     let next_resume_name = spec.next_resume_name.as_ref().expect(
@@ -368,16 +379,7 @@ pub(crate) fn create_resume_function_with_continuation<'db>(
                             )
                         });
 
-                    // Get shift properties
-                    // Use op_offset from the shift operation if available (set by resolve_evidence)
-                    // Otherwise fall back to hash-based op_idx for backwards compatibility
-                    let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
-                        .and_then(|ar| ar.name(db));
-                    let op_name = Some(op_name_sym);
-                    let op_idx = match shift_op.op_offset(db) {
-                        Some(offset) => offset,
-                        None => compute_op_idx(ability_name, op_name),
-                    };
+                    let (ability_name, op_name, op_idx) = resolve_shift_op_idx(db, shift_op);
 
                     // Build state struct with current live values (remapped)
                     let shift_index = next_shift_info.index;
@@ -395,13 +397,8 @@ pub(crate) fn create_resume_function_with_continuation<'db>(
                         .iter()
                         .map(|(v, _ty)| *value_map.get(v).unwrap_or(v))
                         .collect();
-                    let state_fields: Vec<(Symbol, Type<'db>)> =
-                        (0..next_shift_info.live_values.len())
-                            .map(|i| {
-                                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                (field_name, anyref_ty)
-                            })
-                            .collect();
+                    let state_fields =
+                        create_state_fields(next_shift_info.live_values.len(), anyref_ty);
 
                     let state_adt_ty = adt::struct_type(db, state_name, state_fields);
                     let state_op = builder.op(trampoline::build_state(
