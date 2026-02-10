@@ -3190,8 +3190,9 @@ fn get_region_result_value<'db>(
 /// ensuring they always agree on the op index regardless of handler
 /// registration order.
 ///
-/// NOTE: Uses `FxHasher` from `rustc-hash` which provides deterministic
-/// hashing across Rust versions, unlike `DefaultHasher`.
+/// NOTE: Uses `FxHasher` from `rustc-hash` for deterministic hashing within
+/// a single compilation session. Cross-version stability is not required
+/// because op indices are never persisted or compared across binaries.
 fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
     use rustc_hash::FxHasher;
     use std::hash::{Hash, Hasher};

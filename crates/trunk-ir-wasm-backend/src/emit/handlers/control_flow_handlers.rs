@@ -291,9 +291,7 @@ pub(crate) fn handle_loop<'db>(
     function.instruction(&Instruction::Loop(block_type));
 
     let mut child_nesting = nesting.to_vec();
-    child_nesting.push(NestingKind::Loop {
-        arg_locals: arg_locals.clone(),
-    });
+    child_nesting.push(NestingKind::Loop { arg_locals });
     emit_region_ops_nested(db, region, ctx, module_info, function, &child_nesting)?;
 
     if has_result && let Some(value) = region_result_value(db, region) {
