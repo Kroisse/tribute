@@ -333,6 +333,22 @@ mod tests {
         names
     }
 
+    /// Recursively collect `wasm.br` target depths from a region.
+    fn collect_br_targets<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Vec<u32> {
+        let mut targets = Vec::new();
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if let Ok(br) = wasm::Br::from_operation(db, *op) {
+                    targets.push(br.target(db));
+                }
+                for nested_region in op.regions(db).iter() {
+                    targets.extend(collect_br_targets(db, nested_region));
+                }
+            }
+        }
+        targets
+    }
+
     /// Build a module with scf.break inside scf.if inside scf.loop.
     ///
     /// Structure: scf.loop { scf.if(cond) { then: scf.break(val) } { else: scf.continue } }
@@ -425,6 +441,13 @@ mod tests {
         collect_all_op_names(db, &body)
     }
 
+    #[salsa::tracked]
+    fn lower_and_collect_br_targets(db: &dyn salsa::Database, module: Module<'_>) -> Vec<u32> {
+        let lowered = lower(db, module, test_converter());
+        let body = lowered.body(db);
+        collect_br_targets(db, &body)
+    }
+
     #[salsa_test]
     fn test_scf_break_to_wasm_yield_and_br(db: &salsa::DatabaseImpl) {
         let module = make_scf_break_module(db);
@@ -459,6 +482,19 @@ mod tests {
             !all_ops.iter().any(|n| n == "scf.loop"),
             "scf.loop should be lowered, got: {:?}",
             all_ops
+        );
+
+        // Verify br target depths: continue=1 (loop), break=2 (outer block)
+        let br_targets = lower_and_collect_br_targets(db, module);
+        assert!(
+            br_targets.contains(&1),
+            "Expected br target=1 (continue → loop), got targets: {:?}",
+            br_targets
+        );
+        assert!(
+            br_targets.contains(&2),
+            "Expected br target=2 (break → outer block), got targets: {:?}",
+            br_targets
         );
     }
 }

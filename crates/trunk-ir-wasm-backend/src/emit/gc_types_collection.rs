@@ -97,6 +97,22 @@ fn is_abstract_wasm_heap_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         || name == Symbol::new("eqref")
 }
 
+/// Get the builtin struct type index for closure, continuation, or resume wrapper types.
+///
+/// Returns `Some(idx)` if the type is one of the three builtin struct types,
+/// `None` for all other types.
+fn get_builtin_struct_idx(db: &dyn salsa::Database, ty: Type<'_>) -> Option<u32> {
+    if is_closure_struct_type(db, ty) {
+        Some(CLOSURE_STRUCT_IDX)
+    } else if gc_types::is_continuation_struct_type(db, ty) {
+        Some(CONTINUATION_IDX)
+    } else if gc_types::is_resume_wrapper_struct_type(db, ty) {
+        Some(RESUME_WRAPPER_IDX)
+    } else {
+        None
+    }
+}
+
 /// Get or create a builder for a user-defined type.
 /// Returns None for built-in types (0-8) which are predefined.
 fn try_get_builder<'db, 'a>(
@@ -403,17 +419,8 @@ pub(crate) fn collect_gc_types<'db>(
         }
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, *ty) {
-                return Some(CLOSURE_STRUCT_IDX);
-            }
-            // Special case: continuation types use builtin CONTINUATION_IDX
-            if gc_types::is_continuation_struct_type(db, *ty) {
-                return Some(CONTINUATION_IDX);
-            }
-            // Special case: resume wrapper types use builtin RESUME_WRAPPER_IDX
-            if gc_types::is_resume_wrapper_struct_type(db, *ty) {
-                return Some(RESUME_WRAPPER_IDX);
+            if let Some(idx) = get_builtin_struct_idx(db, *ty) {
+                return Some(idx);
             }
             if let Some(&idx) = type_idx_by_type.get(ty) {
                 debug!(
@@ -439,17 +446,8 @@ pub(crate) fn collect_gc_types<'db>(
         }
         // Fall back to inferred type (from result or operand types)
         if let Some(ty) = inferred_type {
-            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, ty) {
-                return Some(CLOSURE_STRUCT_IDX);
-            }
-            // Special case: continuation types use builtin CONTINUATION_IDX
-            if gc_types::is_continuation_struct_type(db, ty) {
-                return Some(CONTINUATION_IDX);
-            }
-            // Special case: resume wrapper types use builtin RESUME_WRAPPER_IDX
-            if gc_types::is_resume_wrapper_struct_type(db, ty) {
-                return Some(RESUME_WRAPPER_IDX);
+            if let Some(idx) = get_builtin_struct_idx(db, ty) {
+                return Some(idx);
             }
             if let Some(&idx) = type_idx_by_type.get(&ty) {
                 debug!(
@@ -612,15 +610,7 @@ pub(crate) fn collect_gc_types<'db>(
             // Check if this is a builtin struct type
             let builtin_type_idx = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    if is_closure_struct_type(db, *ty) {
-                        Some(CLOSURE_STRUCT_IDX)
-                    } else if gc_types::is_continuation_struct_type(db, *ty) {
-                        Some(CONTINUATION_IDX)
-                    } else if gc_types::is_resume_wrapper_struct_type(db, *ty) {
-                        Some(RESUME_WRAPPER_IDX)
-                    } else {
-                        None
-                    }
+                    get_builtin_struct_idx(db, *ty)
                 } else {
                     None
                 }
@@ -630,11 +620,7 @@ pub(crate) fn collect_gc_types<'db>(
             // Returns (adt_struct_type, field_count) if it's an adt.struct type
             let adt_struct_info = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    if adt::is_struct_type(db, *ty)
-                        && !is_closure_struct_type(db, *ty)
-                        && !gc_types::is_continuation_struct_type(db, *ty)
-                        && !gc_types::is_resume_wrapper_struct_type(db, *ty)
-                    {
+                    if adt::is_struct_type(db, *ty) && get_builtin_struct_idx(db, *ty).is_none() {
                         adt::get_struct_fields(db, *ty).map(|fields| (*ty, fields.len()))
                     } else {
                         None
@@ -1120,4 +1106,80 @@ pub(crate) fn collect_gc_types<'db>(
     result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::dialect::adt;
+
+    #[test]
+    fn test_get_builtin_struct_idx_closure() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let closure_ty = adt::struct_type(
+            &db,
+            "_closure",
+            vec![
+                (Symbol::new("func_idx"), i32_ty),
+                (Symbol::new("env"), wasm::Anyref::new(&db).as_type()),
+            ],
+        );
+        assert_eq!(
+            get_builtin_struct_idx(&db, closure_ty),
+            Some(CLOSURE_STRUCT_IDX)
+        );
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_continuation() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let anyref_ty = wasm::Anyref::new(&db).as_type();
+        let cont_ty = adt::struct_type(
+            &db,
+            "_Continuation",
+            vec![
+                (Symbol::new("func_idx"), i32_ty),
+                (Symbol::new("env"), anyref_ty),
+                (Symbol::new("prompt_tag"), i32_ty),
+                (Symbol::new("state"), anyref_ty),
+            ],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, cont_ty), Some(CONTINUATION_IDX));
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_resume_wrapper() {
+        let db = salsa::DatabaseImpl::default();
+        let anyref_ty = wasm::Anyref::new(&db).as_type();
+        let rw_ty = adt::struct_type(
+            &db,
+            "_ResumeWrapper",
+            vec![
+                (Symbol::new("state"), anyref_ty),
+                (Symbol::new("resume_value"), anyref_ty),
+            ],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, rw_ty), Some(RESUME_WRAPPER_IDX));
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_returns_none_for_regular_struct() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let regular_ty = adt::struct_type(
+            &db,
+            "Point",
+            vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, regular_ty), None);
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_returns_none_for_primitive() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        assert_eq!(get_builtin_struct_idx(&db, i32_ty), None);
+    }
 }

@@ -2817,7 +2817,7 @@ fn build_arm_region<'db>(
             while let Some(&remapped) = value_remap.get(&current) {
                 current = remapped;
                 steps += 1;
-                debug_assert!(
+                assert!(
                     steps < 1000,
                     "cycle detected in value_remap after {steps} steps"
                 );
@@ -3189,11 +3189,14 @@ fn get_region_result_value<'db>(
 /// operation name. Both shift sites and handler dispatch use this function,
 /// ensuring they always agree on the op index regardless of handler
 /// registration order.
+///
+/// NOTE: Uses `FxHasher` from `rustc-hash` which provides deterministic
+/// hashing across Rust versions, unlike `DefaultHasher`.
 fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
+    use rustc_hash::FxHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
 
     if let Some(ability) = ability_ref {
         ability.to_string().hash(&mut hasher);
@@ -3960,5 +3963,52 @@ mod tests {
         if let Err(msg) = run_collect_suspend_arms_done_only_test(db) {
             panic!("{}", msg);
         }
+    }
+
+    // ========================================================================
+    // compute_op_idx tests
+    // ========================================================================
+
+    #[test]
+    fn test_compute_op_idx_is_deterministic() {
+        let ability = Some(Symbol::new("State"));
+        let op = Some(Symbol::new("get"));
+        let idx1 = compute_op_idx(ability, op);
+        let idx2 = compute_op_idx(ability, op);
+        assert_eq!(idx1, idx2, "compute_op_idx should be deterministic");
+    }
+
+    #[test]
+    fn test_compute_op_idx_differs_for_different_ops() {
+        let ability = Some(Symbol::new("State"));
+        let get_idx = compute_op_idx(ability, Some(Symbol::new("get")));
+        let set_idx = compute_op_idx(ability, Some(Symbol::new("set")));
+        assert_ne!(
+            get_idx, set_idx,
+            "different operations should produce different indices"
+        );
+    }
+
+    #[test]
+    fn test_compute_op_idx_differs_for_different_abilities() {
+        let op = Some(Symbol::new("get"));
+        let state_idx = compute_op_idx(Some(Symbol::new("State")), op);
+        let console_idx = compute_op_idx(Some(Symbol::new("Console")), op);
+        assert_ne!(
+            state_idx, console_idx,
+            "different abilities should produce different indices"
+        );
+    }
+
+    #[test]
+    fn test_compute_op_idx_handles_none() {
+        // Should not panic with None values
+        let idx_none_both = compute_op_idx(None, None);
+        let idx_none_ability = compute_op_idx(None, Some(Symbol::new("get")));
+        let idx_none_op = compute_op_idx(Some(Symbol::new("State")), None);
+
+        // None cases should differ from populated cases
+        assert_ne!(idx_none_both, idx_none_ability);
+        assert_ne!(idx_none_both, idx_none_op);
     }
 }

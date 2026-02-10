@@ -501,13 +501,16 @@ fn transform_handler_root_function<'db>(
 
     // Transform entry block using the empty evidence.
     // This handles push_prompt -> evidence_extend AND calls to effectful functions.
-    let (new_entry_block, block_changed) = transform_block_with_evidence(
+    let handled_by_tag = collect_handled_abilities_by_tag(db, entry_block);
+    let (new_entry_block, block_changed) = transform_shifts_in_block_with_remap(
         db,
         entry_block,
         ev_value,
-        fns_with_evidence,
+        &handled_by_tag,
         ImHashMap::new(),
         Rc::clone(&registry),
+        fns_with_evidence,
+        None,
     );
 
     if !block_changed {
@@ -580,6 +583,9 @@ fn try_prepend_evidence_to_call<'db>(
 }
 
 /// If `op` is a `func.call_indirect`, replace the evidence argument (index 1) with `ev_value`.
+///
+/// Assumes call_indirect operands are laid out as `[table_idx, evidence, ...rest]`.
+/// This is the calling convention for lifted lambdas with evidence passing.
 /// Returns the new operation if the call was rewritten, or `None` if not applicable.
 fn try_replace_call_indirect_evidence<'db>(
     db: &'db dyn salsa::Database,
@@ -592,6 +598,8 @@ fn try_replace_call_indirect_evidence<'db>(
     if remapped_operands.len() < 2 {
         return None;
     }
+    // Invariant: operand layout is [table_idx, evidence, ...rest].
+    // If this changes, this index must be updated.
     let current_ev = remapped_operands[1];
     if current_ev == ev_value {
         return None;
@@ -611,204 +619,6 @@ fn try_replace_call_indirect_evidence<'db>(
         value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
     }
     Some(new_call_op)
-}
-
-/// Transform a block with evidence, handling both shifts and calls.
-///
-/// Unlike transform_shifts_in_block_with_remap, this also transforms
-/// func.call to effectful functions by prepending evidence.
-fn transform_block_with_evidence<'db>(
-    db: &'db dyn salsa::Database,
-    block: &Block<'db>,
-    ev_value: Value<'db>,
-    fns_with_evidence: &HashSet<Symbol>,
-    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
-    registry: SharedOpTableRegistry<'db>,
-) -> (Block<'db>, bool) {
-    let mut new_ops: Vec<Operation<'db>> = Vec::new();
-    let mut changed = !initial_remap.is_empty();
-    let mut value_map: ImHashMap<Value<'db>, Value<'db>> = initial_remap;
-
-    for op in block.operations(db).iter() {
-        // Remap operands using value map
-        let remapped_operands: Vec<Value<'db>> = op
-            .operands(db)
-            .iter()
-            .map(|v| *value_map.get(v).unwrap_or(v))
-            .collect();
-
-        // Handle cont.push_prompt: delegate to existing transform
-        if cont::PushPrompt::from_operation(db, *op).is_ok() {
-            // Use existing transform for push_prompt but with evidence call support.
-            // Build a temporary single-op block for the push_prompt.
-            let single_block = Block::new(
-                db,
-                block.id(db),
-                block.location(db),
-                block.args(db).clone(),
-                IdVec::from(vec![*op]),
-            );
-            // Collect handled abilities from the ORIGINAL block (not single_block),
-            // because handler_dispatch ops are siblings of push_prompt in the parent block.
-            let handled = collect_handled_abilities_by_tag(db, block);
-            let (transformed, was_changed) = transform_shifts_in_block_with_remap(
-                db,
-                &single_block,
-                ev_value,
-                &handled,
-                value_map.clone(),
-                Rc::clone(&registry),
-                fns_with_evidence,
-                Some(block),
-            );
-            if was_changed {
-                changed = true;
-                for transformed_op in transformed.operations(db).iter() {
-                    new_ops.push(*transformed_op);
-                }
-                // Map old results to new results.
-                // Invariant: the last op of the transformed block must be the
-                // (possibly rebuilt) cont.push_prompt that carries the result.
-                // If the inner transform ever appends ops after push_prompt,
-                // this mapping would silently break.
-                if !op.results(db).is_empty()
-                    && let Some(last_op) = transformed.operations(db).last()
-                    && !last_op.results(db).is_empty()
-                {
-                    debug_assert!(
-                        cont::PushPrompt::from_operation(db, *last_op).is_ok(),
-                        "expected last op of transformed push_prompt block to be cont.push_prompt, got {}.{}",
-                        last_op.dialect(db),
-                        last_op.name(db),
-                    );
-                    value_map.insert(op.result(db, 0), last_op.result(db, 0));
-                }
-                continue;
-            }
-        }
-
-        // Handle func.call to effectful functions: prepend evidence
-        if let Some(new_call_op) = try_prepend_evidence_to_call(
-            db,
-            op,
-            &remapped_operands,
-            ev_value,
-            fns_with_evidence,
-            &mut value_map,
-        ) {
-            new_ops.push(new_call_op);
-            changed = true;
-            continue;
-        }
-
-        // Handle func.call_indirect: replace evidence argument with current ev_value.
-        if let Some(new_call_op) =
-            try_replace_call_indirect_evidence(db, op, &remapped_operands, ev_value, &mut value_map)
-        {
-            new_ops.push(new_call_op);
-            changed = true;
-            continue;
-        }
-
-        // Default: remap operands and recurse into regions
-        let regions = op.regions(db);
-        if !regions.is_empty() {
-            let mut region_changed = false;
-            let new_regions: IdVec<Region<'db>> = regions
-                .iter()
-                .map(|region| {
-                    let (new_region, r_changed) = transform_region_with_evidence(
-                        db,
-                        region,
-                        ev_value,
-                        fns_with_evidence,
-                        value_map.clone(),
-                        Rc::clone(&registry),
-                    );
-                    if r_changed {
-                        region_changed = true;
-                    }
-                    new_region
-                })
-                .collect();
-
-            if region_changed {
-                changed = true;
-                let new_op = op
-                    .modify(db)
-                    .operands(IdVec::from(remapped_operands))
-                    .regions(new_regions)
-                    .build();
-                for i in 0..op.results(db).len() {
-                    value_map.insert(op.result(db, i), new_op.result(db, i));
-                }
-                new_ops.push(new_op);
-                continue;
-            }
-        }
-
-        // If operands were remapped, rebuild
-        let operands_changed = op
-            .operands(db)
-            .iter()
-            .zip(remapped_operands.iter())
-            .any(|(old, new)| old != new);
-
-        if operands_changed {
-            changed = true;
-            let new_op = op
-                .modify(db)
-                .operands(IdVec::from(remapped_operands))
-                .build();
-            for i in 0..op.results(db).len() {
-                value_map.insert(op.result(db, i), new_op.result(db, i));
-            }
-            new_ops.push(new_op);
-        } else {
-            new_ops.push(*op);
-        }
-    }
-
-    let new_block = Block::new(
-        db,
-        block.id(db),
-        block.location(db),
-        block.args(db).clone(),
-        new_ops.into_iter().collect(),
-    );
-    (new_block, changed)
-}
-
-/// Transform a region with evidence for handler-root functions.
-fn transform_region_with_evidence<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    ev_value: Value<'db>,
-    fns_with_evidence: &HashSet<Symbol>,
-    initial_remap: ImHashMap<Value<'db>, Value<'db>>,
-    registry: SharedOpTableRegistry<'db>,
-) -> (Region<'db>, bool) {
-    let mut changed = false;
-    let new_blocks: IdVec<Block<'db>> = region
-        .blocks(db)
-        .iter()
-        .map(|block| {
-            let (new_block, block_changed) = transform_block_with_evidence(
-                db,
-                block,
-                ev_value,
-                fns_with_evidence,
-                initial_remap.clone(),
-                Rc::clone(&registry),
-            );
-            if block_changed {
-                changed = true;
-            }
-            new_block
-        })
-        .collect();
-    let new_region = Region::new(db, region.location(db), new_blocks);
-    (new_region, changed)
 }
 
 /// Transform cont.shift operations in all functions with evidence.
@@ -2374,10 +2184,10 @@ mod tests {
     }
 
     // ========================================================================
-    // transform_block_with_evidence / transform_region_with_evidence tests
+    // transform_shifts_in_block_with_remap / transform_shifts_in_region_with_remap tests
     // ========================================================================
 
-    /// Test that `transform_block_with_evidence` correctly applies non-empty
+    /// Test that `transform_shifts_in_block_with_remap` correctly applies non-empty
     /// `initial_remap` to operands in the block.
     #[salsa::tracked]
     fn run_initial_remap_test(db: &dyn salsa::Database) -> Result<(), String> {
@@ -2414,14 +2224,17 @@ mod tests {
 
         let fns_with_evidence: HashSet<Symbol> = HashSet::new();
         let registry = Rc::new(RefCell::new(OpTableRegistry::new()));
+        let handled_by_tag = HashMap::new();
 
-        let (new_block, changed) = transform_block_with_evidence(
+        let (new_block, changed) = transform_shifts_in_block_with_remap(
             db,
             &block,
             ev_value,
-            &fns_with_evidence,
+            &handled_by_tag,
             initial_remap,
             registry,
+            &fns_with_evidence,
+            None,
         );
 
         // changed should be true since initial_remap is non-empty
@@ -2457,14 +2270,14 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_transform_block_with_evidence_uses_initial_remap(db: &salsa::DatabaseImpl) {
+    fn test_transform_shifts_in_block_with_remap_uses_initial_remap(db: &salsa::DatabaseImpl) {
         let result = run_initial_remap_test(db);
         if let Err(msg) = result {
             panic!("{}", msg);
         }
     }
 
-    /// Test that `transform_region_with_evidence` propagates `initial_remap`
+    /// Test that `transform_shifts_in_region_with_remap` propagates `initial_remap`
     /// to each block in the region.
     #[salsa::tracked]
     fn run_region_remap_propagation_test(db: &dyn salsa::Database) -> Result<(), String> {
@@ -2502,13 +2315,13 @@ mod tests {
         let fns_with_evidence: HashSet<Symbol> = HashSet::new();
         let registry = Rc::new(RefCell::new(OpTableRegistry::new()));
 
-        let (new_region, changed) = transform_region_with_evidence(
+        let (new_region, changed) = transform_shifts_in_region_with_remap(
             db,
             &region,
             ev_value,
-            &fns_with_evidence,
             initial_remap,
             registry,
+            &fns_with_evidence,
         );
 
         if !changed {
@@ -2552,7 +2365,7 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_transform_region_with_evidence_propagates_remap(db: &salsa::DatabaseImpl) {
+    fn test_transform_shifts_in_region_with_remap_propagates_remap(db: &salsa::DatabaseImpl) {
         let result = run_region_remap_propagation_test(db);
         if let Err(msg) = result {
             panic!("{}", msg);

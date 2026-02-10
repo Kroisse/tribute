@@ -278,7 +278,7 @@ pub(crate) fn handle_loop<'db>(
 
     // Initialize loop-carried variables from init operands
     let init_operands = op.operands(db);
-    debug_assert_eq!(
+    assert_eq!(
         init_operands.len(),
         arg_locals.len(),
         "wasm.loop init operands and block arg locals must have the same length"

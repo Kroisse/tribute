@@ -1276,6 +1276,7 @@ name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
  "im",
+ "rustc-hash",
  "salsa",
  "salsa-test-macros",
  "tracing",
