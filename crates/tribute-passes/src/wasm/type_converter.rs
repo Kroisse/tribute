@@ -67,10 +67,10 @@ pub fn evidence_wasm_type(db: &dyn salsa::Database) -> Type<'_> {
     wasm::Arrayref::new(db).as_type()
 }
 
-/// Helper to generate i31 boxing operations (ref_i31 + implicit upcast to anyref).
+/// Helper to generate i31 boxing operations (ref_i31 + explicit upcast to anyref).
 ///
 /// This is used when converting i32/i64 values to anyref for polymorphic function calls.
-/// WasmGC's i31ref is a subtype of anyref, so the boxing is implicit.
+/// WasmGC's i31ref is a subtype of anyref, but an explicit `ref_cast` is emitted for IR type correctness.
 /// If the input is i64, an `i32_wrap_i64` truncation is emitted first.
 fn box_via_i31<'db>(
     db: &'db dyn salsa::Database,

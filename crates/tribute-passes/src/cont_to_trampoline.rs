@@ -661,6 +661,19 @@ fn truncate_scf_if_block<'db>(
 
 /// Truncate a block after the first effect point (step_shift or effectful call).
 /// Returns (modified_block, was_modified).
+/// Rebuild an operation with its result type changed to `Step`.
+/// If the operation has no results, returns it unchanged.
+fn rebuild_with_step_result<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> Operation<'db> {
+    if op.results(db).is_empty() {
+        return *op;
+    }
+    let step_ty = trampoline::Step::new(db).as_type();
+    op.modify(db).results(IdVec::from(vec![step_ty])).build()
+}
+
 fn truncate_block_after_shift<'db>(
     db: &'db dyn salsa::Database,
     block: Block<'db>,
@@ -735,23 +748,7 @@ fn truncate_block_after_shift<'db>(
         // The push_prompt result is the Step value from the handler
         if cont::PushPrompt::from_operation(db, *op).is_ok() {
             // Create new operation with Step result type
-            let step_ty = trampoline::Step::new(db).as_type();
-            let new_result_types = if !op.results(db).is_empty() {
-                IdVec::from(vec![step_ty])
-            } else {
-                op.results(db).clone()
-            };
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                new_result_types,
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = rebuild_with_step_result(db, op);
             new_ops.push(new_op);
             found_effect_point = true;
             if !new_op.results(db).is_empty() {
@@ -769,23 +766,7 @@ fn truncate_block_after_shift<'db>(
             && effectful_funcs.contains(&call.callee(db))
         {
             // Create new operation with Step result type
-            let step_ty = trampoline::Step::new(db).as_type();
-            let new_result_types = if !op.results(db).is_empty() {
-                IdVec::from(vec![step_ty])
-            } else {
-                op.results(db).clone()
-            };
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                new_result_types,
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = rebuild_with_step_result(db, op);
             new_ops.push(new_op);
             found_effect_point = true;
             if !new_op.results(db).is_empty() {
@@ -803,23 +784,7 @@ fn truncate_block_after_shift<'db>(
         // In effectful functions, call_indirect may invoke effectful closures, so we
         // must treat the result as Step to avoid double-wrapping in step_done.
         if func::CallIndirect::from_operation(db, *op).is_ok() {
-            let step_ty = trampoline::Step::new(db).as_type();
-            let new_result_types = if !op.results(db).is_empty() {
-                IdVec::from(vec![step_ty])
-            } else {
-                op.results(db).clone()
-            };
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                new_result_types,
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = rebuild_with_step_result(db, op);
             new_ops.push(new_op);
             found_effect_point = true;
             if !new_op.results(db).is_empty() {

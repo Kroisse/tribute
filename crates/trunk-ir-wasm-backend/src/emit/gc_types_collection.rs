@@ -68,7 +68,7 @@ impl<'db> GcTypeBuilder<'db> {
 // Helper functions
 // ============================================================================
 
-/// Returns true if this is a built-in type (0-4) that shouldn't use a builder
+/// Returns true if this is a built-in type (0-8) that shouldn't use a builder
 fn is_builtin_type(idx: u32) -> bool {
     idx < FIRST_USER_TYPE_IDX
 }
@@ -98,16 +98,16 @@ fn is_abstract_wasm_heap_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 }
 
 /// Get or create a builder for a user-defined type.
-/// Returns None for built-in types (0-4) which are predefined.
+/// Returns None for built-in types (0-8) which are predefined.
 fn try_get_builder<'db, 'a>(
     builders: &'a mut Vec<GcTypeBuilder<'db>>,
     idx: u32,
 ) -> Option<&'a mut GcTypeBuilder<'db>> {
-    // Skip built-in types (0-4) as they are predefined
+    // Skip built-in types (0-8) as they are predefined
     if is_builtin_type(idx) {
         return None;
     }
-    // Subtract FIRST_USER_TYPE_IDX because indices 0-4 are reserved for built-in types
+    // Subtract FIRST_USER_TYPE_IDX because indices 0-8 are reserved for built-in types
     // User type indices start at FIRST_USER_TYPE_IDX
     let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
     if builders.len() <= adjusted_idx {
@@ -341,7 +341,8 @@ pub(crate) fn collect_gc_types<'db>(
     );
 
     // Register builtin types in type_idx_by_type:
-    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct, 5: Marker, 6: Evidence
+    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct, 5: Marker,
+    // 6: Evidence, 7: Continuation, 8: ResumeWrapper
     // Step marker type needs to be registered so wasm.if can use it
     type_idx_by_type.insert(crate::gc_types::step_marker_type(db), STEP_IDX);
     // Evidence (wasm.arrayref) needs to be registered so type_to_valtype resolves to Concrete(EVIDENCE_IDX)
@@ -362,7 +363,7 @@ pub(crate) fn collect_gc_types<'db>(
         RESUME_WRAPPER_IDX,
     );
 
-    // Start at FIRST_USER_TYPE_IDX since indices 0-9 are reserved for built-in types
+    // Start at FIRST_USER_TYPE_IDX since indices 0-8 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
     // Helper to get next available type_idx, skipping reserved indices

@@ -14,7 +14,9 @@
 //! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
 //! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 } (evidence)
 //! Index 6: Evidence - array (ref Marker) (evidence array)
-//! Index 7+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 7: Continuation - struct { resume_fn: funcref, env: anyref } (continuation)
+//! Index 8: ResumeWrapper - struct { continuation: ref Continuation, result: anyref } (resume wrapper)
+//! Index 9+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
 //! ## Usage
@@ -81,21 +83,7 @@ pub const FIRST_USER_TYPE_IDX: u32 = 9;
 /// Check if a type is a closure struct (adt.struct with name "_closure").
 /// Closure structs contain (funcref, anyref) and are used for call_indirect.
 pub fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    // Check if it's an adt.struct type
-    if ty.dialect(db) != adt::DIALECT_NAME() {
-        return false;
-    }
-    if ty.name(db) != Symbol::new("struct") {
-        return false;
-    }
-    // Check if the struct name is "_closure"
-    ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
-        if let Attribute::Symbol(name) = attr {
-            name.with_str(|s| s == "_closure")
-        } else {
-            false
-        }
-    })
+    is_named_adt_struct(db, ty, "_closure")
 }
 
 /// Check if a type is a continuation struct (adt.struct with name "_Continuation").
@@ -190,7 +178,7 @@ impl<'db> GcTypeRegistry<'db> {
     ///
     /// These must be prepended to the user-defined types when emitting.
     /// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), Step(3), ClosureStruct(4),
-    ///          Marker(5), Evidence(6)
+    ///          Marker(5), Evidence(6), Continuation(7), ResumeWrapper(8)
     pub fn builtin_types() -> Vec<GcTypeDef> {
         vec![
             // Index 0: BoxedF64 - struct { value: f64 }
@@ -384,7 +372,7 @@ impl<'db> GcTypeRegistry<'db> {
 
     /// Returns all type definitions including builtins.
     ///
-    /// The returned vector has builtins at indices 0-4 and user types starting at index 5.
+    /// The returned vector has builtins at indices 0-8 and user types starting at index 9.
     pub fn all_types(&self) -> Vec<GcTypeDef> {
         let mut all = Self::builtin_types();
         all.extend(self.types.iter().cloned());

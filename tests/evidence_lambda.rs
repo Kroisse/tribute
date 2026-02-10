@@ -380,7 +380,7 @@ fn main() -> Int {
 /// Effectful lambdas already have evidence as their first parameter (from ast_to_ir).
 /// The evidence pass should detect this and not add a duplicate parameter.
 #[test]
-fn test_evidence_param_added_to_effectful_lambda() {
+fn test_evidence_param_not_duplicated_for_effectful_lambda() {
     use tribute::pipeline::stage_evidence_params;
 
     let code = r#"

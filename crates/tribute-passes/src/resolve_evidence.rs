@@ -540,6 +540,76 @@ fn transform_handler_root_function<'db>(
     (new_func.as_operation(), true)
 }
 
+/// If `op` is a `func.call` to an effectful function, prepend `ev_value` as the first argument.
+/// Returns the new operation if the call was rewritten, or `None` if not applicable.
+fn try_prepend_evidence_to_call<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    remapped_operands: &[Value<'db>],
+    ev_value: Value<'db>,
+    fns_with_evidence: &HashSet<Symbol>,
+    value_map: &mut ImHashMap<Value<'db>, Value<'db>>,
+) -> Option<Operation<'db>> {
+    let call_op = func::Call::from_operation(db, *op).ok()?;
+    let callee = call_op.callee(db);
+    if !fns_with_evidence.contains(&callee) {
+        return None;
+    }
+    // Check if evidence is already the first argument
+    let first_arg = remapped_operands.first().copied();
+    if first_arg == Some(ev_value) {
+        return None;
+    }
+    let location = op.location(db);
+    let result_ty = op
+        .results(db)
+        .first()
+        .copied()
+        .unwrap_or_else(|| *core::Nil::new(db));
+    let mut new_args = vec![ev_value];
+    new_args.extend(remapped_operands.iter().copied());
+    let new_call = func::call(db, location, new_args, result_ty, callee);
+    let new_call_op = new_call.as_operation();
+    if !op.results(db).is_empty() {
+        value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
+    }
+    Some(new_call_op)
+}
+
+/// If `op` is a `func.call_indirect`, replace the evidence argument (index 1) with `ev_value`.
+/// Returns the new operation if the call was rewritten, or `None` if not applicable.
+fn try_replace_call_indirect_evidence<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    remapped_operands: &[Value<'db>],
+    ev_value: Value<'db>,
+    value_map: &mut ImHashMap<Value<'db>, Value<'db>>,
+) -> Option<Operation<'db>> {
+    func::CallIndirect::from_operation(db, *op).ok()?;
+    if remapped_operands.len() < 2 {
+        return None;
+    }
+    let current_ev = remapped_operands[1];
+    if current_ev == ev_value {
+        return None;
+    }
+    let location = op.location(db);
+    let result_ty = op
+        .results(db)
+        .first()
+        .copied()
+        .unwrap_or_else(|| *core::Nil::new(db));
+    let table_idx = remapped_operands[0];
+    let mut new_args: Vec<Value<'db>> = vec![ev_value];
+    new_args.extend(remapped_operands[2..].iter().copied());
+    let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
+    let new_call_op = new_call.as_operation();
+    if !op.results(db).is_empty() {
+        value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
+    }
+    Some(new_call_op)
+}
+
 /// Transform a block with evidence, handling both shifts and calls.
 ///
 /// Unlike transform_shifts_in_block_with_remap, this also transforms
@@ -605,61 +675,26 @@ fn transform_block_with_evidence<'db>(
         }
 
         // Handle func.call to effectful functions: prepend evidence
-        if let Ok(call_op) = func::Call::from_operation(db, *op) {
-            let callee = call_op.callee(db);
-            if fns_with_evidence.contains(&callee) {
-                // Check if evidence is already the first argument
-                let first_arg = remapped_operands.first().copied();
-                if first_arg != Some(ev_value) {
-                    let location = op.location(db);
-                    let result_ty = op
-                        .results(db)
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| *core::Nil::new(db));
-                    let mut new_args = vec![ev_value];
-                    new_args.extend(remapped_operands.iter().copied());
-                    let new_call = func::call(db, location, new_args, result_ty, callee);
-                    let new_call_op = new_call.as_operation();
-                    if !op.results(db).is_empty() {
-                        value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
-                    }
-                    new_ops.push(new_call_op);
-                    changed = true;
-                    continue;
-                }
-            }
+        if let Some(new_call_op) = try_prepend_evidence_to_call(
+            db,
+            op,
+            &remapped_operands,
+            ev_value,
+            fns_with_evidence,
+            &mut value_map,
+        ) {
+            new_ops.push(new_call_op);
+            changed = true;
+            continue;
         }
 
         // Handle func.call_indirect: replace evidence argument with current ev_value.
-        // After closure_lower, call_indirect args are: (table_idx, evidence, env, args...).
-        // The evidence at index 1 may be null (from closure_lower for non-effectful functions)
-        // or stale. Replace it with the current evidence from the handler root.
-        if func::CallIndirect::from_operation(db, *op).is_ok() && remapped_operands.len() >= 2 {
-            // Check if the second operand (index 1) is evidence-typed or null evidence
-            // that should be replaced with the current ev_value.
-            let current_ev = remapped_operands[1];
-            if current_ev != ev_value {
-                let location = op.location(db);
-                let result_ty = op
-                    .results(db)
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| *core::Nil::new(db));
-
-                let table_idx = remapped_operands[0];
-                let mut new_args: Vec<Value<'db>> = vec![ev_value];
-                new_args.extend(remapped_operands[2..].iter().copied());
-
-                let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
-                let new_call_op = new_call.as_operation();
-                if !op.results(db).is_empty() {
-                    value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
-                }
-                new_ops.push(new_call_op);
-                changed = true;
-                continue;
-            }
+        if let Some(new_call_op) =
+            try_replace_call_indirect_evidence(db, op, &remapped_operands, ev_value, &mut value_map)
+        {
+            new_ops.push(new_call_op);
+            changed = true;
+            continue;
         }
 
         // Default: remap operands and recurse into regions
@@ -1139,12 +1174,6 @@ fn transform_shifts_in_block_with_remap<'db>(
             let tag_val = struct_get_tag.result(db);
             new_ops.push(struct_get_tag.as_operation());
 
-            // %op_table_idx = adt.struct_get(%marker, field=2)  -- op_table_index is at field index 2
-            let struct_get_op_table =
-                adt::struct_get(db, location, marker_val, i32_ty, marker_ty, 2);
-            let op_table_idx_val = struct_get_op_table.result(db);
-            new_ops.push(struct_get_op_table.as_operation());
-
             // Get result type
             let result_ty = op
                 .results(db)
@@ -1189,10 +1218,6 @@ fn transform_shifts_in_block_with_remap<'db>(
                 new_handler_region,
             );
 
-            // op_table_idx_val is emitted to IR via struct_get_op_table above
-            // and consumed by the trampoline pass at runtime
-            let _ = op_table_idx_val;
-
             // Map old result to new result
             if !op.results(db).is_empty() {
                 let old_result = op.result(db, 0);
@@ -1207,59 +1232,27 @@ fn transform_shifts_in_block_with_remap<'db>(
 
         // Handle func.call to effectful functions: prepend evidence
         if !fns_with_evidence.is_empty()
-            && let Ok(call_op) = func::Call::from_operation(db, *op)
+            && let Some(new_call_op) = try_prepend_evidence_to_call(
+                db,
+                op,
+                &remapped_operands,
+                ev_value,
+                fns_with_evidence,
+                &mut value_map,
+            )
         {
-            let callee = call_op.callee(db);
-            if fns_with_evidence.contains(&callee) {
-                // Check if evidence is already the first argument
-                let first_arg = remapped_operands.first().copied();
-                if first_arg != Some(ev_value) {
-                    let location = op.location(db);
-                    let result_ty = op
-                        .results(db)
-                        .first()
-                        .copied()
-                        .unwrap_or_else(|| *core::Nil::new(db));
-                    let mut new_args = vec![ev_value];
-                    new_args.extend(remapped_operands.iter().copied());
-                    let new_call = func::call(db, location, new_args, result_ty, callee);
-                    let new_call_op = new_call.as_operation();
-                    if !op.results(db).is_empty() {
-                        value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
-                    }
-                    new_ops.push(new_call_op);
-                    changed = true;
-                    continue;
-                }
-            }
+            new_ops.push(new_call_op);
+            changed = true;
+            continue;
         }
 
         // Handle func.call_indirect: replace evidence argument with current ev_value.
-        // After closure_lower, call_indirect args are: (table_idx, evidence, env, args...).
-        // The evidence at index 1 may be null or stale — replace with current evidence.
-        if func::CallIndirect::from_operation(db, *op).is_ok() && remapped_operands.len() >= 2 {
-            let current_ev = remapped_operands[1];
-            if current_ev != ev_value {
-                let location = op.location(db);
-                let result_ty = op
-                    .results(db)
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| *core::Nil::new(db));
-
-                let table_idx = remapped_operands[0];
-                let mut new_args: Vec<Value<'db>> = vec![ev_value];
-                new_args.extend(remapped_operands[2..].iter().copied());
-
-                let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
-                let new_call_op = new_call.as_operation();
-                if !op.results(db).is_empty() {
-                    value_map.insert(op.result(db, 0), new_call_op.result(db, 0));
-                }
-                new_ops.push(new_call_op);
-                changed = true;
-                continue;
-            }
+        if let Some(new_call_op) =
+            try_replace_call_indirect_evidence(db, op, &remapped_operands, ev_value, &mut value_map)
+        {
+            new_ops.push(new_call_op);
+            changed = true;
+            continue;
         }
 
         // Recursively transform nested regions
