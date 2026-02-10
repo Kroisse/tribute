@@ -276,12 +276,12 @@ impl<'db> GcTypeRegistry<'db> {
                 })),
                 mutable: true,
             }),
-            // Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref }
+            // Index 7: Continuation - struct { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
             // Used for one-shot continuations in the trampoline effect system.
-            // func_idx: index into function table (resume function)
-            // env: captured environment (anyref for uniform calling convention)
-            // prompt_tag: handler's prompt tag (for propagation)
+            // resume_fn: index into function table (resume function)
             // state: captured handler state (anyref)
+            // tag: handler's prompt tag (for propagation)
+            // shift_value: value passed from the shift site (anyref)
             GcTypeDef::Struct(vec![
                 FieldType {
                     element_type: StorageType::Val(ValType::I32),
@@ -934,7 +934,7 @@ mod tests {
         assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 3));
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
-        // Continuation (4 fields: func_idx, env, prompt_tag, state)
+        // Continuation (4 fields: resume_fn, state, tag, shift_value)
         assert!(matches!(&builtins[7], GcTypeDef::Struct(fields) if fields.len() == 4));
         // ResumeWrapper (2 fields: state, resume_value)
         assert!(matches!(&builtins[8], GcTypeDef::Struct(fields) if fields.len() == 2));
@@ -1274,6 +1274,79 @@ mod tests {
                 }
             }
             _ => panic!("Evidence (index 6) should be an array type"),
+        }
+    }
+
+    #[test]
+    fn test_continuation_struct_field_layout() {
+        // Verify the Continuation GC type (index 7) matches the canonical layout:
+        // { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
+        let builtins = GcTypeRegistry::builtin_types();
+        let cont_def = &builtins[CONTINUATION_IDX as usize];
+
+        match cont_def {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(fields.len(), 4, "Continuation should have 4 fields");
+                // Field 0: resume_fn (i32)
+                assert!(
+                    matches!(fields[0].element_type, StorageType::Val(ValType::I32)),
+                    "Field 0 (resume_fn) should be i32"
+                );
+                // Field 1: state (anyref)
+                assert!(
+                    matches!(
+                        fields[1].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 1 (state) should be anyref"
+                );
+                // Field 2: tag (i32)
+                assert!(
+                    matches!(fields[2].element_type, StorageType::Val(ValType::I32)),
+                    "Field 2 (tag) should be i32"
+                );
+                // Field 3: shift_value (anyref)
+                assert!(
+                    matches!(
+                        fields[3].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 3 (shift_value) should be anyref"
+                );
+            }
+            _ => panic!("Continuation (index 7) should be a struct type"),
+        }
+    }
+
+    #[test]
+    fn test_marker_adt_type_matches_builtin() {
+        use trunk_ir::dialect::adt;
+        use trunk_ir::types::Attribute;
+
+        // Verify marker_adt_type() field count matches the Marker GC builtin type
+        let db = salsa::DatabaseImpl::default();
+        let marker_ty = marker_adt_type(&db);
+
+        // marker_adt_type stores fields in attrs under "fields" key
+        let fields_attr = marker_ty
+            .get_attr(&db, adt::ATTR_FIELDS())
+            .expect("marker_adt_type should have fields attribute");
+        let field_count = match fields_attr {
+            Attribute::List(fields) => fields.len(),
+            _ => panic!("fields attribute should be a list"),
+        };
+        assert_eq!(field_count, 3, "marker_adt_type should have 3 fields");
+
+        let builtins = GcTypeRegistry::builtin_types();
+        match &builtins[MARKER_IDX as usize] {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(
+                    fields.len(),
+                    field_count,
+                    "marker_adt_type field count should match builtin GC type"
+                );
+            }
+            _ => panic!("Marker builtin should be a struct type"),
         }
     }
 

@@ -659,8 +659,6 @@ fn truncate_scf_if_block<'db>(
     )
 }
 
-/// Truncate a block after the first effect point (step_shift or effectful call).
-/// Returns (modified_block, was_modified).
 /// Rebuild an operation with its result type changed to `Step`.
 /// If the operation has no results, returns it unchanged.
 fn rebuild_with_step_result<'db>(
@@ -674,6 +672,8 @@ fn rebuild_with_step_result<'db>(
     op.modify(db).results(IdVec::from(vec![step_ty])).build()
 }
 
+/// Truncate a block after the first effect point (step_shift or effectful call).
+/// Returns (modified_block, was_modified).
 fn truncate_block_after_shift<'db>(
     db: &'db dyn salsa::Database,
     block: Block<'db>,

@@ -352,7 +352,10 @@ pub(crate) fn collect_gc_types<'db>(
     // 6: Evidence, 7: Continuation, 8: ResumeWrapper
     // Step marker type needs to be registered so wasm.if can use it
     type_idx_by_type.insert(crate::gc_types::step_marker_type(db), STEP_IDX);
-    // Evidence (wasm.arrayref) needs to be registered so type_to_valtype resolves to Concrete(EVIDENCE_IDX)
+    // Abstract wasm.arrayref maps to EVIDENCE_IDX because type_converter lowers
+    // all core::Array types to wasm::Arrayref (which erases element type info).
+    // Currently the only array in the system is the evidence array, so this is safe.
+    // TODO: if user-defined arrays are added, this will need per-element-type indices.
     type_idx_by_type.insert(wasm::Arrayref::new(db).as_type(), EVIDENCE_IDX);
     // Marker ADT type needs to be registered so wasm.struct_new for Marker reuses MARKER_IDX
     // instead of creating a separate user type index.
