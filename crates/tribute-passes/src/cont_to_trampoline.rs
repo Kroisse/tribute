@@ -601,10 +601,13 @@ fn truncate_scf_if_block<'db>(
     let ops = block.operations(db);
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut step_value: Option<Value<'db>> = None;
+    let mut original_yield_operand: Option<Value<'db>> = None;
 
     for op in ops.iter() {
-        // Skip scf.yield - we'll add our own at the end
+        // Capture scf.yield operand before skipping — needed to wrap pure
+        // branches in step_done when the branch has no effectful call.
         if scf::Yield::from_operation(db, *op).is_ok() {
+            original_yield_operand = op.operands(db).first().copied();
             continue;
         }
 
@@ -647,6 +650,13 @@ fn truncate_scf_if_block<'db>(
     // Add scf.yield with Step value
     if let Some(val) = step_value {
         let yield_op = scf::r#yield(db, block.location(db), vec![val]);
+        new_ops.push(yield_op.as_operation());
+    } else if let Some(original_val) = original_yield_operand {
+        // Non-effectful branch: wrap the original yield value in step_done
+        // so both branches of the scf.if produce a Step-typed result.
+        let step_done_op = trampoline::step_done(db, block.location(db), original_val, step_ty);
+        new_ops.push(step_done_op.as_operation());
+        let yield_op = scf::r#yield(db, block.location(db), vec![step_done_op.result(db)]);
         new_ops.push(yield_op.as_operation());
     }
 
@@ -709,6 +719,11 @@ fn truncate_block_after_shift<'db>(
                 // Replace it with the new effect_result from the recreated scf.if.
                 let new_loop = if let Some(new_step) = effect_result {
                     let old_operands = op.operands(db);
+                    debug_assert!(
+                        old_operands.len() == 1,
+                        "handler trampoline scf.loop should have exactly one init operand (the Step value), got {}",
+                        old_operands.len()
+                    );
                     if !old_operands.is_empty() {
                         let mut new_operands: Vec<Value<'db>> =
                             old_operands.iter().copied().collect();
