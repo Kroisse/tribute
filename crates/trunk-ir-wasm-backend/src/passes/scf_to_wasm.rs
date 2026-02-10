@@ -5,7 +5,7 @@
 //! - `scf.loop` -> `wasm.block(wasm.loop(...))`
 //! - `scf.yield` -> `wasm.yield` (tracks region result value)
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
-//! - `scf.break` -> `wasm.br(target=0)` (branch to block)
+//! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
@@ -77,9 +77,10 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
 
 /// Pattern for `scf.loop` -> `wasm.block(wasm.loop(...))`
 ///
-/// The loop is wrapped in a block to provide a break target:
-/// - `wasm.br(target=0)` branches to the block (break)
+/// The loop is wrapped in a block to provide a break target.
+/// From inside a `wasm.if` within the loop body:
 /// - `wasm.br(target=1)` branches to the loop (continue)
+/// - `wasm.br(target=2)` branches to the block (break)
 struct ScfLoopPattern;
 
 impl<'db> RewritePattern<'db> for ScfLoopPattern {
@@ -87,7 +88,7 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(loop_op) = scf::Loop::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -103,9 +104,17 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
 
-        // Create wasm.loop with the body region
+        // Remap init operands through the adaptor
+        let init = loop_op.init(db);
+        let remapped_init: Vec<_> = init
+            .iter()
+            .enumerate()
+            .map(|(i, v)| adaptor.operand(i).unwrap_or(*v))
+            .collect();
+
+        // Create wasm.loop with init operands and the body region
         // PatternApplicator will recursively process the body
-        let wasm_loop = wasm::r#loop(db, location, result_ty, body).as_operation();
+        let wasm_loop = wasm::r#loop(db, location, remapped_init, result_ty, body).as_operation();
 
         let block_body_block = Block::new(
             db,
@@ -161,7 +170,9 @@ impl<'db> RewritePattern<'db> for ScfYieldPattern {
 
 /// Pattern for `scf.continue` -> `wasm.br(target=1)`
 ///
-/// Branches to the enclosing wasm.loop (depth 1, since loop is inside block).
+/// Branches to the enclosing wasm.loop. Depth 1 is correct because
+/// `scf.continue` is always inside a `scf.if` (depth 0 = wasm.if,
+/// depth 1 = wasm.loop) within a `scf.loop`.
 struct ScfContinuePattern;
 
 impl<'db> RewritePattern<'db> for ScfContinuePattern {
@@ -169,22 +180,42 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(_continue_op) = scf::Continue::from_operation(db, *op) else {
+        let Ok(continue_op) = scf::Continue::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        // Branch to loop (depth 1: block=0, loop=1)
-        let br_op = wasm::br(db, op.location(db), 1).as_operation();
+        let location = op.location(db);
+        let values = continue_op.values(db);
+        assert!(
+            values.len() <= 1,
+            "scf.continue with multiple loop-carried values not yet supported"
+        );
 
-        RewriteResult::Replace(br_op)
+        if values.is_empty() {
+            // No loop-carried values — simple branch
+            let br_op = wasm::br(db, location, 1).as_operation();
+            return RewriteResult::Replace(br_op);
+        }
+
+        // Emit wasm.yield(value) + wasm.br(1) for each loop-carried value.
+        // The emit layer will translate yield+br targeting a loop into
+        // local.set for the loop arg followed by br.
+        let value = adaptor.operand(0).unwrap_or(values[0]);
+        let yield_op = wasm::r#yield(db, location, value).as_operation();
+        let br_op = wasm::br(db, location, 1).as_operation();
+
+        RewriteResult::Expand(vec![yield_op, br_op])
     }
 }
 
-/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=0)`
+/// Pattern for `scf.break` -> `wasm.yield(value) + wasm.br(target=2)`
 ///
-/// Branches to the enclosing wasm.block (depth 0) with a result value.
+/// Branches to the enclosing wasm.block with a result value.
+/// `scf.break` is always inside a `scf.if` within a `scf.loop`, so after
+/// lowering the nesting is: wasm.block > wasm.loop > wasm.if. From inside
+/// the wasm.if, depth 2 targets the outer wasm.block (break out of loop).
 ///
 /// According to WASM spec, `br` instruction takes no operands - values are
 /// passed via the stack. We use `wasm.yield` to mark the break value as the
@@ -196,20 +227,20 @@ impl<'db> RewritePattern<'db> for ScfBreakPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(break_op) = scf::Break::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let value = break_op.value(db);
+        let value = adaptor.operand(0).unwrap_or_else(|| break_op.value(db));
 
         // Emit the break value via wasm.yield (marks it as region result)
         let yield_op = wasm::r#yield(db, location, value).as_operation();
 
-        // Branch to block (depth 0) without operands (WASM spec compliant)
-        let br_op = wasm::br(db, location, 0).as_operation();
+        // Branch to outer block (depth 2: if=0, loop=1, block=2)
+        let br_op = wasm::br(db, location, 2).as_operation();
 
         RewriteResult::Expand(vec![yield_op, br_op])
     }
@@ -283,5 +314,187 @@ mod tests {
         // scf.if should become wasm.if
         assert!(op_names.iter().any(|n| n == "wasm.if"));
         assert!(!op_names.iter().any(|n| n == "scf.if"));
+    }
+
+    /// Recursively collect all operation names from a region (including nested regions).
+    fn collect_all_op_names<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+    ) -> Vec<String> {
+        let mut names = Vec::new();
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                names.push(op.full_name(db));
+                for nested_region in op.regions(db).iter() {
+                    names.extend(collect_all_op_names(db, nested_region));
+                }
+            }
+        }
+        names
+    }
+
+    /// Recursively collect `wasm.br` target depths from a region.
+    fn collect_br_targets<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Vec<u32> {
+        let mut targets = Vec::new();
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                if let Ok(br) = wasm::Br::from_operation(db, *op) {
+                    targets.push(br.target(db));
+                }
+                for nested_region in op.regions(db).iter() {
+                    targets.extend(collect_br_targets(db, nested_region));
+                }
+            }
+        }
+        targets
+    }
+
+    /// Build a module with scf.break inside scf.if inside scf.loop.
+    ///
+    /// Structure: scf.loop { scf.if(cond) { then: scf.break(val) } { else: scf.continue } }
+    #[salsa::tracked]
+    fn make_scf_break_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Value to break with — will be provided as loop init arg
+        // The loop body receives it as block arg
+        let loop_body_block_id = BlockId::fresh();
+
+        // Create a condition value inside the loop body
+        let cond_const = wasm::i32_const(db, location, i32_ty, 1);
+
+        // The loop block arg represents the loop-carried value
+        let loop_arg = trunk_ir::BlockArg::of_type(db, i32_ty);
+        let loop_arg_val =
+            trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(loop_body_block_id), 0);
+
+        // then region: scf.break(loop_arg)
+        let break_op = scf::r#break(db, location, loop_arg_val);
+        let then_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![break_op.as_operation()],
+        );
+        let then_region = Region::new(db, location, idvec![then_block]);
+
+        // else region: scf.continue(loop_arg)
+        let continue_op = scf::r#continue(db, location, vec![loop_arg_val]);
+        let else_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![continue_op.as_operation()],
+        );
+        let else_region = Region::new(db, location, idvec![else_block]);
+
+        // scf.if inside loop body
+        let scf_if = scf::r#if(
+            db,
+            location,
+            cond_const.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        );
+
+        // Loop body block: cond_const + scf.if
+        let loop_body_block = Block::new(
+            db,
+            loop_body_block_id,
+            location,
+            IdVec::from(vec![loop_arg]),
+            idvec![cond_const.operation(), scf_if.as_operation()],
+        );
+        let loop_body_region = Region::new(db, location, idvec![loop_body_block]);
+
+        // Loop init value
+        let init_val = wasm::i32_const(db, location, i32_ty, 42);
+
+        // scf.loop with init and body
+        let scf_loop = scf::r#loop(
+            db,
+            location,
+            vec![init_val.result(db)],
+            i32_ty,
+            loop_body_region,
+        );
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![init_val.operation(), scf_loop.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test_break".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_collect_all(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
+        let lowered = lower(db, module, test_converter());
+        let body = lowered.body(db);
+        collect_all_op_names(db, &body)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_collect_br_targets(db: &dyn salsa::Database, module: Module<'_>) -> Vec<u32> {
+        let lowered = lower(db, module, test_converter());
+        let body = lowered.body(db);
+        collect_br_targets(db, &body)
+    }
+
+    #[salsa_test]
+    fn test_scf_break_to_wasm_yield_and_br(db: &salsa::DatabaseImpl) {
+        let module = make_scf_break_module(db);
+        let all_ops = lower_and_collect_all(db, module);
+
+        // scf.break should be gone
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.break"),
+            "scf.break should be lowered away, but found in: {:?}",
+            all_ops
+        );
+
+        // wasm.yield and wasm.br should be present (from scf.break lowering)
+        assert!(
+            all_ops.iter().any(|n| n == "wasm.yield"),
+            "Expected wasm.yield from scf.break lowering, got: {:?}",
+            all_ops
+        );
+        assert!(
+            all_ops.iter().any(|n| n == "wasm.br"),
+            "Expected wasm.br from scf.break lowering, got: {:?}",
+            all_ops
+        );
+
+        // scf.if and scf.loop should also be gone
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.if"),
+            "scf.if should be lowered, got: {:?}",
+            all_ops
+        );
+        assert!(
+            !all_ops.iter().any(|n| n == "scf.loop"),
+            "scf.loop should be lowered, got: {:?}",
+            all_ops
+        );
+
+        // Verify br target depths: continue=1 (loop), break=2 (outer block)
+        let br_targets = lower_and_collect_br_targets(db, module);
+        assert!(
+            br_targets.contains(&1),
+            "Expected br target=1 (continue → loop), got targets: {:?}",
+            br_targets
+        );
+        assert!(
+            br_targets.contains(&2),
+            "Expected br target=2 (break → outer block), got targets: {:?}",
+            br_targets
+        );
     }
 }

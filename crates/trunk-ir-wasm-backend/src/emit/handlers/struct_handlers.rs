@@ -7,7 +7,7 @@ use trunk_ir::dialect::{adt, cont, wasm};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
-use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef};
+use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
@@ -145,6 +145,47 @@ pub(crate) fn handle_struct_get<'db>(
         debug!("struct_get: boxing i64 to i31ref for anyref local");
         function.instruction(&Instruction::I32WrapI64);
         function.instruction(&Instruction::RefI31);
+    } else {
+        // Check if struct field type is anyref but IR result type is more specific.
+        // This happens when reading from Step.value (anyref field) where the IR
+        // expects a concrete type. Insert ref.cast to narrow the type.
+        let field_is_anyref = module_info
+            .gc_types
+            .get(type_idx as usize)
+            .and_then(|gc_type| match gc_type {
+                GcTypeDef::Struct(fields) => fields.get(field_idx as usize),
+                _ => None,
+            })
+            .map(|field| {
+                matches!(
+                    field.element_type,
+                    StorageType::Val(ValType::Ref(wasm_encoder::RefType {
+                        nullable: true,
+                        heap_type: HeapType::Abstract {
+                            shared: false,
+                            ty: wasm_encoder::AbstractHeapType::Any,
+                        },
+                    }))
+                )
+            })
+            .unwrap_or(false);
+
+        // Skip concrete ref.cast for Step.value (field_idx=1): it stores
+        // heterogeneous anyref values (i31ref, struct ref, null) by design.
+        // The correct narrowing casts are inserted at the IR level.
+        let is_step_value_field = type_idx == STEP_IDX && field_idx == 1;
+
+        if field_is_anyref
+            && !is_step_value_field
+            && let Some(result_ty) = op.results(db).first().copied()
+            && let Ok(result_valtype) =
+                super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
+            && let ValType::Ref(rt) = &result_valtype
+            && let ht @ HeapType::Concrete(_) = &rt.heap_type
+        {
+            debug!("struct_get: casting anyref field to concrete type {:?}", ht);
+            function.instruction(&Instruction::RefCastNullable(*ht));
+        }
     }
 
     set_result_local(db, op, ctx, function)?;

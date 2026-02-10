@@ -54,21 +54,20 @@ pub(crate) fn handle_array_new<'db>(
 /// Handle array.new_default operation
 pub(crate) fn handle_array_new_default<'db>(
     db: &'db dyn salsa::Database,
-    array_new_default_op: wasm::ArrayNewDefault<'db>,
+    op: &Operation<'db>,
     ctx: &super::super::FunctionEmitContext<'db>,
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = array_new_default_op.operation();
     let operands = op.operands(db);
     emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
 
     // Infer type from result type
     let inferred_type = op.results(db).first().copied();
-    let type_idx = get_type_idx(db, &op, inferred_type, module_info)?;
+    let type_idx = get_type_idx(db, op, inferred_type, module_info)?;
 
     function.instruction(&Instruction::ArrayNewDefault(type_idx));
-    set_result_local(db, &op, ctx, function)?;
+    set_result_local(db, op, ctx, function)?;
     Ok(())
 }
 

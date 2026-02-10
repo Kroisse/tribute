@@ -704,6 +704,23 @@ fn collect_module_info<'db>(
     // Pass the counts so call_indirect types get indices after GC types and function definitions
     let gc_type_count = info.gc_types.len();
     let func_type_count = info.imports.len() + info.funcs.len();
+
+    // Register function definition types in type_idx_by_type so that
+    // call_indirect can reuse existing type indices instead of allocating
+    // duplicate entries for structurally identical function signatures.
+    for (i, import_def) in info.imports.iter().enumerate() {
+        let func_type = import_def.ty.as_type();
+        type_idx_by_type
+            .entry(func_type)
+            .or_insert(gc_type_count as u32 + i as u32);
+    }
+    for (i, func_def) in info.funcs.iter().enumerate() {
+        let func_type = func_def.ty.as_type();
+        type_idx_by_type
+            .entry(func_type)
+            .or_insert(gc_type_count as u32 + info.imports.len() as u32 + i as u32);
+    }
+
     let call_indirect_types = collect_call_indirect_types(
         db,
         module,
@@ -974,6 +991,19 @@ fn assign_locals_in_region<'db>(
     Ok(())
 }
 
+/// Describes what kind of construct a nesting level represents.
+/// Used to determine how yield+br patterns should emit code.
+#[derive(Clone, Debug)]
+enum NestingKind {
+    /// A `wasm.block` — br carries a stack value as the block result.
+    Block,
+    /// A `wasm.loop` — br restarts the loop; loop-carried values must be
+    /// written to their corresponding locals before the branch.
+    Loop { arg_locals: Vec<u32> },
+    /// A `wasm.if` — br carries a stack value as the if result.
+    If,
+}
+
 fn emit_region_ops<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
@@ -981,18 +1011,60 @@ fn emit_region_ops<'db>(
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
 ) -> CompilationResult<()> {
+    emit_region_ops_nested(db, region, ctx, module_info, function, &[])
+}
+
+fn emit_region_ops_nested<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    ctx: &FunctionEmitContext<'db>,
+    module_info: &ModuleInfo<'db>,
+    function: &mut Function,
+    nesting: &[NestingKind],
+) -> CompilationResult<()> {
     let blocks = region.blocks(db);
     if blocks.len() != 1 {
         return Err(CompilationError::unsupported_feature("multi-block regions"));
     }
     let block = &blocks[0];
-    for op in block.operations(db).iter() {
-        // Skip wasm.yield - it's handled by region_result_value + emit_value_get,
-        // not emitted as a real Wasm instruction
-        if wasm::Yield::from_operation(db, *op).is_ok() {
+    let mut ops = block.operations(db).iter().peekable();
+    while let Some(op) = ops.next() {
+        if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
+            // When wasm.yield is followed by wasm.br, emit the value for the branch.
+            // - For block/if targets: put value on stack (br carries it as result).
+            // - For loop targets: write value to loop arg local, then br (no stack value).
+            // Standalone wasm.yield (region fall-through) is handled by the
+            // caller via region_result_value + emit_value_get.
+            let followed_by_br = ops
+                .peek()
+                .is_some_and(|next| wasm::Br::from_operation(db, **next).is_ok());
+            if followed_by_br {
+                let br_op = wasm::Br::from_operation(db, **ops.peek().unwrap()).unwrap();
+                let depth = br_op.target(db) as usize;
+                let value = yield_op.value(db);
+                let index = *ctx.value_locals.get(&value).ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.yield value missing local")
+                })?;
+
+                // Check if the br target is a loop
+                if depth < nesting.len()
+                    && let NestingKind::Loop { ref arg_locals } = nesting[nesting.len() - 1 - depth]
+                {
+                    // Loop target: write to loop arg local, then br (no stack value)
+                    for &local in arg_locals.iter() {
+                        function.instruction(&Instruction::LocalGet(index));
+                        function.instruction(&Instruction::LocalSet(local));
+                    }
+                    // Skip the yield, let the next iteration emit the br
+                    continue;
+                }
+
+                // Block/if target: put value on stack
+                function.instruction(&Instruction::LocalGet(index));
+            }
             continue;
         }
-        emit_op(db, op, ctx, module_info, function)?;
+        emit_op_nested(db, op, ctx, module_info, function, nesting)?;
     }
     Ok(())
 }
@@ -1020,12 +1092,13 @@ fn region_result_value<'db>(
     }
 }
 
-fn emit_op<'db>(
+fn emit_op_nested<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     ctx: &FunctionEmitContext<'db>,
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
+    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let wasm_dialect = Symbol::new("wasm");
     if op.dialect(db) != wasm_dialect {
@@ -1104,11 +1177,11 @@ fn emit_op<'db>(
     } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
         handle_f64_const(db, const_op, ctx, function)
     } else if wasm::If::matches(db, *op) {
-        handle_if(db, op, ctx, module_info, function)
+        handle_if(db, op, ctx, module_info, function, nesting)
     } else if wasm::Block::matches(db, *op) {
-        handle_block(db, op, ctx, module_info, function)
+        handle_block(db, op, ctx, module_info, function, nesting)
     } else if wasm::Loop::matches(db, *op) {
-        handle_loop(db, op, ctx, module_info, function)
+        handle_loop(db, op, ctx, module_info, function, nesting)
     } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
         handle_br(db, br_op, function)
     } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
@@ -1126,7 +1199,7 @@ fn emit_op<'db>(
     } else if let Ok(local_op) = wasm::LocalTee::from_operation(db, *op) {
         handle_local_tee(db, local_op, ctx, module_info, function)
     } else if let Ok(global_op) = wasm::GlobalGet::from_operation(db, *op) {
-        handle_global_get(db, global_op, ctx, function)
+        handle_global_get(db, global_op, ctx, module_info, function)
     } else if let Ok(global_op) = wasm::GlobalSet::from_operation(db, *op) {
         handle_global_set(db, global_op, ctx, module_info, function)
     } else if wasm::StructNew::matches(db, *op) {
@@ -1137,8 +1210,8 @@ fn emit_op<'db>(
         handle_struct_set(db, struct_set_op, ctx, module_info, function)
     } else if let Ok(array_new_op) = wasm::ArrayNew::from_operation(db, *op) {
         handle_array_new(db, array_new_op, ctx, module_info, function)
-    } else if let Ok(array_new_default_op) = wasm::ArrayNewDefault::from_operation(db, *op) {
-        handle_array_new_default(db, array_new_default_op, ctx, module_info, function)
+    } else if wasm::ArrayNewDefault::matches(db, *op) {
+        handle_array_new_default(db, op, ctx, module_info, function)
     } else if let Ok(array_get_op) = wasm::ArrayGet::from_operation(db, *op) {
         handle_array_get(db, array_get_op, ctx, module_info, function)
     } else if let Ok(array_get_s_op) = wasm::ArrayGetS::from_operation(db, *op) {
@@ -1222,7 +1295,14 @@ fn emit_op<'db>(
     } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
         handle_i64_store32(db, store_op, ctx, module_info, function)
     } else {
-        tracing::error!("unsupported wasm op: {}", name);
+        tracing::error!(
+            "unsupported wasm op: {} (dialect={}, operands={}, results={}, attrs={:?})",
+            name,
+            op.dialect(db),
+            op.operands(db).len(),
+            op.results(db).len(),
+            op.attributes(db).keys().collect::<Vec<_>>()
+        );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
             name
@@ -1422,8 +1502,8 @@ mod tests {
         let (gc_types, type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 8 GC types: 7 built-in + 1 user struct
-        assert_eq!(gc_types.len(), 8);
+        // Should have 10 GC types: 9 built-in + 1 user struct
+        assert_eq!(gc_types.len(), 10);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1438,8 +1518,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
         // Index 6 is Evidence
         assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is the user struct
+        // Index 7 is Continuation
         assert_eq!(gc_type_kind(&gc_types[7]), "struct");
+        // Index 8 is ResumeWrapper
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
+        // Index 9 is the user struct
+        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
 
         // Type should be in the map
         let i32_ty = core::I32::new(db).as_type();
@@ -1490,8 +1574,8 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 8 GC types: 7 built-in + 1 user array
-        assert_eq!(gc_types.len(), 8);
+        // Should have 10 GC types: 9 built-in + 1 user array
+        assert_eq!(gc_types.len(), 10);
         // Index 0 is BoxedF64 (struct)
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray (array)
@@ -1506,8 +1590,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
         // Index 6 is Evidence (array)
         assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is the user array
-        assert_eq!(gc_type_kind(&gc_types[7]), "array");
+        // Index 7 is Continuation (struct)
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
+        // Index 8 is ResumeWrapper (struct)
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
+        // Index 9 is the user array
+        assert_eq!(gc_type_kind(&gc_types[9]), "array");
     }
 
     // ========================================
@@ -1559,8 +1647,8 @@ mod tests {
         let (gc_types, _type_map, _) =
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
-        // Should have 8 GC types: 7 built-in + 1 user struct (same type_idx used twice)
-        assert_eq!(gc_types.len(), 8);
+        // Should have 10 GC types: 9 built-in + 1 user struct (same type_idx used twice)
+        assert_eq!(gc_types.len(), 10);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1575,8 +1663,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
         // Index 6 is Evidence
         assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is the deduplicated user struct
+        // Index 7 is Continuation
         assert_eq!(gc_type_kind(&gc_types[7]), "struct");
+        // Index 8 is ResumeWrapper
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
+        // Index 9 is the deduplicated user struct
+        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
     }
 
     // ========================================
@@ -1685,8 +1777,8 @@ mod tests {
             collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
 
         // Should find the struct type from inside the function body
-        // (8 types: 7 built-in + 1 user struct)
-        assert_eq!(gc_types.len(), 8);
+        // (10 types: 9 built-in + 1 user struct)
+        assert_eq!(gc_types.len(), 10);
         // Index 0 is BoxedF64
         assert_eq!(gc_type_kind(&gc_types[0]), "struct");
         // Index 1 is BytesArray
@@ -1701,8 +1793,12 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[5]), "struct");
         // Index 6 is Evidence
         assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is the user struct from inside the function body
+        // Index 7 is Continuation
         assert_eq!(gc_type_kind(&gc_types[7]), "struct");
+        // Index 8 is ResumeWrapper
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
+        // Index 9 is the user struct from inside the function body
+        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
     }
 
     // ========================================
@@ -1754,8 +1850,8 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 7 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 7);
+        // Should only have the 9 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 9);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
@@ -1763,6 +1859,8 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
         assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct"); // Continuation
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct"); // ResumeWrapper
     }
 
     /// Test that struct_get with BYTES_STRUCT_IDX (2) doesn't panic.
@@ -1798,8 +1896,8 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 7 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 7);
+        // Should only have the 9 built-in types (no additional user types allocated)
+        assert_eq!(gc_types.len(), 9);
         assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
         assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
         assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
@@ -1807,6 +1905,8 @@ mod tests {
         assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
         assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
         assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
+        assert_eq!(gc_type_kind(&gc_types[7]), "struct"); // Continuation
+        assert_eq!(gc_type_kind(&gc_types[8]), "struct"); // ResumeWrapper
     }
 
     /// Test that array_set with BYTES_ARRAY_IDX (1) doesn't panic.
@@ -1856,8 +1956,8 @@ mod tests {
 
         let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
 
-        // Should only have the 7 built-in types
-        assert_eq!(gc_types.len(), 7);
+        // Should only have the 9 built-in types
+        assert_eq!(gc_types.len(), 9);
     }
 
     // ========================================
@@ -2266,6 +2366,77 @@ mod tests {
         assert!(
             result.is_ok(),
             "ref.cast with concrete type should compile: {:?}",
+            result.err()
+        );
+
+        let bytes = result.unwrap();
+        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
+    }
+
+    // ========================================
+    // Test: wasm.loop with block argument compiles
+    // ========================================
+
+    #[salsa::tracked]
+    fn make_loop_with_arg_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
+
+        // Init value for the loop-carried variable
+        let init_val = wasm::i32_const(db, location, i32_ty, 42).as_operation();
+
+        // Loop body: one block with a block arg (matching the init operand),
+        // immediately returns from the function
+        let mut body_builder = BlockBuilder::new(db, location).arg(i32_ty);
+        body_builder.op(wasm::r#return(db, location, vec![]));
+        let body_block = body_builder.build();
+        let body_region = Region::new(db, location, idvec![body_block]);
+
+        // wasm.loop with one init operand → body block gets one block arg
+        let loop_op = wasm::r#loop(
+            db,
+            location,
+            vec![init_val.result(db, 0)],
+            nil_ty,
+            body_region,
+        )
+        .as_operation();
+
+        // Function return (after loop, unreachable in practice)
+        let func_return = wasm::r#return(db, location, vec![]).as_operation();
+
+        let func_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![init_val, loop_op, func_return],
+        );
+        let func_body_region = Region::new(db, location, idvec![func_body_block]);
+
+        let wasm_func = wasm::func(
+            db,
+            location,
+            Symbol::new("test_loop"),
+            func_ty,
+            func_body_region,
+        )
+        .as_operation();
+
+        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
+        let module_region = Region::new(db, location, idvec![module_block]);
+        core::Module::create(db, location, "test".into(), module_region)
+    }
+
+    #[salsa_test]
+    fn test_loop_with_block_arg_compiles(db: &salsa::DatabaseImpl) {
+        let module = make_loop_with_arg_module(db);
+        let result = emit_wasm(db, module);
+        assert!(
+            result.is_ok(),
+            "wasm.loop with block arg should compile: {:?}",
             result.err()
         );
 

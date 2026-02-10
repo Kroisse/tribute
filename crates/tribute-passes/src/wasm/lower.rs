@@ -8,7 +8,9 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::RewriteContext;
+use trunk_ir::rewrite::{
+    ConversionTarget, PatternApplicator, RewriteContext, WasmFuncSignatureConversionPattern,
+};
 
 use super::const_to_wasm::ConstAnalysis;
 use super::intrinsic_to_wasm::IntrinsicAnalysis;
@@ -57,6 +59,19 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     };
     debug_func_params(db, &module, "after func_to_wasm");
 
+    // Convert wasm.func signature types (e.g., core.array(Marker) → wasm.arrayref)
+    // This must run AFTER func_to_wasm so wasm.func operations exist, and BEFORE
+    // emit so function type attributes have WASM-level types.
+    let module = {
+        let _span = tracing::info_span!("wasm_func_signature_conversion").entered();
+        let target = ConversionTarget::new();
+        PatternApplicator::new(wasm_type_converter())
+            .add_pattern(WasmFuncSignatureConversionPattern)
+            .apply_partial(db, module, target)
+            .module
+    };
+    debug_func_params(db, &module, "after wasm_func_signature_conversion");
+
     // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
     let module = {
         let _span = tracing::info_span!("adt_to_wasm").entered();
@@ -75,12 +90,6 @@ pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> 
     let module = {
         let _span = tracing::info_span!("evidence_to_wasm").entered();
         super::evidence_to_wasm::lower_evidence_to_wasm(db, module)
-    };
-
-    // Lower ability.handler_table to wasm.table + wasm.elem for table-based dispatch
-    let module = {
-        let _span = tracing::info_span!("handler_table_to_wasm").entered();
-        super::handler_table_to_wasm::lower_handler_table(db, module)
     };
 
     // NOTE: wasm_type_concrete pass removed - type variables are now resolved
@@ -296,8 +305,8 @@ impl<'db> WasmLowerer<'db> {
     fn module_preamble_ops(&mut self, builder: &mut BlockBuilder<'db>, location: Location<'db>) {
         let module_location = self.module_location.unwrap_or(location);
 
-        // Emit fd_write import if intrinsics need it
-        if self.intrinsic_analysis.needs_fd_write(self.db) {
+        // Emit fd_write import if intrinsics need it OR if main exists (_start needs it)
+        if self.intrinsic_analysis.needs_fd_write(self.db) || self.main_exports.saw_main {
             let i32_ty = core::I32::new(self.db).as_type();
             let params = idvec![i32_ty, i32_ty, i32_ty, i32_ty];
             let import_ty = core::Func::new(self.db, params, i32_ty).as_type();
@@ -314,13 +323,18 @@ impl<'db> WasmLowerer<'db> {
         // Check if any analysis has data that requires memory
         let const_size = self.const_analysis.total_size(self.db);
         let intrinsic_size = self.intrinsic_analysis.total_size(self.db);
-        if const_size > 0 || intrinsic_size > 0 {
+        // _start needs memory for its print buffer (itoa + iovec + nwritten)
+        let start_buf_size = if self.main_exports.saw_main {
+            Self::PRINT_BUF_TOTAL
+        } else {
+            0
+        };
+        if const_size > 0 || intrinsic_size > 0 || start_buf_size > 0 {
             self.memory_plan.needs_memory = true;
         }
 
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            // Calculate total data size: const analysis + intrinsic analysis
-            let total_data_size = const_size + intrinsic_size;
+            let total_data_size = const_size + intrinsic_size + start_buf_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
             builder.op(wasm::memory(
                 self.db,
@@ -440,35 +454,16 @@ impl<'db> WasmLowerer<'db> {
         }
 
         if self.main_exports.saw_main && !self.main_exports.main_exported {
-            // Check if main returns Step (effectful function)
-            let main_returns_step = self
-                .main_exports
-                .main_result_type
-                .map(|ty| self.is_step_type(ty))
-                .unwrap_or(false);
-
-            if main_returns_step {
-                // Generate trampoline wrapper and export it instead
-                builder.op(self.build_trampoline_main(module_location));
-                builder.op(wasm::export_func(
-                    self.db,
-                    module_location,
-                    "main".into(),
-                    Symbol::new("main_trampoline"),
-                ));
-            } else {
-                // Export main directly
-                builder.op(wasm::export_func(
-                    self.db,
-                    module_location,
-                    "main".into(),
-                    Symbol::new("main"),
-                ));
-            }
+            builder.op(wasm::export_func(
+                self.db,
+                module_location,
+                "main".into(),
+                Symbol::new("main"),
+            ));
             self.main_exports.main_exported = true;
         }
 
-        if self.intrinsic_analysis.needs_fd_write(self.db) && self.main_exports.saw_main {
+        if self.main_exports.saw_main {
             builder.op(self.build_start_function(module_location));
             builder.op(wasm::export_func(
                 self.db,
@@ -479,198 +474,487 @@ impl<'db> WasmLowerer<'db> {
         }
     }
 
-    fn build_start_function(&self, location: Location<'db>) -> Operation<'db> {
-        let nil_ty = core::Nil::new(self.db).as_type();
+    /// Size of the runtime print buffer used by `_start` for itoa + fd_write.
+    ///
+    /// Layout (relative to `start_buf_base()`):
+    ///   +0..+4:   scratch: remaining value
+    ///   +4..+8:   scratch: current write position
+    ///   +8..+20:  digit buffer (12 bytes, enough for "-2147483648")
+    ///   +20..+28: iovec (ptr, len)
+    ///   +28..+32: nwritten buffer
+    const PRINT_BUF_TOTAL: u32 = 32;
 
-        // Normalize result type: nil has no runtime representation in wasm
-        let main_result = self
+    /// Base offset for `_start`'s runtime print buffer in linear memory.
+    /// Placed after all const and intrinsic data, aligned to 4 bytes.
+    fn start_buf_base(&self) -> u32 {
+        let end =
+            self.const_analysis.total_size(self.db) + self.intrinsic_analysis.total_size(self.db);
+        (end + 3) & !3
+    }
+
+    fn build_start_function(&self, location: Location<'db>) -> Operation<'db> {
+        use tribute_ir::dialect::tribute_rt;
+
+        let db = self.db;
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        let main_returns_step = self
             .main_exports
             .main_result_type
-            .and_then(|ty| if ty == nil_ty { None } else { Some(ty) });
+            .map(|ty| self.is_step_type(ty))
+            .unwrap_or(false);
 
-        // Collect operations for the function body
-        let mut builder = BlockBuilder::new(self.db, location);
+        let mut builder = BlockBuilder::new(db, location);
 
-        // Build wasm.call to main
-        let call = builder.op(wasm::call(
-            self.db,
-            location,
-            None,
-            main_result,
-            Symbol::new("main"),
-        ));
+        if main_returns_step {
+            // main returns Step — unwrap inline in _start
+            let step_ty = step_marker_type(db);
+            let anyref_ty = wasm::Anyref::new(db).as_type();
 
-        // Drop result if main returns a value
-        if main_result.is_some() {
-            let call_val = call.result(self.db, 0);
-            builder.op(wasm::drop(self.db, location, call_val));
+            let orig_ty = self.main_exports.original_result_type;
+            let is_int_like = orig_ty
+                .map(|ty| {
+                    tribute_rt::is_int(db, ty)
+                        || tribute_rt::is_nat(db, ty)
+                        || core::I32::from_type(db, ty).is_some()
+                })
+                .unwrap_or(false);
+            let is_nat = orig_ty
+                .map(|ty| tribute_rt::is_nat(db, ty))
+                .unwrap_or(false);
+            let returns_nil = orig_ty
+                .map(|ty| core::Nil::from_type(db, ty).is_some())
+                .unwrap_or(false);
+
+            // Call main directly — returns Step
+            let call_main = builder.op(wasm::call(
+                db,
+                location,
+                None,
+                Some(step_ty),
+                Symbol::new("main"),
+            ));
+            let step_result = call_main.result(db, 0);
+
+            // Extract tag field (field 0) from Step
+            let get_tag = builder.op(wasm::struct_get(
+                db,
+                location,
+                step_result,
+                i32_ty,
+                STEP_IDX,
+                0,
+            ));
+            let tag_val = get_tag.result(db);
+
+            // Compare tag with DONE (0)
+            let done_const = builder.op(wasm::i32_const(db, location, i32_ty, STEP_TAG_DONE));
+            let cmp_eq = builder.op(wasm::i32_eq(
+                db,
+                location,
+                tag_val,
+                done_const.result(db),
+                i32_ty,
+            ));
+            let is_done = cmp_eq.result(db);
+
+            // Build then (Done) branch
+            let then_block = {
+                let mut then_builder = BlockBuilder::new(db, location);
+
+                if returns_nil {
+                    // Nil return — nothing to print or drop
+                } else {
+                    // Extract value field (field 1) from Step
+                    let get_value = then_builder.op(wasm::struct_get(
+                        db,
+                        location,
+                        step_result,
+                        anyref_ty,
+                        STEP_IDX,
+                        1,
+                    ));
+                    let value_val = get_value.result(db);
+
+                    if is_int_like {
+                        // Unbox to i32 and print
+                        let i31ref_ty = wasm::I31ref::new(db).as_type();
+                        let cast = then_builder.op(wasm::ref_cast(
+                            db, location, value_val, i31ref_ty, i31ref_ty, None,
+                        ));
+                        let unbox_val = if is_nat {
+                            then_builder
+                                .op(wasm::i31_get_u(db, location, cast.result(db), i32_ty))
+                                .result(db)
+                        } else {
+                            then_builder
+                                .op(wasm::i31_get_s(db, location, cast.result(db), i32_ty))
+                                .result(db)
+                        };
+                        self.build_print_i32_body(&mut then_builder, location, unbox_val);
+                    } else {
+                        // Drop the anyref value
+                        then_builder.op(wasm::drop(db, location, value_val));
+                    }
+                }
+
+                then_builder.op(wasm::r#return(db, location, None));
+                then_builder.build()
+            };
+
+            // Build else (unhandled effect) branch — trap
+            let else_block = {
+                let mut else_builder = BlockBuilder::new(db, location);
+                else_builder.op(wasm::unreachable(db, location));
+                else_builder.build()
+            };
+
+            let then_region = Region::new(db, location, idvec![then_block]);
+            let else_region = Region::new(db, location, idvec![else_block]);
+
+            builder.op(wasm::r#if(
+                db,
+                location,
+                is_done,
+                nil_ty,
+                then_region,
+                else_region,
+            ));
+            builder.op(wasm::unreachable(db, location));
+        } else {
+            // Non-Step case: call main directly
+            let result_ty = self
+                .main_exports
+                .main_result_type
+                .and_then(|ty| if ty == nil_ty { None } else { Some(ty) });
+            let is_i32 = result_ty
+                .map(|ty| core::I32::from_type(db, ty).is_some())
+                .unwrap_or(false);
+
+            let call = builder.op(wasm::call(
+                db,
+                location,
+                None,
+                result_ty,
+                Symbol::new("main"),
+            ));
+
+            if is_i32 {
+                self.build_print_i32_body(&mut builder, location, call.result(db, 0));
+            } else if result_ty.is_some() {
+                builder.op(wasm::drop(db, location, call.result(db, 0)));
+            }
+
+            builder.op(wasm::r#return(db, location, None));
         }
 
-        // Return (use typed helper)
-        builder.op(wasm::r#return(self.db, location, None));
-
-        // Build region and func operation
         let body_block = builder.build();
-        let region = Region::new(self.db, location, idvec![body_block]);
-        let func_ty =
-            core::Func::new(self.db, idvec![], core::Nil::new(self.db).as_type()).as_type();
+        let region = Region::new(db, location, idvec![body_block]);
+        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
 
-        // Create wasm.func directly (not func.func) since we're past the func_to_wasm pass
-        wasm::func(self.db, location, Symbol::new("_start"), func_ty, region).as_operation()
+        wasm::func(db, location, Symbol::new("_start"), func_ty, region).as_operation()
+    }
+
+    /// Build IR operations to print an i32 value as decimal to stdout via fd_write.
+    ///
+    /// Uses a do-while loop to extract digits right-to-left into a memory buffer,
+    /// then writes the result via fd_write. Handles negative numbers and zero correctly.
+    ///
+    /// Uses unsigned div/rem for digit extraction, so INT_MIN (-2147483648) works
+    /// correctly: its two's complement representation is treated as unsigned 2147483648.
+    fn build_print_i32_body(
+        &self,
+        builder: &mut BlockBuilder<'db>,
+        location: Location<'db>,
+        result_val: Value<'db>,
+    ) {
+        let db = self.db;
+        let i32_ty = core::I32::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        // Memory layout offsets
+        let buf_base = self.start_buf_base();
+        let scratch_rem = buf_base;
+        let scratch_pos = buf_base + 4;
+        let buf_end = buf_base + 8 + 11; // rightmost digit position
+        let iovec_off = buf_base + 20;
+        let nwr_off = buf_base + 28;
+
+        // Helper: memory attr defaults (offset=0, align, memory=0)
+        let align_i32: u32 = 2; // 2^2 = 4 bytes natural alignment for i32
+        let align_i8: u32 = 0; // 2^0 = 1 byte alignment for i8
+
+        // === Step 1: Handle sign — compute absolute value ===
+        let zero = builder.op(wasm::i32_const(db, location, i32_ty, 0));
+        let zero_val = zero.result(db);
+
+        let is_neg = builder.op(wasm::i32_lt_s(db, location, result_val, zero_val, i32_ty));
+        let is_neg_val = is_neg.result(db);
+
+        // if (result < 0) then (0 - result) else result → abs_value
+        let then_abs = {
+            let mut b = BlockBuilder::new(db, location);
+            let neg = b.op(wasm::i32_sub(db, location, zero_val, result_val, i32_ty));
+            b.op(wasm::r#yield(db, location, neg.result(db)));
+            b.build()
+        };
+        let else_abs = {
+            let mut b = BlockBuilder::new(db, location);
+            b.op(wasm::r#yield(db, location, result_val));
+            b.build()
+        };
+        let then_abs_region = Region::new(db, location, idvec![then_abs]);
+        let else_abs_region = Region::new(db, location, idvec![else_abs]);
+        let if_abs = builder.op(wasm::r#if(
+            db,
+            location,
+            is_neg_val,
+            i32_ty,
+            then_abs_region,
+            else_abs_region,
+        ));
+        let abs_value = if_abs.result(db);
+
+        // === Step 2: Initialize scratch memory ===
+        let rem_addr = builder.op(wasm::i32_const(db, location, i32_ty, scratch_rem as i32));
+        builder.op(wasm::i32_store(
+            db,
+            location,
+            rem_addr.result(db),
+            abs_value,
+            0,
+            align_i32,
+            0,
+        ));
+
+        let pos_addr_c = builder.op(wasm::i32_const(db, location, i32_ty, scratch_pos as i32));
+        let buf_end_c = builder.op(wasm::i32_const(db, location, i32_ty, buf_end as i32));
+        builder.op(wasm::i32_store(
+            db,
+            location,
+            pos_addr_c.result(db),
+            buf_end_c.result(db),
+            0,
+            align_i32,
+            0,
+        ));
+
+        // === Step 3: Do-while digit extraction loop ===
+        // Always extracts at least one digit, so value 0 produces "0".
+        // Uses unsigned div/rem so the absolute value of INT_MIN works.
+        let loop_body = {
+            let mut b = BlockBuilder::new(db, location);
+
+            // Load remaining value and position from scratch memory
+            let rem_addr_l = b.op(wasm::i32_const(db, location, i32_ty, scratch_rem as i32));
+            let rem = b.op(wasm::i32_load(
+                db,
+                location,
+                rem_addr_l.result(db),
+                i32_ty,
+                0,
+                align_i32,
+                0,
+            ));
+            let pos_addr_l = b.op(wasm::i32_const(db, location, i32_ty, scratch_pos as i32));
+            let pos = b.op(wasm::i32_load(
+                db,
+                location,
+                pos_addr_l.result(db),
+                i32_ty,
+                0,
+                align_i32,
+                0,
+            ));
+
+            // Extract least significant digit
+            let ten = b.op(wasm::i32_const(db, location, i32_ty, 10));
+            let digit = b.op(wasm::i32_rem_u(
+                db,
+                location,
+                rem.result(db),
+                ten.result(db),
+                i32_ty,
+            ));
+            let next = b.op(wasm::i32_div_u(
+                db,
+                location,
+                rem.result(db),
+                ten.result(db),
+                i32_ty,
+            ));
+
+            // Convert to ASCII and store at current position
+            let ascii_0 = b.op(wasm::i32_const(db, location, i32_ty, 48));
+            let ascii = b.op(wasm::i32_add(
+                db,
+                location,
+                digit.result(db),
+                ascii_0.result(db),
+                i32_ty,
+            ));
+            b.op(wasm::i32_store8(
+                db,
+                location,
+                pos.result(db),
+                ascii.result(db),
+                0,
+                align_i8,
+                0,
+            ));
+
+            // Update remaining value in scratch
+            let rem_addr_s = b.op(wasm::i32_const(db, location, i32_ty, scratch_rem as i32));
+            b.op(wasm::i32_store(
+                db,
+                location,
+                rem_addr_s.result(db),
+                next.result(db),
+                0,
+                align_i32,
+                0,
+            ));
+
+            // Decrement position
+            let one = b.op(wasm::i32_const(db, location, i32_ty, 1));
+            let new_pos = b.op(wasm::i32_sub(
+                db,
+                location,
+                pos.result(db),
+                one.result(db),
+                i32_ty,
+            ));
+            let pos_addr_s = b.op(wasm::i32_const(db, location, i32_ty, scratch_pos as i32));
+            b.op(wasm::i32_store(
+                db,
+                location,
+                pos_addr_s.result(db),
+                new_pos.result(db),
+                0,
+                align_i32,
+                0,
+            ));
+
+            // Continue loop if more digits remain (next != 0)
+            b.op(wasm::br_if(db, location, next.result(db), 0));
+
+            b.build()
+        };
+        let loop_body_region = Region::new(db, location, idvec![loop_body]);
+        builder.op(wasm::r#loop(db, location, vec![], nil_ty, loop_body_region));
+
+        // === Step 4: Read final position (one before first digit) ===
+        let final_pos_addr = builder.op(wasm::i32_const(db, location, i32_ty, scratch_pos as i32));
+        let final_pos = builder.op(wasm::i32_load(
+            db,
+            location,
+            final_pos_addr.result(db),
+            i32_ty,
+            0,
+            align_i32,
+            0,
+        ));
+
+        // === Step 5: Handle negative sign prefix ===
+        let then_sign = {
+            let mut b = BlockBuilder::new(db, location);
+            let minus = b.op(wasm::i32_const(db, location, i32_ty, 45)); // '-'
+            b.op(wasm::i32_store8(
+                db,
+                location,
+                final_pos.result(db),
+                minus.result(db),
+                0,
+                align_i8,
+                0,
+            ));
+            b.op(wasm::r#yield(db, location, final_pos.result(db)));
+            b.build()
+        };
+        let else_sign = {
+            let mut b = BlockBuilder::new(db, location);
+            let one = b.op(wasm::i32_const(db, location, i32_ty, 1));
+            let start = b.op(wasm::i32_add(
+                db,
+                location,
+                final_pos.result(db),
+                one.result(db),
+                i32_ty,
+            ));
+            b.op(wasm::r#yield(db, location, start.result(db)));
+            b.build()
+        };
+        let then_sign_region = Region::new(db, location, idvec![then_sign]);
+        let else_sign_region = Region::new(db, location, idvec![else_sign]);
+        let if_sign = builder.op(wasm::r#if(
+            db,
+            location,
+            is_neg_val,
+            i32_ty,
+            then_sign_region,
+            else_sign_region,
+        ));
+        let start_ptr = if_sign.result(db);
+
+        // === Step 6: Calculate string length ===
+        let buf_end_plus1 = builder.op(wasm::i32_const(db, location, i32_ty, (buf_end + 1) as i32));
+        let len = builder.op(wasm::i32_sub(
+            db,
+            location,
+            buf_end_plus1.result(db),
+            start_ptr,
+            i32_ty,
+        ));
+
+        // === Step 7: Set up iovec and call fd_write ===
+        let iovec_addr = builder.op(wasm::i32_const(db, location, i32_ty, iovec_off as i32));
+        builder.op(wasm::i32_store(
+            db,
+            location,
+            iovec_addr.result(db),
+            start_ptr,
+            0,
+            align_i32,
+            0,
+        ));
+        let iovec_len_addr = builder.op(wasm::i32_const(
+            db,
+            location,
+            i32_ty,
+            (iovec_off + 4) as i32,
+        ));
+        builder.op(wasm::i32_store(
+            db,
+            location,
+            iovec_len_addr.result(db),
+            len.result(db),
+            0,
+            align_i32,
+            0,
+        ));
+
+        let stdout = builder.op(wasm::i32_const(db, location, i32_ty, 1));
+        let iovs_count = builder.op(wasm::i32_const(db, location, i32_ty, 1));
+        let nwr_addr = builder.op(wasm::i32_const(db, location, i32_ty, nwr_off as i32));
+        let fd_result = builder.op(wasm::call(
+            db,
+            location,
+            vec![
+                stdout.result(db),
+                iovec_addr.result(db),
+                iovs_count.result(db),
+                nwr_addr.result(db),
+            ],
+            vec![i32_ty],
+            Symbol::new("fd_write"),
+        ));
+        builder.op(wasm::drop(db, location, fd_result.results(db)[0]));
     }
 
     /// Check if a type is the Step type (trampoline return type).
     fn is_step_type(&self, ty: Type<'db>) -> bool {
         ty == step_marker_type(self.db)
-    }
-
-    /// Build a trampoline wrapper function that unwraps Step values from main.
-    ///
-    /// The trampoline:
-    /// 1. Calls the original main function (which returns Step)
-    /// 2. Extracts the tag field from Step
-    /// 3. If tag == DONE: extracts and returns the value (with proper unboxing)
-    /// 4. If tag != DONE: traps (unhandled effect)
-    fn build_trampoline_main(&self, location: Location<'db>) -> Operation<'db> {
-        use tribute_ir::dialect::tribute_rt;
-
-        let anyref_ty = wasm::Anyref::new(self.db).as_type();
-        let i32_ty = core::I32::new(self.db).as_type();
-        let nil_ty = core::Nil::new(self.db).as_type();
-        let step_ty = step_marker_type(self.db);
-
-        // Determine the actual return type from the original main signature
-        let original_result_ty = self.main_exports.original_result_type.unwrap_or(anyref_ty);
-
-        // Check for special return types
-        let returns_nil = core::Nil::from_type(self.db, original_result_ty).is_some();
-        let is_nat = tribute_rt::is_nat(self.db, original_result_ty);
-        let needs_i32_unbox = tribute_rt::is_int(self.db, original_result_ty)
-            || is_nat
-            || core::I32::from_type(self.db, original_result_ty).is_some();
-
-        // The trampoline's return type
-        let trampoline_result_ty = if returns_nil {
-            nil_ty
-        } else if needs_i32_unbox {
-            i32_ty
-        } else {
-            anyref_ty
-        };
-
-        let mut builder = BlockBuilder::new(self.db, location);
-
-        // Call the original main function which returns Step
-        let call_main = builder.op(wasm::call(
-            self.db,
-            location,
-            None,
-            Some(step_ty),
-            Symbol::new("main"),
-        ));
-        let step_result = call_main.results(self.db).first().copied().unwrap();
-
-        // Extract tag field (field 0) from Step
-        let get_tag = builder.op(wasm::struct_get(
-            self.db,
-            location,
-            step_result,
-            i32_ty,
-            STEP_IDX,
-            0,
-        ));
-        let tag_val = get_tag.result(self.db);
-
-        // Extract value field (field 1) from Step
-        let get_value = builder.op(wasm::struct_get(
-            self.db,
-            location,
-            step_result,
-            anyref_ty,
-            STEP_IDX,
-            1,
-        ));
-        let value_val = get_value.result(self.db);
-
-        // Compare tag with DONE (0)
-        let done_const = builder.op(wasm::i32_const(self.db, location, i32_ty, STEP_TAG_DONE));
-        let done_val = done_const.result(self.db);
-
-        let cmp_eq = builder.op(wasm::i32_eq(self.db, location, tag_val, done_val, i32_ty));
-        let is_done = cmp_eq.result(self.db);
-
-        // If tag == DONE, return the value; otherwise trap
-        // Build the if-else construct
-        let then_block = {
-            let mut then_builder = BlockBuilder::new(self.db, location);
-
-            if returns_nil {
-                // Nil return - no value to return
-                then_builder.op(wasm::r#return(self.db, location, None));
-            } else if needs_i32_unbox {
-                // Unbox Int/Nat to i32
-                // Cast anyref to i31ref and extract i32 (abstract type, no type_idx)
-                let i31ref_ty = wasm::I31ref::new(self.db).as_type();
-                let cast = then_builder.op(wasm::ref_cast(
-                    self.db, location, value_val, i31ref_ty, i31ref_ty, None,
-                ));
-                let i31_val = cast.result(self.db);
-                // Use unsigned extraction for Nat, signed for Int
-                let return_val = if is_nat {
-                    let unbox =
-                        then_builder.op(wasm::i31_get_u(self.db, location, i31_val, i32_ty));
-                    unbox.result(self.db)
-                } else {
-                    let unbox =
-                        then_builder.op(wasm::i31_get_s(self.db, location, i31_val, i32_ty));
-                    unbox.result(self.db)
-                };
-                then_builder.op(wasm::r#return(self.db, location, Some(return_val)));
-            } else {
-                // Return anyref directly
-                then_builder.op(wasm::r#return(self.db, location, Some(value_val)));
-            }
-
-            then_builder.build()
-        };
-
-        let else_block = {
-            let mut else_builder = BlockBuilder::new(self.db, location);
-            // Unhandled effect - trap
-            else_builder.op(wasm::unreachable(self.db, location));
-            else_builder.build()
-        };
-
-        let then_region = Region::new(self.db, location, idvec![then_block]);
-        let else_region = Region::new(self.db, location, idvec![else_block]);
-
-        // Note: wasm.if returns a value when both branches return the same type
-        // Since we return from both branches, we need a different approach
-        // Use scf.if or just emit the if without result and rely on return
-        builder.op(wasm::r#if(
-            self.db,
-            location,
-            is_done,
-            nil_ty, // no result type - branches use return
-            then_region,
-            else_region,
-        ));
-
-        // This point is unreachable, but we need to return something for validation
-        builder.op(wasm::unreachable(self.db, location));
-
-        let body_block = builder.build();
-        let region = Region::new(self.db, location, idvec![body_block]);
-        let func_ty = core::Func::new(self.db, idvec![], trampoline_result_ty).as_type();
-
-        wasm::func(
-            self.db,
-            location,
-            Symbol::new("main_trampoline"),
-            func_ty,
-            region,
-        )
-        .as_operation()
     }
 
     fn lower_op(&mut self, builder: &mut BlockBuilder<'db>, op: Operation<'db>) {

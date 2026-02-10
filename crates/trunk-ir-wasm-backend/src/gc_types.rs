@@ -14,7 +14,9 @@
 //! Index 4: ClosureStruct - struct { i32, anyref } (table index + env)
 //! Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 } (evidence)
 //! Index 6: Evidence - array (ref Marker) (evidence array)
-//! Index 7+: User-defined types (structs, arrays, variants, closures, etc.)
+//! Index 7: Continuation - struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref } (continuation)
+//! Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref } (resume wrapper)
+//! Index 9+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 //!
 //! ## Usage
@@ -65,23 +67,46 @@ pub const MARKER_IDX: u32 = 5;
 /// Evidence is a sorted array of markers for ability handler lookup.
 pub const EVIDENCE_IDX: u32 = 6;
 
+/// Type index for Continuation (struct { func_idx: i32, env: anyref, prompt_tag: i32, state: anyref }).
+/// This is always index 7 in the GC type section.
+/// Used for one-shot continuations in the trampoline effect system.
+pub const CONTINUATION_IDX: u32 = 7;
+
+/// Type index for ResumeWrapper (struct { state: anyref, resume_value: anyref }).
+/// This is always index 8 in the GC type section.
+/// Packages captured state and resume value for continuation resume functions.
+pub const RESUME_WRAPPER_IDX: u32 = 8;
+
 /// First type index available for user-defined types.
-pub const FIRST_USER_TYPE_IDX: u32 = 7;
+pub const FIRST_USER_TYPE_IDX: u32 = 9;
 
 /// Check if a type is a closure struct (adt.struct with name "_closure").
 /// Closure structs contain (funcref, anyref) and are used for call_indirect.
 pub fn is_closure_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    // Check if it's an adt.struct type
+    is_named_adt_struct(db, ty, "_closure")
+}
+
+/// Check if a type is a continuation struct (adt.struct with name "_Continuation").
+pub fn is_continuation_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    is_named_adt_struct(db, ty, "_Continuation")
+}
+
+/// Check if a type is a resume wrapper struct (adt.struct with name "_ResumeWrapper").
+pub fn is_resume_wrapper_struct_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
+    is_named_adt_struct(db, ty, "_ResumeWrapper")
+}
+
+/// Check if a type is an adt.struct with the given name.
+fn is_named_adt_struct(db: &dyn salsa::Database, ty: Type<'_>, expected_name: &str) -> bool {
     if ty.dialect(db) != adt::DIALECT_NAME() {
         return false;
     }
     if ty.name(db) != Symbol::new("struct") {
         return false;
     }
-    // Check if the struct name is "_closure"
     ty.attrs(db).get(&Symbol::new("name")).is_some_and(|attr| {
         if let Attribute::Symbol(name) = attr {
-            name.with_str(|s| s == "_closure")
+            name.with_str(|s| s == expected_name)
         } else {
             false
         }
@@ -153,7 +178,7 @@ impl<'db> GcTypeRegistry<'db> {
     ///
     /// These must be prepended to the user-defined types when emitting.
     /// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), Step(3), ClosureStruct(4),
-    ///          Marker(5), Evidence(6)
+    ///          Marker(5), Evidence(6), Continuation(7), ResumeWrapper(8)
     pub fn builtin_types() -> Vec<GcTypeDef> {
         vec![
             // Index 0: BoxedF64 - struct { value: f64 }
@@ -251,6 +276,44 @@ impl<'db> GcTypeRegistry<'db> {
                 })),
                 mutable: true,
             }),
+            // Index 7: Continuation - struct { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
+            // Used for one-shot continuations in the trampoline effect system.
+            // resume_fn: index into function table (resume function)
+            // state: captured handler state (anyref)
+            // tag: handler's prompt tag (for propagation)
+            // shift_value: value passed from the shift site (anyref)
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::I32),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+            ]),
+            // Index 8: ResumeWrapper - struct { state: anyref, resume_value: anyref }
+            // Packages captured state and resume value for continuation resume functions.
+            // state: continuation's captured state
+            // resume_value: value being passed back to the continuation
+            GcTypeDef::Struct(vec![
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+                FieldType {
+                    element_type: StorageType::Val(ValType::Ref(RefType::ANYREF)),
+                    mutable: false,
+                },
+            ]),
         ]
     }
 
@@ -309,7 +372,7 @@ impl<'db> GcTypeRegistry<'db> {
 
     /// Returns all type definitions including builtins.
     ///
-    /// The returned vector has builtins at indices 0-4 and user types starting at index 5.
+    /// The returned vector has builtins at indices 0-8 and user types starting at index 9.
     pub fn all_types(&self) -> Vec<GcTypeDef> {
         let mut all = Self::builtin_types();
         all.extend(self.types.iter().cloned());
@@ -433,6 +496,10 @@ pub fn type_to_storage_type<'db>(
     }
     if core::F64::from_type(db, ty).is_some() {
         return StorageType::Val(ValType::F64);
+    }
+    // cont.prompt_tag is represented as i32 at runtime (prompt tag index)
+    if cont::PromptTag::from_type(db, ty).is_some() {
+        return StorageType::Val(ValType::I32);
     }
 
     // Note: tribute_rt types (int, nat, bool, float, any) should be
@@ -715,6 +782,36 @@ pub const STEP_TAG_DONE: i32 = 0;
 /// Tag value for Shift (suspended with continuation, needs handler dispatch).
 pub const STEP_TAG_SHIFT: i32 = 1;
 
+/// Create the canonical Marker ADT type.
+///
+/// This returns the same type as `ability::marker_adt_type()` from `tribute-ir`,
+/// but is constructed directly from `adt::struct_type` since this crate does not
+/// depend on `tribute-ir`.
+///
+/// Layout: (ability_id: i32, prompt_tag: i32, op_table_index: i32)
+pub fn marker_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_Marker",
+        vec![
+            (Symbol::new("ability_id"), i32_ty),
+            (Symbol::new("prompt_tag"), i32_ty),
+            (Symbol::new("op_table_index"), i32_ty),
+        ],
+    )
+}
+
+/// Create the canonical Evidence ADT type (array of Marker) without
+/// depending on `tribute-ir`.
+///
+/// This matches `ability::evidence_adt_type(db)` from `tribute-ir`.
+pub fn evidence_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let marker_ty = marker_adt_type(db);
+    core::Array::new(db, marker_ty).as_type()
+}
+
 /// Create the Step marker type.
 ///
 /// This creates a unique ADT struct type to use as a key in the registry.
@@ -821,7 +918,7 @@ mod tests {
     #[test]
     fn test_builtin_types() {
         let builtins = GcTypeRegistry::builtin_types();
-        assert_eq!(builtins.len(), 7);
+        assert_eq!(builtins.len(), 9);
 
         // BoxedF64
         assert!(matches!(&builtins[0], GcTypeDef::Struct(fields) if fields.len() == 1));
@@ -837,6 +934,10 @@ mod tests {
         assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 3));
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
+        // Continuation (4 fields: resume_fn, state, tag, shift_value)
+        assert!(matches!(&builtins[7], GcTypeDef::Struct(fields) if fields.len() == 4));
+        // ResumeWrapper (2 fields: state, resume_value)
+        assert!(matches!(&builtins[8], GcTypeDef::Struct(fields) if fields.len() == 2));
     }
 
     #[test]
@@ -916,7 +1017,7 @@ mod tests {
         registry.register_type(i32_ty, def);
 
         let all = registry.all_types();
-        assert_eq!(all.len(), 8); // 7 builtins + 1 user type
+        assert_eq!(all.len(), 10); // 9 builtins + 1 user type
     }
 
     #[test]
@@ -1173,6 +1274,79 @@ mod tests {
                 }
             }
             _ => panic!("Evidence (index 6) should be an array type"),
+        }
+    }
+
+    #[test]
+    fn test_continuation_struct_field_layout() {
+        // Verify the Continuation GC type (index 7) matches the canonical layout:
+        // { resume_fn: i32, state: anyref, tag: i32, shift_value: anyref }
+        let builtins = GcTypeRegistry::builtin_types();
+        let cont_def = &builtins[CONTINUATION_IDX as usize];
+
+        match cont_def {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(fields.len(), 4, "Continuation should have 4 fields");
+                // Field 0: resume_fn (i32)
+                assert!(
+                    matches!(fields[0].element_type, StorageType::Val(ValType::I32)),
+                    "Field 0 (resume_fn) should be i32"
+                );
+                // Field 1: state (anyref)
+                assert!(
+                    matches!(
+                        fields[1].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 1 (state) should be anyref"
+                );
+                // Field 2: tag (i32)
+                assert!(
+                    matches!(fields[2].element_type, StorageType::Val(ValType::I32)),
+                    "Field 2 (tag) should be i32"
+                );
+                // Field 3: shift_value (anyref)
+                assert!(
+                    matches!(
+                        fields[3].element_type,
+                        StorageType::Val(ValType::Ref(RefType::ANYREF))
+                    ),
+                    "Field 3 (shift_value) should be anyref"
+                );
+            }
+            _ => panic!("Continuation (index 7) should be a struct type"),
+        }
+    }
+
+    #[test]
+    fn test_marker_adt_type_matches_builtin() {
+        use trunk_ir::dialect::adt;
+        use trunk_ir::types::Attribute;
+
+        // Verify marker_adt_type() field count matches the Marker GC builtin type
+        let db = salsa::DatabaseImpl::default();
+        let marker_ty = marker_adt_type(&db);
+
+        // marker_adt_type stores fields in attrs under "fields" key
+        let fields_attr = marker_ty
+            .get_attr(&db, adt::ATTR_FIELDS())
+            .expect("marker_adt_type should have fields attribute");
+        let field_count = match fields_attr {
+            Attribute::List(fields) => fields.len(),
+            _ => panic!("fields attribute should be a list"),
+        };
+        assert_eq!(field_count, 3, "marker_adt_type should have 3 fields");
+
+        let builtins = GcTypeRegistry::builtin_types();
+        match &builtins[MARKER_IDX as usize] {
+            GcTypeDef::Struct(fields) => {
+                assert_eq!(
+                    fields.len(),
+                    field_count,
+                    "marker_adt_type field count should match builtin GC type"
+                );
+            }
+            _ => panic!("Marker builtin should be a struct type"),
         }
     }
 

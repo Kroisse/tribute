@@ -1,11 +1,10 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 177
 expression: ir_module
 ---
 Module(test) {
     operations: [
-        func @test::__lambda_0(core.nil) -> tribute_rt.any {
+        func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "func.call",
                 "func.return",
@@ -26,6 +25,7 @@ Module(test) {
             body: [
                 "cont.push_prompt",
                 "cont.handler_dispatch",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

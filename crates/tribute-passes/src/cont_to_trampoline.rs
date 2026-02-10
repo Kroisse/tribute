@@ -29,8 +29,8 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol,
-    Type, Value,
+    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, Span,
+    Symbol, Type, Value,
 };
 
 // ============================================================================
@@ -60,8 +60,11 @@ struct ResumeFuncSpec<'db> {
     name: String,
     /// State struct type (used to extract captured values)
     state_type: Type<'db>,
-    /// Fields in the state struct (field_name, field_type)
+    /// Fields in the state struct (field_name, field_type) — field types are anyref
+    /// to match the WASM lowering (LowerBuildStatePattern converts all fields to anyref).
     state_fields: Vec<(Symbol, Type<'db>)>,
+    /// Original (pre-anyref) field types for casting extracted values back
+    original_field_types: Vec<Type<'db>>,
     /// Original values that were captured (for value remapping)
     original_live_values: Vec<Value<'db>>,
     /// The original shift result value (maps to resume_value)
@@ -178,10 +181,6 @@ pub fn lower_cont_to_trampoline<'db>(
     );
     let result = applicator.apply_partial(db, module, empty_target);
     let module = result.module;
-
-    // Step 5: Wrap main with global trampoline (_start)
-    // This handles the case where main returns Step (effectful main)
-    let module = wrap_main_with_global_trampoline(db, module, &effectful_funcs);
 
     // Verify all cont.* ops (except cont.drop) are converted
     let conversion_target = ConversionTarget::new()
@@ -527,13 +526,20 @@ fn truncate_func_after_shift<'db>(
         // Get the existing function type and modify its return type
         let old_func_ty = func.r#type(db);
         if let Some(func_ty) = core::Func::from_type(db, old_func_ty) {
+            let original_result = func_ty.result(db);
             let params = func_ty.params(db);
             let effect = func_ty.effect(db);
             let new_func_ty = core::Func::with_effect(db, params, step_ty, effect);
-            builder = builder.attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()));
+            builder = builder
+                .attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()))
+                .attr(
+                    Symbol::new("original_result_type"),
+                    Attribute::Type(original_result),
+                );
             tracing::debug!(
-                "truncate_func_after_shift: {} changed return type to Step",
-                func_name
+                "truncate_func_after_shift: {} changed return type to Step (original: {:?})",
+                func_name,
+                original_result
             );
         }
     }
@@ -595,10 +601,13 @@ fn truncate_scf_if_block<'db>(
     let ops = block.operations(db);
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut step_value: Option<Value<'db>> = None;
+    let mut original_yield_operand: Option<Value<'db>> = None;
 
     for op in ops.iter() {
-        // Skip scf.yield - we'll add our own at the end
+        // Capture scf.yield operand before skipping — needed to wrap pure
+        // branches in step_done when the branch has no effectful call.
         if scf::Yield::from_operation(db, *op).is_ok() {
+            original_yield_operand = op.operands(db).first().copied();
             continue;
         }
 
@@ -642,6 +651,13 @@ fn truncate_scf_if_block<'db>(
     if let Some(val) = step_value {
         let yield_op = scf::r#yield(db, block.location(db), vec![val]);
         new_ops.push(yield_op.as_operation());
+    } else if let Some(original_val) = original_yield_operand {
+        // Non-effectful branch: wrap the original yield value in step_done
+        // so both branches of the scf.if produce a Step-typed result.
+        let step_done_op = trampoline::step_done(db, block.location(db), original_val, step_ty);
+        new_ops.push(step_done_op.as_operation());
+        let yield_op = scf::r#yield(db, block.location(db), vec![step_done_op.result(db)]);
+        new_ops.push(yield_op.as_operation());
     }
 
     Block::new(
@@ -651,6 +667,19 @@ fn truncate_scf_if_block<'db>(
         block.args(db).clone(),
         new_ops.into(),
     )
+}
+
+/// Rebuild an operation with its result type changed to `Step`.
+/// If the operation has no results, returns it unchanged.
+fn rebuild_with_step_result<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+) -> Operation<'db> {
+    if op.results(db).is_empty() {
+        return *op;
+    }
+    let step_ty = trampoline::Step::new(db).as_type();
+    op.modify(db).results(IdVec::from(vec![step_ty])).build()
 }
 
 /// Truncate a block after the first effect point (step_shift or effectful call).
@@ -682,7 +711,42 @@ fn truncate_block_after_shift<'db>(
             op.name(db)
         );
         if found_effect_point {
-            // Skip all operations after effect point (they're now in resume functions)
+            // Special case: scf.loop after an effect point is the handler trampoline
+            // (generated by LowerHandlerDispatchPattern). It consumes the Step result
+            // from push_prompt and drives the trampoline loop. Must be preserved.
+            if scf::Loop::from_operation(db, *op).is_ok() {
+                // The scf.loop's init operand may reference the old scf.if result.
+                // Replace it with the new effect_result from the recreated scf.if.
+                let new_loop = if let Some(new_step) = effect_result {
+                    let old_operands = op.operands(db);
+                    debug_assert!(
+                        old_operands.len() == 1,
+                        "handler trampoline scf.loop should have exactly one init operand (the Step value), got {}",
+                        old_operands.len()
+                    );
+                    if !old_operands.is_empty() {
+                        let mut new_operands: Vec<Value<'db>> =
+                            old_operands.iter().copied().collect();
+                        new_operands[0] = new_step;
+                        op.modify(db).operands(IdVec::from(new_operands)).build()
+                    } else {
+                        *op
+                    }
+                } else {
+                    *op
+                };
+                new_ops.push(new_loop);
+                // Update effect result to the loop's result (may be Step or user_result_ty)
+                if !new_loop.results(db).is_empty() {
+                    effect_result = Some(new_loop.result(db, 0));
+                }
+                effect_location = Some(op.location(db));
+                tracing::debug!(
+                    "truncate_block_after_shift: preserved handler trampoline scf.loop after effect point"
+                );
+                continue;
+            }
+            // Skip all other operations after effect point (they're now in resume functions)
             continue;
         }
 
@@ -699,23 +763,7 @@ fn truncate_block_after_shift<'db>(
         // The push_prompt result is the Step value from the handler
         if cont::PushPrompt::from_operation(db, *op).is_ok() {
             // Create new operation with Step result type
-            let step_ty = trampoline::Step::new(db).as_type();
-            let new_result_types = if !op.results(db).is_empty() {
-                IdVec::from(vec![step_ty])
-            } else {
-                op.results(db).clone()
-            };
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                new_result_types,
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = rebuild_with_step_result(db, op);
             new_ops.push(new_op);
             found_effect_point = true;
             if !new_op.results(db).is_empty() {
@@ -733,23 +781,7 @@ fn truncate_block_after_shift<'db>(
             && effectful_funcs.contains(&call.callee(db))
         {
             // Create new operation with Step result type
-            let step_ty = trampoline::Step::new(db).as_type();
-            let new_result_types = if !op.results(db).is_empty() {
-                IdVec::from(vec![step_ty])
-            } else {
-                op.results(db).clone()
-            };
-            let new_op = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                new_result_types,
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
+            let new_op = rebuild_with_step_result(db, op);
             new_ops.push(new_op);
             found_effect_point = true;
             if !new_op.results(db).is_empty() {
@@ -759,6 +791,23 @@ fn truncate_block_after_shift<'db>(
             tracing::debug!(
                 "truncate_block_after_shift: found effectful call to {}, changed result type to Step",
                 call.callee(db)
+            );
+            continue;
+        }
+
+        // Check if this is a call_indirect (indirect function call through closure).
+        // In effectful functions, call_indirect may invoke effectful closures, so we
+        // must treat the result as Step to avoid double-wrapping in step_done.
+        if func::CallIndirect::from_operation(db, *op).is_ok() {
+            let new_op = rebuild_with_step_result(db, op);
+            new_ops.push(new_op);
+            found_effect_point = true;
+            if !new_op.results(db).is_empty() {
+                effect_result = Some(new_op.result(db, 0));
+            }
+            effect_location = Some(op.location(db));
+            tracing::debug!(
+                "truncate_block_after_shift: found call_indirect, changed result type to Step"
             );
             continue;
         }
@@ -949,7 +998,15 @@ fn collect_direct_effectful_funcs<'db>(
                 all_funcs.push((func_name, body));
 
                 // Check the function's type signature for effectfulness
-                if has_effectful_type(db, func.ty(db)) {
+                let func_ty = func.ty(db);
+                let is_effectful = has_effectful_type(db, func_ty);
+                tracing::trace!(
+                    "collect_direct_effectful_funcs: '{}' type={:?}, is_effectful={}",
+                    func_name,
+                    func_ty,
+                    is_effectful
+                );
+                if is_effectful {
                     effectful.insert(func_name);
                 }
             }
@@ -1106,7 +1163,7 @@ fn state_type_name(key: StateTypeKey) -> String {
     key.shift_index.hash(&mut hasher);
 
     let hash = hasher.finish();
-    format!("__State_{:x}", hash & 0xFFFFFF)
+    format!("__State_{:012x}", hash & 0xFFFF_FFFF_FFFF)
 }
 
 // ============================================================================
@@ -1170,17 +1227,27 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         };
         let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
 
-        // Get live values and their types from analysis
-        let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-            shift_point_info
-                .live_values
-                .iter()
-                .enumerate()
-                .map(|(i, (v, ty))| {
-                    let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                    (*v, (field_name, *ty))
-                })
-                .unzip();
+        // Get live values and their types from analysis.
+        // State fields use anyref as field type to match the WASM lowering
+        // (LowerBuildStatePattern converts all fields to anyref). This ensures
+        // the state struct's nominal type is consistent between creation and extraction.
+        let anyref_ty = tribute_rt::any_type(db);
+        let state_values: Vec<Value<'db>> = shift_point_info
+            .live_values
+            .iter()
+            .map(|(v, _ty)| *v)
+            .collect();
+        let original_field_types: Vec<Type<'db>> = shift_point_info
+            .live_values
+            .iter()
+            .map(|(_v, ty)| *ty)
+            .collect();
+        let state_fields: Vec<(Symbol, Type<'db>)> = (0..shift_point_info.live_values.len())
+            .map(|i| {
+                let field_name = Symbol::from_dynamic(&format!("field_{}", i));
+                (field_name, anyref_ty)
+            })
+            .collect();
 
         let state_adt_ty = adt::struct_type(db, state_name, state_fields.clone());
         let state_op = trampoline::build_state(
@@ -1212,6 +1279,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
             name: resume_name.clone(),
             state_type: state_adt_ty,
             state_fields,
+            original_field_types,
             original_live_values: state_values.clone(),
             shift_result_value: shift_point_info.shift_result_value,
             shift_result_type: shift_point_info.shift_result_type,
@@ -1284,26 +1352,19 @@ fn create_resume_function_with_continuation<'db>(
     let location = spec.location;
     let name = Symbol::from_dynamic(&spec.name);
 
-    // Resume functions take (evidence, wrapper as anyref) for calling convention consistency
-    // with lifted lambdas. Using anyref allows uniform call_indirect type.
-    // The function casts anyref to the specific wrapper_ty at the start.
+    // Resume functions take (evidence, wrapper) where wrapper is
+    // trampoline.resume_wrapper. ConvertFuncTypePattern will later convert
+    // this to _ResumeWrapper ADT, matching the call_indirect signature.
     let func_op = Func::build(
         db,
         location,
         name,
-        IdVec::from(vec![evidence_ty, anyref_ty]),
+        IdVec::from(vec![evidence_ty, wrapper_ty]),
         step_ty,
         |builder| {
             // Evidence is at index 0 (unused but required for calling convention)
-            // Wrapper is at index 1 as anyref, needs cast to specific type
-            let wrapper_anyref = builder.block_arg(db, 1);
-            let wrapper_cast = builder.op(core::unrealized_conversion_cast(
-                db,
-                location,
-                wrapper_anyref,
-                wrapper_ty,
-            ));
-            let wrapper_arg = wrapper_cast.result(db);
+            // Wrapper is at index 1, already the correct type
+            let wrapper_arg = builder.block_arg(db, 1);
 
             // Build value map for remapping
             let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
@@ -1346,17 +1407,16 @@ fn create_resume_function_with_continuation<'db>(
                 ));
                 let state_val = get_state.result(db);
 
-                // Extract each captured local from state and map to original value
-                // Note: State fields are stored as anyref after lowering (in trampoline_to_wasm),
-                // so we use anyref as the field type here and add a cast to the original type.
+                // Extract each captured local from state and map to original value.
+                // State fields are all anyref (matching LowerBuildStatePattern in WASM lowering).
+                // We cast each extracted anyref value to the original field type.
                 let anyref_ty = tribute_rt::any_type(db);
-                for (i, ((_field_name, field_type), original_value)) in spec
-                    .state_fields
+                for (i, (original_field_type, original_value)) in spec
+                    .original_field_types
                     .iter()
                     .zip(spec.original_live_values.iter())
                     .enumerate()
                 {
-                    // Get field as anyref (consistent with how LowerBuildStatePattern stores it)
                     let get_field = builder.op(adt::struct_get(
                         db,
                         location,
@@ -1367,12 +1427,12 @@ fn create_resume_function_with_continuation<'db>(
                     ));
                     let anyref_value = get_field.result(db);
 
-                    // Cast anyref to the expected field type
+                    // Cast anyref to the original field type
                     let cast_op = builder.op(core::unrealized_conversion_cast(
                         db,
                         location,
                         anyref_value,
-                        *field_type,
+                        *original_field_type,
                     ));
                     let extracted_value = cast_op.result(db);
                     value_map.insert(*original_value, extracted_value);
@@ -1420,10 +1480,15 @@ fn create_resume_function_with_continuation<'db>(
                         });
 
                     // Get shift properties
+                    // Use op_offset from the shift operation if available (set by resolve_evidence)
+                    // Otherwise fall back to hash-based op_idx for backwards compatibility
                     let ability_name = core::AbilityRefType::from_type(db, ability_ref_type)
                         .and_then(|ar| ar.name(db));
                     let op_name = Some(op_name_sym);
-                    let op_idx = compute_op_idx(ability_name, op_name);
+                    let op_idx = match shift_op.op_offset(db) {
+                        Some(offset) => offset,
+                        None => compute_op_idx(ability_name, op_name),
+                    };
 
                     // Build state struct with current live values (remapped)
                     let shift_index = next_shift_info.index;
@@ -1435,17 +1500,19 @@ fn create_resume_function_with_continuation<'db>(
                         shift_index,
                     };
                     let state_name = Symbol::from_dynamic(&state_type_name(state_type_key));
-                    let (state_values, state_fields): (Vec<Value<'db>>, Vec<(Symbol, Type<'db>)>) =
-                        next_shift_info
-                            .live_values
-                            .iter()
-                            .enumerate()
-                            .map(|(i, (v, ty))| {
-                                let remapped_v = *value_map.get(v).unwrap_or(v);
+                    let anyref_ty = tribute_rt::any_type(db);
+                    let state_values: Vec<Value<'db>> = next_shift_info
+                        .live_values
+                        .iter()
+                        .map(|(v, _ty)| *value_map.get(v).unwrap_or(v))
+                        .collect();
+                    let state_fields: Vec<(Symbol, Type<'db>)> =
+                        (0..next_shift_info.live_values.len())
+                            .map(|i| {
                                 let field_name = Symbol::from_dynamic(&format!("field_{}", i));
-                                (remapped_v, (field_name, *ty))
+                                (field_name, anyref_ty)
                             })
-                            .unzip();
+                            .collect();
 
                     let state_adt_ty = adt::struct_type(db, state_name, state_fields);
                     let state_op = builder.op(trampoline::build_state(
@@ -1612,10 +1679,9 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         ops.push(wrapper_op.as_operation());
 
         // === 5. Call resume function ===
-        // Resume functions take (evidence, wrapper) for calling convention consistency
-        // with lifted lambdas. We pass null evidence since we're inside a handler arm.
+        // Resume functions take (evidence, wrapper) where wrapper is the resume_wrapper type.
         let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
-        let null_evidence = adt::ref_null(db, location, evidence_ty, anyref_ty);
+        let null_evidence = adt::ref_null(db, location, evidence_ty, evidence_ty);
         ops.push(null_evidence.as_operation());
         let evidence_val = null_evidence.as_operation().result(db, 0);
 
@@ -2491,12 +2557,10 @@ struct SuspendArm<'db> {
 
 /// Collect suspend arms from handler blocks with their expected op_idx.
 ///
-/// For table-based dispatch, the op_idx is simply the block index (0-based,
-/// relative to suspend blocks). This matches the op_offset assigned by
-/// resolve_evidence.
-///
-/// For backwards compatibility with hash-based dispatch, if no blocks have
-/// op_offset metadata, we fall back to computing op_idx from ability_ref and op_name.
+/// Uses hash-based dispatch: each arm's op_idx is computed from the ability
+/// name and operation name via `compute_op_idx`. This is handler-independent —
+/// both shift sites and handler dispatch use the same hash function, so the
+/// index matches regardless of handler registration order.
 fn collect_suspend_arms<'db>(
     db: &'db dyn salsa::Database,
     blocks: &IdVec<Block<'db>>,
@@ -2504,7 +2568,7 @@ fn collect_suspend_arms<'db>(
     let mut arms = Vec::new();
 
     // Skip block 0 (done case), process blocks 1+ (suspend cases)
-    for (idx, block) in blocks.iter().skip(1).enumerate() {
+    for block in blocks.iter().skip(1) {
         // Extract ability_ref and op_name from marker block arg
         let block_args = block.args(db);
         if let Some(marker_arg) = block_args.first() {
@@ -2524,19 +2588,11 @@ fn collect_suspend_arms<'db>(
                 }
             });
 
-            // For table-based dispatch, use the block index as op_idx.
-            // This corresponds to the op_offset assigned by resolve_evidence.
-            let expected_op_idx = if ability_ref.is_some() || op_name.is_some() {
-                // Use block index when we have metadata
-                idx as u32
-            } else {
-                // Missing metadata indicates malformed IR - all suspend blocks should
-                // have ability_ref/op_name from resolve_evidence pass.
-                tracing::warn!(
-                    "suspend block missing ability_ref/op_name metadata, using hash fallback"
-                );
-                compute_op_idx(ability_ref, op_name)
-            };
+            // Use hash-based dispatch: compute a stable index from ability+op_name.
+            // This is handler-independent — both shift and handler sides use the
+            // same hash function, so the index matches regardless of handler
+            // registration order.
+            let expected_op_idx = compute_op_idx(ability_ref, op_name);
             arms.push(SuspendArm {
                 expected_op_idx,
                 block: *block,
@@ -2609,7 +2665,7 @@ fn build_nested_dispatch<'db>(
     arm_index: usize,
     effectful_funcs: &HashSet<Symbol>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
+    let i1_ty = core::I::<1>::new(db).as_type();
 
     // Safety check
     if arm_index >= suspend_arms.len() {
@@ -2624,7 +2680,7 @@ fn build_nested_dispatch<'db>(
 
     if is_last_arm {
         // Last arm (or only arm): use always-true condition, duplicate arm for else
-        let true_const = builder.op(arith::Const::i32(db, location, 1));
+        let true_const = builder.op(arith::r#const(db, location, i1_ty, true.into()));
         let else_region = build_arm_region(db, location, &arm.block, effectful_funcs);
 
         let if_op = builder.op(scf::r#if(
@@ -2648,7 +2704,7 @@ fn build_nested_dispatch<'db>(
         location,
         current_op_idx,
         expected_const.result(db),
-        i32_ty,
+        i1_ty,
     ));
     let is_match = cmp_op.result(db);
 
@@ -2772,8 +2828,14 @@ fn build_arm_region<'db>(
             value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
         ) -> Value<'db> {
             let mut current = v;
+            let mut steps = 0u32;
             while let Some(&remapped) = value_remap.get(&current) {
                 current = remapped;
+                steps += 1;
+                assert!(
+                    steps < 1000,
+                    "cycle detected in value_remap after {steps} steps"
+                );
             }
             current
         }
@@ -2908,276 +2970,6 @@ fn build_arm_region<'db>(
 }
 
 // ============================================================================
-// Global Trampoline Wrapper (_start)
-// ============================================================================
-
-/// Wrap main with a global trampoline if main is effectful (returns Step).
-///
-/// Creates `_start` function that:
-/// 1. Calls `main()` which returns Step
-/// 2. Loops to process the Step:
-///    - Done: extract value and return
-///    - Shift: panic (unhandled effect at top level)
-fn wrap_main_with_global_trampoline<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    effectful_funcs: &HashSet<Symbol>,
-) -> Module<'db> {
-    let main_symbol = Symbol::new("main");
-
-    // Check if main is effectful
-    if !effectful_funcs.contains(&main_symbol) {
-        return module;
-    }
-
-    // Find main function and get its return type
-    let mut main_func_op: Option<Operation<'db>> = None;
-    let mut main_original_return_ty: Option<Type<'db>> = None;
-
-    for block in module.body(db).blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func) = Func::from_operation(db, *op)
-                && func.sym_name(db) == main_symbol
-            {
-                main_func_op = Some(*op);
-                // Get the function type to extract original return type
-                let func_ty = func.r#type(db);
-                if let Some(fn_ty) = core::Func::from_type(db, func_ty) {
-                    // For _start wrapper, we need the main function's return type
-                    // For now, assume i32 for main (common case)
-                    main_original_return_ty = Some(core::I32::new(db).as_type());
-                    let _ = fn_ty; // suppress unused warning
-                }
-                break;
-            }
-        }
-        if main_func_op.is_some() {
-            break;
-        }
-    }
-
-    let Some(_main_op) = main_func_op else {
-        // No main function found
-        return module;
-    };
-
-    let original_return_ty =
-        main_original_return_ty.unwrap_or_else(|| core::I32::new(db).as_type());
-    let location = module.location(db);
-
-    // Create _start function
-    let start_func = build_start_function(db, location, original_return_ty);
-
-    // Add _start to module
-    let body = module.body(db);
-    let mut blocks: Vec<Block<'db>> = body.blocks(db).iter().copied().collect();
-    if let Some(block) = blocks.first_mut() {
-        let mut ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
-        ops.push(start_func);
-        *block = Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            IdVec::from(ops),
-        );
-    }
-
-    let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
-    Module::create(db, module.location(db), module.name(db), new_body)
-}
-
-/// Build the _start function that wraps main with a trampoline loop.
-fn build_start_function<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    return_ty: Type<'db>,
-) -> Operation<'db> {
-    let step_ty = trampoline::Step::new(db).as_type();
-    let i32_ty = core::I32::new(db).as_type();
-    let i1_ty = core::I1::new(db).as_type();
-    let anyref_ty = tribute_rt::Any::new(db).as_type();
-
-    let mut builder = BlockBuilder::new(db, location);
-
-    // Call main() -> Step
-    let main_call = builder.op(func::call(
-        db,
-        location,
-        IdVec::new(), // no args
-        step_ty,
-        Symbol::new("main"),
-    ));
-    let initial_step = main_call.result(db);
-
-    // Build trampoline loop body
-    let loop_body = build_start_trampoline_loop_body(
-        db, location, step_ty, return_ty, i32_ty, i1_ty, anyref_ty,
-    );
-
-    // Create scf.loop
-    let loop_op = builder.op(scf::r#loop(
-        db,
-        location,
-        vec![initial_step],
-        return_ty,
-        loop_body,
-    ));
-
-    // Return the loop result
-    builder.op(func::r#return(db, location, Some(loop_op.result(db))));
-
-    // Build function body region
-    let body_block = builder.build();
-    let body_region = Region::new(db, location, IdVec::from(vec![body_block]));
-
-    // Create function type: () -> return_ty
-    let func_ty = core::Func::new(db, IdVec::new(), return_ty).as_type();
-
-    func::func(db, location, Symbol::new("_start"), func_ty, body_region).as_operation()
-}
-
-/// Build the trampoline loop body for _start.
-fn build_start_trampoline_loop_body<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    step_ty: Type<'db>,
-    return_ty: Type<'db>,
-    i32_ty: Type<'db>,
-    i1_ty: Type<'db>,
-    anyref_ty: Type<'db>,
-) -> Region<'db> {
-    use trunk_ir::BlockArg;
-
-    // Block argument: current_step (Step type)
-    let block_id = trunk_ir::BlockId::fresh();
-    let current_step_arg = BlockArg::of_type(db, step_ty);
-    let current_step = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-
-    let mut builder = BlockBuilder::new(db, location);
-
-    // Extract tag from Step (0 = Done, 1 = Shift)
-    let get_tag = builder.op(trampoline::step_get(
-        db,
-        location,
-        current_step,
-        i32_ty,
-        Symbol::new("tag"),
-    ));
-    let step_tag = get_tag.result(db);
-
-    // Compare with DONE (0)
-    let done_const = builder.op(arith::Const::i32(db, location, 0));
-    let is_done = builder.op(arith::cmp_eq(
-        db,
-        location,
-        step_tag,
-        done_const.result(db),
-        i1_ty,
-    ));
-
-    // Done branch: extract value and break
-    let done_region = build_start_done_region(db, location, current_step, return_ty, anyref_ty);
-
-    // Shift branch: unhandled effect - unreachable/panic
-    let shift_region = build_start_shift_region(db, location, return_ty);
-
-    // scf.if: if is_done { done } else { shift }
-    let if_op = builder.op(scf::r#if(
-        db,
-        location,
-        is_done.result(db),
-        return_ty,
-        done_region,
-        shift_region,
-    ));
-
-    // Yield the if result (for loop body)
-    builder.op(scf::r#yield(db, location, vec![if_op.result(db)]));
-
-    let body_block = Block::new(
-        db,
-        block_id,
-        location,
-        IdVec::from(vec![current_step_arg]),
-        builder.build().operations(db).clone(),
-    );
-
-    Region::new(db, location, IdVec::from(vec![body_block]))
-}
-
-/// Build Done region for _start: extract value and break.
-fn build_start_done_region<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    current_step: Value<'db>,
-    return_ty: Type<'db>,
-    anyref_ty: Type<'db>,
-) -> Region<'db> {
-    let mut builder = BlockBuilder::new(db, location);
-
-    // Extract value from Step
-    let get_value = builder.op(trampoline::step_get(
-        db,
-        location,
-        current_step,
-        anyref_ty,
-        Symbol::new("value"),
-    ));
-    let step_value = get_value.result(db);
-
-    // Cast anyref to return type
-    let result_value = if anyref_ty != return_ty {
-        let cast = builder.op(core::unrealized_conversion_cast(
-            db, location, step_value, return_ty,
-        ));
-        cast.result(db)
-    } else {
-        step_value
-    };
-
-    // Break from loop with the value
-    builder.op(scf::r#break(db, location, result_value));
-
-    let block = builder.build();
-    Region::new(db, location, IdVec::from(vec![block]))
-}
-
-/// Build Shift region for _start: unhandled effect (unreachable).
-fn build_start_shift_region<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    return_ty: Type<'db>,
-) -> Region<'db> {
-    let mut builder = BlockBuilder::new(db, location);
-
-    // Unhandled effect at top level - this should never happen in well-formed programs
-    // Use unreachable to indicate this is an error path
-    builder.op(func::unreachable(db, location));
-
-    // Need a dummy break to satisfy type checker (unreachable, but needed for IR validity)
-    // Create a dummy value of return_ty - use i32(0) as a placeholder since unreachable
-    let const_op = builder.op(arith::Const::i32(db, location, 0));
-    let dummy = if return_ty == core::I32::new(db).as_type() {
-        const_op.result(db)
-    } else {
-        // Cast to the expected return type
-        let cast = builder.op(core::unrealized_conversion_cast(
-            db,
-            location,
-            const_op.result(db),
-            return_ty,
-        ));
-        cast.result(db)
-    };
-
-    builder.op(scf::r#break(db, location, dummy));
-
-    let block = builder.build();
-    Region::new(db, location, IdVec::from(vec![block]))
-}
-
-// ============================================================================
 // Pattern: Wrap returns in effectful functions with step_done
 // ============================================================================
 
@@ -3210,7 +3002,9 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
 
         // Transform the function body - wrap non-Step returns with step_done
         let body = func.body(db);
-        let (new_body, modified) = wrap_returns_in_region(db, body);
+        let mut block_map = HashMap::new();
+        collect_block_map(db, &body, &mut block_map);
+        let (new_body, modified) = wrap_returns_in_region(db, body, &block_map);
 
         tracing::debug!(
             "WrapReturnsInEffectfulFuncsPattern: {} modified={}",
@@ -3233,12 +3027,13 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
 fn wrap_returns_in_region<'db>(
     db: &'db dyn salsa::Database,
     region: Region<'db>,
+    block_map: &HashMap<BlockId, Block<'db>>,
 ) -> (Region<'db>, bool) {
     let mut new_blocks = Vec::new();
     let mut any_modified = false;
 
     for block in region.blocks(db).iter() {
-        let (new_block, modified) = wrap_returns_in_block(db, *block);
+        let (new_block, modified) = wrap_returns_in_block(db, *block, block_map);
         new_blocks.push(new_block);
         any_modified |= modified;
     }
@@ -3258,6 +3053,7 @@ fn wrap_returns_in_region<'db>(
 fn wrap_returns_in_block<'db>(
     db: &'db dyn salsa::Database,
     block: Block<'db>,
+    block_map: &HashMap<BlockId, Block<'db>>,
 ) -> (Block<'db>, bool) {
     let mut new_ops = Vec::new();
     let mut modified = false;
@@ -3268,7 +3064,7 @@ fn wrap_returns_in_block<'db>(
         let op_with_transformed_regions = if !op.regions(db).is_empty() {
             let mut new_regions = Vec::new();
             for r in op.regions(db).iter() {
-                let (new_r, r_modified) = wrap_returns_in_region(db, *r);
+                let (new_r, r_modified) = wrap_returns_in_region(db, *r, block_map);
                 new_regions.push(new_r);
                 op_modified |= r_modified;
             }
@@ -3289,7 +3085,7 @@ fn wrap_returns_in_block<'db>(
 
             if let Some(&value) = operands.first() {
                 // Check if already returning Step
-                let is_step = is_step_value(db, value);
+                let is_step = is_step_value(db, value, block_map);
                 tracing::debug!(
                     "wrap_returns_in_block: found func.return, value is_step={}",
                     is_step
@@ -3333,7 +3129,13 @@ fn wrap_returns_in_block<'db>(
 }
 
 /// Check if a value is already a Step type (from step_shift, step_done, or check_yield result).
-fn is_step_value<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
+///
+/// `block_map` maps `BlockId → Block` for resolving block argument types.
+fn is_step_value<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    block_map: &HashMap<BlockId, Block<'db>>,
+) -> bool {
     use trunk_ir::ValueDef;
 
     match value.def(db) {
@@ -3341,17 +3143,35 @@ fn is_step_value<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> bool {
             // Check if the defining operation produces Step
             trampoline::StepShift::from_operation(db, def_op).is_ok()
                 || trampoline::StepDone::from_operation(db, def_op).is_ok()
-                // Check if scf.if returns Step type (not all scf.if return Step)
-                || (scf::If::from_operation(db, def_op).is_ok()
-                    && def_op
-                        .results(db)
-                        .first()
-                        .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some()))
+                // Check if any operation's result type is Step
+                // This handles trampoline loop results, unrealized_conversion_cast, etc.
+                || def_op
+                    .results(db)
+                    .first()
+                    .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
         }
-        ValueDef::BlockArg(_) => {
-            // Block args could be Step, but we can't easily tell from here
-            // For safety, don't wrap block args
-            false
+        ValueDef::BlockArg(block_id) => {
+            let index = value.index(db);
+            block_map
+                .get(&block_id)
+                .and_then(|block| block.args(db).get(index).map(|arg| arg.ty(db)))
+                .is_some_and(|ty| trampoline::Step::from_type(db, ty).is_some())
+        }
+    }
+}
+
+/// Collect all blocks in a region (recursively) into a map from BlockId → Block.
+fn collect_block_map<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    map: &mut HashMap<BlockId, Block<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        map.insert(block.id(db), *block);
+        for op in block.operations(db).iter() {
+            for nested in op.regions(db).iter() {
+                collect_block_map(db, nested, map);
+            }
         }
     }
 }
@@ -3380,18 +3200,19 @@ fn get_region_result_value<'db>(
 
 /// Compute operation index using hash-based dispatch.
 ///
-/// **Deprecated**: This function is kept for backwards compatibility.
-/// New code should use table-based dispatch with `op_offset` from the
-/// `OpTableRegistry` in `resolve_evidence.rs`.
+/// Computes a stable, handler-independent index from ability name and
+/// operation name. Both shift sites and handler dispatch use this function,
+/// ensuring they always agree on the op index regardless of handler
+/// registration order.
 ///
-/// The hash-based approach computes a stable hash from ability name and
-/// operation name, but requires runtime comparison against expected values.
-/// Table-based dispatch uses direct indexing for O(1) lookup.
+/// NOTE: Uses `FxHasher` from `rustc-hash` for deterministic hashing within
+/// a single compilation session. Cross-version stability is not required
+/// because op indices are never persisted or compared across binaries.
 fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
-    use std::collections::hash_map::DefaultHasher;
+    use rustc_hash::FxHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
 
     if let Some(ability) = ability_ref {
         ability.to_string().hash(&mut hasher);
@@ -3624,7 +3445,8 @@ mod tests {
         let if_op = scf::r#if(db, location, cond_val, step_ty, then_region, else_region);
         let if_result = if_op.as_operation().result(db, 0);
 
-        is_step_value(db, if_result)
+        let empty_map = HashMap::new();
+        is_step_value(db, if_result, &empty_map)
     }
 
     /// Test helper: creates scf.if returning i32 (non-Step) and checks is_step_value.
@@ -3650,7 +3472,8 @@ mod tests {
         let if_op = scf::r#if(db, location, cond_val, i32_ty, then_region, else_region);
         let if_result = if_op.as_operation().result(db, 0);
 
-        is_step_value(db, if_result)
+        let empty_map = HashMap::new();
+        is_step_value(db, if_result, &empty_map)
     }
 
     #[salsa_test]
@@ -3845,10 +3668,162 @@ mod tests {
     }
 
     // ========================================================================
-    // Test: Table-based dispatch (collect_suspend_arms)
+    // Test: build_nested_dispatch i1 condition types
     // ========================================================================
 
-    /// Helper tracked function to test table-based indexing.
+    /// Verify that build_nested_dispatch produces i1-typed conditions.
+    ///
+    /// With 2 SuspendArms, the first arm generates arith.cmp_eq (result: i1)
+    /// and the last arm generates arith.const true (result: i1).
+    #[salsa::tracked]
+    fn run_build_nested_dispatch_i1_test(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I::<1>::new(db).as_type();
+
+        // Create 2 simple suspend arm blocks with marker args
+        let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
+
+        let block_get = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("get")),
+            );
+            let marker_arg = BlockArg::new(db, i32_ty, attrs);
+            let mut b = BlockBuilder::new(db, location);
+            let c = b.op(arith::Const::i32(db, location, 0));
+            let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+            b.op(scf::r#yield(db, location, vec![step.result(db)]));
+            let block = b.build();
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg]),
+                block.operations(db).clone(),
+            )
+        };
+
+        let block_set = {
+            let mut attrs = std::collections::BTreeMap::new();
+            attrs.insert(
+                Symbol::new("ability_ref"),
+                Attribute::Type(state_ref.as_type()),
+            );
+            attrs.insert(
+                Symbol::new("op_name"),
+                Attribute::Symbol(Symbol::new("set")),
+            );
+            let marker_arg = BlockArg::new(db, i32_ty, attrs);
+            let mut b = BlockBuilder::new(db, location);
+            let c = b.op(arith::Const::i32(db, location, 0));
+            let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+            b.op(scf::r#yield(db, location, vec![step.result(db)]));
+            let block = b.build();
+            Block::new(
+                db,
+                block.id(db),
+                location,
+                IdVec::from(vec![marker_arg]),
+                block.operations(db).clone(),
+            )
+        };
+
+        let arms = vec![
+            SuspendArm {
+                expected_op_idx: compute_op_idx(
+                    Some(Symbol::new("State")),
+                    Some(Symbol::new("get")),
+                ),
+                block: block_get,
+            },
+            SuspendArm {
+                expected_op_idx: compute_op_idx(
+                    Some(Symbol::new("State")),
+                    Some(Symbol::new("set")),
+                ),
+                block: block_set,
+            },
+        ];
+
+        // Build a dummy current_op_idx value
+        let mut builder = BlockBuilder::new(db, location);
+        let op_idx_const = builder.op(arith::Const::i32(db, location, 0));
+
+        build_nested_dispatch(
+            db,
+            &mut builder,
+            location,
+            step_ty,
+            op_idx_const.result(db),
+            &arms,
+            0,
+            &HashSet::new(),
+        );
+
+        let block = builder.build();
+        let ops = block.operations(db);
+
+        // Find arith.cmp_eq and check its result type is i1
+        let mut found_cmp_eq = false;
+        let mut found_const_i1 = false;
+        for op in ops.iter() {
+            if let Ok(cmp_op) = arith::CmpEq::from_operation(db, *op) {
+                let result_ty = cmp_op.as_operation().results(db);
+                if result_ty.len() == 1 && result_ty[0] == i1_ty {
+                    found_cmp_eq = true;
+                }
+            }
+        }
+
+        // Check the scf.if's then/else regions for the last arm's arith.const with i1 type
+        for op in ops.iter() {
+            if let Ok(if_op) = scf::If::from_operation(db, *op) {
+                // The else region contains the last arm dispatch with arith.const true (i1)
+                let else_region = if_op.r#else(db);
+                for else_block in else_region.blocks(db).iter() {
+                    for else_op in else_block.operations(db).iter() {
+                        if arith::Const::from_operation(db, *else_op).is_ok() {
+                            let results = else_op.results(db);
+                            if results.len() == 1 && results[0] == i1_ty {
+                                found_const_i1 = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !found_cmp_eq {
+            return Err("arith.cmp_eq with i1 result type not found in dispatch".to_string());
+        }
+        if !found_const_i1 {
+            return Err(
+                "arith.const with i1 result type not found in last-arm else region".to_string(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_build_nested_dispatch_uses_i1_conditions(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_build_nested_dispatch_i1_test(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: Hash-based dispatch (collect_suspend_arms)
+    // ========================================================================
+
+    /// Helper tracked function to test hash-based indexing.
     #[salsa::tracked]
     fn run_collect_suspend_arms_table_based_test(db: &dyn salsa::Database) -> Result<(), String> {
         let location = test_location(db);
@@ -3938,32 +3913,37 @@ mod tests {
             return Err(format!("Expected 3 suspend arms, got {}", arms.len()));
         }
 
-        // With table-based dispatch, expected_op_idx should be 0, 1, 2 (block indices)
-        if arms[0].expected_op_idx != 0 {
+        // With hash-based dispatch, expected_op_idx is compute_op_idx(ability, op_name)
+        let expected_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+        let expected_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
+        let expected_modify =
+            compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("modify")));
+
+        if arms[0].expected_op_idx != expected_get {
             return Err(format!(
-                "First arm should have op_idx 0, got {}",
-                arms[0].expected_op_idx
+                "First arm (get) should have op_idx {}, got {}",
+                expected_get, arms[0].expected_op_idx
             ));
         }
-        if arms[1].expected_op_idx != 1 {
+        if arms[1].expected_op_idx != expected_set {
             return Err(format!(
-                "Second arm should have op_idx 1, got {}",
-                arms[1].expected_op_idx
+                "Second arm (set) should have op_idx {}, got {}",
+                expected_set, arms[1].expected_op_idx
             ));
         }
-        if arms[2].expected_op_idx != 2 {
+        if arms[2].expected_op_idx != expected_modify {
             return Err(format!(
-                "Third arm should have op_idx 2, got {}",
-                arms[2].expected_op_idx
+                "Third arm (modify) should have op_idx {}, got {}",
+                expected_modify, arms[2].expected_op_idx
             ));
         }
 
         Ok(())
     }
 
-    /// Test that collect_suspend_arms assigns sequential indices (table-based dispatch).
+    /// Test that collect_suspend_arms assigns hash-based indices.
     #[salsa_test]
-    fn test_collect_suspend_arms_table_based_indexing(db: &salsa::DatabaseImpl) {
+    fn test_collect_suspend_arms_hash_based_indexing(db: &salsa::DatabaseImpl) {
         if let Err(msg) = run_collect_suspend_arms_table_based_test(db) {
             panic!("{}", msg);
         }
@@ -3997,6 +3977,286 @@ mod tests {
     #[salsa_test]
     fn test_collect_suspend_arms_done_only(db: &salsa::DatabaseImpl) {
         if let Err(msg) = run_collect_suspend_arms_done_only_test(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // compute_op_idx tests
+    // ========================================================================
+
+    #[test]
+    fn test_compute_op_idx_is_deterministic() {
+        let ability = Some(Symbol::new("State"));
+        let op = Some(Symbol::new("get"));
+        let idx1 = compute_op_idx(ability, op);
+        let idx2 = compute_op_idx(ability, op);
+        assert_eq!(idx1, idx2, "compute_op_idx should be deterministic");
+    }
+
+    #[test]
+    fn test_compute_op_idx_differs_for_different_ops() {
+        let ability = Some(Symbol::new("State"));
+        let get_idx = compute_op_idx(ability, Some(Symbol::new("get")));
+        let set_idx = compute_op_idx(ability, Some(Symbol::new("set")));
+        assert_ne!(
+            get_idx, set_idx,
+            "different operations should produce different indices"
+        );
+    }
+
+    #[test]
+    fn test_compute_op_idx_differs_for_different_abilities() {
+        let op = Some(Symbol::new("get"));
+        let state_idx = compute_op_idx(Some(Symbol::new("State")), op);
+        let console_idx = compute_op_idx(Some(Symbol::new("Console")), op);
+        assert_ne!(
+            state_idx, console_idx,
+            "different abilities should produce different indices"
+        );
+    }
+
+    #[test]
+    fn test_compute_op_idx_handles_none() {
+        // Should not panic with None values
+        let idx_none_both = compute_op_idx(None, None);
+        let idx_none_ability = compute_op_idx(None, Some(Symbol::new("get")));
+        let idx_none_op = compute_op_idx(Some(Symbol::new("State")), None);
+
+        // None cases should differ from populated cases
+        assert_ne!(idx_none_both, idx_none_ability);
+        assert_ne!(idx_none_both, idx_none_op);
+    }
+
+    // ========================================================================
+    // Test: truncate_scf_if_block — pure branch regression
+    // ========================================================================
+
+    /// Pure branch (no effectful calls): original ops are preserved, and the
+    /// yield operand is wrapped in `trampoline.step_done` + `scf.yield`.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_pure_branch(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let step_ty = trampoline::Step::new(db).as_type();
+
+        // Build a block: arith.const 42 ; scf.yield(%const)
+        let mut builder = BlockBuilder::new(db, location);
+        let c = builder.op(arith::Const::i32(db, location, 42));
+        builder.op(scf::r#yield(db, location, vec![c.result(db)]));
+        let block = builder.build();
+
+        let effectful_funcs: HashSet<Symbol> = HashSet::new();
+        let result = truncate_scf_if_block(db, &block, &effectful_funcs, step_ty);
+
+        let ops: Vec<_> = result.operations(db).iter().copied().collect();
+
+        // Expect 3 ops: arith.const, trampoline.step_done, scf.yield
+        if ops.len() != 3 {
+            return Err(format!(
+                "Expected 3 ops (const + step_done + yield), got {}",
+                ops.len()
+            ));
+        }
+
+        // First op should be the original arith.const
+        if arith::Const::from_operation(db, ops[0]).is_err() {
+            return Err("ops[0] should be arith.const".to_string());
+        }
+
+        // Second op should be trampoline.step_done
+        let step_done = trampoline::StepDone::from_operation(db, ops[1])
+            .map_err(|_| "ops[1] should be trampoline.step_done".to_string())?;
+        let step_done_result_ty = step_done.as_operation().results(db);
+        if step_done_result_ty.first() != Some(&step_ty) {
+            return Err("step_done result type should be Step".to_string());
+        }
+
+        // Third op should be scf.yield whose operand is the step_done result
+        let yield_op = scf::Yield::from_operation(db, ops[2])
+            .map_err(|_| "ops[2] should be scf.yield".to_string())?;
+        let yield_operands = yield_op.as_operation().operands(db);
+        if yield_operands.len() != 1 {
+            return Err(format!(
+                "scf.yield should have 1 operand, got {}",
+                yield_operands.len()
+            ));
+        }
+        if yield_operands[0] != step_done.result(db) {
+            return Err("scf.yield operand should be the step_done result".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_pure_branch(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_pure_branch(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: truncate_scf_if_block — effectful branch
+    // ========================================================================
+
+    /// Effectful branch: call to an effectful function gets its result type
+    /// changed to Step, and ops after the call are truncated.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_effectful_branch(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let step_ty = trampoline::Step::new(db).as_type();
+        let callee = Symbol::new("effectful_fn");
+
+        // Build: func.call @effectful_fn() -> i32 ; arith.const 99 ; scf.yield(%call)
+        let mut builder = BlockBuilder::new(db, location);
+        let call = builder.op(func::call(db, location, vec![], i32_ty, callee));
+        let _dead = builder.op(arith::Const::i32(db, location, 99));
+        builder.op(scf::r#yield(db, location, vec![call.result(db)]));
+        let block = builder.build();
+
+        let mut effectful_funcs: HashSet<Symbol> = HashSet::new();
+        effectful_funcs.insert(callee);
+        let result = truncate_scf_if_block(db, &block, &effectful_funcs, step_ty);
+
+        let ops: Vec<_> = result.operations(db).iter().copied().collect();
+
+        // Expect 2 ops: func.call (with Step result) + scf.yield
+        if ops.len() != 2 {
+            return Err(format!("Expected 2 ops (call + yield), got {}", ops.len()));
+        }
+
+        // First op: func.call with Step result type
+        let new_call = func::Call::from_operation(db, ops[0])
+            .map_err(|_| "ops[0] should be func.call".to_string())?;
+        let call_results = new_call.as_operation().results(db);
+        if call_results.first() != Some(&step_ty) {
+            return Err(format!(
+                "call result should be Step, got {:?}",
+                call_results.first()
+            ));
+        }
+
+        // Second op: scf.yield whose operand is the call's Step result
+        let yield_op = scf::Yield::from_operation(db, ops[1])
+            .map_err(|_| "ops[1] should be scf.yield".to_string())?;
+        let yield_operands = yield_op.as_operation().operands(db);
+        if yield_operands.len() != 1 {
+            return Err(format!(
+                "scf.yield should have 1 operand, got {}",
+                yield_operands.len()
+            ));
+        }
+        if yield_operands[0] != new_call.as_operation().result(db, 0) {
+            return Err("scf.yield operand should be the call's Step result".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_effectful_branch(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_effectful_branch(db) {
+            panic!("{}", msg);
+        }
+    }
+
+    // ========================================================================
+    // Test: truncate_scf_if_branch — mixed branches (integration)
+    // ========================================================================
+
+    /// Integration test: scf.if with effectful then-branch and pure else-branch.
+    /// Both branches should produce Step-typed yield values after processing.
+    #[salsa::tracked]
+    fn run_truncate_scf_if_block_mixed_branches(db: &dyn salsa::Database) -> Result<(), String> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let step_ty = trampoline::Step::new(db).as_type();
+        let callee = Symbol::new("effectful_fn");
+
+        let mut effectful_funcs: HashSet<Symbol> = HashSet::new();
+        effectful_funcs.insert(callee);
+
+        // Then branch (effectful): func.call @effectful_fn() ; scf.yield(%call)
+        let mut then_builder = BlockBuilder::new(db, location);
+        let call = then_builder.op(func::call(db, location, vec![], i32_ty, callee));
+        then_builder.op(scf::r#yield(db, location, vec![call.result(db)]));
+        let then_block = then_builder.build();
+        let then_region = Region::new(db, location, IdVec::from(vec![then_block]));
+
+        // Else branch (pure): arith.const 7 ; scf.yield(%const)
+        let mut else_builder = BlockBuilder::new(db, location);
+        let c = else_builder.op(arith::Const::i32(db, location, 7));
+        else_builder.op(scf::r#yield(db, location, vec![c.result(db)]));
+        let else_block = else_builder.build();
+        let else_region = Region::new(db, location, IdVec::from(vec![else_block]));
+
+        // Process both branches
+        let new_then = truncate_scf_if_branch(db, &then_region, &effectful_funcs, step_ty);
+        let new_else = truncate_scf_if_branch(db, &else_region, &effectful_funcs, step_ty);
+
+        // --- Verify then branch ---
+        let then_ops: Vec<_> = new_then.blocks(db)[0]
+            .operations(db)
+            .iter()
+            .copied()
+            .collect();
+
+        // Then: call (Step) + yield
+        if then_ops.len() != 2 {
+            return Err(format!(
+                "Then branch: expected 2 ops, got {}",
+                then_ops.len()
+            ));
+        }
+        let then_call = func::Call::from_operation(db, then_ops[0])
+            .map_err(|_| "Then ops[0] should be func.call".to_string())?;
+        if then_call.as_operation().results(db).first() != Some(&step_ty) {
+            return Err("Then call should have Step result".to_string());
+        }
+        let then_yield = scf::Yield::from_operation(db, then_ops[1])
+            .map_err(|_| "Then ops[1] should be scf.yield".to_string())?;
+        // The yield operand should be the call result (which has Step type)
+        if then_yield.as_operation().operands(db)[0] != then_call.as_operation().result(db, 0) {
+            return Err("Then yield operand should be the call's Step result".to_string());
+        }
+
+        // --- Verify else branch ---
+        let else_ops: Vec<_> = new_else.blocks(db)[0]
+            .operations(db)
+            .iter()
+            .copied()
+            .collect();
+
+        // Else: const + step_done + yield
+        if else_ops.len() != 3 {
+            return Err(format!(
+                "Else branch: expected 3 ops, got {}",
+                else_ops.len()
+            ));
+        }
+        if arith::Const::from_operation(db, else_ops[0]).is_err() {
+            return Err("Else ops[0] should be arith.const".to_string());
+        }
+        let else_step_done = trampoline::StepDone::from_operation(db, else_ops[1])
+            .map_err(|_| "Else ops[1] should be trampoline.step_done".to_string())?;
+        let else_yield = scf::Yield::from_operation(db, else_ops[2])
+            .map_err(|_| "Else ops[2] should be scf.yield".to_string())?;
+        // The yield operand should be the step_done result (which has Step type)
+        if else_yield.as_operation().operands(db)[0] != else_step_done.result(db) {
+            return Err("Else yield operand should be the step_done result".to_string());
+        }
+        // Verify step_done result type is Step
+        if else_step_done.as_operation().results(db).first() != Some(&step_ty) {
+            return Err("step_done result type should be Step".to_string());
+        }
+
+        Ok(())
+    }
+
+    #[salsa_test]
+    fn test_truncate_scf_if_block_mixed_branches(db: &salsa::DatabaseImpl) {
+        if let Err(msg) = run_truncate_scf_if_block_mixed_branches(db) {
             panic!("{}", msg);
         }
     }

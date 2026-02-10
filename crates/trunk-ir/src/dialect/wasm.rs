@@ -17,7 +17,8 @@ dialect! {
 
         /// `wasm.loop` operation: loop construct.
         /// Label is for debugging/text format only, stored as empty string in IR.
-        fn r#loop() -> result {
+        /// Init operands are loop-carried values that initialize block arguments.
+        fn r#loop(#[rest] init) -> result {
             #[region(body)] {}
         };
 

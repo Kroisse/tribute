@@ -12,7 +12,8 @@ use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, Operation, Region, Sy
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
-    self, CLOSURE_STRUCT_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, GcTypeRegistry, STEP_IDX,
+    self, CLOSURE_STRUCT_IDX, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    GcTypeRegistry, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -67,22 +68,62 @@ impl<'db> GcTypeBuilder<'db> {
 // Helper functions
 // ============================================================================
 
-/// Returns true if this is a built-in type (0-4) that shouldn't use a builder
+/// Returns true if this is a built-in type (0-8) that shouldn't use a builder
 fn is_builtin_type(idx: u32) -> bool {
     idx < FIRST_USER_TYPE_IDX
 }
 
+/// Check if a type is an abstract WASM heap type that should NOT get a concrete GC type index.
+///
+/// Abstract types (anyref, i31ref, structref, funcref, etc.) are WASM built-in types.
+/// They must NOT be allocated concrete GC struct/array indices because they don't correspond
+/// to user-defined type definitions. If registered, they create spurious empty `(struct)`
+/// definitions that cause `ref.cast` to emit invalid concrete type references instead of
+/// abstract heap type references.
+///
+/// Note: `wasm.arrayref` may be pre-registered as EVIDENCE_IDX — that's handled by the
+/// existing lookup path (which finds it before reaching the allocation code).
+fn is_abstract_wasm_heap_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    let wasm_dialect = Symbol::new("wasm");
+    if ty.dialect(db) != wasm_dialect {
+        return false;
+    }
+    let name = ty.name(db);
+    name == Symbol::new("anyref")
+        || name == Symbol::new("i31ref")
+        || name == Symbol::new("structref")
+        || name == Symbol::new("funcref")
+        || name == Symbol::new("externref")
+        || name == Symbol::new("eqref")
+}
+
+/// Get the builtin struct type index for closure, continuation, or resume wrapper types.
+///
+/// Returns `Some(idx)` if the type is one of the three builtin struct types,
+/// `None` for all other types.
+fn get_builtin_struct_idx(db: &dyn salsa::Database, ty: Type<'_>) -> Option<u32> {
+    if is_closure_struct_type(db, ty) {
+        Some(CLOSURE_STRUCT_IDX)
+    } else if gc_types::is_continuation_struct_type(db, ty) {
+        Some(CONTINUATION_IDX)
+    } else if gc_types::is_resume_wrapper_struct_type(db, ty) {
+        Some(RESUME_WRAPPER_IDX)
+    } else {
+        None
+    }
+}
+
 /// Get or create a builder for a user-defined type.
-/// Returns None for built-in types (0-4) which are predefined.
+/// Returns None for built-in types (0-8) which are predefined.
 fn try_get_builder<'db, 'a>(
     builders: &'a mut Vec<GcTypeBuilder<'db>>,
     idx: u32,
 ) -> Option<&'a mut GcTypeBuilder<'db>> {
-    // Skip built-in types (0-4) as they are predefined
+    // Skip built-in types (0-8) as they are predefined
     if is_builtin_type(idx) {
         return None;
     }
-    // Subtract FIRST_USER_TYPE_IDX because indices 0-4 are reserved for built-in types
+    // Subtract FIRST_USER_TYPE_IDX because indices 0-8 are reserved for built-in types
     // User type indices start at FIRST_USER_TYPE_IDX
     let adjusted_idx = (idx - FIRST_USER_TYPE_IDX) as usize;
     if builders.len() <= adjusted_idx {
@@ -162,6 +203,33 @@ fn types_equivalent_for_gc<'db>(
     ) && name1 == name2
     {
         return true;
+    }
+    // anyref is a supertype of all concrete GC reference types (adt.struct,
+    // wasm.structref, wasm.arrayref, etc.). When one code path records a field
+    // as anyref and another records the concrete type, they are compatible —
+    // the field should remain anyref (the wider type).
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+    if ty1_norm == anyref_ty || ty2_norm == anyref_ty {
+        let other = if ty1_norm == anyref_ty {
+            ty2_norm
+        } else {
+            ty1_norm
+        };
+        // Accept if the other type is an ADT reference (adt.struct, adt.enum)
+        // or a wasm heap type that is a subtype of anyref.
+        // Note: funcref and externref are NOT subtypes of anyref.
+        let other_dialect = other.dialect(db);
+        let adt_dialect = Symbol::new("adt");
+        if other_dialect == adt_dialect {
+            return true;
+        }
+        if wasm::Structref::from_type(db, other).is_some()
+            || wasm::Arrayref::from_type(db, other).is_some()
+            || wasm::Eqref::from_type(db, other).is_some()
+            || wasm::I31ref::from_type(db, other).is_some()
+        {
+            return true;
+        }
     }
     false
 }
@@ -296,11 +364,32 @@ pub(crate) fn collect_gc_types<'db>(
     );
 
     // Register builtin types in type_idx_by_type:
-    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct
+    // 0: BoxedF64, 1: BytesArray, 2: BytesStruct, 3: Step, 4: ClosureStruct, 5: Marker,
+    // 6: Evidence, 7: Continuation, 8: ResumeWrapper
     // Step marker type needs to be registered so wasm.if can use it
     type_idx_by_type.insert(crate::gc_types::step_marker_type(db), STEP_IDX);
+    // Abstract wasm.arrayref maps to EVIDENCE_IDX because type_converter lowers
+    // all core::Array types to wasm::Arrayref (which erases element type info).
+    // Currently the only array in the system is the evidence array, so this is safe.
+    // TODO: if user-defined arrays are added, this will need per-element-type indices.
+    type_idx_by_type.insert(wasm::Arrayref::new(db).as_type(), EVIDENCE_IDX);
+    // Marker ADT type needs to be registered so wasm.struct_new for Marker reuses MARKER_IDX
+    // instead of creating a separate user type index.
+    type_idx_by_type.insert(crate::gc_types::marker_adt_type(db), MARKER_IDX);
+    // Evidence ADT type (core.array(Marker)) maps to EVIDENCE_IDX
+    type_idx_by_type.insert(crate::gc_types::evidence_adt_type(db), EVIDENCE_IDX);
+    // Continuation ADT type (_Continuation) maps to CONTINUATION_IDX
+    type_idx_by_type.insert(
+        crate::passes::trampoline_to_wasm::continuation_adt_type(db),
+        CONTINUATION_IDX,
+    );
+    // ResumeWrapper ADT type (_ResumeWrapper) maps to RESUME_WRAPPER_IDX
+    type_idx_by_type.insert(
+        crate::passes::trampoline_to_wasm::resume_wrapper_adt_type(db),
+        RESUME_WRAPPER_IDX,
+    );
 
-    // Start at FIRST_USER_TYPE_IDX since indices 0-4 are reserved for built-in types
+    // Start at FIRST_USER_TYPE_IDX since indices 0-8 are reserved for built-in types
     let mut next_type_idx: u32 = FIRST_USER_TYPE_IDX;
 
     // Helper to get next available type_idx, skipping reserved indices
@@ -330,9 +419,8 @@ pub(crate) fn collect_gc_types<'db>(
         }
         // Fall back to type attribute (legacy, will be removed)
         if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, *ty) {
-                return Some(CLOSURE_STRUCT_IDX);
+            if let Some(idx) = get_builtin_struct_idx(db, *ty) {
+                return Some(idx);
             }
             if let Some(&idx) = type_idx_by_type.get(ty) {
                 debug!(
@@ -340,6 +428,12 @@ pub(crate) fn collect_gc_types<'db>(
                     idx, ty
                 );
                 return Some(idx);
+            }
+            // Don't allocate concrete GC type indices for abstract WASM heap types.
+            // Types like wasm.anyref, wasm.i31ref are built-in abstract types, not
+            // user-defined struct/array definitions.
+            if is_abstract_wasm_heap_type(db, *ty) {
+                return None;
             }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
@@ -352,9 +446,8 @@ pub(crate) fn collect_gc_types<'db>(
         }
         // Fall back to inferred type (from result or operand types)
         if let Some(ty) = inferred_type {
-            // Special case: closure types use builtin CLOSURE_STRUCT_IDX
-            if is_closure_struct_type(db, ty) {
-                return Some(CLOSURE_STRUCT_IDX);
+            if let Some(idx) = get_builtin_struct_idx(db, ty) {
+                return Some(idx);
             }
             if let Some(&idx) = type_idx_by_type.get(&ty) {
                 debug!(
@@ -362,6 +455,10 @@ pub(crate) fn collect_gc_types<'db>(
                     idx, ty
                 );
                 return Some(idx);
+            }
+            // Don't allocate concrete GC type indices for abstract WASM heap types.
+            if is_abstract_wasm_heap_type(db, ty) {
+                return None;
             }
             // Allocate new type_idx, skipping reserved indices
             let idx = next_available_idx(next_type_idx, &reserved_indices);
@@ -510,12 +607,12 @@ pub(crate) fn collect_gc_types<'db>(
                 })
                 .unwrap_or(false);
 
-            // Check if this is a _closure struct type (should use CLOSURE_STRUCT_IDX)
-            let is_closure_type = attrs.get(&ATTR_TYPE()).is_some_and(|attr| {
+            // Check if this is a builtin struct type
+            let builtin_type_idx = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    is_closure_struct_type(db, *ty)
+                    get_builtin_struct_idx(db, *ty)
                 } else {
-                    false
+                    None
                 }
             });
 
@@ -523,7 +620,7 @@ pub(crate) fn collect_gc_types<'db>(
             // Returns (adt_struct_type, field_count) if it's an adt.struct type
             let adt_struct_info = attrs.get(&ATTR_TYPE()).and_then(|attr| {
                 if let Attribute::Type(ty) = attr {
-                    if adt::is_struct_type(db, *ty) && !is_closure_struct_type(db, *ty) {
+                    if adt::is_struct_type(db, *ty) && get_builtin_struct_idx(db, *ty).is_none() {
                         adt::get_struct_fields(db, *ty).map(|fields| (*ty, fields.len()))
                     } else {
                         None
@@ -533,9 +630,8 @@ pub(crate) fn collect_gc_types<'db>(
                 }
             });
 
-            let type_idx = if is_closure_type {
-                // Closure struct types use the builtin CLOSURE_STRUCT_IDX
-                CLOSURE_STRUCT_IDX
+            let type_idx = if let Some(idx) = builtin_type_idx {
+                idx
             } else if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
                 let ty = match attrs.get(&ATTR_TYPE()) {
@@ -1010,4 +1106,80 @@ pub(crate) fn collect_gc_types<'db>(
     result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::dialect::adt;
+
+    #[test]
+    fn test_get_builtin_struct_idx_closure() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let closure_ty = adt::struct_type(
+            &db,
+            "_closure",
+            vec![
+                (Symbol::new("func_idx"), i32_ty),
+                (Symbol::new("env"), wasm::Anyref::new(&db).as_type()),
+            ],
+        );
+        assert_eq!(
+            get_builtin_struct_idx(&db, closure_ty),
+            Some(CLOSURE_STRUCT_IDX)
+        );
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_continuation() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let anyref_ty = wasm::Anyref::new(&db).as_type();
+        let cont_ty = adt::struct_type(
+            &db,
+            "_Continuation",
+            vec![
+                (Symbol::new("func_idx"), i32_ty),
+                (Symbol::new("env"), anyref_ty),
+                (Symbol::new("prompt_tag"), i32_ty),
+                (Symbol::new("state"), anyref_ty),
+            ],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, cont_ty), Some(CONTINUATION_IDX));
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_resume_wrapper() {
+        let db = salsa::DatabaseImpl::default();
+        let anyref_ty = wasm::Anyref::new(&db).as_type();
+        let rw_ty = adt::struct_type(
+            &db,
+            "_ResumeWrapper",
+            vec![
+                (Symbol::new("state"), anyref_ty),
+                (Symbol::new("resume_value"), anyref_ty),
+            ],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, rw_ty), Some(RESUME_WRAPPER_IDX));
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_returns_none_for_regular_struct() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        let regular_ty = adt::struct_type(
+            &db,
+            "Point",
+            vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
+        );
+        assert_eq!(get_builtin_struct_idx(&db, regular_ty), None);
+    }
+
+    #[test]
+    fn test_get_builtin_struct_idx_returns_none_for_primitive() {
+        let db = salsa::DatabaseImpl::default();
+        let i32_ty = core::I32::new(&db).as_type();
+        assert_eq!(get_builtin_struct_idx(&db, i32_ty), None);
+    }
 }

@@ -67,10 +67,10 @@ pub fn evidence_wasm_type(db: &dyn salsa::Database) -> Type<'_> {
     wasm::Arrayref::new(db).as_type()
 }
 
-/// Helper to generate i31 boxing operations (ref_i31 + implicit upcast to anyref).
+/// Helper to generate i31 boxing operations (ref_i31 + explicit upcast to anyref).
 ///
 /// This is used when converting i32/i64 values to anyref for polymorphic function calls.
-/// WasmGC's i31ref is a subtype of anyref, so the boxing is implicit.
+/// WasmGC's i31ref is a subtype of anyref, but an explicit `ref_cast` is emitted for IR type correctness.
 /// If the input is i64, an `i32_wrap_i64` truncation is emitted first.
 fn box_via_i31<'db>(
     db: &'db dyn salsa::Database,
@@ -79,6 +79,7 @@ fn box_via_i31<'db>(
     from_ty: trunk_ir::Type<'db>,
 ) -> MaterializeResult<'db> {
     let i31ref_ty = wasm::I31ref::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
 
     // If the source is i64, wrap to i32 first (ref_i31 requires an i32 operand)
     if core::I64::from_type(db, from_ty).is_some() {
@@ -86,13 +87,22 @@ fn box_via_i31<'db>(
         let wrap_op = wasm::i32_wrap_i64(db, location, value, i32_ty);
         let wrapped = wrap_op.as_operation().result(db, 0);
         let ref_op = wasm::ref_i31(db, location, wrapped, i31ref_ty);
-        return MaterializeResult::ops([wrap_op.as_operation(), ref_op.as_operation()]);
+        let i31ref_val = ref_op.as_operation().result(db, 0);
+        // Upcast i31ref → anyref (needed for IR type correctness)
+        let upcast = wasm::ref_cast(db, location, i31ref_val, anyref_ty, anyref_ty, None);
+        return MaterializeResult::ops([
+            wrap_op.as_operation(),
+            ref_op.as_operation(),
+            upcast.as_operation(),
+        ]);
     }
 
     // Create i31ref from i32 value (truncates to 31 bits)
-    let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-
-    MaterializeResult::single(new_op.as_operation())
+    let ref_op = wasm::ref_i31(db, location, value, i31ref_ty);
+    let i31ref_val = ref_op.as_operation().result(db, 0);
+    // Upcast i31ref → anyref (needed for IR type correctness)
+    let upcast = wasm::ref_cast(db, location, i31ref_val, anyref_ty, anyref_ty, None);
+    MaterializeResult::ops([ref_op.as_operation(), upcast.as_operation()])
 }
 
 /// Helper to generate i31 unboxing operations (ref_cast to i31ref + i31_get_s).
@@ -172,6 +182,16 @@ pub fn wasm_type_converter() -> TypeConverter {
         // Convert tribute_rt.any → wasm.anyref (any reference type)
         .add_conversion(|db, ty| {
             tribute_rt::Any::from_type(db, ty).map(|_| wasm::Anyref::new(db).as_type())
+        })
+        // Convert trampoline.step → _Step ADT
+        .add_conversion(|db, ty| trampoline::Step::from_type(db, ty).map(|_| step_adt_type(db)))
+        // Convert trampoline.continuation → _Continuation ADT
+        .add_conversion(|db, ty| {
+            trampoline::Continuation::from_type(db, ty).map(|_| continuation_adt_type(db))
+        })
+        // Convert trampoline.resume_wrapper → _ResumeWrapper ADT
+        .add_conversion(|db, ty| {
+            trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
         })
         // Convert adt.typeref → wasm.structref (generic struct reference)
         .add_conversion(|db, ty| {
@@ -253,17 +273,16 @@ pub fn wasm_type_converter() -> TypeConverter {
                 || tribute_rt::Any::from_type(db, from_ty).is_some();
             let to_is_abstract_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
             if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
-                // Convert trampoline types to their ADT representation for the cast
-                let target_ty = if trampoline::ResumeWrapper::from_type(db, to_ty).is_some() {
-                    resume_wrapper_adt_type(db)
-                } else if trampoline::Step::from_type(db, to_ty).is_some() {
-                    step_adt_type(db)
-                } else if trampoline::Continuation::from_type(db, to_ty).is_some() {
-                    continuation_adt_type(db)
-                } else {
-                    to_ty
-                };
-                let cast_op = wasm::ref_cast(db, location, value, target_ty, target_ty, None);
+                // Trampoline types must already be converted to ADT types by add_conversion
+                // rules before materialization runs (convert_type is applied to to_ty in
+                // resolve_unrealized_casts before calling materialize).
+                debug_assert!(
+                    trampoline::ResumeWrapper::from_type(db, to_ty).is_none()
+                        && trampoline::Step::from_type(db, to_ty).is_none()
+                        && trampoline::Continuation::from_type(db, to_ty).is_none(),
+                    "ICE: trampoline type {to_ty:?} reached materialization without conversion"
+                );
+                let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty, None);
                 let mut ops = OpVec::new();
                 ops.push(cast_op.as_operation());
                 return MaterializeResult::Ops(ops);
@@ -351,6 +370,12 @@ pub fn wasm_type_converter() -> TypeConverter {
             }
             // wasm.structref → wasm.anyref (structref is a subtype of anyref)
             if wasm::Structref::from_type(db, from_ty).is_some()
+                && wasm::Anyref::from_type(db, to_ty).is_some()
+            {
+                return MaterializeResult::NoOp;
+            }
+            // wasm.arrayref → wasm.anyref (arrayref is a subtype of anyref in WasmGC)
+            if wasm::Arrayref::from_type(db, from_ty).is_some()
                 && wasm::Anyref::from_type(db, to_ty).is_some()
             {
                 return MaterializeResult::NoOp;
@@ -484,15 +509,21 @@ pub fn wasm_type_converter() -> TypeConverter {
 
 /// Check if a type is a struct-like reference type.
 ///
-/// This includes `wasm.structref`, `wasm.anyref`, and ADT typeref types.
+/// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
+/// and trampoline types that get lowered to ADT structs.
 fn is_struct_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
     // wasm.structref or wasm.anyref
     if wasm::Structref::from_type(db, ty).is_some() || wasm::Anyref::from_type(db, ty).is_some() {
         return true;
     }
 
-    // adt.typeref (struct types)
+    // adt.typeref (generic struct references)
     if adt::is_typeref(db, ty) {
+        return true;
+    }
+
+    // adt.struct (concrete struct types like _ResumeWrapper, _Continuation, _Step)
+    if adt::is_struct_type(db, ty) {
         return true;
     }
 
@@ -718,11 +749,17 @@ mod tests {
     fn test_materialize_i64_to_anyref_emits_wrap_and_ref_i31(db: &salsa::DatabaseImpl) {
         let ops = do_materialize_i64_to_anyref_test(db);
         let ops = ops.expect("core.i64 → wasm.anyref should produce Ops");
-        assert_eq!(ops.len(), 2, "should emit 2 ops: i32_wrap_i64 + ref_i31");
+        assert_eq!(
+            ops.len(),
+            3,
+            "should emit 3 ops: i32_wrap_i64 + ref_i31 + ref_cast(anyref)"
+        );
         assert_eq!(ops[0].0, wasm::DIALECT_NAME());
         assert_eq!(ops[0].1, Symbol::new("i32_wrap_i64"));
         assert_eq!(ops[1].0, wasm::DIALECT_NAME());
         assert_eq!(ops[1].1, Symbol::new("ref_i31"));
+        assert_eq!(ops[2].0, wasm::DIALECT_NAME());
+        assert_eq!(ops[2].1, Symbol::new("ref_cast"));
     }
 
     #[salsa_test]

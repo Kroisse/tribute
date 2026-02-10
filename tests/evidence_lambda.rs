@@ -377,9 +377,10 @@ fn main() -> Int {
 // Evidence Parameter Count Tests
 // ========================================================================
 
-/// After evidence pass, effectful functions should have one more parameter.
+/// Effectful lambdas already have evidence as their first parameter (from ast_to_ir).
+/// The evidence pass should detect this and not add a duplicate parameter.
 #[test]
-fn test_evidence_param_added_to_effectful_lambda() {
+fn test_evidence_param_not_duplicated_for_effectful_lambda() {
     use tribute::pipeline::stage_evidence_params;
 
     let code = r#"
@@ -418,7 +419,9 @@ fn main() -> Int {
         let effectful_before = collect_effectful_functions(db, &module);
         eprintln!("Effectful functions: {:?}", effectful_before);
 
-        // Effectful lambdas should have one more parameter after evidence pass
+        // Effectful lambdas already get evidence as their first parameter during
+        // ast_to_ir lowering (for uniform calling convention at call_indirect sites).
+        // The evidence pass should detect this and NOT add a duplicate.
         let mut checked = 0;
         for name in effectful_before.iter() {
             let name_str = name.to_string();
@@ -435,8 +438,8 @@ fn main() -> Int {
                 if let (Some(before), Some(after)) = (before_count, after_count) {
                     assert_eq!(
                         after,
-                        before + 1,
-                        "Effectful lambda {} should have one more param after evidence pass (before: {}, after: {})",
+                        before,
+                        "Effectful lambda {} should keep same param count (evidence already added in ast_to_ir) (before: {}, after: {})",
                         name_str,
                         before,
                         after

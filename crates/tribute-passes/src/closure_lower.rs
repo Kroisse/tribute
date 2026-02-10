@@ -23,7 +23,7 @@ use std::collections::HashSet;
 
 use tribute_ir::dialect::{closure, tribute_rt};
 use trunk_ir::dialect::adt;
-use trunk_ir::dialect::{cont, core, func, wasm};
+use trunk_ir::dialect::{cont, core, func};
 use trunk_ir::rewrite::{
     ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
 };
@@ -387,11 +387,9 @@ fn transform_closure_calls_in_block_with_null<'db>(
         } else if let Some(ev) = *null_ev_value {
             ev
         } else {
-            // Create null evidence
-            // Use anyref directly for wasm compatibility - evidence is represented
-            // as core.array(Marker) which is converted to wasm.arrayref
-            let anyref_ty = wasm::Anyref::new(db).as_type();
-            let null_ev_op = adt::ref_null(db, func_location, anyref_ty, anyref_ty);
+            // Create null evidence using the canonical evidence ADT type
+            let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
+            let null_ev_op = adt::ref_null(db, func_location, evidence_ty, evidence_ty);
             let ev = null_ev_op.as_operation().result(db, 0);
             new_ops.insert(0, null_ev_op.as_operation()); // Prepend to block
             *null_ev_value = Some(ev);

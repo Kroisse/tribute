@@ -24,6 +24,7 @@ paste = "1.0"
 proptest = "1.9"
 quote = "1.0"
 ropey = "1.6"
+rustc-hash = "2.1"
 salsa = "0.25.2"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }

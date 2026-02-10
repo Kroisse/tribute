@@ -15,8 +15,8 @@ use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType}
 use crate::{CompilationError, CompilationResult};
 
 use super::super::{
-    FunctionEmitContext, ModuleInfo, emit_operands, emit_region_ops, is_nil_type,
-    region_result_value, set_result_local, type_to_valtype,
+    FunctionEmitContext, ModuleInfo, NestingKind, emit_operands, emit_region_ops_nested,
+    is_nil_type, region_result_value, set_result_local, type_to_valtype,
 };
 
 // ============================================================================
@@ -66,6 +66,7 @@ pub(crate) fn handle_if<'db>(
     ctx: &FunctionEmitContext<'db>,
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
+    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     let operands = op.operands(db);
     let result_ty = op.results(db).first().copied();
@@ -102,31 +103,21 @@ pub(crate) fn handle_if<'db>(
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
 
+    // Push If nesting for child regions
+    let mut child_nesting = nesting.to_vec();
+    child_nesting.push(NestingKind::If);
+
     // Emit then branch
-    let then_result = if has_result {
-        Some(region_result_value(db, then_region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.if then region missing result value")
-        })?)
-    } else {
-        None
-    };
-    emit_region_ops(db, then_region, ctx, module_info, function)?;
-    if let Some(value) = then_result {
+    emit_region_ops_nested(db, then_region, ctx, module_info, function, &child_nesting)?;
+    if has_result && let Some(value) = region_result_value(db, then_region) {
         emit_value_get(db, value, ctx, function)?;
     }
 
     // Emit else branch if present
     if let Some(else_region) = regions.get(1) {
-        let else_result = if has_result {
-            Some(region_result_value(db, else_region).ok_or_else(|| {
-                CompilationError::invalid_module("wasm.if else region missing result value")
-            })?)
-        } else {
-            None
-        };
         function.instruction(&Instruction::Else);
-        emit_region_ops(db, else_region, ctx, module_info, function)?;
-        if let Some(value) = else_result {
+        emit_region_ops_nested(db, else_region, ctx, module_info, function, &child_nesting)?;
+        if has_result && let Some(value) = region_result_value(db, else_region) {
             emit_value_get(db, value, ctx, function)?;
         }
     } else if has_result {
@@ -219,6 +210,7 @@ pub(crate) fn handle_block<'db>(
     ctx: &FunctionEmitContext<'db>,
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
+    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     // Use IR result type directly - type variables are resolved at AST level
     let result_ty = op.results(db).first().copied();
@@ -232,12 +224,12 @@ pub(crate) fn handle_block<'db>(
         .regions(db)
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
-    emit_region_ops(db, region, ctx, module_info, function)?;
 
-    if has_result {
-        let value = region_result_value(db, region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.block body missing result value")
-        })?;
+    let mut child_nesting = nesting.to_vec();
+    child_nesting.push(NestingKind::Block);
+    emit_region_ops_nested(db, region, ctx, module_info, function, &child_nesting)?;
+
+    if has_result && let Some(value) = region_result_value(db, region) {
         emit_value_get(db, value, ctx, function)?;
     }
 
@@ -255,6 +247,7 @@ pub(crate) fn handle_loop<'db>(
     ctx: &FunctionEmitContext<'db>,
     module_info: &ModuleInfo<'db>,
     function: &mut Function,
+    nesting: &[NestingKind],
 ) -> CompilationResult<()> {
     // Use IR result type directly - type variables are resolved at AST level
     let result_ty = op.results(db).first().copied();
@@ -262,18 +255,46 @@ pub(crate) fn handle_loop<'db>(
 
     let block_type = compute_block_type(db, has_result, result_ty, module_info)?;
 
-    function.instruction(&Instruction::Loop(block_type));
-
     let region = op
         .regions(db)
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
-    emit_region_ops(db, region, ctx, module_info, function)?;
 
-    if has_result {
-        let value = region_result_value(db, region).ok_or_else(|| {
-            CompilationError::invalid_module("wasm.loop body missing result value")
-        })?;
+    // Collect loop arg locals from the body's block arguments
+    let body_block = region
+        .blocks(db)
+        .first()
+        .ok_or_else(|| CompilationError::invalid_module("wasm.loop body has no block"))?;
+    let arg_locals: Vec<u32> = (0..body_block.args(db).len())
+        .map(|i| {
+            ctx.value_locals
+                .get(&body_block.arg(db, i))
+                .copied()
+                .ok_or_else(|| {
+                    CompilationError::invalid_module("wasm.loop block arg missing local")
+                })
+        })
+        .collect::<Result<Vec<u32>, _>>()?;
+
+    // Initialize loop-carried variables from init operands
+    let init_operands = op.operands(db);
+    assert_eq!(
+        init_operands.len(),
+        arg_locals.len(),
+        "wasm.loop init operands and block arg locals must have the same length"
+    );
+    for (init_val, &arg_local) in init_operands.iter().zip(&arg_locals) {
+        emit_value_get(db, *init_val, ctx, function)?;
+        function.instruction(&Instruction::LocalSet(arg_local));
+    }
+
+    function.instruction(&Instruction::Loop(block_type));
+
+    let mut child_nesting = nesting.to_vec();
+    child_nesting.push(NestingKind::Loop { arg_locals });
+    emit_region_ops_nested(db, region, ctx, module_info, function, &child_nesting)?;
+
+    if has_result && let Some(value) = region_result_value(db, region) {
         emit_value_get(db, value, ctx, function)?;
     }
 
