@@ -1172,9 +1172,11 @@ fn transform_shifts_in_block_with_remap<'db>(
             // Look up op_offset from registry (if available)
             // The op_table_index is dynamic at runtime, but for static analysis we can
             // try to determine it from known registrations. If not found, use None.
+            // TODO(#336): first-match heuristic may be unsound when multiple handlers
+            // register the same ability/op at different offsets. Needs proper runtime
+            // dispatch or alignment with collect_suspend_arms' table-based indexing.
             let op_offset = {
                 let reg = registry.borrow();
-                // Try all registered handlers to find one that handles this ability/op
                 let mut found_offset = None;
                 for idx in 0..reg.len() {
                     if let Some(offset) = reg.compute_op_offset(idx as u32, ability_ref, op_name) {

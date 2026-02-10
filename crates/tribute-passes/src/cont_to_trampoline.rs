@@ -2695,7 +2695,7 @@ fn build_nested_dispatch<'db>(
     arm_index: usize,
     effectful_funcs: &HashSet<Symbol>,
 ) -> Value<'db> {
-    let i32_ty = core::I32::new(db).as_type();
+    let i1_ty = core::I::<1>::new(db).as_type();
 
     // Safety check
     if arm_index >= suspend_arms.len() {
@@ -2710,7 +2710,7 @@ fn build_nested_dispatch<'db>(
 
     if is_last_arm {
         // Last arm (or only arm): use always-true condition, duplicate arm for else
-        let true_const = builder.op(arith::Const::i32(db, location, 1));
+        let true_const = builder.op(arith::r#const(db, location, i1_ty, true.into()));
         let else_region = build_arm_region(db, location, &arm.block, effectful_funcs);
 
         let if_op = builder.op(scf::r#if(
@@ -2734,7 +2734,7 @@ fn build_nested_dispatch<'db>(
         location,
         current_op_idx,
         expected_const.result(db),
-        i32_ty,
+        i1_ty,
     ));
     let is_match = cmp_op.result(db);
 

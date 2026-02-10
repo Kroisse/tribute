@@ -223,14 +223,14 @@ impl<'db> RewritePattern<'db> for ScfBreakPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(break_op) = scf::Break::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
         let location = op.location(db);
-        let value = break_op.value(db);
+        let value = adaptor.operand(0).unwrap_or_else(|| break_op.value(db));
 
         // Emit the break value via wasm.yield (marks it as region result)
         let yield_op = wasm::r#yield(db, location, value).as_operation();
