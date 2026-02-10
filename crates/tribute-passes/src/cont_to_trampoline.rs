@@ -1148,7 +1148,7 @@ fn state_type_name(key: StateTypeKey) -> String {
     key.shift_index.hash(&mut hasher);
 
     let hash = hasher.finish();
-    format!("__State_{:x}", hash & 0xFFFFFF)
+    format!("__State_{:012x}", hash & 0xFFFF_FFFF_FFFF)
 }
 
 // ============================================================================
@@ -2813,8 +2813,14 @@ fn build_arm_region<'db>(
             value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
         ) -> Value<'db> {
             let mut current = v;
+            let mut steps = 0u32;
             while let Some(&remapped) = value_remap.get(&current) {
                 current = remapped;
+                steps += 1;
+                debug_assert!(
+                    steps < 1000,
+                    "cycle detected in value_remap after {steps} steps"
+                );
             }
             current
         }

@@ -278,6 +278,11 @@ pub(crate) fn handle_loop<'db>(
 
     // Initialize loop-carried variables from init operands
     let init_operands = op.operands(db);
+    debug_assert_eq!(
+        init_operands.len(),
+        arg_locals.len(),
+        "wasm.loop init operands and block arg locals must have the same length"
+    );
     for (init_val, &arg_local) in init_operands.iter().zip(&arg_locals) {
         emit_value_get(db, *init_val, ctx, function)?;
         function.instruction(&Instruction::LocalSet(arg_local));

@@ -666,11 +666,21 @@ fn transform_block_with_evidence<'db>(
                 for transformed_op in transformed.operations(db).iter() {
                     new_ops.push(*transformed_op);
                 }
-                // Map old results to new results
+                // Map old results to new results.
+                // Invariant: the last op of the transformed block must be the
+                // (possibly rebuilt) cont.push_prompt that carries the result.
+                // If the inner transform ever appends ops after push_prompt,
+                // this mapping would silently break.
                 if !op.results(db).is_empty()
                     && let Some(last_op) = transformed.operations(db).last()
                     && !last_op.results(db).is_empty()
                 {
+                    debug_assert!(
+                        cont::PushPrompt::from_operation(db, *last_op).is_ok(),
+                        "expected last op of transformed push_prompt block to be cont.push_prompt, got {}.{}",
+                        last_op.dialect(db),
+                        last_op.name(db),
+                    );
                     value_map.insert(op.result(db, 0), last_op.result(db, 0));
                 }
                 continue;

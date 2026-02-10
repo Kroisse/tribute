@@ -188,7 +188,7 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
 
         let location = op.location(db);
         let values = continue_op.values(db);
-        debug_assert!(
+        assert!(
             values.len() <= 1,
             "scf.continue with multiple loop-carried values not yet supported"
         );
