@@ -1,0 +1,22 @@
+[package]
+name = "trunk-ir-cranelift-backend"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cranelift native backend for TrunkIR (language-agnostic)"
+
+[dependencies]
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+derive_more.workspace = true
+salsa.workspace = true
+target-lexicon.workspace = true
+tracing.workspace = true
+trunk-ir.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+salsa-test-macros = { path = "../salsa-test-macros" }
