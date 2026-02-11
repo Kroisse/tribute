@@ -102,7 +102,7 @@ enum RawAttribute<'a> {
 // Winnow parsers
 // ============================================================================
 
-/// Skip whitespace and comments.
+/// Skip whitespace.
 fn ws(input: &mut &str) -> ModalResult<()> {
     take_while(0.., |c: char| c.is_ascii_whitespace())
         .void()
@@ -202,6 +202,23 @@ fn string_lit(input: &mut &str) -> ModalResult<String> {
                     '\\' => result.push('\\'),
                     'n' => result.push('\n'),
                     't' => result.push('\t'),
+                    'r' => result.push('\r'),
+                    '0' => result.push('\0'),
+                    'x' => {
+                        // \xNN hex escape
+                        let h1 = any.parse_next(input)?;
+                        let h2 = any.parse_next(input)?;
+                        let hex_str = format!("{}{}", h1, h2);
+                        if let Ok(code) = u8::from_str_radix(&hex_str, 16) {
+                            result.push(code as char);
+                        } else {
+                            // Invalid hex: pass through literally
+                            result.push('\\');
+                            result.push('x');
+                            result.push(h1);
+                            result.push(h2);
+                        }
+                    }
                     _ => {
                         result.push('\\');
                         result.push(escaped);
@@ -592,17 +609,21 @@ impl<'db> IrBuilder<'db> {
         }
     }
 
-    fn build_region(&mut self, raw: &RawRegion<'_>) -> Region<'db> {
+    fn build_region(&mut self, raw: &RawRegion<'_>) -> Result<Region<'db>, ParseError> {
         self.pre_assign_blocks(raw);
-        let blocks: IdVec<Block<'db>> = raw.blocks.iter().map(|b| self.build_block(b)).collect();
-        Region::new(self.db, self.location, blocks)
+        let blocks: IdVec<Block<'db>> = raw
+            .blocks
+            .iter()
+            .map(|b| self.build_block(b))
+            .collect::<Result<_, _>>()?;
+        Ok(Region::new(self.db, self.location, blocks))
     }
 
     fn build_block_with_extra_args(
         &mut self,
         raw: &RawBlock<'_>,
         extra_args: &[(&str, RawType<'_>)],
-    ) -> Block<'db> {
+    ) -> Result<Block<'db>, ParseError> {
         let block_id = self
             .block_id_map
             .get(raw.label)
@@ -640,17 +661,26 @@ impl<'db> IrBuilder<'db> {
         }
 
         // Build operations
-        let ops: IdVec<Operation<'db>> =
-            raw.ops.iter().map(|op| self.build_operation(op)).collect();
+        let ops: IdVec<Operation<'db>> = raw
+            .ops
+            .iter()
+            .map(|op| self.build_operation(op))
+            .collect::<Result<_, _>>()?;
 
-        Block::new(self.db, block_id, self.location, block_args, ops)
+        Ok(Block::new(
+            self.db,
+            block_id,
+            self.location,
+            block_args,
+            ops,
+        ))
     }
 
-    fn build_block(&mut self, raw: &RawBlock<'_>) -> Block<'db> {
+    fn build_block(&mut self, raw: &RawBlock<'_>) -> Result<Block<'db>, ParseError> {
         self.build_block_with_extra_args(raw, &[])
     }
 
-    fn build_operation(&mut self, raw: &RawOperation<'_>) -> Operation<'db> {
+    fn build_operation(&mut self, raw: &RawOperation<'_>) -> Result<Operation<'db>, ParseError> {
         let dialect = Symbol::from_dynamic(raw.dialect);
         let op_name = Symbol::from_dynamic(raw.op_name);
 
@@ -658,8 +688,16 @@ impl<'db> IrBuilder<'db> {
         let operands: IdVec<Value<'db>> = raw
             .operands
             .iter()
-            .filter_map(|name| self.resolve_value(name))
-            .collect();
+            .map(|name| {
+                self.resolve_value(name).ok_or_else(|| ParseError {
+                    message: format!(
+                        "undefined value '%{}' in operation '{}.{}'",
+                        name, raw.dialect, raw.op_name
+                    ),
+                    offset: 0,
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
         // Build result types
         let results: IdVec<Type<'db>> = raw
@@ -743,13 +781,13 @@ impl<'db> IrBuilder<'db> {
                                 self.build_block(b)
                             }
                         })
-                        .collect();
-                    Region::new(self.db, self.location, blocks)
+                        .collect::<Result<_, _>>()?;
+                    Ok(Region::new(self.db, self.location, blocks))
                 } else {
                     self.build_region(r)
                 }
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         let op = Operation::of(self.db, self.location, dialect, op_name)
             .operands(operands)
@@ -764,7 +802,7 @@ impl<'db> IrBuilder<'db> {
             self.value_map.insert(name.to_string(), value);
         }
 
-        op
+        Ok(op)
     }
 }
 
@@ -791,9 +829,21 @@ pub fn parse_module<'db>(
             offset: input.len() - remaining.len(),
         })?;
 
+    // Reject trailing input
+    ws.parse_next(&mut remaining).map_err(|e| ParseError {
+        message: format!("lexer error: {}", e),
+        offset: input.len() - remaining.len(),
+    })?;
+    if !remaining.is_empty() {
+        return Err(ParseError {
+            message: "trailing input after top-level operation".to_string(),
+            offset: input.len() - remaining.len(),
+        });
+    }
+
     // Build IR
     let mut builder = IrBuilder::new(db);
-    Ok(builder.build_operation(&raw_op))
+    builder.build_operation(&raw_op)
 }
 
 // ============================================================================
@@ -804,6 +854,7 @@ pub fn parse_module<'db>(
 mod tests {
     use super::*;
     use crate::{DialectOp, dialect::core, printer::print_op};
+    use salsa::Database;
     use salsa_test_macros::salsa_test;
 
     // Salsa input to hold text for tracked function parsing
@@ -923,6 +974,124 @@ mod tests {
         let op2 = do_parse(db, input2);
         let printed2 = print_op(db, op2);
         assert_eq!(printed, printed2, "round-trip failed");
+    }
+
+    #[test]
+    fn test_parse_trailing_input() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f() -> core.nil {\n",
+                    "    func.return\n",
+                    "  }\n",
+                    "} garbage",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on trailing input");
+        assert!(
+            err.message.contains("trailing input"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[salsa_test]
+    fn test_parse_trailing_whitespace_ok(db: &salsa::DatabaseImpl) {
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.nil {\n",
+                "    func.return\n",
+                "  }\n",
+                "}  \n  \n",
+            )
+            .to_string(),
+        );
+        // Should succeed — do_parse calls .expect() internally
+        let _ = do_parse(db, input);
+    }
+
+    #[test]
+    fn test_parse_string_escapes() {
+        use winnow::prelude::*;
+
+        // Basic escapes
+        let cases = [
+            (r#""hello""#, "hello"),
+            (r#""a\nb""#, "a\nb"),
+            (r#""a\tb""#, "a\tb"),
+            (r#""a\rb""#, "a\rb"),
+            (r#""a\0b""#, "a\0b"),
+            (r#""a\\b""#, "a\\b"),
+            (r#""a\"b""#, "a\"b"),
+            (r#""a\x01b""#, "a\x01b"),
+            (r#""a\x7fb""#, "a\x7fb"),
+        ];
+        for (input_str, expected) in &cases {
+            let mut input = *input_str;
+            let result = string_lit.parse_next(&mut input).expect("should parse");
+            assert_eq!(&result, *expected, "failed for input: {}", input_str);
+        }
+    }
+
+    #[salsa_test]
+    fn test_string_escape_roundtrip(db: &salsa::DatabaseImpl) {
+        // Build an operation with a string attribute containing special chars
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.nil {\n",
+                "    %0 = test.op {msg = \"line1\\nline2\\ttab\\r\\0end\"} : core.nil\n",
+                "    func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "string escape round-trip failed");
+    }
+
+    #[test]
+    fn test_parse_undefined_operand() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f() -> core.i32 {\n",
+                    "    ^bb0:\n",
+                    "      %0 = arith.add %x, %y : core.i32\n",
+                    "      func.return %0\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on undefined operand");
+        assert!(
+            err.message.contains("%x"),
+            "error should mention the undefined value: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("arith.add"),
+            "error should mention the operation: {}",
+            err.message
+        );
     }
 
     // ========================================================================

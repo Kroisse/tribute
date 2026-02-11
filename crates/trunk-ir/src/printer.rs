@@ -61,6 +61,13 @@ static PRINT_REGISTRY: std::sync::LazyLock<OpPrintRegistry> = std::sync::LazyLoc
     for reg in inventory::iter::<OpPrintRegistration> {
         let dialect = Symbol::from_dynamic(reg.dialect);
         let op_name = Symbol::from_dynamic(reg.op_name);
+        if registry.printers.contains_key(&(dialect, op_name)) {
+            tracing::warn!(
+                "duplicate printer registration for {}.{}",
+                reg.dialect,
+                reg.op_name
+            );
+        }
         registry.printers.insert((dialect, op_name), reg.print);
     }
     registry
@@ -131,17 +138,26 @@ impl<'db> PrintState<'db> {
         bind_name: Option<Symbol>,
     ) -> String {
         let value = block.arg(self.db, index);
-        let name = if let Some(sym) = bind_name {
-            let name_str = sym.to_string();
-            let candidate = format!("%{name_str}");
-            if self.value_names.values().any(|v| *v == candidate) {
-                format!("%arg{}", index)
-            } else {
-                candidate
-            }
+        let base = if let Some(sym) = bind_name {
+            format!("%{}", sym)
         } else {
             format!("%arg{}", index)
         };
+
+        let name = if self.value_names.values().any(|v| *v == base) {
+            // Collision: append increasing suffix until unique
+            let mut n = 0;
+            loop {
+                let candidate = format!("{base}_{n}");
+                if !self.value_names.values().any(|v| *v == candidate) {
+                    break candidate;
+                }
+                n += 1;
+            }
+        } else {
+            base
+        };
+
         self.value_names.insert(value, name.clone());
         name
     }
@@ -436,11 +452,20 @@ pub fn print_attribute<'db>(state: &mut PrintState<'db>, attr: &Attribute<'db>) 
             }
         }
         Attribute::String(s) => {
-            write!(
-                state.output,
-                "\"{}\"",
-                s.replace('\\', "\\\\").replace('"', "\\\"")
-            )?;
+            state.output.push('"');
+            for c in s.chars() {
+                match c {
+                    '\\' => state.output.push_str("\\\\"),
+                    '"' => state.output.push_str("\\\""),
+                    '\n' => state.output.push_str("\\n"),
+                    '\t' => state.output.push_str("\\t"),
+                    '\r' => state.output.push_str("\\r"),
+                    '\0' => state.output.push_str("\\0"),
+                    c if c.is_control() => write!(state.output, "\\x{:02x}", c as u32)?,
+                    c => state.output.push(c),
+                }
+            }
+            state.output.push('"');
         }
         Attribute::Bytes(bytes) => {
             state.output.push_str("bytes(");
@@ -481,7 +506,8 @@ pub fn print_attribute<'db>(state: &mut PrintState<'db>, attr: &Attribute<'db>) 
 pub fn print_symbol(state: &mut PrintState<'_>, sym: Symbol) -> fmt::Result {
     // Note: no lifetime constraint needed since Symbol is Copy and 'static-like
     sym.with_str(|s| {
-        let needs_quotes = s.contains("::") || s.contains(' ') || s.contains('.');
+        let needs_quotes =
+            s.is_empty() || s.chars().any(|c| !c.is_ascii_alphanumeric() && c != '_');
         if needs_quotes {
             write!(state.output, "@\"{}\"", s)
         } else {
@@ -756,5 +782,81 @@ mod tests {
         let op = build_module_with_params(db);
         let text = print_op(db, op);
         insta::assert_snapshot!(text);
+    }
+
+    #[salsa_test]
+    fn test_symbol_quoting(db: &salsa::DatabaseImpl) {
+        let mut state = PrintState::new(db);
+
+        // Bare symbols: alphanumeric + underscore
+        print_symbol(&mut state, Symbol::new("foo")).unwrap();
+        assert_eq!(state.output, "@foo");
+
+        state.output.clear();
+        print_symbol(&mut state, Symbol::new("foo_bar")).unwrap();
+        assert_eq!(state.output, "@foo_bar");
+
+        // Must-quote symbols: special characters
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("std::List::map")).unwrap();
+        assert_eq!(state.output, "@\"std::List::map\"");
+
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("has space")).unwrap();
+        assert_eq!(state.output, "@\"has space\"");
+
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("has.dot")).unwrap();
+        assert_eq!(state.output, "@\"has.dot\"");
+
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("has-dash")).unwrap();
+        assert_eq!(state.output, "@\"has-dash\"");
+
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("a/b")).unwrap();
+        assert_eq!(state.output, "@\"a/b\"");
+    }
+
+    #[salsa::tracked]
+    fn build_module_with_dup_names(db: &dyn salsa::Database) -> Operation<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Build a function with two params both named "x"
+        let func_op = func::Func::build_with_named_params(
+            db,
+            location,
+            "dup_names",
+            None,
+            vec![
+                (i32_ty, Some(Symbol::new("x"))),
+                (i32_ty, Some(Symbol::new("x"))),
+            ],
+            i32_ty,
+            None,
+            |entry, args| {
+                let add = entry.op(arith::add(db, location, args[0], args[1], i32_ty));
+                entry.op(func::Return::value(db, location, add.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, "test".into(), |top| {
+            top.op(func_op);
+        })
+        .as_operation()
+    }
+
+    #[salsa_test]
+    fn test_block_arg_name_collision(db: &salsa::DatabaseImpl) {
+        let module = build_module_with_dup_names(db);
+        let text = print_op(db, module);
+        // The second %x should get a unique suffix
+        assert!(
+            text.contains("%x_0"),
+            "second arg should get a collision-avoiding name, got:\n{}",
+            text
+        );
     }
 }
