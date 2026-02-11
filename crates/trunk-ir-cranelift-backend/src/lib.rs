@@ -15,6 +15,7 @@
 //! - `validation`: Pre-emit validation (all ops must be clif.*)
 
 mod errors;
+mod function;
 pub mod passes;
 mod translate;
 mod validation;
