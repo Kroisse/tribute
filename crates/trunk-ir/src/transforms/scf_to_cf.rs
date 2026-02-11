@@ -576,6 +576,12 @@ fn replace_continue_break_op<'db>(
         return cf::br(db, location, [break_op.value(db)], exit_block).as_operation();
     }
 
+    // Don't rewrite inside nested loops; their continue/break are handled
+    // when that loop is lowered.
+    if scf::Loop::matches(db, *op) {
+        return *op;
+    }
+
     // Recurse into nested regions (e.g., scf.if's then/else bodies)
     let regions = op.regions(db);
     if regions.is_empty() {
