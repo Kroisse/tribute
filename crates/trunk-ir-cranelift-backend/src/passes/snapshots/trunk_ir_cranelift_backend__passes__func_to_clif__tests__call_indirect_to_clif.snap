@@ -4,4 +4,4 @@ expression: formatted
 ---
 arith.const -> i32
 arith.const -> i32
-clif.call_indirect operands=2 -> i32
+clif.call_indirect sig=func operands=2 -> i32
