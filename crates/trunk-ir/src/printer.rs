@@ -148,6 +148,11 @@ impl<'db> PrintState<'db> {
     }
 
     /// Assign a name to a block argument.
+    ///
+    /// If a `bind_name` is provided it is used as-is **only** when it matches
+    /// the `value_ref` grammar accepted by the parser (`[A-Za-z0-9_]+`).
+    /// Invalid symbols fall back to the default `%argN` form so the printed
+    /// IR is always re-parseable.
     pub fn assign_block_arg_name(
         &mut self,
         block: Block<'db>,
@@ -156,7 +161,18 @@ impl<'db> PrintState<'db> {
     ) -> String {
         let value = block.arg(self.db, index);
         let base = if let Some(sym) = bind_name {
-            format!("%{}", sym)
+            let is_valid = sym.with_str(|s| {
+                !s.is_empty()
+                    && s.bytes()
+                        .all(|b: u8| b.is_ascii_alphanumeric() || b == b'_')
+            });
+            if is_valid {
+                format!("%{}", sym)
+            } else {
+                // Symbol contains characters outside the value_ref grammar;
+                // fall back to the auto-generated name.
+                format!("%arg{}", index)
+            }
         } else {
             format!("%arg{}", index)
         };
@@ -1145,5 +1161,56 @@ mod tests {
             arg0_count,
             text,
         );
+    }
+
+    /// Helper: compute the base name that `assign_block_arg_name` would use
+    /// for a given bind_name + index, without needing a real Block.
+    fn bind_name_base(index: usize, bind_name: Option<Symbol>) -> String {
+        if let Some(sym) = bind_name {
+            let is_valid = sym.with_str(|s| {
+                !s.is_empty()
+                    && s.bytes()
+                        .all(|b: u8| b.is_ascii_alphanumeric() || b == b'_')
+            });
+            if is_valid {
+                return format!("%{}", sym);
+            }
+        }
+        format!("%arg{}", index)
+    }
+
+    #[test]
+    fn test_bind_name_validation_rejects_invalid_symbols() {
+        // "::" is not in [A-Za-z0-9_]+ — must fall back to %argN
+        let name = bind_name_base(0, Some(Symbol::from_dynamic("std::foo")));
+        assert_eq!(name, "%arg0", "invalid bind_name should fall back");
+
+        // Space is invalid
+        let name = bind_name_base(1, Some(Symbol::from_dynamic("has space")));
+        assert_eq!(name, "%arg1", "space in bind_name should fall back");
+
+        // Empty symbol is invalid
+        let name = bind_name_base(2, Some(Symbol::from_dynamic("")));
+        assert_eq!(name, "%arg2", "empty bind_name should fall back");
+
+        // Dot is invalid
+        let name = bind_name_base(0, Some(Symbol::from_dynamic("has.dot")));
+        assert_eq!(name, "%arg0", "dot in bind_name should fall back");
+    }
+
+    #[test]
+    fn test_bind_name_validation_accepts_valid_symbols() {
+        let name = bind_name_base(0, Some(Symbol::from_dynamic("my_var_3")));
+        assert_eq!(name, "%my_var_3");
+
+        let name = bind_name_base(0, Some(Symbol::from_dynamic("x")));
+        assert_eq!(name, "%x");
+
+        let name = bind_name_base(0, Some(Symbol::from_dynamic("ARG0")));
+        assert_eq!(name, "%ARG0");
+
+        // None → default
+        let name = bind_name_base(5, None);
+        assert_eq!(name, "%arg5");
     }
 }

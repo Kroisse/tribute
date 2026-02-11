@@ -772,7 +772,7 @@ impl<'db> IrBuilder<'db> {
             // Detect duplicate argument names
             if !seen_names.insert(name.to_string()) {
                 return Err(ParseError {
-                    message: format!("duplicate block argument name '%{}' at index {}", name, i),
+                    message: format!("duplicate block argument name '{}' at index {}", name, i),
                     offset: 0,
                 });
             }
@@ -859,8 +859,10 @@ impl<'db> IrBuilder<'db> {
             );
         }
 
-        // Handle func-style signature: build function type and inject into attributes
-        let has_func_signature = raw.return_type.is_some() || !raw.func_params.is_empty();
+        // Handle func-style signature: build function type and inject into attributes.
+        // Include effect_type so effect-only signatures are not silently dropped.
+        let has_func_signature =
+            raw.return_type.is_some() || !raw.func_params.is_empty() || raw.effect_type.is_some();
         if has_func_signature {
             let return_ty = raw
                 .return_type
@@ -957,8 +959,17 @@ impl<'db> IrBuilder<'db> {
             .regions(regions)
             .build();
 
-        // Register result values
+        // Register result values, rejecting duplicates within the region
         for (i, name) in raw.results.iter().enumerate() {
+            if self.value_map.contains_key(*name) {
+                return Err(ParseError {
+                    message: format!(
+                        "duplicate SSA name '{}' in operation '{}.{}' result index {}",
+                        name, raw.dialect, raw.op_name, i
+                    ),
+                    offset: 0,
+                });
+            }
             let value = op.result(self.db, i);
             self.value_map.insert(name.to_string(), value);
         }
@@ -1029,6 +1040,13 @@ mod tests {
     #[salsa::tracked]
     fn do_parse(db: &dyn salsa::Database, input: TextInput) -> Operation<'_> {
         parse_module(db, input.text(db)).expect("should parse")
+    }
+
+    /// Tracked wrapper that preserves the error message, for testing parse
+    /// failures that occur after tracked structs have already been created.
+    #[salsa::tracked]
+    fn try_parse_err(db: &dyn salsa::Database, input: TextInput) -> Option<String> {
+        parse_module(db, input.text(db)).err().map(|e| e.message)
     }
 
     #[salsa_test]
@@ -1759,6 +1777,67 @@ mod tests {
         let op2 = do_parse(db, input2);
         let printed2 = print_op(db, op2);
         assert_eq!(printed, printed2, "value_map scoping round-trip failed");
+    }
+
+    // ---- Fix: duplicate SSA name in op results ----
+
+    #[salsa_test]
+    fn test_parse_duplicate_result_name(db: &salsa::DatabaseImpl) {
+        let input = TextInput::new(
+            db,
+            // Two operations produce the same result name %0
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.i32 {\n",
+                "    %0 = arith.const {value = 1} : core.i32\n",
+                "    %0 = arith.const {value = 2} : core.i32\n",
+                "    func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+        let err_msg = try_parse_err(db, input);
+        let err_msg = err_msg.as_ref().expect("should fail on duplicate SSA name");
+        assert!(
+            err_msg.contains("duplicate SSA name"),
+            "unexpected error: {}",
+            err_msg
+        );
+    }
+
+    // ---- Fix: effect-only func signature ----
+
+    #[salsa_test]
+    fn test_effect_only_signature_roundtrip(db: &salsa::DatabaseImpl) {
+        // A function with only an effect type (no explicit return type, no params).
+        // Before the fix, the effect would be silently dropped because
+        // has_func_signature didn't check effect_type.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.nil effects core.nil {\n",
+                "    func.return\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        // The effect annotation must survive the round-trip
+        assert!(
+            printed.contains("effects"),
+            "effect should be preserved in printed output:\n{}",
+            printed,
+        );
+
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "effect-only signature round-trip failed");
     }
 
     // ========================================================================
