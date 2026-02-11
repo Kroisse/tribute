@@ -123,24 +123,52 @@ fn emit_module_impl<'db>(
                     let builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
                     let mut translator = FunctionTranslator::new(db, builder, &func_refs);
 
+                    let func_body = func_op.body(db);
+                    let ir_blocks = func_body.blocks(db);
+
+                    // Phase 1: Create all Cranelift blocks upfront
                     let entry_block = translator.builder.create_block();
                     translator
                         .builder
                         .append_block_params_for_function_params(entry_block);
-                    translator.builder.switch_to_block(entry_block);
 
-                    // Map TrunkIR block arguments (function params) to Cranelift block params
-                    let func_body = func_op.body(db);
-                    if let Some(ir_entry_block) = func_body.blocks(db).first() {
-                        let cl_params: Vec<_> =
-                            translator.builder.block_params(entry_block).to_vec();
+                    if let Some(ir_entry_block) = ir_blocks.first() {
+                        translator.block_map.insert(*ir_entry_block, entry_block);
+                    }
+
+                    // Create Cranelift blocks for non-entry IR blocks
+                    for ir_block in ir_blocks.iter().skip(1) {
+                        let cl_block = translator.builder.create_block();
+                        // Add block parameters matching TrunkIR block args
+                        for arg in ir_block.args(db).iter() {
+                            let cl_ty = crate::function::translate_type(db, arg.ty(db))?;
+                            translator.builder.append_block_param(cl_block, cl_ty);
+                        }
+                        translator.block_map.insert(*ir_block, cl_block);
+                    }
+
+                    // Phase 2: Translate operations in each block
+                    for ir_block in ir_blocks.iter() {
+                        let cl_block = translator.lookup_block(*ir_block)?;
+                        translator.builder.switch_to_block(cl_block);
+
+                        // Map block arguments to Cranelift block params
+                        let cl_params: Vec<_> = translator.builder.block_params(cl_block).to_vec();
+                        let ir_arg_count = ir_block.args(db).len();
+                        if ir_arg_count != cl_params.len() {
+                            return Err(crate::CompilationError::codegen(format!(
+                                "block arg count mismatch: TrunkIR block has {} args but Cranelift block has {} params",
+                                ir_arg_count,
+                                cl_params.len(),
+                            )));
+                        }
                         for (i, &cl_param) in cl_params.iter().enumerate() {
-                            let ir_arg = ir_entry_block.arg(db, i);
+                            let ir_arg = ir_block.arg(db, i);
                             translator.values.insert(ir_arg, cl_param);
                         }
 
-                        // Translate each operation in the entry block
-                        for ir_op in ir_entry_block.operations(db).iter() {
+                        // Translate each operation in this block
+                        for ir_op in ir_block.operations(db).iter() {
                             translator.translate_op(ir_op)?;
                         }
                     }
@@ -374,6 +402,256 @@ mod tests {
         let result = emit_module_to_native(db, module);
         assert!(result.is_ok(), "emit failed: {:?}", result.err());
         assert!(!result.unwrap().is_empty());
+    }
+
+    // --- multi-block: brif + jump ---
+
+    #[salsa::tracked]
+    fn make_brif_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+        let i8_ty = core::I8::new(db).as_type();
+
+        // fn main(cond: I8) -> I64 {
+        //   entry:
+        //     brif cond, then_block, else_block
+        //   then_block:
+        //     return 1
+        //   else_block:
+        //     return 0
+        // }
+        let func_ty = core::Func::new(db, IdVec::from(vec![i8_ty]), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let then_block_id = BlockId::fresh();
+        let else_block_id = BlockId::fresh();
+
+        // Create then_block: return 1
+        let c1 = clif::iconst(db, location, i64_ty, 1);
+        let ret1 = clif::r#return(db, location, [c1.result(db)]);
+        let then_block = Block::new(
+            db,
+            then_block_id,
+            location,
+            idvec![],
+            idvec![c1.as_operation(), ret1.as_operation()],
+        );
+
+        // Create else_block: return 0
+        let c0 = clif::iconst(db, location, i64_ty, 0);
+        let ret0 = clif::r#return(db, location, [c0.result(db)]);
+        let else_block = Block::new(
+            db,
+            else_block_id,
+            location,
+            idvec![],
+            idvec![c0.as_operation(), ret0.as_operation()],
+        );
+
+        // Create entry block with cond param and brif
+        let entry_cond_arg = BlockArg::of_type(db, i8_ty);
+        let entry_block_tmp = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![entry_cond_arg],
+            idvec![],
+        );
+        let cond_val = entry_block_tmp.arg(db, 0);
+        let brif_op = clif::brif(db, location, cond_val, then_block, else_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![entry_cond_arg],
+            idvec![brif_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, then_block, else_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_brif_multi_block(db: &salsa::DatabaseImpl) {
+        let module = make_brif_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_ok(), "emit failed: {:?}", result.err());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty(), "object file should not be empty");
+    }
+
+    #[salsa::tracked]
+    fn make_jump_with_args_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // fn main() -> I64 {
+        //   entry:
+        //     %c = iconst 42
+        //     jump merge_block(%c)
+        //   merge_block(%val: I64):
+        //     return %val
+        // }
+        let func_ty = core::Func::new(db, IdVec::new(), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let merge_block_id = BlockId::fresh();
+
+        // Create merge_block with arg: return %val
+        let merge_arg = BlockArg::of_type(db, i64_ty);
+        let merge_block_tmp = Block::new(db, merge_block_id, location, idvec![merge_arg], idvec![]);
+        let merge_val = merge_block_tmp.arg(db, 0);
+        let ret = clif::r#return(db, location, [merge_val]);
+        let merge_block = Block::new(
+            db,
+            merge_block_id,
+            location,
+            idvec![merge_arg],
+            idvec![ret.as_operation()],
+        );
+
+        // Create entry block: iconst 42, jump merge_block(42)
+        let c42 = clif::iconst(db, location, i64_ty, 42);
+        let jump_op = clif::jump(db, location, [c42.result(db)], merge_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![],
+            idvec![c42.as_operation(), jump_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, merge_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_jump_with_block_args(db: &salsa::DatabaseImpl) {
+        let module = make_jump_with_args_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_ok(), "emit failed: {:?}", result.err());
+        let bytes = result.unwrap();
+        assert!(!bytes.is_empty(), "object file should not be empty");
+    }
+
+    // --- validation: jump arg count mismatch ---
+
+    #[salsa::tracked]
+    fn make_jump_too_many_args_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // fn main() -> I64 {
+        //   entry:
+        //     %c = iconst 42
+        //     jump dest(%c)       ← 1 arg
+        //   dest:                  ← 0 params  (mismatch!)
+        //     return iconst 0
+        // }
+        let func_ty = core::Func::new(db, IdVec::new(), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let dest_block_id = BlockId::fresh();
+
+        // dest block: no params, just return 0
+        let c0 = clif::iconst(db, location, i64_ty, 0);
+        let ret0 = clif::r#return(db, location, [c0.result(db)]);
+        let dest_block = Block::new(
+            db,
+            dest_block_id,
+            location,
+            idvec![],
+            idvec![c0.as_operation(), ret0.as_operation()],
+        );
+
+        // entry block: jump to dest with 1 arg (dest expects 0)
+        let c42 = clif::iconst(db, location, i64_ty, 42);
+        let jump_op = clif::jump(db, location, [c42.result(db)], dest_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![],
+            idvec![c42.as_operation(), jump_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, dest_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_rejects_jump_arg_count_mismatch(db: &salsa::DatabaseImpl) {
+        let module = make_jump_too_many_args_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_err(), "should fail due to arg count mismatch");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("argument count"),
+            "error should mention argument count mismatch, got: {err_msg}"
+        );
+    }
+
+    #[salsa::tracked]
+    fn make_jump_too_few_args_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // fn main() -> I64 {
+        //   entry:
+        //     jump dest()          ← 0 args
+        //   dest(%val: I64):       ← 1 param  (mismatch!)
+        //     return %val
+        // }
+        let func_ty = core::Func::new(db, IdVec::new(), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let dest_block_id = BlockId::fresh();
+
+        // dest block: 1 param
+        let dest_arg = BlockArg::of_type(db, i64_ty);
+        let dest_block_tmp = Block::new(db, dest_block_id, location, idvec![dest_arg], idvec![]);
+        let dest_val = dest_block_tmp.arg(db, 0);
+        let ret = clif::r#return(db, location, [dest_val]);
+        let dest_block = Block::new(
+            db,
+            dest_block_id,
+            location,
+            idvec![dest_arg],
+            idvec![ret.as_operation()],
+        );
+
+        // entry block: jump with 0 args (dest expects 1)
+        let jump_op = clif::jump(db, location, [], dest_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![],
+            idvec![jump_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, dest_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_rejects_jump_too_few_args(db: &salsa::DatabaseImpl) {
+        let module = make_jump_too_few_args_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_err(), "should fail due to arg count mismatch");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("argument count"),
+            "error should mention argument count mismatch, got: {err_msg}"
+        );
     }
 
     // --- validation: reject non-clif ops ---

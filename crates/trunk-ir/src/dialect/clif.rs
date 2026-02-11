@@ -130,12 +130,14 @@ dialect! {
         /// `clif.brif` operation: conditional branch.
         /// Branches to `then_dest` if cond is nonzero, else to `else_dest`.
         fn brif(cond) {
-            #[region(then_dest)] {}
-            #[region(else_dest)] {}
+            #[successor(then_dest)]
+            #[successor(else_dest)]
         };
 
         /// `clif.jump` operation: unconditional jump to a block.
-        fn jump(#[rest] args);
+        fn jump(#[rest] args) {
+            #[successor(dest)]
+        };
 
         /// `clif.br_table` operation: table-based branch.
         #[attr(table: any)]
