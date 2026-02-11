@@ -1,0 +1,7 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+expression: formatted
+---
+arith.const -> i32
+arith.const -> i32
+clif.call_indirect operands=2 -> i32

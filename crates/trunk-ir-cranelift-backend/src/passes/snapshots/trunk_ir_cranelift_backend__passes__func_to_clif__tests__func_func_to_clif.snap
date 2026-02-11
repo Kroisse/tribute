@@ -1,0 +1,7 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+assertion_line: 338
+expression: formatted
+---
+clif.func sym_name=test_fn
+  clif.return
