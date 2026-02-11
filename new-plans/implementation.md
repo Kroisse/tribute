@@ -399,23 +399,38 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 (resume $cont (local.get $value))
 ```
 
-### Cranelift
+### Cranelift (libmprompt)
 
-**libmprompt 통합:**
+**libmprompt C FFI:**
 
-```rust
-// Prompt 설치
-let result = mp_prompt(tag, || {
-    body(ev)
-});
-
-// Continuation 캡처
-mp_yield(tag, |k| {
-    handler(k)
-});
+```c
+void* mp_prompt(mp_prompt_t* p, mp_start_fun_t* fun, void* arg);
+void* mp_yield(mp_prompt_t* p, mp_yield_fun_t* fun, void* arg);
+void* mp_resume(mp_resume_t* r, void* result);
+void  mp_resume_drop(mp_resume_t* r);
 ```
 
 libmprompt는 setjmp/longjmp + 스택 복사로 delimited continuation을 구현한다.
+
+**cont.* → libmprompt 매핑:**
+
+| cont.* op | libmprompt 호출 | 설명 |
+| --------- | --------------- | ---- |
+| `cont.push_prompt` | `mp_prompt(&p, body_fn, env)` | body region을 별도 함수로 outline 후 호출 |
+| `cont.shift` | `mp_yield(%tag, yield_fn, %yr)` | YieldResult { op_idx, shift_value } 할당 |
+| `cont.resume(k, val)` | `mp_resume(yr.resume, box(val))` | 캡처된 continuation 재개 |
+| `cont.drop(k)` | `mp_resume_drop(yr.resume)` | continuation 폐기 |
+
+**Done/Shift 프로토콜:**
+
+`mp_prompt` 반환 후 body가 정상 완료(Done)인지 yield(Shift)인지 구분이 필요하다.
+Thread-local `__tribute_yield_active` 플래그를 사용:
+
+```text
+mp_prompt 반환 →
+  if __tribute_yield_active == false → Done: 결과값 직접 반환
+  if __tribute_yield_active == true  → Shift: handler_dispatch 각 arm으로 분기
+```
 
 **메모리 레이아웃:**
 
@@ -434,53 +449,64 @@ libmprompt는 setjmp/longjmp + 스택 복사로 delimited continuation을 구현
 ```
 
 Continuation 캡처 시 해당 prompt까지의 스택 세그먼트를 힙에 복사.
+WASM의 trampoline과 달리 라이브 변수 캡처/state struct가 불필요 —
+libmprompt가 스택 자체를 관리.
+
+**파이프라인 분기:**
+
+```text
+공통: parse → resolve → typecheck → tdnr → ast_to_ir
+      → evidence_params → closure_lower → evidence_calls → resolve_evidence
+
+WASM:   → cont_to_trampoline → dce → resolve_casts → lower_to_wasm → emit_wasm
+Native: → cont_to_libmprompt → dce → resolve_casts → lower_to_clif → emit_native
+```
 
 ---
 
-## GC Integration
-
-### 문제: Continuation 내 객체 참조
-
-```rust
-fn example() ->{State(Int)} Text {
-    let big_object = create_large_data()  // 힙 할당
-    let n = State::get()                   // 여기서 캡처
-    process(big_object, n)
-}
-```
-
-캡처된 continuation 안에 `big_object` 참조가 있다. GC가 이를 알아야 한다.
-
-### Cranelift + Boehm GC
-
-**보수적 GC 방식:**
-
-- 복사된 스택 세그먼트를 GC 루트로 등록
-- 모든 워드를 잠재적 포인터로 취급하여 스캔
-- False retention 가능하지만 구현 단순
-
-```rust
-impl Continuation {
-    fn register_with_gc(&self) {
-        // 스택 세그먼트를 GC 루트로 등록
-        boehm_gc_add_roots(
-            self.stack_segment.as_ptr(),
-            self.stack_segment.len()
-        );
-    }
-    
-    fn unregister_from_gc(&self) {
-        boehm_gc_remove_roots(
-            self.stack_segment.as_ptr(),
-            self.stack_segment.len()
-        );
-    }
-}
-```
+## Memory Management
 
 ### WasmGC
 
 런타임의 GC가 자동으로 처리. Continuation을 GC-managed 객체로 표현하면 별도 처리 불필요.
+
+### Cranelift: Reference Counting
+
+Cranelift 타겟에서는 **Reference Counting**을 채택한다.
+
+#### RC 전략: +1 convention
+
+- 생산자가 소유 (refcount = 1로 할당)
+- 소비자가 retain (+1)
+- 마지막 사용에서 release (-1, 0이면 해제)
+
+**Object 헤더:**
+
+```text
+[-8 bytes] refcount: u32 + type_id: u32
+[ 0 bytes] first field (자연 정렬)
+```
+
+**RC 삽입 pass** (`tribute-passes/src/native/rc.rs`):
+
+- 함수 파라미터: retain 삽입
+- 함수 반환: 소유권 이전 (retain/release 없음)
+- 로컬 변수: 마지막 사용에서 release
+- 필드 접근: retain/release 쌍
+
+**Continuation과 RC:**
+
+- libmprompt가 캡처한 스택에는 RC 객체 포인터가 포함됨
+- 스택 캡처 시 포함된 모든 RC 객체를 retain
+- `mp_resume_drop` 시 캡처된 스택의 RC 객체를 release
+- 이를 위해 런타임에 "스택 스캔" 또는
+  컴파일 타임 live variable 분석이 필요
+
+**단계적 구현:**
+
+1. Phase 2: malloc/free 단순 할당 (누수 허용)
+2. Phase 3: RC retain/release 삽입
+3. Future: Cycle detection (필요시)
 
 ---
 

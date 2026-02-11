@@ -38,6 +38,9 @@ tribute/                  # main crate - 파이프라인 조율
 └── pipeline.rs
 ```
 
+Native (Cranelift) 백엔드는
+[cranelift-backend.md](cranelift-backend.md)를 참조.
+
 ---
 
 ## Lowering 경로

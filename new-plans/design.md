@@ -301,40 +301,51 @@ Optimized .wasm
 - **빠른 컴파일**: JIT 설계 기반
 - **Rust 친화적**: Rust로 작성됨
 
-### Effect 구현 전략
+### 아키텍처: 2-Layer 패턴
 
-**setjmp/longjmp + 스택 복사** 방식 사용:
+WASM 백엔드와 동일한 구조를 유지한다:
 
-```rust
-#[repr(C)]
-pub struct Continuation {
-    registers: JmpBuf,
-    stack_segment: Box<[u8]>,
-    stack_base: *mut u8,
-    stack_size: usize,
-}
+```text
+tribute-passes/src/native/       Tribute 전용 native lowering
+  cont → libmprompt 호출, evidence, boxing(RC)
+  + func/arith/scf/adt/mem → clif.* dialect 변환
 
-impl Continuation {
-    /// 현재 continuation 캡처 (shift)
-    pub fn capture(prompt: &Prompt) -> Self { ... }
-
-    /// Continuation 실행 (resume)
-    pub fn resume(self, value: Value) -> ! { ... }
-
-    /// Continuation 버림 (abort)
-    pub fn abort(self) { ... }
-}
+trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
+  clif.* dialect → Cranelift IR → 네이티브 바이너리
 ```
 
-참고: [libmprompt](https://github.com/koka-lang/libmprompt) (Koka 언어의 effect 런타임)
+- `clif.*` dialect은 Cranelift IR과 1:1 대응 (`wasm.*`과 대칭)
+- `trunk-ir-cranelift-backend`은 `trunk-ir`만 의존 (Tribute 독립적)
 
-### 메모리 관리
+### Effect 구현 전략: libmprompt
 
-Cranelift 타겟에서는 GC가 필요하다. 선택지:
+[libmprompt](https://github.com/koka-lang/libmprompt) (Koka 언어의 effect 런타임)을
+사용하여 `cont.*` dialect을 직접 변환한다. WASM의 trampoline과 달리
+라이브 변수 캡처/state struct가 불필요 — libmprompt가 스택 자체를 관리.
 
-1. **Reference Counting**: 단순하지만 cycle 처리 필요
-2. **Boehm GC**: 보수적 GC, 쉬운 통합
-3. **Custom GC**: 정밀한 제어, 높은 구현 비용
+```c
+// libmprompt C FFI
+void* mp_prompt(mp_prompt_t* p, mp_start_fun_t* fun, void* arg);
+void* mp_yield(mp_prompt_t* p, mp_yield_fun_t* fun, void* arg);
+void* mp_resume(mp_resume_t* r, void* result);
+void  mp_resume_drop(mp_resume_t* r);
+```
+
+핵심 변환:
+
+- `cont.push_prompt` → `mp_prompt` 호출
+- `cont.shift` → `mp_yield` 호출
+- `cont.resume` → `mp_resume` 호출
+- `cont.drop` → `mp_resume_drop` 호출
+
+### 메모리 관리: Reference Counting
+
+Cranelift 타겟에서는 **Reference Counting**을 채택한다.
+
+- **+1 convention**: 생산자가 소유, 소비자가 retain, 마지막 사용에서 release
+- **Object 헤더**: `[-8 bytes] refcount: u32 + type_id: u32 | [0 bytes] first field`
+- Cycle 처리는 당면 과제가 아님 (함수형 언어 특성상 cycle이 드묾)
+- Phase 2에서는 malloc/free 단순 할당으로 시작하고, 이후 RC 삽입
 
 ---
 
