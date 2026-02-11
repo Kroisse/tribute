@@ -10,7 +10,7 @@ use cranelift_codegen::ir::{self as cl_ir, InstBuilder};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::dialect::{clif, core};
-use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Type, Value};
+use trunk_ir::{Block as IrBlock, DialectOp, DialectType, Operation, Symbol, Type, Value};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -80,6 +80,8 @@ pub(crate) struct FunctionTranslator<'a, 'db> {
     pub(crate) values: HashMap<Value<'db>, cl_ir::Value>,
     /// Maps function symbols to Cranelift FuncRefs for call instructions.
     func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
+    /// Maps TrunkIR blocks to Cranelift blocks for multi-block functions.
+    pub(crate) block_map: HashMap<IrBlock<'db>, cl_ir::Block>,
 }
 
 impl<'a, 'db> FunctionTranslator<'a, 'db> {
@@ -93,6 +95,7 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
             builder,
             values: HashMap::new(),
             func_refs,
+            block_map: HashMap::new(),
         }
     }
 
@@ -100,6 +103,13 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
     fn lookup(&self, ir_val: Value<'db>) -> CompilationResult<cl_ir::Value> {
         self.values.get(&ir_val).copied().ok_or_else(|| {
             CompilationError::codegen("TrunkIR value not found in Cranelift mapping")
+        })
+    }
+
+    /// Look up a TrunkIR block in the block mapping.
+    fn lookup_block(&self, ir_block: IrBlock<'db>) -> CompilationResult<cl_ir::Block> {
+        self.block_map.get(&ir_block).copied().ok_or_else(|| {
+            CompilationError::codegen("TrunkIR block not found in Cranelift block mapping")
         })
     }
 
@@ -221,6 +231,26 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
                 .map(|v| self.lookup(*v))
                 .collect::<CompilationResult<_>>()?;
             self.builder.ins().return_(&vals);
+            return Ok(());
+        }
+
+        // === Control Flow ===
+        if let Ok(jump) = clif::Jump::from_operation(db, *op) {
+            let ir_dest = jump.dest(db);
+            let cl_dest = self.lookup_block(ir_dest)?;
+            let args: Vec<cl_ir::BlockArg> = jump
+                .args(db)
+                .iter()
+                .map(|v| self.lookup(*v).map(cl_ir::BlockArg::from))
+                .collect::<CompilationResult<_>>()?;
+            self.builder.ins().jump(cl_dest, &args);
+            return Ok(());
+        }
+        if let Ok(brif) = clif::Brif::from_operation(db, *op) {
+            let cond = self.lookup(brif.cond(db))?;
+            let cl_then = self.lookup_block(brif.then_dest(db))?;
+            let cl_else = self.lookup_block(brif.else_dest(db))?;
+            self.builder.ins().brif(cond, cl_then, &[], cl_else, &[]);
             return Ok(());
         }
 

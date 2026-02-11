@@ -95,7 +95,7 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, func_to_clif};
+use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
@@ -676,16 +676,24 @@ fn compile_module_to_native<'db>(
     module: Module<'db>,
 ) -> NativeCompilationResult<Vec<u8>> {
     use tribute_passes::native_type_converter;
+    use trunk_ir::transforms::lower_scf_to_cf;
+
+    // Phase 0 - Lower structured control flow to CFG-based control flow
+    let module = lower_scf_to_cf(db, module);
 
     // Phase 1 - Lower func dialect to clif dialect
     let module = func_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
-    // Phase 1.5 - Lower ADT struct operations to clif dialect
+    // Phase 1.5 - Lower cf dialect to clif dialect
+    let module = cf_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 2 - Lower ADT struct operations to clif dialect
     let module = adt_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
-    // Phase 2 - Lower arith dialect to clif dialect
+    // Phase 2.5 - Lower arith dialect to clif dialect
     let module = arith_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
