@@ -1,0 +1,11 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+assertion_line: 771
+expression: formatted
+---
+clif.symbol_addr sym=lifted_fn -> ptr
+arith.const -> anyref
+adt.struct_new type=struct operands=2 -> struct
+adt.struct_get type=struct field=0 operands=1 -> ptr
+adt.struct_get type=struct field=1 operands=1 -> ptr
+clif.call_indirect sig=func operands=2 -> i32

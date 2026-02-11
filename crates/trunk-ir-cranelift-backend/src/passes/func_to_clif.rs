@@ -124,17 +124,19 @@ impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
             return RewriteResult::Unchanged;
         };
 
-        // Collect argument types (skip operand 0 which is the callee)
-        let ptr_ty = core::Ptr::new(db).as_type();
+        // Collect argument types (skip operand 0 which is the callee).
+        // Bail out if any type is unavailable so the ConversionTarget can report the unconverted op.
         let mut param_types = Vec::new();
         for i in 1..adaptor.num_operands() {
-            let ty = adaptor.operand_type(i).unwrap_or(ptr_ty);
+            let Some(ty) = adaptor.operand_type(i) else {
+                return RewriteResult::Unchanged;
+            };
             param_types.push(ty);
         }
 
-        let result_ty = adaptor
-            .result_type(db, 0)
-            .unwrap_or_else(|| core::Nil::new(db).as_type());
+        let Some(result_ty) = adaptor.result_type(db, 0) else {
+            return RewriteResult::Unchanged;
+        };
         let sig_ty = core::Func::new(db, param_types.into(), result_ty).as_type();
 
         let new_op = op
@@ -306,12 +308,11 @@ impl<'db> RewritePattern<'db> for ClosureStructAdaptPattern {
                 return RewriteResult::Unchanged;
             }
             let field_idx = struct_get.field(db);
+            // Both fields are pointers in the native closure struct
             let mut builder = op.modify(db).attr("type", Attribute::Type(native_ty));
-            // Field 0 (func_ptr): result type must be ptr
-            if field_idx == 0 {
+            if field_idx == 0 || field_idx == 1 {
                 builder = builder.results(vec![ptr_ty].into());
             }
-            // Field 1 (env): result type stays as-is (type converter handles anyref → ptr)
             let new_op = builder.build();
             return RewriteResult::Replace(new_op);
         }
@@ -325,7 +326,8 @@ mod tests {
     use super::*;
     use insta::assert_snapshot;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{arith, core};
+    use trunk_ir::dialect::{arith, core, wasm};
+    use trunk_ir::rewrite::RewriteContext;
     use trunk_ir::{Attribute, Block, BlockId, DialectType, Location, PathId, Region, Span, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -660,6 +662,118 @@ mod tests {
         // adt.struct_new on _closure -> type adapted to { ptr, ptr }
         // adt.struct_get field 0 -> result type becomes ptr
         // func.call_indirect -> clif.call_indirect with sig attribute
+        assert_snapshot!(formatted);
+    }
+
+    #[salsa::tracked]
+    fn make_call_indirect_op(db: &dyn salsa::Database) -> Operation<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let callee_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let arg_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(1));
+        func::call_indirect(
+            db,
+            location,
+            callee_op.result(db),
+            vec![arg_op.result(db)],
+            i32_ty,
+        )
+        .as_operation()
+    }
+
+    /// Test that `FuncCallIndirectPattern` returns `Unchanged` when operand types
+    /// are unavailable, instead of silently defaulting to ptr/Nil.
+    #[salsa_test]
+    fn test_call_indirect_unchanged_on_missing_types(db: &salsa::DatabaseImpl) {
+        let call_op = make_call_indirect_op(db);
+
+        // Construct an OpAdaptor with None operand types to simulate missing type info
+        let ctx = RewriteContext::new();
+        let converter = test_converter();
+        let operand_types = vec![None, None]; // callee and arg both unknown
+        let adaptor = OpAdaptor::new(
+            call_op,
+            call_op.operands(db).clone(),
+            operand_types,
+            &ctx,
+            &converter,
+        );
+
+        let result = FuncCallIndirectPattern.match_and_rewrite(db, &call_op, &adaptor);
+        assert!(
+            matches!(result, RewriteResult::Unchanged),
+            "expected Unchanged when operand types are None"
+        );
+    }
+
+    /// Test closure struct adaptation with actual `wasm.anyref` env type.
+    ///
+    /// Verifies that `adt.struct_get` on field 1 (env) produces `ptr` result
+    /// even when the original type is `wasm.anyref`.
+    #[salsa::tracked]
+    fn make_closure_struct_anyref_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let anyref_ty = wasm::Anyref::new(db).as_type();
+
+        // WASM-style closure struct: { table_idx: i32, env: anyref }
+        let closure_ty = adt::struct_type(
+            db,
+            Symbol::new("_closure"),
+            vec![
+                (Symbol::new("table_idx"), i32_ty),
+                (Symbol::new("env"), anyref_ty),
+            ],
+        );
+
+        let func_const = func::constant(db, location, i32_ty, Symbol::new("lifted_fn"));
+        let func_ptr_val = func_const.result(db);
+
+        let env_op = arith::r#const(db, location, anyref_ty, Attribute::IntBits(0));
+        let env_val = env_op.result(db);
+
+        let struct_new = adt::struct_new(
+            db,
+            location,
+            vec![func_ptr_val, env_val],
+            closure_ty,
+            closure_ty,
+        );
+        let closure_val = struct_new.result(db);
+
+        // Extract func ptr (field 0) and env (field 1)
+        let get_func = adt::struct_get(db, location, closure_val, i32_ty, closure_ty, 0);
+        let func_ptr = get_func.result(db);
+
+        let get_env = adt::struct_get(db, location, closure_val, anyref_ty, closure_ty, 1);
+        let env = get_env.result(db);
+
+        let call_indirect = func::call_indirect(db, location, func_ptr, vec![env], i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                func_const.as_operation(),
+                env_op.as_operation(),
+                struct_new.as_operation(),
+                get_func.as_operation(),
+                get_env.as_operation(),
+                call_indirect.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_closure_struct_anyref_adaptation(db: &salsa::DatabaseImpl) {
+        let module = make_closure_struct_anyref_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        // Both struct_get field 0 and field 1 should produce ptr results
         assert_snapshot!(formatted);
     }
 }
