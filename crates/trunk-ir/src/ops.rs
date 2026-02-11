@@ -187,6 +187,8 @@ pub enum ConversionError {
     MissingResult,
     /// Missing region.
     MissingRegion,
+    /// Missing or insufficient successors.
+    MissingSuccessor,
     /// Wrong number of operands.
     WrongOperandCount { expected: usize, actual: usize },
 }
@@ -897,11 +899,12 @@ macro_rules! define_op {
             operands: $operands,
             results: $results,
             regions: [],
+            successors: [],
             tokens: [$($tokens)*]
         );
     };
 
-    // Empty regions
+    // Empty regions/successors → emit @impl
     (@munch_regions
         doc: $doc:tt,
         dialect: $dialect:ident,
@@ -910,6 +913,7 @@ macro_rules! define_op {
         operands: $operands:tt,
         results: $results:tt,
         regions: [$($region:ident),*],
+        successors: [$($succ:ident),*],
         tokens: []
     ) => {
         $crate::define_op!(@impl
@@ -919,7 +923,8 @@ macro_rules! define_op {
             attrs: $attrs,
             operands: $operands,
             results: $results,
-            regions: [$($region),*]
+            regions: [$($region),*],
+            successors: [$($succ),*]
         );
     };
 
@@ -932,6 +937,7 @@ macro_rules! define_op {
         operands: $operands:tt,
         results: $results:tt,
         regions: [$($region:ident),*],
+        successors: $successors:tt,
         tokens: [#[region($name:ident)] {} $($rest:tt)*]
     ) => {
         $crate::define_op!(@munch_regions
@@ -942,6 +948,32 @@ macro_rules! define_op {
             operands: $operands,
             results: $results,
             regions: [$($region,)* $name],
+            successors: $successors,
+            tokens: [$($rest)*]
+        );
+    };
+
+    // Successor: #[successor(name)]
+    (@munch_regions
+        doc: $doc:tt,
+        dialect: $dialect:ident,
+        op: $op:ident,
+        attrs: $attrs:tt,
+        operands: $operands:tt,
+        results: $results:tt,
+        regions: $regions:tt,
+        successors: [$($succ:ident),*],
+        tokens: [#[successor($name:ident)] $($rest:tt)*]
+    ) => {
+        $crate::define_op!(@munch_regions
+            doc: $doc,
+            dialect: $dialect,
+            op: $op,
+            attrs: $attrs,
+            operands: $operands,
+            results: $results,
+            regions: $regions,
+            successors: [$($succ,)* $name],
             tokens: [$($rest)*]
         );
     };
@@ -958,7 +990,8 @@ macro_rules! define_op {
         attrs: [$($attr_block:tt)*],
         operands: [$($fixed:ident),*; $($var:ident)?],
         results: [$($fixed_res:ident),*; $($var_res:ident)?],
-        regions: [$($region:ident),*]
+        regions: [$($region:ident),*],
+        successors: [$($succ:ident),*]
     ) => {
         $crate::paste::paste! {
             #[doc = concat!($($doc, "\n",)*)]
@@ -989,6 +1022,9 @@ macro_rules! define_op {
 
                 // Region accessors
                 $crate::define_op!(@gen_region_accessor { 0 } $($region)*);
+
+                // Successor accessors
+                $crate::define_op!(@gen_successor_accessor { 0 } $($succ)*);
             }
 
             impl<'db> std::ops::Deref for [<$op:camel>]<'db> {
@@ -1019,6 +1055,8 @@ macro_rules! define_op {
                     $crate::define_op!(@maybe_result_validation [$($fixed_res),*; $($var_res)?]; op, db);
                     // Region validation
                     $crate::define_op!(@maybe_region_validation [$($region),*]; op, db);
+                    // Successor validation
+                    $crate::define_op!(@maybe_successor_validation [$($succ),*]; op, db);
                     Ok(Self { op })
                 }
 
@@ -1088,7 +1126,8 @@ macro_rules! define_op {
             fixed: [$($fixed),*],
             var: [$($var)?],
             results: [$($fixed_res),*; $($var_res)?],
-            regions: [$($region),*]
+            regions: [$($region),*],
+            successors: [$($succ),*]
         );
     };
 
@@ -1101,7 +1140,8 @@ macro_rules! define_op {
         fixed: [$($fixed:ident),*],
         var: [$($var:ident)?],
         results: [$($fixed_res:ident),*; $($var_res:ident)?],
-        regions: [$($region:ident),*]
+        regions: [$($region:ident),*],
+        successors: [$($succ:ident),*]
     ) => {
         $crate::define_op!(@gen_constructor_munch
             doc: [$($doc),*],
@@ -1112,7 +1152,8 @@ macro_rules! define_op {
             fixed: [$($fixed),*],
             var: [$($var)?],
             results: [$($fixed_res),*; $($var_res)?],
-            regions: [$($region),*]
+            regions: [$($region),*],
+            successors: [$($succ),*]
         );
     };
 
@@ -1126,7 +1167,8 @@ macro_rules! define_op {
         fixed: $fixed:tt,
         var: $var:tt,
         results: $results:tt,
-        regions: $regions:tt
+        regions: $regions:tt,
+        successors: $successors:tt
     ) => {
         $crate::define_op!(@gen_constructor_final
             doc: $doc,
@@ -1136,7 +1178,8 @@ macro_rules! define_op {
             fixed: $fixed,
             var: $var,
             results: $results,
-            regions: $regions
+            regions: $regions,
+            successors: $successors
         );
     };
 
@@ -1150,7 +1193,8 @@ macro_rules! define_op {
         fixed: $fixed:tt,
         var: $var:tt,
         results: $results:tt,
-        regions: $regions:tt
+        regions: $regions:tt,
+        successors: $successors:tt
     ) => {
         $crate::define_op!(@gen_constructor_munch
             doc: $doc,
@@ -1161,7 +1205,8 @@ macro_rules! define_op {
             fixed: $fixed,
             var: $var,
             results: $results,
-            regions: $regions
+            regions: $regions,
+            successors: $successors
         );
     };
 
@@ -1175,7 +1220,8 @@ macro_rules! define_op {
         fixed: $fixed:tt,
         var: $var:tt,
         results: $results:tt,
-        regions: $regions:tt
+        regions: $regions:tt,
+        successors: $successors:tt
     ) => {
         $crate::define_op!(@gen_constructor_munch
             doc: $doc,
@@ -1186,7 +1232,8 @@ macro_rules! define_op {
             fixed: $fixed,
             var: $var,
             results: $results,
-            regions: $regions
+            regions: $regions,
+            successors: $successors
         );
     };
 
@@ -1200,7 +1247,8 @@ macro_rules! define_op {
         fixed: $fixed:tt,
         var: $var:tt,
         results: $results:tt,
-        regions: $regions:tt
+        regions: $regions:tt,
+        successors: $successors:tt
     ) => {
         $crate::define_op!(@gen_constructor_munch
             doc: $doc,
@@ -1211,7 +1259,8 @@ macro_rules! define_op {
             fixed: $fixed,
             var: $var,
             results: $results,
-            regions: $regions
+            regions: $regions,
+            successors: $successors
         );
     };
 
@@ -1224,7 +1273,8 @@ macro_rules! define_op {
         fixed: [$($fixed:ident),*],
         var: [$($var:ident)?],
         results: [$($fixed_res:ident),*; $($var_res:ident)?],
-        regions: [$($region:ident),*]
+        regions: [$($region:ident),*],
+        successors: [$($succ:ident),*]
     ) => {
         $crate::paste::paste! {
             #[doc = concat!($($doc, "\n",)*)]
@@ -1238,6 +1288,7 @@ macro_rules! define_op {
                 $($var_res: impl IntoIterator<Item = $crate::Type<'db>>,)?
                 $($attr: $crate::define_op!(@attr_param_type $kind $($attr_ty)?),)*
                 $($region: $crate::Region<'db>,)*
+                $($succ: $crate::Block<'db>,)*
             ) -> [<$op:camel>]<'db> {
                 let dialect = $crate::Symbol::new($crate::raw_ident_str!($dialect));
                 let name = $crate::Symbol::new($crate::raw_ident_str!($op));
@@ -1256,6 +1307,8 @@ macro_rules! define_op {
                 $(
                     $crate::define_op!(@add_attr_final builder, $attr, $kind $($attr_ty)?);
                 )*
+                // Add successors
+                $crate::define_op!(@maybe_add_successors builder, [$($succ),*]);
                 let op = builder.build();
                 [<$op:camel>]::wrap_unchecked(op)
             }
@@ -1396,6 +1449,37 @@ macro_rules! define_op {
                 return Err($crate::ConversionError::MissingRegion);
             }
         }
+    };
+
+    // Successor accessor - base case
+    (@gen_successor_accessor { $idx:expr }) => {};
+    // Successor accessor - recursive
+    (@gen_successor_accessor { $idx:expr } $succ:ident $($rest:ident)*) => {
+        #[allow(dead_code)]
+        pub fn $succ(&self, db: &'db dyn salsa::Database) -> $crate::Block<'db> {
+            self.op.successors(db)[$idx]
+        }
+
+        $crate::define_op!(@gen_successor_accessor { $idx + 1 } $($rest)*);
+    };
+
+    // Successor validation - empty
+    (@maybe_successor_validation []; $op:ident, $db:ident) => {};
+    // Successor validation - present
+    (@maybe_successor_validation [$($succ:ident),+]; $op:ident, $db:ident) => {
+        {
+            const EXPECTED_SUCCESSORS: usize = $crate::define_op!(@count $($succ)+);
+            if $op.successors($db).len() < EXPECTED_SUCCESSORS {
+                return Err($crate::ConversionError::MissingSuccessor);
+            }
+        }
+    };
+
+    // Conditional successor builder call - empty
+    (@maybe_add_successors $builder:ident, []) => {};
+    // Conditional successor builder call - present
+    (@maybe_add_successors $builder:ident, [$($succ:ident),+]) => {
+        $builder = $builder.successors($crate::idvec![$($succ),*]);
     };
 
     // Count tokens

@@ -265,6 +265,10 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Rewrite a region.
+    ///
+    /// Uses a 2-pass approach to handle successor block references:
+    /// 1. Rewrite all blocks, collecting old→new block mappings
+    /// 2. Remap successor references in all operations using the block map
     fn rewrite_region(
         &self,
         db: &'db dyn salsa::Database,
@@ -272,10 +276,19 @@ impl<'db> PatternApplicator<'db> {
         ctx: &mut RewriteContext<'db>,
         target: &ConversionTarget,
     ) -> Region<'db> {
-        let new_blocks: IdVec<Block<'db>> = region
+        // Pass 1: Rewrite all blocks and collect old→new mappings
+        let pairs: Vec<(Block<'db>, Block<'db>)> = region
             .blocks(db)
             .iter()
-            .map(|block| self.rewrite_block(db, block, ctx, target))
+            .map(|old| (*old, self.rewrite_block(db, old, ctx, target)))
+            .collect();
+
+        let block_map: HashMap<Block<'db>, Block<'db>> = pairs.iter().copied().collect();
+
+        // Pass 2: Remap successor references using the block map
+        let new_blocks: IdVec<Block<'db>> = pairs
+            .into_iter()
+            .map(|(_, new_block)| remap_block_successors(db, new_block, &block_map))
             .collect();
 
         Region::new(db, region.location(db), new_blocks)
@@ -531,6 +544,65 @@ impl<'db> PatternApplicator<'db> {
 impl<'db> Default for PatternApplicator<'db> {
     fn default() -> Self {
         Self::new(super::TypeConverter::new())
+    }
+}
+
+/// Remap successor block references in all operations within a block.
+///
+/// If any operation has successors that appear in `block_map`, the successors
+/// are replaced with the mapped blocks. Returns the block unchanged if no
+/// successors need remapping (avoids unnecessary rebuilds).
+fn remap_block_successors<'db>(
+    db: &'db dyn salsa::Database,
+    block: Block<'db>,
+    block_map: &HashMap<Block<'db>, Block<'db>>,
+) -> Block<'db> {
+    if block_map.is_empty() {
+        return block;
+    }
+
+    let ops = block.operations(db);
+    let mut any_changed = false;
+    let new_ops: IdVec<Operation<'db>> = ops
+        .iter()
+        .map(|op| {
+            let successors = op.successors(db);
+            if successors.is_empty() {
+                return *op;
+            }
+
+            let mut changed = false;
+            let new_successors: IdVec<Block<'db>> = successors
+                .iter()
+                .map(|succ| {
+                    if let Some(&mapped) = block_map.get(succ) {
+                        changed = true;
+                        mapped
+                    } else {
+                        *succ
+                    }
+                })
+                .collect();
+
+            if changed {
+                any_changed = true;
+                op.modify(db).successors(new_successors).build()
+            } else {
+                *op
+            }
+        })
+        .collect();
+
+    if any_changed {
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
+    } else {
+        block
     }
 }
 
@@ -1298,5 +1370,145 @@ mod tests {
             }
             _ => panic!("First operand should still be a block argument"),
         }
+    }
+
+    // === Successor Remap Tests ===
+
+    /// Create a module with cf.br and cf.cond_br ops that have successor references.
+    /// Tests that PatternApplicator correctly remaps successor block references
+    /// when blocks are rewritten (getting new Block entities).
+    #[salsa::tracked]
+    fn make_module_with_successors(db: &dyn salsa::Database) -> Module<'_> {
+        use crate::dialect::cf;
+
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I1::new(db).as_type();
+
+        // Block 2: target block with a block argument
+        let block2_id = BlockId::fresh();
+        let block2_arg = crate::BlockArg::of_type(db, i32_ty);
+        let block2_arg_value = Value::new(db, ValueDef::BlockArg(block2_id), 0);
+        // block2 uses its own arg
+        let const99 = arith::r#const(db, location, i32_ty, Attribute::IntBits(99));
+        let add_op = arith::add(db, location, block2_arg_value, const99.result(db), i32_ty);
+        let block2 = Block::new(
+            db,
+            block2_id,
+            location,
+            idvec![block2_arg],
+            idvec![const99.as_operation(), add_op.as_operation()],
+        );
+
+        // Block 3: another target block
+        let block3_id = BlockId::fresh();
+        let const0 = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
+        let block3 = Block::new(
+            db,
+            block3_id,
+            location,
+            idvec![],
+            idvec![const0.as_operation()],
+        );
+
+        // Block 1 (entry): has cf.cond_br to block2 / block3
+        let block1_id = BlockId::fresh();
+        let cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
+        // Const for the arg passed to block2
+        let const42 = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
+        let cond_br = cf::cond_br(db, location, cond.result(db), block2, block3);
+
+        let block1 = Block::new(
+            db,
+            block1_id,
+            location,
+            idvec![],
+            idvec![
+                cond.as_operation(),
+                const42.as_operation(),
+                cond_br.as_operation()
+            ],
+        );
+
+        let region = Region::new(db, location, idvec![block1, block2, block3]);
+        Module::create(db, location, Symbol::new("test_succ"), region)
+    }
+
+    /// Apply a no-op pattern (that still triggers block rewriting) to test successor remap.
+    #[salsa::tracked]
+    fn apply_to_successor_module<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> Module<'db> {
+        use super::ConversionTarget;
+
+        // Use const(99) → const(100) pattern to force block rewriting
+        struct Const99To100;
+        impl<'db> RewritePattern<'db> for Const99To100 {
+            fn match_and_rewrite(
+                &self,
+                db: &'db dyn salsa::Database,
+                op: &Operation<'db>,
+                _adaptor: &OpAdaptor<'db, '_>,
+            ) -> RewriteResult<'db> {
+                let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+                    return RewriteResult::Unchanged;
+                };
+                if const_op.value(db) != Attribute::IntBits(99) {
+                    return RewriteResult::Unchanged;
+                }
+                let location = op.location(db);
+                let result_ty = op.results(db)[0];
+                let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
+                RewriteResult::Replace(new_op.as_operation())
+            }
+        }
+
+        let target = ConversionTarget::new();
+        let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(Const99To100);
+        applicator.apply_partial(db, module, target).module
+    }
+
+    #[salsa_test]
+    fn test_applicator_successor_remap(db: &salsa::DatabaseImpl) {
+        use crate::dialect::cf;
+
+        let module = make_module_with_successors(db);
+        let result = apply_to_successor_module(db, module);
+
+        let blocks = result.body(db).blocks(db);
+        assert_eq!(blocks.len(), 3, "Should still have 3 blocks");
+
+        // Get the new block2 and block3
+        let new_block2 = blocks[1];
+        let new_block3 = blocks[2];
+
+        // Entry block should have cf.cond_br as last op
+        let entry_ops = blocks[0].operations(db);
+        let last_op = entry_ops.last().unwrap();
+        let cond_br = cf::CondBr::from_operation(db, *last_op)
+            .expect("Last op of entry should be cf.cond_br");
+
+        // Successor references should point to the NEW blocks, not the old ones
+        assert_eq!(
+            cond_br.then_dest(db),
+            new_block2,
+            "cf.cond_br then_dest should be remapped to new block2"
+        );
+        assert_eq!(
+            cond_br.else_dest(db),
+            new_block3,
+            "cf.cond_br else_dest should be remapped to new block3"
+        );
+
+        // Verify the pattern was applied (const 99 → 100)
+        let block2_ops = new_block2.operations(db);
+        let const_op = arith::Const::from_operation(db, block2_ops[0]).unwrap();
+        assert_eq!(
+            const_op.value(db),
+            Attribute::IntBits(100),
+            "const(99) should have been rewritten to const(100)"
+        );
     }
 }

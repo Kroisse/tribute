@@ -12,6 +12,7 @@ pub mod core;
 // === Mid-level (target independent) ===
 pub mod adt;
 pub mod arith;
+pub mod cf;
 pub mod cont;
 pub mod func;
 pub mod mem;
