@@ -270,25 +270,15 @@ fn remap_op<'db>(
 /// Build the merge block with remaining ops, remapping values.
 fn build_merge_block<'db>(
     db: &'db dyn salsa::Database,
+    merge_id: BlockId,
     location: Location<'db>,
     merge_args: IdVec<BlockArg<'db>>,
     after_ops: &[&Operation<'db>],
     value_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> Block<'db> {
-    let merge_id = BlockId::fresh();
-
-    // Build value map for merge block args from the scf result values
-    // The value_map already maps scf result → placeholder, but we need to update
-    // it to map to the actual merge block args
-    let full_map = value_map.clone();
-
-    // Map any values that point to merge block arg placeholders
-    // Actually, the caller sets up value_map to map scf result → merge block arg Value
-    // We just need to use the map as-is
-
     let remapped_ops: IdVec<Operation<'db>> = after_ops
         .iter()
-        .map(|op| remap_op(db, op, &full_map))
+        .map(|op| remap_op(db, op, value_map))
         .collect();
 
     Block::new(db, merge_id, location, merge_args, remapped_ops)
@@ -328,15 +318,7 @@ fn lower_scf_if<'db>(
     }
 
     // Build merge block with remaining ops
-    let merge_block_inner = build_merge_block(db, location, merge_args, after_ops, value_map);
-    // We need to set the merge_id on it
-    let merge_block = Block::new(
-        db,
-        merge_id,
-        location,
-        merge_block_inner.args(db).clone(),
-        merge_block_inner.operations(db).clone(),
-    );
+    let merge_block = build_merge_block(db, merge_id, location, merge_args, after_ops, value_map);
 
     // Process then region: extract ops and replace scf.yield with cf.br to merge
     let then_blocks = lower_region_to_br(db, &if_op.then(db), merge_block, location);
@@ -793,7 +775,10 @@ fn find_yield_type<'db>(
                     return match val.def(db) {
                         ValueDef::OpResult(op) => op.results(db).get(val.index(db)).copied(),
                         ValueDef::BlockArg(block_id) => {
-                            // Search for the block with this ID in the region
+                            // Search for the block with this ID in the region.
+                            // NOTE: This only searches the immediate region. BlockArgs from
+                            // parent regions won't be found and will return None. This is
+                            // acceptable because yield values typically reference local values.
                             for b in region.blocks(db).iter() {
                                 if b.id(db) == block_id {
                                     return Some(b.arg_ty(db, val.index(db)));
@@ -822,12 +807,12 @@ fn discriminant_type<'db>(
             .copied()
             .unwrap_or_else(|| core::I32::new(db).as_type()),
         ValueDef::BlockArg(block_id) => {
-            if block.id(db) == block_id {
-                block.arg_ty(db, value.index(db))
-            } else {
-                // Fallback to i32 if the block arg is from a different block
-                core::I32::new(db).as_type()
-            }
+            assert_eq!(
+                block.id(db),
+                block_id,
+                "discriminant BlockArg must belong to the current block"
+            );
+            block.arg_ty(db, value.index(db))
         }
     }
 }
@@ -2376,6 +2361,72 @@ mod tests {
         assert_eq!(
             last_op_name, "func.return",
             "Last block should end with func.return"
+        );
+    }
+
+    // === discriminant_type: cross-block BlockArg should panic ===
+
+    #[salsa::tracked]
+    fn call_discriminant_type_cross_block(db: &dyn salsa::Database) {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        let block_id = BlockId::fresh();
+        let other_id = BlockId::fresh();
+
+        let block = Block::new(
+            db,
+            block_id,
+            location,
+            idvec![BlockArg::of_type(db, i32_ty)],
+            idvec![],
+        );
+
+        // Value referring to a different block's argument
+        let cross_block_value = Value::new(db, ValueDef::BlockArg(other_id), 0);
+
+        // Should panic because the BlockArg doesn't belong to `block`
+        let _ = discriminant_type(db, cross_block_value, &block);
+    }
+
+    #[salsa_test]
+    #[should_panic(expected = "discriminant BlockArg must belong to the current block")]
+    fn test_discriminant_type_panics_on_cross_block_arg(db: &salsa::DatabaseImpl) {
+        call_discriminant_type_cross_block(db);
+    }
+
+    // === find_yield_type: BlockArg from outside region returns None ===
+
+    #[salsa::tracked]
+    fn call_find_yield_type_outside_block_arg(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Create a BlockArg value referring to a block outside the region
+        let outer_block_id = BlockId::fresh();
+        let outer_value = Value::new(db, ValueDef::BlockArg(outer_block_id), 0);
+
+        // Build a region whose only block yields that outer value
+        let yield_op = scf::r#yield(db, location, [outer_value]);
+        let inner_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![BlockArg::of_type(db, i32_ty)],
+            idvec![yield_op.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![inner_block]);
+
+        // find_yield_type cannot resolve the type because the defining block
+        // is not in this region
+        find_yield_type(db, Some(&region)).is_none()
+    }
+
+    #[salsa_test]
+    fn test_find_yield_type_outside_block_arg_returns_none(db: &salsa::DatabaseImpl) {
+        assert!(
+            call_find_yield_type_outside_block_arg(db),
+            "find_yield_type should return None for BlockArg from outside the region"
         );
     }
 }
