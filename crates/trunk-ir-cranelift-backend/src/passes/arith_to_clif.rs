@@ -210,11 +210,13 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
                 _ => clif::sdiv(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::REM() {
-            // Only integer remainder in Cranelift (no float remainder)
-            if is_unsigned_int(db, Some(result_ty)) {
-                clif::urem(db, location, lhs, rhs, result_ty).as_operation()
-            } else {
-                clif::srem(db, location, lhs, rhs, result_ty).as_operation()
+            // Cranelift has no float remainder instruction
+            match category {
+                "f32" | "f64" => return RewriteResult::Unchanged,
+                _ if is_unsigned_int(db, Some(result_ty)) => {
+                    clif::urem(db, location, lhs, rhs, result_ty).as_operation()
+                }
+                _ => clif::srem(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
             return RewriteResult::Unchanged;
@@ -477,17 +479,28 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
             }
         } else if name == arith::EXTEND() {
             match (src_cat, dst_cat) {
+                ("int", "int") if is_unsigned_int(db, src_ty) => {
+                    clif::uextend(db, location, operand, dst_ty).as_operation()
+                }
                 ("int", "int") => clif::sextend(db, location, operand, dst_ty).as_operation(),
                 ("f32", "f64") => clif::fpromote(db, location, operand, dst_ty).as_operation(),
                 _ => return RewriteResult::Unchanged,
             }
         } else if name == arith::CONVERT() {
             match (src_cat, dst_cat) {
-                // int to float
+                // unsigned int to float
+                ("int", "f32" | "f64") if is_unsigned_int(db, src_ty) => {
+                    clif::fcvt_from_uint(db, location, operand, dst_ty).as_operation()
+                }
+                // signed int to float
                 ("int", "f32" | "f64") => {
                     clif::fcvt_from_sint(db, location, operand, dst_ty).as_operation()
                 }
-                // float to int
+                // float to unsigned int
+                ("f32" | "f64", "int") if is_unsigned_int(db, Some(dst_ty)) => {
+                    clif::fcvt_to_uint(db, location, operand, dst_ty).as_operation()
+                }
+                // float to signed int
                 ("f32" | "f64", "int") => {
                     clif::fcvt_to_sint(db, location, operand, dst_ty).as_operation()
                 }
@@ -1072,6 +1085,140 @@ mod tests {
         clif.f64const value=2 -> f64
         clif.fcmp cond=lt operands=2 -> f64
         clif.fcmp cond=eq operands=2 -> f64
+        ");
+    }
+
+    // === Float remainder rejection test ===
+
+    #[salsa::tracked]
+    fn make_float_rem_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let f64_ty = core::F64::new(db).as_type();
+
+        let const1 = arith::Const::f64(db, location, 5.5);
+        let const2 = arith::Const::f64(db, location, 2.0);
+        let rem = arith::rem(db, location, const1.result(db), const2.result(db), f64_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                rem.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa::tracked]
+    fn try_lower_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> bool {
+        lower(db, module, test_converter()).is_ok()
+    }
+
+    #[salsa_test]
+    fn test_float_rem_rejected(db: &salsa::DatabaseImpl) {
+        let module = make_float_rem_module(db);
+        assert!(
+            !try_lower_module(db, module),
+            "float remainder should fail conversion"
+        );
+    }
+
+    // === Unsigned extend and convert tests ===
+
+    #[salsa::tracked]
+    fn make_unsigned_extend_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let nat_ty = nat_type(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        let nat_const = arith_const_with_type(db, location, nat_ty, 100);
+        let extend = arith::extend(db, location, nat_const.result(db), i64_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![nat_const.as_operation(), extend.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_unsigned_extend(db: &salsa::DatabaseImpl) {
+        let module = make_unsigned_extend_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=100 -> nat
+        clif.uextend operands=1 -> i64
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_unsigned_convert_to_float_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let nat_ty = nat_type(db);
+        let f64_ty = core::F64::new(db).as_type();
+
+        let nat_const = arith_const_with_type(db, location, nat_ty, 42);
+        let convert = arith::convert(db, location, nat_const.result(db), f64_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![nat_const.as_operation(), convert.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_unsigned_convert_to_float(db: &salsa::DatabaseImpl) {
+        let module = make_unsigned_convert_to_float_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=42 -> nat
+        clif.fcvt_from_uint operands=1 -> f64
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_unsigned_convert_from_float_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let nat_ty = nat_type(db);
+
+        let float_const = arith::Const::f64(db, location, 3.7);
+        let convert = arith::convert(db, location, float_const.result(db), nat_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![float_const.as_operation(), convert.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_unsigned_convert_from_float(db: &salsa::DatabaseImpl) {
+        let module = make_unsigned_convert_from_float_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.f64const value=3.7 -> f64
+        clif.fcvt_to_uint operands=1 -> nat
         ");
     }
 }
