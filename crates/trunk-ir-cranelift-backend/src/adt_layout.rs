@@ -67,11 +67,7 @@ pub fn compute_struct_layout<'db>(
     }
 
     // Pad total size to alignment
-    let total_size = if max_align > 0 {
-        (offset + max_align - 1) & !(max_align - 1)
-    } else {
-        offset
-    };
+    let total_size = (offset + max_align - 1) & !(max_align - 1);
 
     Some(StructLayout {
         field_offsets,

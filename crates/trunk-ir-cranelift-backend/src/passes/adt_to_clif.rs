@@ -13,7 +13,6 @@
 //! ## Limitations
 //!
 //! - Only struct operations are lowered (variant/array/ref ops are left unchanged)
-//! - Only struct operations are lowered (variant/array/ref ops are left unchanged)
 
 use tracing::warn;
 
