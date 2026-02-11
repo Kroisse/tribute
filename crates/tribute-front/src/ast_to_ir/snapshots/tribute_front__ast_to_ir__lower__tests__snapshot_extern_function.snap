@@ -5,7 +5,6 @@ expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
 core.module @test {
   func.func @__add(%a: core.i32, %b: core.i32) -> core.i32 {
-    ^bb0(%a: core.i32, %b: core.i32):
       func.unreachable
   }
 }

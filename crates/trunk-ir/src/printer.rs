@@ -336,8 +336,8 @@ fn assign_block_arg_names<'db>(state: &mut PrintState<'db>, block: Block<'db>) {
 
 /// Print a block with label, arguments, and operations.
 ///
-/// If `elide_label` is true and the block has no arguments, the block label
-/// line is omitted (used for single-block regions like module bodies).
+/// If `elide_label` is true, the block label line is omitted entirely.
+/// Callers decide when to elide (e.g., single-block regions, func bodies).
 fn print_block<'db>(
     state: &mut PrintState<'db>,
     block: Block<'db>,
@@ -346,8 +346,8 @@ fn print_block<'db>(
     let db = state.db;
     let args = block.args(db);
 
-    // Block label (may be elided for single-block regions with no args)
-    if !(elide_label && args.is_empty()) {
+    // Block label (may be elided for single-block regions or func bodies)
+    if !elide_label {
         state.write_indent();
         let label = state.get_block_label(block);
         state.output.push_str(&label);
@@ -644,11 +644,12 @@ fn print_func_func<'db>(
         assign_block_arg_names(state, *block);
     }
 
-    // Elide entry block label when function body has a single block with no args
-    let single_block_no_args = blocks.len() == 1 && blocks[0].args(db).is_empty();
+    // Elide entry block label when function body has a single block
+    // (block args are already shown in the function signature)
+    let single_block = blocks.len() == 1;
     state.indent += 2;
     for block in blocks.iter() {
-        print_block(state, *block, single_block_no_args)?;
+        print_block(state, *block, single_block)?;
     }
     state.indent -= 2;
 

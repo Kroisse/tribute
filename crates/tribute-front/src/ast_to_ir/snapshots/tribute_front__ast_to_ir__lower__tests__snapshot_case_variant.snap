@@ -5,7 +5,6 @@ expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
 core.module @test {
   func.func @main(%x: core.i32) -> core.nil {
-    ^bb0(%x: core.i32):
       %0 = adt.variant_is %x {type = tribute_rt.any, tag = @Some} : core.i1
       %1 = scf.if %0 : tribute_rt.any {
         %2 = adt.variant_cast %x {type = tribute_rt.any, tag = @Some} : tribute_rt.any
