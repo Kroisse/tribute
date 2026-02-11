@@ -6,6 +6,7 @@
 //! ## Passes
 //!
 //! - `func_to_clif`: Lowers `func.*` operations to `clif.*`
+//! - `adt_to_clif`: Lowers `adt.struct_*` operations to `clif.*` (load/store/call)
 //! - `arith_to_clif`: Lowers `arith.*` operations to `clif.*`
 //!
 //! ## Emission
@@ -14,6 +15,7 @@
 //! - `function`: clif.* -> Cranelift FunctionBuilder emit
 //! - `validation`: Pre-emit validation (all ops must be clif.*)
 
+pub mod adt_layout;
 mod errors;
 mod function;
 pub mod passes;

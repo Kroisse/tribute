@@ -88,6 +88,9 @@ fn emit_module_impl<'db>(
         }
     }
 
+    // 3b. Declare runtime functions (imported, provided by linker)
+    declare_runtime_functions(db, &mut obj_module, &mut func_ids, call_conv)?;
+
     // 4. Second pass — define functions
     let mut fb_ctx = FunctionBuilderContext::new();
 
@@ -162,6 +165,36 @@ fn emit_module_impl<'db>(
         .map_err(|e| CompilationError::codegen(format!("{e}")))?;
 
     Ok(bytes)
+}
+
+/// Declare runtime functions that are imported (provided by the linker).
+///
+/// Currently declares:
+/// - `tribute_rt_alloc(i64) -> ptr`: heap allocation (Phase 1: malloc wrapper)
+fn declare_runtime_functions(
+    _db: &dyn salsa::Database,
+    obj_module: &mut ObjectModule,
+    func_ids: &mut HashMap<Symbol, cranelift_module::FuncId>,
+    call_conv: isa::CallConv,
+) -> CompilationResult<()> {
+    // tribute_rt_alloc(size: i64) -> ptr (i64 on 64-bit)
+    let mut alloc_sig = cl_ir::Signature::new(call_conv);
+    alloc_sig
+        .params
+        .push(cl_ir::AbiParam::new(cranelift_codegen::ir::types::I64));
+    alloc_sig
+        .returns
+        .push(cl_ir::AbiParam::new(cranelift_codegen::ir::types::I64));
+
+    let alloc_sym = Symbol::new("tribute_rt_alloc");
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
+        let func_id = obj_module
+            .declare_function("tribute_rt_alloc", Linkage::Import, &alloc_sig)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+        e.insert(func_id);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
