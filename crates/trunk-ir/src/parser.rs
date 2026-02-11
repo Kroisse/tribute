@@ -686,8 +686,22 @@ impl<'db> IrBuilder<'db> {
         }
     }
 
+    /// Snapshot the entire `value_map` so it can be restored after leaving a
+    /// region.  Inner SSA names (block args, op results) are region-local and
+    /// must not leak into the enclosing scope.
+    fn save_value_map(&self) -> std::collections::HashMap<String, Value<'db>> {
+        self.value_map.clone()
+    }
+
+    /// Restore the `value_map` to a previously saved snapshot, discarding any
+    /// names introduced inside the region.
+    fn restore_value_map(&mut self, saved: std::collections::HashMap<String, Value<'db>>) {
+        self.value_map = saved;
+    }
+
     fn build_region(&mut self, raw: &RawRegion<'_>) -> Result<Region<'db>, ParseError> {
-        let saved = self.save_block_labels(raw);
+        let saved_blocks = self.save_block_labels(raw);
+        let saved_values = self.save_value_map();
         self.pre_assign_blocks(raw)?;
         let blocks: IdVec<Block<'db>> = raw
             .blocks
@@ -695,7 +709,8 @@ impl<'db> IrBuilder<'db> {
             .map(|b| self.build_block(b))
             .collect::<Result<_, _>>()?;
         let region = Region::new(self.db, self.location, blocks);
-        self.restore_block_labels(saved);
+        self.restore_value_map(saved_values);
+        self.restore_block_labels(saved_blocks);
         Ok(region)
     }
 
@@ -765,7 +780,8 @@ impl<'db> IrBuilder<'db> {
             let ty = self.build_type(raw_ty);
             let is_default_name = name
                 .strip_prefix("arg")
-                .is_some_and(|rest| rest.parse::<usize>().is_ok());
+                .and_then(|rest| rest.parse::<usize>().ok())
+                .is_some_and(|n| n == i);
             let arg = if !is_default_name {
                 let mut attrs = BTreeMap::new();
                 attrs.insert(
@@ -891,9 +907,10 @@ impl<'db> IrBuilder<'db> {
             .map(|(i, r)| {
                 if i == 0 && !raw.func_params.is_empty() {
                     // First region: inject func_params as entry block args.
-                    // Save/restore block_id_map so inner labels don't clobber
-                    // outer mappings.
-                    let saved = self.save_block_labels(r);
+                    // Save/restore both block_id_map and value_map so inner
+                    // names don't clobber outer mappings.
+                    let saved_blocks = self.save_block_labels(r);
+                    let saved_values = self.save_value_map();
                     self.pre_assign_blocks(r)?;
                     let blocks: IdVec<Block<'db>> = r
                         .blocks
@@ -908,7 +925,8 @@ impl<'db> IrBuilder<'db> {
                         })
                         .collect::<Result<_, _>>()?;
                     let region = Region::new(self.db, self.location, blocks);
-                    self.restore_block_labels(saved);
+                    self.restore_value_map(saved_values);
+                    self.restore_block_labels(saved_blocks);
                     Ok(region)
                 } else {
                     self.build_region(r)
@@ -1642,6 +1660,105 @@ mod tests {
             printed, printed2,
             "type empty-parens attrs round-trip failed"
         );
+    }
+
+    // ---- Fix: is_default_name index comparison ----
+
+    #[salsa_test]
+    fn test_arg_default_name_preserves_mismatched_index(db: &salsa::DatabaseImpl) {
+        // If parameter 0 is explicitly named "%arg5", that should NOT be
+        // treated as a default name — the parser must preserve the bind_name
+        // attribute so the round-trip keeps "%arg5".
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f(%arg5: core.i32) -> core.i32 {\n",
+                "    func.return %arg5\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        // %arg5 should survive in the printed text (not be normalised to %arg0)
+        assert!(
+            printed.contains("%arg5"),
+            "explicit %arg5 at param index 0 should be preserved, got:\n{}",
+            printed,
+        );
+
+        // Full round-trip
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "arg5 round-trip failed");
+    }
+
+    #[salsa_test]
+    fn test_arg_default_name_strips_matching_index(db: &salsa::DatabaseImpl) {
+        // "%arg0" at index 0 IS the default name, so it should NOT carry a
+        // bind_name and round-trip as "%arg0" via the default path.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f(%arg0: core.i32) -> core.i32 {\n",
+                "    func.return %arg0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        assert!(
+            printed.contains("%arg0"),
+            "default %arg0 at index 0 should still appear, got:\n{}",
+            printed,
+        );
+
+        // Round-trip
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "arg0 round-trip failed");
+    }
+
+    // ---- Fix: value_map scoping in nested regions ----
+
+    #[salsa_test]
+    fn test_value_map_scoped_across_sibling_functions(db: &salsa::DatabaseImpl) {
+        // Two sibling functions that each use %0 — the second function's
+        // %0 must not resolve to the first function's Value.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f(%arg0: core.i32) -> core.i32 {\n",
+                "    %0 = arith.const {value = 10} : core.i32\n",
+                "    %1 = arith.add %arg0, %0 : core.i32\n",
+                "    func.return %1\n",
+                "  }\n",
+                "  func.func @g(%arg0: core.i32) -> core.i32 {\n",
+                "    %0 = arith.const {value = 20} : core.i32\n",
+                "    %1 = arith.add %arg0, %0 : core.i32\n",
+                "    func.return %1\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "value_map scoping round-trip failed");
     }
 
     // ========================================================================

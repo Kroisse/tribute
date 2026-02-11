@@ -77,6 +77,15 @@ static PRINT_REGISTRY: std::sync::LazyLock<OpPrintRegistry> = std::sync::LazyLoc
 // Printer State
 // ============================================================================
 
+/// Saved numbering scope (counters + name maps) for save/restore around
+/// isolated regions.
+pub struct NumberingState<'db> {
+    next_value_num: usize,
+    next_block_num: usize,
+    value_names: HashMap<Value<'db>, String>,
+    block_labels: HashMap<BlockId, String>,
+}
+
 /// IR printer state, managing SSA value numbering and block labeling.
 ///
 /// Uses a single lifetime since all Salsa data shares the same DB lifetime.
@@ -208,17 +217,26 @@ impl<'db> PrintState<'db> {
     pub fn reset_numbering(&mut self) {
         self.next_value_num = 0;
         self.next_block_num = 0;
+        self.value_names.clear();
+        self.block_labels.clear();
     }
 
-    /// Save current numbering state.
-    pub fn save_numbering(&self) -> (usize, usize) {
-        (self.next_value_num, self.next_block_num)
+    /// Save current numbering state (counters + name maps).
+    pub fn save_numbering(&self) -> NumberingState<'db> {
+        NumberingState {
+            next_value_num: self.next_value_num,
+            next_block_num: self.next_block_num,
+            value_names: self.value_names.clone(),
+            block_labels: self.block_labels.clone(),
+        }
     }
 
-    /// Restore numbering state.
-    pub fn restore_numbering(&mut self, state: (usize, usize)) {
-        self.next_value_num = state.0;
-        self.next_block_num = state.1;
+    /// Restore numbering state (counters + name maps).
+    pub fn restore_numbering(&mut self, state: NumberingState<'db>) {
+        self.next_value_num = state.next_value_num;
+        self.next_block_num = state.next_block_num;
+        self.value_names = state.value_names;
+        self.block_labels = state.block_labels;
     }
 }
 
@@ -1077,5 +1095,55 @@ mod tests {
             state.output
         );
         assert_eq!(state.output, "custom.mytype() {effect = core.nil}");
+    }
+
+    /// Two sibling functions should each get clean %arg0/%0 numbering.
+    /// Before the fix, reset_numbering only cleared counters but left old
+    /// names in value_names/block_labels, causing spurious collision suffixes.
+    #[salsa::tracked]
+    fn build_module_with_two_functions(db: &dyn salsa::Database) -> Operation<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        let func_f = func::Func::build(db, location, "f", idvec![i32_ty], i32_ty, |entry| {
+            let arg = entry.block_arg(db, 0);
+            entry.op(func::Return::value(db, location, arg));
+        });
+
+        let func_g = func::Func::build(db, location, "g", idvec![i32_ty], i32_ty, |entry| {
+            let arg = entry.block_arg(db, 0);
+            let c = entry.op(arith::Const::i32(db, location, 1));
+            let add = entry.op(arith::add(db, location, arg, c.result(db), i32_ty));
+            entry.op(func::Return::value(db, location, add.result(db)));
+        });
+
+        core::Module::build(db, location, "test".into(), |top| {
+            top.op(func_f);
+            top.op(func_g);
+        })
+        .as_operation()
+    }
+
+    #[salsa_test]
+    fn test_reset_numbering_clears_maps(db: &salsa::DatabaseImpl) {
+        let module = build_module_with_two_functions(db);
+        let text = print_op(db, module);
+
+        // Both functions should use plain %arg0, %0, %1 etc. without
+        // collision suffixes like %arg0_0 or %0_0.
+        assert!(
+            !text.contains("_0"),
+            "sibling functions should get clean numbering without collision suffixes:\n{}",
+            text,
+        );
+        // Verify both functions have their own %arg0
+        let arg0_count = text.matches("%arg0").count();
+        assert!(
+            arg0_count >= 2,
+            "both functions should have %arg0, found {} occurrences:\n{}",
+            arg0_count,
+            text,
+        );
     }
 }
