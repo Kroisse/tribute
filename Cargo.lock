@@ -1442,6 +1442,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "dashmap",
+ "derive_more",
  "fluent-uri",
  "insta",
  "lsp-server",
@@ -1460,6 +1461,7 @@ dependencies = [
  "tribute-ir",
  "tribute-passes",
  "trunk-ir",
+ "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
 ]
 

@@ -52,7 +52,8 @@
 //!     ▼ resolve_casts
 //! Core IR Module
 //!     │
-//!     └─► [target: wasm] ─► compile_to_wasm ─► WasmBinary
+//!     ├─► [target: wasm]   ─► compile_to_wasm   ─► WasmBinary
+//!     └─► [target: native] ─► compile_to_native ─► ObjectFile ─► cc ─► Executable
 //! ```
 //!
 //! ## Diagnostics
@@ -64,6 +65,7 @@
 use crate::SourceCst;
 use ropey::Rope;
 use salsa::Accumulator;
+use std::path::Path;
 use tree_sitter::Parser;
 use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
@@ -93,6 +95,10 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
+use trunk_ir_cranelift_backend::passes::{arith_to_clif, func_to_clif};
+use trunk_ir_cranelift_backend::{
+    CompilationResult as NativeCompilationResult, emit_module_to_native,
+};
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
@@ -654,6 +660,90 @@ pub fn compile_to_wasm_binary<'db>(
 }
 
 // =============================================================================
+// Native Pipeline (Cranelift)
+// =============================================================================
+
+/// Compile a TrunkIR module to a native object file.
+///
+/// This function:
+/// 1. Lowers `func.*` operations to `clif.*`
+/// 2. Lowers `arith.*` operations to `clif.*`
+/// 3. Resolves unrealized conversion casts using native type converter
+/// 4. Validates and emits the native object file via Cranelift
+#[salsa::tracked]
+fn compile_module_to_native<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> NativeCompilationResult<Vec<u8>> {
+    use tribute_passes::native_type_converter;
+
+    // Phase 1 - Lower func dialect to clif dialect
+    let module = func_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 2 - Lower arith dialect to clif dialect
+    let module = arith_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 3 - Resolve unrealized_conversion_cast operations
+    let module = {
+        let type_converter = native_type_converter();
+        let result = resolve_unrealized_casts(db, module, &type_converter);
+        if !result.unresolved.is_empty() {
+            return Err(trunk_ir_cranelift_backend::CompilationError::ir_validation(
+                format!(
+                    "{} unresolved cast(s) remain after native type conversion",
+                    result.unresolved.len()
+                ),
+            ));
+        }
+        result.module
+    };
+
+    // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
+    let _span = tracing::info_span!("emit_module_to_native").entered();
+    emit_module_to_native(db, module)
+}
+
+/// Compile to native object bytes.
+///
+/// Runs the full pipeline and then lowers to a native object file via Cranelift.
+/// Returns `None` if compilation fails, with diagnostics accumulated.
+#[salsa::tracked]
+pub fn compile_to_native_binary<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<Vec<u8>> {
+    let module = match run_full_pipeline(db, source) {
+        Ok(m) => m,
+        Err(e) => {
+            Diagnostic {
+                message: format!("Pipeline failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            return None;
+        }
+    };
+
+    match compile_module_to_native(db, module) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            Diagnostic {
+                message: format!("Native compilation failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            None
+        }
+    }
+}
+
+// =============================================================================
 // AST-Based Pipeline (New)
 // =============================================================================
 //
@@ -818,6 +908,53 @@ pub fn compile_with_diagnostics<'db>(
         module,
         diagnostics,
     }
+}
+
+// =============================================================================
+// Linking
+// =============================================================================
+
+/// Errors that can occur during native binary linking.
+#[derive(Debug, derive_more::Display)]
+pub enum LinkError {
+    #[display("failed to create temporary file: {_0}")]
+    TempFile(std::io::Error),
+    #[display("failed to invoke linker (cc): {_0}")]
+    LinkerNotFound(std::io::Error),
+    #[display("linker failed with exit code {_0}")]
+    LinkerFailed(i32),
+}
+
+impl std::error::Error for LinkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LinkError::TempFile(e) | LinkError::LinkerNotFound(e) => Some(e),
+            LinkError::LinkerFailed(_) => None,
+        }
+    }
+}
+
+/// Link native object bytes into an executable.
+///
+/// Writes object bytes to a temp file and invokes the system linker (`cc`).
+pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), LinkError> {
+    let obj_file = tempfile::Builder::new()
+        .suffix(".o")
+        .tempfile()
+        .map_err(LinkError::TempFile)?;
+    std::fs::write(obj_file.path(), object_bytes).map_err(LinkError::TempFile)?;
+
+    let status = std::process::Command::new("cc")
+        .arg(obj_file.path())
+        .arg("-o")
+        .arg(output)
+        .status()
+        .map_err(LinkError::LinkerNotFound)?;
+
+    if !status.success() {
+        return Err(LinkError::LinkerFailed(status.code().unwrap_or(-1)));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1130,5 +1267,68 @@ mod tests {
 
         let module = parse_and_lower_ast(db, source);
         assert_eq!(module.name(db), "test");
+    }
+
+    // =========================================================================
+    // LinkError & link_native_binary Tests
+    // =========================================================================
+
+    #[test]
+    fn test_link_error_display_temp_file() {
+        let err = LinkError::TempFile(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("failed to create temporary file"));
+        assert!(msg.contains("permission denied"));
+    }
+
+    #[test]
+    fn test_link_error_display_linker_not_found() {
+        let err = LinkError::LinkerNotFound(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("failed to invoke linker (cc)"));
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_link_error_display_linker_failed() {
+        let err = LinkError::LinkerFailed(1);
+        assert_eq!(err.to_string(), "linker failed with exit code 1");
+    }
+
+    #[test]
+    fn test_link_error_source() {
+        use std::error::Error;
+
+        let io_err = LinkError::TempFile(std::io::Error::other("test"));
+        assert!(io_err.source().is_some());
+
+        let linker_err = LinkError::LinkerFailed(1);
+        assert!(linker_err.source().is_none());
+    }
+
+    #[test]
+    fn test_link_native_binary_invalid_object() {
+        // Passing garbage bytes should cause the linker to fail
+        let output = std::env::temp_dir().join("tribute_test_invalid_link");
+        let result = link_native_binary(b"not valid object code", &output);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            LinkError::LinkerNotFound(_) => {
+                eprintln!("warning: system linker (cc) not found, skipping test");
+                return;
+            }
+            LinkError::LinkerFailed(code) => {
+                assert_ne!(code, 0, "linker should fail with non-zero exit code");
+            }
+            other => panic!("expected LinkerFailed, got: {other}"),
+        }
+        // Clean up in case it somehow succeeded
+        let _ = std::fs::remove_file(&output);
     }
 }

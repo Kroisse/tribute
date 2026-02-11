@@ -6,13 +6,15 @@ mod lsp;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use diagnostics::print_diagnostic;
+use diagnostics::{print_diagnostic, report_diagnostics};
 use ropey::Rope;
 use salsa::Database;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_to_wasm_binary, compile_with_diagnostics};
+use tribute::pipeline::{
+    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, link_native_binary,
+};
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
@@ -71,6 +73,26 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         match target {
+            "native" => {
+                println!("Compiling {} to native executable...", input_path.display());
+
+                if let Some(object_bytes) = compile_to_native_binary(db, source) {
+                    let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
+                    if let Err(e) = link_native_binary(&object_bytes, &output) {
+                        eprintln!("Linking failed: {e}");
+                        std::process::exit(1);
+                    }
+                    println!(
+                        "Successfully compiled native executable: {}",
+                        output.display()
+                    );
+                } else {
+                    let file_path = input_path.display().to_string();
+                    let diags = compile_to_native_binary::accumulated::<Diagnostic>(db, source);
+                    report_diagnostics(db, source, &file_path, diags);
+                    std::process::exit(1);
+                }
+            }
             "wasm" => {
                 println!("Compiling {} to WebAssembly...", input_path.display());
 
@@ -81,7 +103,7 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     match std::fs::write(&output, bytes) {
                         Ok(_) => {
                             println!(
-                                "✓ Successfully wrote WebAssembly binary to {}",
+                                "Successfully wrote WebAssembly binary to {}",
                                 output.display()
                             );
                         }
@@ -92,26 +114,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     }
                 } else {
                     let file_path = input_path.display().to_string();
-                    let source_text = source.text(db);
-
-                    // Collect diagnostics from wasm lowering
-                    let wasm_diags: Vec<_> =
-                        compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-                    if !wasm_diags.is_empty() {
-                        for diag in &wasm_diags {
-                            print_diagnostic(diag, source_text, &file_path);
-                        }
-                    } else {
-                        // Try getting frontend diagnostics
-                        let result = compile_with_diagnostics(db, source);
-                        if !result.diagnostics.is_empty() {
-                            for diag in &result.diagnostics {
-                                print_diagnostic(diag, source_text, &file_path);
-                            }
-                        } else {
-                            eprintln!("✗ WebAssembly compilation failed (unknown error)");
-                        }
-                    }
+                    let diags = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
+                    report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }
             }
@@ -131,7 +135,10 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 }
             }
             _ => {
-                eprintln!("Unknown target: {}. Use 'wasm' or 'none'", target);
+                eprintln!(
+                    "Unknown target: {}. Use 'native', 'wasm', or 'none'",
+                    target
+                );
                 std::process::exit(1);
             }
         }
