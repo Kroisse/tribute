@@ -663,6 +663,10 @@ fn lower_scf_switch<'db>(
         lower_region_to_br(db, region, merge_block, location)
     } else {
         // No default — create a block that just branches to merge with no args
+        assert!(
+            result_ty.is_none(),
+            "scf.switch with yielding cases must have a default region"
+        );
         let default_block = BlockBuilder::new(db, location).build();
         let br_op = cf::br(db, location, std::iter::empty::<Value<'db>>(), merge_block);
         vec![Block::new(
@@ -814,7 +818,7 @@ fn discriminant_type<'db>(
             .results(db)
             .get(value.index(db))
             .copied()
-            .unwrap_or_else(|| core::I32::new(db).as_type()),
+            .expect("discriminant result index out of bounds"),
         ValueDef::BlockArg(block_id) => {
             assert_eq!(
                 block.id(db),
