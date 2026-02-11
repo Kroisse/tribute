@@ -9,7 +9,6 @@ core.module @test {
       func.unreachable
   }
   func.func @main() -> core.nil {
-    ^bb0:
       %0 = arith.const {value = 42} : core.i32
       func.return %0
   }

@@ -644,10 +644,11 @@ fn print_func_func<'db>(
         assign_block_arg_names(state, *block);
     }
 
-    // Print all blocks (never elide labels in func body)
+    // Elide entry block label when function body has a single block with no args
+    let single_block_no_args = blocks.len() == 1 && blocks[0].args(db).is_empty();
     state.indent += 2;
     for block in blocks.iter() {
-        print_block(state, *block, false)?;
+        print_block(state, *block, single_block_no_args)?;
     }
     state.indent -= 2;
 
