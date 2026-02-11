@@ -13,6 +13,7 @@ component_management:
       name: "TrunkIR"
       paths:
         - "crates/trunk-ir/**"
+        - "crates/trunk-ir-cranelift-backend/**"
         - "crates/trunk-ir-wasm-backend/**"
 
     # Front-end (parsing, CST lowering, AST-to-IR)
