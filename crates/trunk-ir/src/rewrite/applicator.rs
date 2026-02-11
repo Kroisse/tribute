@@ -265,6 +265,10 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Rewrite a region.
+    ///
+    /// Uses a 2-pass approach to handle successor block references:
+    /// 1. Rewrite all blocks, collecting old→new block mappings
+    /// 2. Remap successor references in all operations using the block map
     fn rewrite_region(
         &self,
         db: &'db dyn salsa::Database,
@@ -272,10 +276,19 @@ impl<'db> PatternApplicator<'db> {
         ctx: &mut RewriteContext<'db>,
         target: &ConversionTarget,
     ) -> Region<'db> {
-        let new_blocks: IdVec<Block<'db>> = region
+        // Pass 1: Rewrite all blocks and collect old→new mappings
+        let pairs: Vec<(Block<'db>, Block<'db>)> = region
             .blocks(db)
             .iter()
-            .map(|block| self.rewrite_block(db, block, ctx, target))
+            .map(|old| (*old, self.rewrite_block(db, old, ctx, target)))
+            .collect();
+
+        let block_map: HashMap<Block<'db>, Block<'db>> = pairs.iter().copied().collect();
+
+        // Pass 2: Remap successor references using the block map
+        let new_blocks: IdVec<Block<'db>> = pairs
+            .into_iter()
+            .map(|(_, new_block)| remap_block_successors(db, new_block, &block_map))
             .collect();
 
         Region::new(db, region.location(db), new_blocks)
@@ -531,6 +544,65 @@ impl<'db> PatternApplicator<'db> {
 impl<'db> Default for PatternApplicator<'db> {
     fn default() -> Self {
         Self::new(super::TypeConverter::new())
+    }
+}
+
+/// Remap successor block references in all operations within a block.
+///
+/// If any operation has successors that appear in `block_map`, the successors
+/// are replaced with the mapped blocks. Returns the block unchanged if no
+/// successors need remapping (avoids unnecessary rebuilds).
+fn remap_block_successors<'db>(
+    db: &'db dyn salsa::Database,
+    block: Block<'db>,
+    block_map: &HashMap<Block<'db>, Block<'db>>,
+) -> Block<'db> {
+    if block_map.is_empty() {
+        return block;
+    }
+
+    let ops = block.operations(db);
+    let mut any_changed = false;
+    let new_ops: IdVec<Operation<'db>> = ops
+        .iter()
+        .map(|op| {
+            let successors = op.successors(db);
+            if successors.is_empty() {
+                return *op;
+            }
+
+            let mut changed = false;
+            let new_successors: IdVec<Block<'db>> = successors
+                .iter()
+                .map(|succ| {
+                    if let Some(&mapped) = block_map.get(succ) {
+                        changed = true;
+                        mapped
+                    } else {
+                        *succ
+                    }
+                })
+                .collect();
+
+            if changed {
+                any_changed = true;
+                op.modify(db).successors(new_successors).build()
+            } else {
+                *op
+            }
+        })
+        .collect();
+
+    if any_changed {
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
+    } else {
+        block
     }
 }
 
