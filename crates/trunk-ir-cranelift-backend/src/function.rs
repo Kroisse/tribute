@@ -107,7 +107,7 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
     }
 
     /// Look up a TrunkIR block in the block mapping.
-    fn lookup_block(&self, ir_block: IrBlock<'db>) -> CompilationResult<cl_ir::Block> {
+    pub(crate) fn lookup_block(&self, ir_block: IrBlock<'db>) -> CompilationResult<cl_ir::Block> {
         self.block_map.get(&ir_block).copied().ok_or_else(|| {
             CompilationError::codegen("TrunkIR block not found in Cranelift block mapping")
         })
@@ -243,9 +243,18 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
                 .iter()
                 .map(|v| self.lookup(*v).map(cl_ir::BlockArg::from))
                 .collect::<CompilationResult<_>>()?;
+            let dest_param_count = self.builder.block_params(cl_dest).len();
+            if args.len() != dest_param_count {
+                return Err(CompilationError::codegen(format!(
+                    "clif.jump: argument count ({}) does not match destination block parameter count ({})",
+                    args.len(),
+                    dest_param_count,
+                )));
+            }
             self.builder.ins().jump(cl_dest, &args);
             return Ok(());
         }
+        // cf.cond_br carries no block args by design, so empty arg slices are intentional.
         if let Ok(brif) = clif::Brif::from_operation(db, *op) {
             let cond = self.lookup(brif.cond(db))?;
             let cl_then = self.lookup_block(brif.then_dest(db))?;

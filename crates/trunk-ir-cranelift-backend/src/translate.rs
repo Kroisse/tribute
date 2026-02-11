@@ -149,11 +149,19 @@ fn emit_module_impl<'db>(
 
                     // Phase 2: Translate operations in each block
                     for ir_block in ir_blocks.iter() {
-                        let cl_block = translator.block_map[ir_block];
+                        let cl_block = translator.lookup_block(*ir_block)?;
                         translator.builder.switch_to_block(cl_block);
 
                         // Map block arguments to Cranelift block params
                         let cl_params: Vec<_> = translator.builder.block_params(cl_block).to_vec();
+                        let ir_arg_count = ir_block.args(db).len();
+                        if ir_arg_count != cl_params.len() {
+                            return Err(crate::CompilationError::codegen(format!(
+                                "block arg count mismatch: TrunkIR block has {} args but Cranelift block has {} params",
+                                ir_arg_count,
+                                cl_params.len(),
+                            )));
+                        }
                         for (i, &cl_param) in cl_params.iter().enumerate() {
                             let ir_arg = ir_block.arg(db, i);
                             translator.values.insert(ir_arg, cl_param);
@@ -528,6 +536,122 @@ mod tests {
         assert!(result.is_ok(), "emit failed: {:?}", result.err());
         let bytes = result.unwrap();
         assert!(!bytes.is_empty(), "object file should not be empty");
+    }
+
+    // --- validation: jump arg count mismatch ---
+
+    #[salsa::tracked]
+    fn make_jump_too_many_args_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // fn main() -> I64 {
+        //   entry:
+        //     %c = iconst 42
+        //     jump dest(%c)       ← 1 arg
+        //   dest:                  ← 0 params  (mismatch!)
+        //     return iconst 0
+        // }
+        let func_ty = core::Func::new(db, IdVec::new(), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let dest_block_id = BlockId::fresh();
+
+        // dest block: no params, just return 0
+        let c0 = clif::iconst(db, location, i64_ty, 0);
+        let ret0 = clif::r#return(db, location, [c0.result(db)]);
+        let dest_block = Block::new(
+            db,
+            dest_block_id,
+            location,
+            idvec![],
+            idvec![c0.as_operation(), ret0.as_operation()],
+        );
+
+        // entry block: jump to dest with 1 arg (dest expects 0)
+        let c42 = clif::iconst(db, location, i64_ty, 42);
+        let jump_op = clif::jump(db, location, [c42.result(db)], dest_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![],
+            idvec![c42.as_operation(), jump_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, dest_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_rejects_jump_arg_count_mismatch(db: &salsa::DatabaseImpl) {
+        let module = make_jump_too_many_args_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_err(), "should fail due to arg count mismatch");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("argument count"),
+            "error should mention argument count mismatch, got: {err_msg}"
+        );
+    }
+
+    #[salsa::tracked]
+    fn make_jump_too_few_args_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i64_ty = core::I64::new(db).as_type();
+
+        // fn main() -> I64 {
+        //   entry:
+        //     jump dest()          ← 0 args
+        //   dest(%val: I64):       ← 1 param  (mismatch!)
+        //     return %val
+        // }
+        let func_ty = core::Func::new(db, IdVec::new(), i64_ty).as_type();
+
+        let entry_block_id = BlockId::fresh();
+        let dest_block_id = BlockId::fresh();
+
+        // dest block: 1 param
+        let dest_arg = BlockArg::of_type(db, i64_ty);
+        let dest_block_tmp = Block::new(db, dest_block_id, location, idvec![dest_arg], idvec![]);
+        let dest_val = dest_block_tmp.arg(db, 0);
+        let ret = clif::r#return(db, location, [dest_val]);
+        let dest_block = Block::new(
+            db,
+            dest_block_id,
+            location,
+            idvec![dest_arg],
+            idvec![ret.as_operation()],
+        );
+
+        // entry block: jump with 0 args (dest expects 1)
+        let jump_op = clif::jump(db, location, [], dest_block);
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            idvec![],
+            idvec![jump_op.as_operation()],
+        );
+
+        let body = Region::new(db, location, idvec![entry_block, dest_block]);
+        let func_op = clif::func(db, location, Symbol::new("main"), func_ty, body);
+
+        build_module(db, location, vec![func_op.as_operation()])
+    }
+
+    #[salsa_test]
+    fn test_emit_rejects_jump_too_few_args(db: &salsa::DatabaseImpl) {
+        let module = make_jump_too_few_args_module(db);
+        let result = emit_module_to_native(db, module);
+        assert!(result.is_err(), "should fail due to arg count mismatch");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("argument count"),
+            "error should mention argument count mismatch, got: {err_msg}"
+        );
     }
 
     // --- validation: reject non-clif ops ---
