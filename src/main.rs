@@ -6,14 +6,14 @@ mod lsp;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use diagnostics::print_diagnostic;
+use diagnostics::{print_diagnostic, report_diagnostics};
 use ropey::Rope;
 use salsa::Database;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
-    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
+    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, link_native_binary,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
@@ -77,66 +77,19 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 println!("Compiling {} to native executable...", input_path.display());
 
                 if let Some(object_bytes) = compile_to_native_binary(db, source) {
-                    // Write object file to a temp file
-                    let obj_file = tempfile::Builder::new()
-                        .suffix(".o")
-                        .tempfile()
-                        .unwrap_or_else(|e| {
-                            eprintln!("Error creating temp file: {}", e);
-                            std::process::exit(1);
-                        });
-                    std::fs::write(obj_file.path(), &object_bytes).unwrap_or_else(|e| {
-                        eprintln!("Error writing object file: {}", e);
-                        std::process::exit(1);
-                    });
-
-                    // Determine output path
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
-
-                    // Link with system cc
-                    let status = std::process::Command::new("cc")
-                        .arg(obj_file.path())
-                        .arg("-o")
-                        .arg(&output)
-                        .status();
-
-                    match status {
-                        Ok(s) if s.success() => {
-                            println!(
-                                "Successfully compiled native executable: {}",
-                                output.display()
-                            );
-                        }
-                        Ok(s) => {
-                            eprintln!("Linker failed with exit code: {}", s.code().unwrap_or(-1));
-                            std::process::exit(1);
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to run linker (cc): {}", e);
-                            eprintln!("Make sure a C compiler is installed and available in PATH.");
-                            std::process::exit(1);
-                        }
+                    if let Err(e) = link_native_binary(&object_bytes, &output) {
+                        eprintln!("Linking failed: {e}");
+                        std::process::exit(1);
                     }
+                    println!(
+                        "Successfully compiled native executable: {}",
+                        output.display()
+                    );
                 } else {
                     let file_path = input_path.display().to_string();
-                    let source_text = source.text(db);
-
-                    let native_diags: Vec<_> =
-                        compile_to_native_binary::accumulated::<Diagnostic>(db, source);
-                    if !native_diags.is_empty() {
-                        for diag in &native_diags {
-                            print_diagnostic(diag, source_text, &file_path);
-                        }
-                    } else {
-                        let result = compile_with_diagnostics(db, source);
-                        if !result.diagnostics.is_empty() {
-                            for diag in &result.diagnostics {
-                                print_diagnostic(diag, source_text, &file_path);
-                            }
-                        } else {
-                            eprintln!("Native compilation failed (unknown error)");
-                        }
-                    }
+                    let diags = compile_to_native_binary::accumulated::<Diagnostic>(db, source);
+                    report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }
             }
@@ -150,7 +103,7 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     match std::fs::write(&output, bytes) {
                         Ok(_) => {
                             println!(
-                                "✓ Successfully wrote WebAssembly binary to {}",
+                                "Successfully wrote WebAssembly binary to {}",
                                 output.display()
                             );
                         }
@@ -161,26 +114,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                     }
                 } else {
                     let file_path = input_path.display().to_string();
-                    let source_text = source.text(db);
-
-                    // Collect diagnostics from wasm lowering
-                    let wasm_diags: Vec<_> =
-                        compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
-                    if !wasm_diags.is_empty() {
-                        for diag in &wasm_diags {
-                            print_diagnostic(diag, source_text, &file_path);
-                        }
-                    } else {
-                        // Try getting frontend diagnostics
-                        let result = compile_with_diagnostics(db, source);
-                        if !result.diagnostics.is_empty() {
-                            for diag in &result.diagnostics {
-                                print_diagnostic(diag, source_text, &file_path);
-                            }
-                        } else {
-                            eprintln!("✗ WebAssembly compilation failed (unknown error)");
-                        }
-                    }
+                    let diags = compile_to_wasm_binary::accumulated::<Diagnostic>(db, source);
+                    report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }
             }

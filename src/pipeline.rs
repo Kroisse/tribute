@@ -65,6 +65,7 @@
 use crate::SourceCst;
 use ropey::Rope;
 use salsa::Accumulator;
+use std::path::Path;
 use tree_sitter::Parser;
 use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
@@ -909,6 +910,53 @@ pub fn compile_with_diagnostics<'db>(
     }
 }
 
+// =============================================================================
+// Linking
+// =============================================================================
+
+/// Errors that can occur during native binary linking.
+#[derive(Debug, derive_more::Display)]
+pub enum LinkError {
+    #[display("failed to create temporary file: {_0}")]
+    TempFile(std::io::Error),
+    #[display("failed to invoke linker (cc): {_0}")]
+    LinkerNotFound(std::io::Error),
+    #[display("linker failed with exit code {_0}")]
+    LinkerFailed(i32),
+}
+
+impl std::error::Error for LinkError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            LinkError::TempFile(e) | LinkError::LinkerNotFound(e) => Some(e),
+            LinkError::LinkerFailed(_) => None,
+        }
+    }
+}
+
+/// Link native object bytes into an executable.
+///
+/// Writes object bytes to a temp file and invokes the system linker (`cc`).
+pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), LinkError> {
+    let obj_file = tempfile::Builder::new()
+        .suffix(".o")
+        .tempfile()
+        .map_err(LinkError::TempFile)?;
+    std::fs::write(obj_file.path(), object_bytes).map_err(LinkError::TempFile)?;
+
+    let status = std::process::Command::new("cc")
+        .arg(obj_file.path())
+        .arg("-o")
+        .arg(output)
+        .status()
+        .map_err(LinkError::LinkerNotFound)?;
+
+    if !status.success() {
+        return Err(LinkError::LinkerFailed(status.code().unwrap_or(-1)));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1219,5 +1267,64 @@ mod tests {
 
         let module = parse_and_lower_ast(db, source);
         assert_eq!(module.name(db), "test");
+    }
+
+    // =========================================================================
+    // LinkError & link_native_binary Tests
+    // =========================================================================
+
+    #[test]
+    fn test_link_error_display_temp_file() {
+        let err = LinkError::TempFile(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "permission denied",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("failed to create temporary file"));
+        assert!(msg.contains("permission denied"));
+    }
+
+    #[test]
+    fn test_link_error_display_linker_not_found() {
+        let err = LinkError::LinkerNotFound(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "not found",
+        ));
+        let msg = err.to_string();
+        assert!(msg.contains("failed to invoke linker (cc)"));
+        assert!(msg.contains("not found"));
+    }
+
+    #[test]
+    fn test_link_error_display_linker_failed() {
+        let err = LinkError::LinkerFailed(1);
+        assert_eq!(err.to_string(), "linker failed with exit code 1");
+    }
+
+    #[test]
+    fn test_link_error_source() {
+        use std::error::Error;
+
+        let io_err = LinkError::TempFile(std::io::Error::other("test"));
+        assert!(io_err.source().is_some());
+
+        let linker_err = LinkError::LinkerFailed(1);
+        assert!(linker_err.source().is_none());
+    }
+
+    #[test]
+    fn test_link_native_binary_invalid_object() {
+        // Passing garbage bytes should cause the linker to fail
+        let output = std::env::temp_dir().join("tribute_test_invalid_link");
+        let result = link_native_binary(b"not valid object code", &output);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            LinkError::LinkerFailed(code) => {
+                assert_ne!(code, 0, "linker should fail with non-zero exit code");
+            }
+            other => panic!("expected LinkerFailed, got: {other}"),
+        }
+        // Clean up in case it somehow succeeded
+        let _ = std::fs::remove_file(&output);
     }
 }

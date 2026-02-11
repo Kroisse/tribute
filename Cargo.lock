@@ -1442,6 +1442,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "dashmap",
+ "derive_more",
  "fluent-uri",
  "insta",
  "lsp-server",

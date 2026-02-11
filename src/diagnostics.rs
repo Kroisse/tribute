@@ -4,6 +4,9 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use ropey::Rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
 
+use tribute::SourceCst;
+use tribute::pipeline::compile_with_diagnostics;
+
 /// Get the display color for a compilation phase.
 pub fn phase_color(phase: &CompilationPhase) -> Color {
     match phase {
@@ -39,6 +42,33 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
         .finish()
         .eprint((file_path, Source::from(source_text)))
         .ok();
+}
+
+/// Collect and print diagnostics from a failed compilation.
+///
+/// First tries target-specific accumulated diagnostics; if empty,
+/// falls back to `compile_with_diagnostics` for frontend diagnostics.
+pub fn report_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    file_path: &str,
+    accumulated_diags: Vec<&Diagnostic>,
+) {
+    let source_text = source.text(db);
+    if !accumulated_diags.is_empty() {
+        for diag in &accumulated_diags {
+            print_diagnostic(diag, source_text, file_path);
+        }
+    } else {
+        let result = compile_with_diagnostics(db, source);
+        if !result.diagnostics.is_empty() {
+            for diag in &result.diagnostics {
+                print_diagnostic(diag, source_text, file_path);
+            }
+        } else {
+            eprintln!("Compilation failed (unknown error)");
+        }
+    }
 }
 
 #[cfg(test)]
