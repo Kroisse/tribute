@@ -424,4 +424,29 @@ mod tests {
         // arith.const ops should remain unchanged (different dialect)
         assert_snapshot!(formatted);
     }
+
+    #[salsa::tracked]
+    fn make_func_tail_call_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+
+        let tail_call = func::tail_call(db, location, vec![], Symbol::new("target_fn"));
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![tail_call.as_operation()],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_func_tail_call_to_clif(db: &salsa::DatabaseImpl) {
+        let module = make_func_tail_call_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @"clif.return_call callee=target_fn");
+    }
 }

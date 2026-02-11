@@ -113,23 +113,35 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
         let value = const_op.value(db).clone();
 
         let new_op = match category {
-            "f32" => if let Attribute::FloatBits(v) = value {
-                clif::f32const(db, location, result_ty, f32::from_bits(v as u32))
+            "f32" => if let Attribute::FloatBits(v) = &value {
+                clif::f32const(db, location, result_ty, f32::from_bits(*v as u32))
             } else {
+                debug_assert!(
+                    false,
+                    "arith.const: expected Attribute::FloatBits for f32, got {value:?}"
+                );
                 clif::f32const(db, location, result_ty, 0.0)
             }
             .as_operation(),
-            "f64" => if let Attribute::FloatBits(v) = value {
-                clif::f64const(db, location, result_ty, f64::from_bits(v))
+            "f64" => if let Attribute::FloatBits(v) = &value {
+                clif::f64const(db, location, result_ty, f64::from_bits(*v))
             } else {
+                debug_assert!(
+                    false,
+                    "arith.const: expected Attribute::FloatBits for f64, got {value:?}"
+                );
                 clif::f64const(db, location, result_ty, 0.0)
             }
             .as_operation(),
             _ => {
                 // All integer types (i1, i8, i16, i32, i64, int, nat, bool)
-                if let Attribute::IntBits(v) = value {
-                    clif::iconst(db, location, result_ty, v as i64).as_operation()
+                if let Attribute::IntBits(v) = &value {
+                    clif::iconst(db, location, result_ty, *v as i64).as_operation()
                 } else {
+                    debug_assert!(
+                        false,
+                        "arith.const: expected Attribute::IntBits for integer type, got {value:?}"
+                    );
                     clif::iconst(db, location, result_ty, 0).as_operation()
                 }
             }
@@ -192,11 +204,18 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
         } else if name == arith::DIV() {
             match category {
                 "f32" | "f64" => clif::fdiv(db, location, lhs, rhs, result_ty).as_operation(),
+                _ if is_unsigned_int(db, Some(result_ty)) => {
+                    clif::udiv(db, location, lhs, rhs, result_ty).as_operation()
+                }
                 _ => clif::sdiv(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else if name == arith::REM() {
             // Only integer remainder in Cranelift (no float remainder)
-            clif::srem(db, location, lhs, rhs, result_ty).as_operation()
+            if is_unsigned_int(db, Some(result_ty)) {
+                clif::urem(db, location, lhs, rhs, result_ty).as_operation()
+            } else {
+                clif::srem(db, location, lhs, rhs, result_ty).as_operation()
+            }
         } else {
             return RewriteResult::Unchanged;
         };
@@ -472,6 +491,17 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
         };
 
         RewriteResult::Replace(new_op)
+    }
+}
+
+/// Check if the type is an unsigned integer (e.g., `nat`, `bool`).
+fn is_unsigned_int<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> bool {
+    match ty {
+        Some(t) => {
+            let name = t.name(db);
+            name == Symbol::new("nat") || name == Symbol::new("bool")
+        }
+        None => false,
     }
 }
 
