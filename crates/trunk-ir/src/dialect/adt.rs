@@ -44,7 +44,8 @@ dialect! {
         fn struct_get(r#ref) -> result;
 
         /// `adt.struct_set` operation: writes a field in a struct by index.
-        #[attr(field: u64)]
+        /// Type attribute specifies the struct type (for layout computation).
+        #[attr(r#type: Type, field: u64)]
         fn struct_set(r#ref, value);
 
         // === Variant (Sum Type) ===

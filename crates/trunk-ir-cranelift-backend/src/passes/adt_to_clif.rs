@@ -3,6 +3,7 @@
 //! This pass converts struct-related ADT operations to their Cranelift equivalents:
 //! - `adt.struct_new(fields...)` -> `clif.call @tribute_rt_alloc` + `clif.store` per field
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
+//! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
 //!
 //! ## Allocation strategy
 //!
@@ -12,7 +13,7 @@
 //! ## Limitations
 //!
 //! - Only struct operations are lowered (variant/array/ref ops are left unchanged)
-//! - `adt.struct_set` is not yet implemented (needs type attribute on the operation)
+//! - Only struct operations are lowered (variant/array/ref ops are left unchanged)
 
 use tracing::warn;
 
@@ -30,7 +31,7 @@ const ALLOC_FN: &str = "tribute_rt_alloc";
 
 /// Lower ADT struct operations to clif dialect.
 ///
-/// This is a partial lowering: only struct_new and struct_get are converted.
+/// This is a partial lowering: only struct_new, struct_get, and struct_set are converted.
 /// Other ADT operations (variant, array, ref) pass through unchanged.
 ///
 /// The `type_converter` parameter is used to determine field sizes for
@@ -50,6 +51,7 @@ pub fn lower<'db>(
     Ok(PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
+        .add_pattern(StructSetPattern)
         .apply_partial(db, module, target)
         .module)
 }
@@ -176,6 +178,53 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
 
         let load_op = clif::load(db, location, ref_val, result_ty, offset);
         RewriteResult::Replace(load_op.as_operation())
+    }
+}
+
+/// Pattern for `adt.struct_set(ref, value, field_idx)` -> `clif.store(value, ref, offset)`.
+struct StructSetPattern;
+
+impl<'db> RewritePattern<'db> for StructSetPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let struct_ty = struct_set.r#type(db);
+        let field_idx = struct_set.field(db) as usize;
+        let type_converter = adaptor.type_converter();
+
+        let Some(layout) = compute_struct_layout(db, struct_ty, type_converter) else {
+            warn!(
+                "adt_to_clif: cannot compute layout for struct_set type at {:?}",
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        if field_idx >= layout.field_offsets.len() {
+            warn!(
+                "adt_to_clif: field index {} out of bounds (struct has {} fields)",
+                field_idx,
+                layout.field_offsets.len()
+            );
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let offset = layout.field_offsets[field_idx] as i32;
+
+        // Get remapped operands: ref (0) and value (1)
+        let ref_val = adaptor.operand(0).unwrap_or_else(|| struct_set.r#ref(db));
+        let value_val = adaptor.operand(1).unwrap_or_else(|| struct_set.value(db));
+
+        let store_op = clif::store(db, location, value_val, ref_val, offset);
+        RewriteResult::Replace(store_op.as_operation())
     }
 }
 
@@ -362,6 +411,57 @@ mod tests {
         clif.call callee=tribute_rt_alloc operands=1 -> ptr
         clif.iconst value=0 -> i64
         clif.iadd operands=2 -> ptr
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_struct_set_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let ptr_ty = core::Ptr::new(db).as_type();
+
+        let struct_ty = adt::struct_type(
+            db,
+            Symbol::new("Point"),
+            vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
+        );
+
+        // Simulate: ref = some pointer, value = 42, set field 0
+        let ref_op = clif::iconst(db, location, ptr_ty, 0);
+        let val_op = clif::iconst(db, location, i32_ty, 42);
+        let struct_set_op = adt::struct_set(
+            db,
+            location,
+            ref_op.result(db),
+            val_op.result(db),
+            struct_ty,
+            0,
+        );
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                ref_op.as_operation(),
+                val_op.as_operation(),
+                struct_set_op.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_struct_set_to_clif(db: &salsa::DatabaseImpl) {
+        let module = make_struct_set_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=0 -> ptr
+        clif.iconst value=42 -> i32
+        clif.store offset=0 operands=2
         ");
     }
 }
