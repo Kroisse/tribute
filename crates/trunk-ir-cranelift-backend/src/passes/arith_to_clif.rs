@@ -13,11 +13,14 @@ use tracing::warn;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, clif, core};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
 /// Lower arith dialect to clif dialect.
+///
+/// Returns an error if any `arith.*` operations remain after conversion.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
@@ -25,20 +28,20 @@ pub fn lower<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     type_converter: TypeConverter,
-) -> Module<'db> {
+) -> Result<Module<'db>, ConversionError> {
     let target = ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("arith");
 
-    PatternApplicator::new(type_converter)
+    Ok(PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern)
-        .apply_partial(db, module, target)
-        .module
+        .apply(db, module, target)?
+        .module)
 }
 
 /// Classify a type into integer vs float category.
@@ -584,7 +587,7 @@ mod tests {
 
     #[salsa::tracked]
     fn format_lowered_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> String {
-        let lowered = lower(db, module, test_converter());
+        let lowered = lower(db, module, test_converter()).expect("conversion should succeed");
         format_module_ops(db, &lowered)
     }
 

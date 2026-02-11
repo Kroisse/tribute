@@ -12,11 +12,14 @@
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, Operation, Symbol};
 
 /// Lower func dialect to clif dialect.
+///
+/// Returns an error if any `func.*` operations remain after conversion.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
@@ -24,12 +27,12 @@ pub fn lower<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     type_converter: TypeConverter,
-) -> Module<'db> {
+) -> Result<Module<'db>, ConversionError> {
     let target = ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("func");
 
-    PatternApplicator::new(type_converter)
+    Ok(PatternApplicator::new(type_converter)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
@@ -37,8 +40,8 @@ pub fn lower<'db>(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern)
-        .apply_partial(db, module, target)
-        .module
+        .apply(db, module, target)?
+        .module)
 }
 
 /// Pattern for `func.func` -> `clif.func`
@@ -313,7 +316,7 @@ mod tests {
 
     #[salsa::tracked]
     fn format_lowered_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> String {
-        let lowered = lower(db, module, test_converter());
+        let lowered = lower(db, module, test_converter()).expect("conversion should succeed");
         format_module_ops(db, &lowered)
     }
 
