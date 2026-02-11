@@ -184,6 +184,58 @@ fn transform_op_regions<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) 
     }
 }
 
+/// Recursively transform nested regions within an operation, propagating a value map.
+///
+/// This is used by `remap_op` so that nested regions also have their captured
+/// values remapped (e.g., when an scf.if result is replaced by a merge block arg,
+/// operations inside nested func regions must see the updated value).
+fn transform_op_regions_with_map<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    value_map: &HashMap<Value<'db>, Value<'db>>,
+) -> Operation<'db> {
+    let regions = op.regions(db);
+    if regions.is_empty() {
+        return *op;
+    }
+
+    let new_regions: IdVec<Region<'db>> = regions
+        .iter()
+        .map(|region| transform_region_with_map(db, region, value_map))
+        .collect();
+
+    if new_regions == *regions {
+        *op
+    } else {
+        op.modify(db).regions(new_regions).build()
+    }
+}
+
+/// Transform all blocks in a region, remapping values via `value_map` and
+/// recursively processing nested regions.
+fn transform_region_with_map<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    value_map: &HashMap<Value<'db>, Value<'db>>,
+) -> Region<'db> {
+    let mut new_blocks = IdVec::new();
+    for block in region.blocks(db).iter() {
+        let new_ops: IdVec<Operation<'db>> = block
+            .operations(db)
+            .iter()
+            .map(|op| remap_op(db, op, value_map))
+            .collect();
+        new_blocks.push(Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        ));
+    }
+    Region::new(db, region.location(db), new_blocks)
+}
+
 /// Remap operands of an operation using the value map.
 fn remap_op<'db>(
     db: &'db dyn salsa::Database,
@@ -212,7 +264,7 @@ fn remap_op<'db>(
     } else {
         *op
     };
-    transform_op_regions(db, &remapped)
+    transform_op_regions_with_map(db, &remapped, value_map)
 }
 
 /// Build the merge block with remaining ops, remapping values.
@@ -595,7 +647,8 @@ fn lower_scf_switch<'db>(
     // The result comes from the merge block with values from scf.yield in each case.
 
     // Find result type from first case's yield (if any)
-    let result_ty = find_yield_type(db, cases.first().map(|(_, r)| r));
+    let result_ty = find_yield_type(db, cases.first().map(|(_, r)| r))
+        .or_else(|| find_yield_type(db, default_region.as_ref()));
 
     // Create merge block
     let merge_id = BlockId::fresh();
