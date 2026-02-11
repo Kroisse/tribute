@@ -187,6 +187,8 @@ pub enum ConversionError {
     MissingResult,
     /// Missing region.
     MissingRegion,
+    /// Missing or insufficient successors.
+    MissingSuccessor,
     /// Wrong number of operands.
     WrongOperandCount { expected: usize, actual: usize },
 }
@@ -1468,7 +1470,7 @@ macro_rules! define_op {
         {
             const EXPECTED_SUCCESSORS: usize = $crate::define_op!(@count $($succ)+);
             if $op.successors($db).len() < EXPECTED_SUCCESSORS {
-                return Err($crate::ConversionError::MissingRegion);
+                return Err($crate::ConversionError::MissingSuccessor);
             }
         }
     };

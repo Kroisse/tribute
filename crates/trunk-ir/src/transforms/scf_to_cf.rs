@@ -252,7 +252,13 @@ fn lower_scf_if<'db>(
     value_map: &mut HashMap<Value<'db>, Value<'db>>,
     location: Location<'db>,
 ) -> Vec<Block<'db>> {
-    let result_ty = if_op.as_operation().results(db).first().copied();
+    let results = if_op.as_operation().results(db);
+    assert!(
+        results.len() <= 1,
+        "scf.if must have at most 1 result, got {}",
+        results.len()
+    );
+    let result_ty = results.first().copied();
 
     // Create merge block (will be the target of then/else branches)
     let merge_id = BlockId::fresh();
@@ -336,6 +342,11 @@ fn lower_region_to_br<'db>(
                 // Replace scf.yield with cf.br to merge block
                 let yield_op = scf::Yield::from_operation(db, *op).unwrap();
                 let values: Vec<Value<'db>> = yield_op.values(db).to_vec();
+                assert!(
+                    values.len() <= 1,
+                    "scf.yield must have at most 1 value, got {}",
+                    values.len()
+                );
                 let br_op = cf::br(db, location, values, merge_block);
                 new_ops.push(br_op.as_operation());
             } else {
@@ -394,7 +405,13 @@ fn lower_scf_loop<'db>(
     value_map: &mut HashMap<Value<'db>, Value<'db>>,
     location: Location<'db>,
 ) -> Vec<Block<'db>> {
-    let result_ty = loop_op.as_operation().results(db).first().copied();
+    let results = loop_op.as_operation().results(db);
+    assert!(
+        results.len() <= 1,
+        "scf.loop must have at most 1 result, got {}",
+        results.len()
+    );
+    let result_ty = results.first().copied();
 
     // Create exit block
     let exit_id = BlockId::fresh();
@@ -618,82 +635,8 @@ fn lower_scf_switch<'db>(
     let cmp_ty = core::I1::new(db).as_type();
 
     // Build chained cond_br blocks
-    // For N cases, we need N check blocks (the first is the entry block)
+    // For N cases, we need N check blocks (the first reuses orig_block's ID)
     let mut all_blocks = Vec::new();
-
-    // Build from the last case backwards so each check block knows its "else" target
-    // Actually, let's build forward with entry block containing before_ops + first check
-
-    let mut current_entry_ops = before_ops;
-
-    for (i, ((case_attr, _), case_blks)) in cases.iter().zip(case_blocks.iter()).enumerate() {
-        let case_entry = case_blks[0];
-        let is_last = i == cases.len() - 1;
-
-        // Create comparison: discriminant == case_value
-        let case_const = arith::r#const(
-            db,
-            location,
-            discriminant_type(db, discriminant),
-            case_attr.clone(),
-        );
-        let cmp = arith::cmp_eq(db, location, discriminant, case_const.result(db), cmp_ty);
-
-        current_entry_ops.push(case_const.as_operation());
-        current_entry_ops.push(cmp.as_operation());
-
-        if is_last {
-            // Last case: else goes to default
-            let default_entry = default_blocks[0];
-            let cond_br_op = cf::cond_br(db, location, cmp.result(db), case_entry, default_entry);
-            current_entry_ops.push(cond_br_op.as_operation());
-        } else {
-            // Not the last case: else goes to next check block
-            let next_check_id = BlockId::fresh();
-            let next_check_placeholder =
-                Block::new(db, next_check_id, location, IdVec::new(), IdVec::new());
-
-            let cond_br_op = cf::cond_br(
-                db,
-                location,
-                cmp.result(db),
-                case_entry,
-                next_check_placeholder,
-            );
-            current_entry_ops.push(cond_br_op.as_operation());
-
-            // Finish current check block
-            if i == 0 {
-                // First check block is the entry block
-                let entry_block = Block::new(
-                    db,
-                    orig_block.id(db),
-                    location,
-                    orig_block.args(db).clone(),
-                    current_entry_ops,
-                );
-                all_blocks.push(entry_block);
-            } else {
-                let check_block = Block::new(
-                    db,
-                    all_blocks
-                        .last()
-                        .map(|_| BlockId::fresh())
-                        .unwrap_or(orig_block.id(db)),
-                    location,
-                    IdVec::new(),
-                    current_entry_ops,
-                );
-                all_blocks.push(check_block);
-            }
-
-            // Start next check block
-            current_entry_ops = IdVec::new();
-
-            // Add case blocks
-            all_blocks.extend(case_blks.iter().copied());
-        }
-    }
 
     if cases.is_empty() {
         // No cases, just branch to default
@@ -704,39 +647,63 @@ fn lower_scf_switch<'db>(
             std::iter::empty::<Value<'db>>(),
             default_entry,
         );
-        current_entry_ops.push(br_op.as_operation());
+        let mut entry_ops = before_ops;
+        entry_ops.push(br_op.as_operation());
 
         let entry_block = Block::new(
             db,
             orig_block.id(db),
             location,
             orig_block.args(db).clone(),
-            current_entry_ops,
+            entry_ops,
         );
         all_blocks.push(entry_block);
     } else {
-        // Add the last entry/check block
-        let last_block_id = if all_blocks.is_empty() {
-            orig_block.id(db)
-        } else {
-            BlockId::fresh()
-        };
-        let last_check = Block::new(
-            db,
-            last_block_id,
-            location,
-            if all_blocks.is_empty() {
-                orig_block.args(db).clone()
-            } else {
-                IdVec::new()
-            },
-            current_entry_ops,
-        );
-        all_blocks.push(last_check);
+        // Pre-allocate check block IDs for cases after the first.
+        // check_block_ids[j] is the ID for the block that checks case j+1.
+        let check_block_ids: Vec<BlockId> = (1..cases.len()).map(|_| BlockId::fresh()).collect();
 
-        // Add last case blocks
-        if let Some(last_case_blks) = case_blocks.last() {
-            all_blocks.extend(last_case_blks.iter().copied());
+        let mut current_entry_ops = before_ops;
+
+        for (i, ((case_attr, _), case_blks)) in cases.iter().zip(case_blocks.iter()).enumerate() {
+            let case_entry = case_blks[0];
+            let is_last = i == cases.len() - 1;
+
+            // Create comparison: discriminant == case_value
+            let case_const = arith::r#const(
+                db,
+                location,
+                discriminant_type(db, discriminant, orig_block),
+                case_attr.clone(),
+            );
+            let cmp = arith::cmp_eq(db, location, discriminant, case_const.result(db), cmp_ty);
+
+            current_entry_ops.push(case_const.as_operation());
+            current_entry_ops.push(cmp.as_operation());
+
+            // Branch: match → case entry, no match → next check (or default for last)
+            let else_target = if is_last {
+                default_blocks[0]
+            } else {
+                Block::new(db, check_block_ids[i], location, IdVec::new(), IdVec::new())
+            };
+            let cond_br_op = cf::cond_br(db, location, cmp.result(db), case_entry, else_target);
+            current_entry_ops.push(cond_br_op.as_operation());
+
+            // Finish current check block
+            let (block_id, block_args) = if i == 0 {
+                (orig_block.id(db), orig_block.args(db).clone())
+            } else {
+                (check_block_ids[i - 1], IdVec::new())
+            };
+            let check_block = Block::new(db, block_id, location, block_args, current_entry_ops);
+            all_blocks.push(check_block);
+
+            // Add case blocks
+            all_blocks.extend(case_blks.iter().copied());
+
+            // Start next check block ops
+            current_entry_ops = IdVec::new();
         }
     }
 
@@ -790,16 +757,24 @@ fn find_yield_type<'db>(
 }
 
 /// Get the type of a discriminant value.
-fn discriminant_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Type<'db> {
+fn discriminant_type<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    block: &Block<'db>,
+) -> Type<'db> {
     match value.def(db) {
         ValueDef::OpResult(op) => op
             .results(db)
             .get(value.index(db))
             .copied()
             .unwrap_or_else(|| core::I32::new(db).as_type()),
-        ValueDef::BlockArg(_) => {
-            // Fallback to i32
-            core::I32::new(db).as_type()
+        ValueDef::BlockArg(block_id) => {
+            if block.id(db) == block_id {
+                block.arg_ty(db, value.index(db))
+            } else {
+                // Fallback to i32 if the block arg is from a different block
+                core::I32::new(db).as_type()
+            }
         }
     }
 }
@@ -1580,6 +1555,171 @@ mod tests {
             .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
             .collect();
         (blocks.len(), all_ops, last_ops)
+    }
+
+    // === Consecutive scf.if test (edge case: scf ops in after_ops) ===
+
+    /// Create module with two consecutive scf.if ops in the same block.
+    /// The second scf.if appears in the after_ops of the first, testing that
+    /// merge block successor references remain valid after transformation.
+    #[salsa::tracked]
+    fn make_consecutive_scf_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I1::new(db).as_type();
+
+        // First condition
+        let cond1 = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
+
+        // First scf.if: yield 1 or 2
+        let then1_const = arith::Const::i32(db, location, 1);
+        let then1_yield = scf::r#yield(db, location, [then1_const.result(db)]);
+        let then1_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![then1_const.as_operation(), then1_yield.as_operation()],
+        );
+        let then1_region = Region::new(db, location, idvec![then1_block]);
+
+        let else1_const = arith::Const::i32(db, location, 2);
+        let else1_yield = scf::r#yield(db, location, [else1_const.result(db)]);
+        let else1_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![else1_const.as_operation(), else1_yield.as_operation()],
+        );
+        let else1_region = Region::new(db, location, idvec![else1_block]);
+
+        let if1 = scf::r#if(
+            db,
+            location,
+            cond1.result(db),
+            i32_ty,
+            then1_region,
+            else1_region,
+        );
+
+        // Second condition
+        let cond2 = arith::r#const(db, location, i1_ty, Attribute::Bool(false));
+
+        // Second scf.if: yield 10 or 20
+        let then2_const = arith::Const::i32(db, location, 10);
+        let then2_yield = scf::r#yield(db, location, [then2_const.result(db)]);
+        let then2_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![then2_const.as_operation(), then2_yield.as_operation()],
+        );
+        let then2_region = Region::new(db, location, idvec![then2_block]);
+
+        let else2_const = arith::Const::i32(db, location, 20);
+        let else2_yield = scf::r#yield(db, location, [else2_const.result(db)]);
+        let else2_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![else2_const.as_operation(), else2_yield.as_operation()],
+        );
+        let else2_region = Region::new(db, location, idvec![else2_block]);
+
+        let if2 = scf::r#if(
+            db,
+            location,
+            cond2.result(db),
+            i32_ty,
+            then2_region,
+            else2_region,
+        );
+
+        // Use both results: add(if1_result, if2_result)
+        let add_op = arith::add(db, location, if1.result(db), if2.result(db), i32_ty);
+        let ret = func::r#return(db, location, [add_op.result(db)]);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                cond1.as_operation(),
+                if1.as_operation(),
+                cond2.as_operation(),
+                if2.as_operation(),
+                add_op.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_consecutive_if".into(), body)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_check_consecutive_if(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+        (blocks.len(), all_ops, last_ops)
+    }
+
+    #[salsa_test]
+    fn test_consecutive_scf_if(db: &salsa::DatabaseImpl) {
+        let module = make_consecutive_scf_if_module(db);
+        let (block_count, all_ops, last_ops) = lower_and_check_consecutive_if(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain after consecutive if lowering, found: {:?}",
+            all_ops
+        );
+
+        // Should have at least 8 blocks:
+        // entry, then1, else1, merge1(=entry2), then2, else2, merge2(with add+return)
+        // (merge1 may split further)
+        assert!(
+            block_count >= 7,
+            "Expected at least 7 blocks for consecutive ifs, got {}",
+            block_count
+        );
+
+        // All blocks should end with branch or return
+        for (i, last_op) in last_ops.iter().enumerate() {
+            assert!(
+                last_op == "cf.cond_br" || last_op == "cf.br" || last_op == "func.return",
+                "Block {} should end with a branch or return, got: {}",
+                i,
+                last_op
+            );
+        }
+
+        // Exactly one func.return should exist
+        let return_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "func.return")
+            .count();
+        assert_eq!(return_count, 1, "Should have exactly 1 func.return");
+
+        // Should have arith.add in the final merge block
+        assert!(
+            all_ops.iter().any(|n| n == "arith.add"),
+            "Should have arith.add for combining results, got: {:?}",
+            all_ops
+        );
     }
 
     #[salsa_test]
