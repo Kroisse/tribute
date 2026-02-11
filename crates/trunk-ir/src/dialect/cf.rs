@@ -8,185 +8,35 @@
 //! - `cf.br` — unconditional branch with arguments
 //! - `cf.cond_br` — conditional branch to one of two successor blocks
 
-use crate::{Block, ConversionError, DialectOp, IdVec, Location, Operation, Value, idvec, symbols};
+use crate::dialect;
 
-symbols! {
-    DIALECT_NAME => "cf",
-    BR => "br",
-    COND_BR => "cond_br",
-}
+dialect! {
+    mod cf {
+        /// `cf.br` operation: unconditional branch to a successor block.
+        ///
+        /// Transfers control to the single successor block, passing `args` as
+        /// block arguments.
+        fn br(#[rest] args) {
+            #[successor(dest)]
+        };
 
-// ============================================================================
-// cf.br — unconditional branch
-// ============================================================================
-
-/// `cf.br` operation: unconditional branch to a successor block.
-///
-/// Transfers control to the single successor block, passing `args` as
-/// block arguments.
-///
-/// ```text
-/// cf.br(%a, %b) -> ^target
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
-pub struct Br<'db> {
-    op: Operation<'db>,
-}
-
-impl<'db> Br<'db> {
-    /// Arguments passed to the successor block.
-    pub fn args(&self, db: &'db dyn salsa::Database) -> &[Value<'db>] {
-        self.op.operands(db)
+        /// `cf.cond_br` operation: conditional branch to one of two successor blocks.
+        ///
+        /// If `cond` is true (nonzero), branches to `then_dest`; otherwise to `else_dest`.
+        fn cond_br(cond) {
+            #[successor(then_dest)]
+            #[successor(else_dest)]
+        };
     }
-
-    /// The target successor block.
-    pub fn dest(&self, db: &'db dyn salsa::Database) -> Block<'db> {
-        self.op.successors(db)[0]
-    }
-}
-
-impl<'db> std::ops::Deref for Br<'db> {
-    type Target = Operation<'db>;
-    fn deref(&self) -> &Self::Target {
-        &self.op
-    }
-}
-
-impl<'db> DialectOp<'db> for Br<'db> {
-    const DIALECT_NAME: &'static str = "cf";
-    const OP_NAME: &'static str = "br";
-
-    fn from_operation(
-        db: &'db dyn salsa::Database,
-        op: Operation<'db>,
-    ) -> Result<Self, ConversionError> {
-        if op.dialect(db) != DIALECT_NAME() || op.name(db) != BR() {
-            return Err(ConversionError::WrongOperation {
-                expected: "cf.br",
-                actual: op.full_name(db),
-            });
-        }
-        if op.successors(db).is_empty() {
-            return Err(ConversionError::MissingRegion);
-        }
-        Ok(Self { op })
-    }
-
-    fn as_operation(&self) -> Operation<'db> {
-        self.op
-    }
-}
-
-/// Construct a `cf.br` operation.
-///
-/// `args` are passed to the target block as block arguments.
-pub fn br<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    args: impl IntoIterator<Item = Value<'db>>,
-    dest: Block<'db>,
-) -> Br<'db> {
-    let operands: IdVec<Value<'db>> = args.into_iter().collect();
-    let op = Operation::of(db, location, DIALECT_NAME(), BR())
-        .operands(operands)
-        .successors(idvec![dest])
-        .build();
-    Br { op }
-}
-
-// ============================================================================
-// cf.cond_br — conditional branch
-// ============================================================================
-
-/// `cf.cond_br` operation: conditional branch to one of two successor blocks.
-///
-/// If `cond` is true (nonzero), branches to `then_dest`; otherwise to `else_dest`.
-/// No arguments are passed to successor blocks (use merge block arguments via cf.br).
-///
-/// ```text
-/// cf.cond_br(%cond) -> ^then_block, ^else_block
-/// ```
-#[derive(Clone, Copy, PartialEq, Eq, salsa::Update)]
-pub struct CondBr<'db> {
-    op: Operation<'db>,
-}
-
-impl<'db> CondBr<'db> {
-    /// The condition value.
-    pub fn cond(&self, db: &'db dyn salsa::Database) -> Value<'db> {
-        self.op.operands(db)[0]
-    }
-
-    /// The "then" successor block (taken when cond is true).
-    pub fn then_dest(&self, db: &'db dyn salsa::Database) -> Block<'db> {
-        self.op.successors(db)[0]
-    }
-
-    /// The "else" successor block (taken when cond is false).
-    pub fn else_dest(&self, db: &'db dyn salsa::Database) -> Block<'db> {
-        self.op.successors(db)[1]
-    }
-}
-
-impl<'db> std::ops::Deref for CondBr<'db> {
-    type Target = Operation<'db>;
-    fn deref(&self) -> &Self::Target {
-        &self.op
-    }
-}
-
-impl<'db> DialectOp<'db> for CondBr<'db> {
-    const DIALECT_NAME: &'static str = "cf";
-    const OP_NAME: &'static str = "cond_br";
-
-    fn from_operation(
-        db: &'db dyn salsa::Database,
-        op: Operation<'db>,
-    ) -> Result<Self, ConversionError> {
-        if op.dialect(db) != DIALECT_NAME() || op.name(db) != COND_BR() {
-            return Err(ConversionError::WrongOperation {
-                expected: "cf.cond_br",
-                actual: op.full_name(db),
-            });
-        }
-        if op.operands(db).is_empty() {
-            return Err(ConversionError::WrongOperandCount {
-                expected: 1,
-                actual: 0,
-            });
-        }
-        if op.successors(db).len() < 2 {
-            return Err(ConversionError::MissingRegion);
-        }
-        Ok(Self { op })
-    }
-
-    fn as_operation(&self) -> Operation<'db> {
-        self.op
-    }
-}
-
-/// Construct a `cf.cond_br` operation.
-pub fn cond_br<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    cond: Value<'db>,
-    then_dest: Block<'db>,
-    else_dest: Block<'db>,
-) -> CondBr<'db> {
-    let op = Operation::of(db, location, DIALECT_NAME(), COND_BR())
-        .operand(cond)
-        .successors(idvec![then_dest, else_dest])
-        .build();
-    CondBr { op }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dialect::core;
+    use crate::ops::DialectOp;
     use crate::types::DialectType;
-    use crate::{BlockBuilder, PathId, Span};
+    use crate::{BlockBuilder, Location, PathId, Span};
     use salsa_test_macros::salsa_test;
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
