@@ -17,6 +17,7 @@ pub mod closure_lower;
 pub mod cont_to_trampoline;
 pub mod evidence;
 pub mod live_vars;
+pub mod native;
 pub mod resolve_evidence;
 pub mod type_converter;
 pub mod wasm;
@@ -31,6 +32,7 @@ pub use evidence::{
     add_evidence_params, collect_effectful_functions, insert_evidence, is_effectful_type,
     transform_evidence_calls,
 };
+pub use native::type_converter::native_type_converter;
 pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
