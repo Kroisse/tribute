@@ -123,11 +123,19 @@ impl<'db> PrintState<'db> {
     // ---- Value naming ----
 
     /// Assign a name to a value (operation result).
+    ///
+    /// Increments `next_value_num` until the generated `%N` name does not
+    /// collide with any name already present in `value_names` (e.g. a named
+    /// block argument like `%x` that happens to equal `%0`).
     pub fn assign_result_name(&mut self, value: Value<'db>) -> String {
-        let name = format!("%{}", self.next_value_num);
-        self.next_value_num += 1;
-        self.value_names.insert(value, name.clone());
-        name
+        loop {
+            let name = format!("%{}", self.next_value_num);
+            self.next_value_num += 1;
+            if !self.value_names.values().any(|v| *v == name) {
+                self.value_names.insert(value, name.clone());
+                return name;
+            }
+        }
     }
 
     /// Assign a name to a block argument.
@@ -503,13 +511,31 @@ pub fn print_attribute<'db>(state: &mut PrintState<'db>, attr: &Attribute<'db>) 
 }
 
 /// Print a symbol reference (@ prefix).
+///
+/// Bare symbols (`@name`) are used when the name contains only
+/// `[a-zA-Z0-9_]`.  Quoted symbols (`@"name"`) are used otherwise,
+/// with the same escape sequences as `Attribute::String`.
 pub fn print_symbol(state: &mut PrintState<'_>, sym: Symbol) -> fmt::Result {
     // Note: no lifetime constraint needed since Symbol is Copy and 'static-like
     sym.with_str(|s| {
         let needs_quotes =
             s.is_empty() || s.chars().any(|c| !c.is_ascii_alphanumeric() && c != '_');
         if needs_quotes {
-            write!(state.output, "@\"{}\"", s)
+            state.output.push_str("@\"");
+            for c in s.chars() {
+                match c {
+                    '\\' => state.output.push_str("\\\\"),
+                    '"' => state.output.push_str("\\\""),
+                    '\n' => state.output.push_str("\\n"),
+                    '\t' => state.output.push_str("\\t"),
+                    '\r' => state.output.push_str("\\r"),
+                    '\0' => state.output.push_str("\\0"),
+                    c if c.is_control() => write!(state.output, "\\x{:02x}", c as u32)?,
+                    c => state.output.push(c),
+                }
+            }
+            state.output.push('"');
+            Ok(())
         } else {
             write!(state.output, "@{}", s)
         }
@@ -816,6 +842,91 @@ mod tests {
         state.output.clear();
         print_symbol(&mut state, Symbol::from_dynamic("a/b")).unwrap();
         assert_eq!(state.output, "@\"a/b\"");
+    }
+
+    #[salsa_test]
+    fn test_symbol_escape_special_chars(db: &salsa::DatabaseImpl) {
+        let mut state = PrintState::new(db);
+
+        // Backslash in symbol name
+        print_symbol(&mut state, Symbol::from_dynamic("a\\b")).unwrap();
+        assert_eq!(state.output, "@\"a\\\\b\"");
+
+        // Double-quote in symbol name
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("say\"hi\"")).unwrap();
+        assert_eq!(state.output, "@\"say\\\"hi\\\"\"");
+
+        // Newline in symbol name
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("line1\nline2")).unwrap();
+        assert_eq!(state.output, "@\"line1\\nline2\"");
+
+        // Tab in symbol name
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("a\tb")).unwrap();
+        assert_eq!(state.output, "@\"a\\tb\"");
+
+        // Empty symbol
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("")).unwrap();
+        assert_eq!(state.output, "@\"\"");
+
+        // Control char
+        state.output.clear();
+        print_symbol(&mut state, Symbol::from_dynamic("x\x01y")).unwrap();
+        assert_eq!(state.output, "@\"x\\x01y\"");
+    }
+
+    /// Build a module where a named block arg "%0" would collide with
+    /// the default result numbering.
+    #[salsa::tracked]
+    fn build_module_with_arg_named_0(db: &dyn salsa::Database) -> Operation<'_> {
+        let path = PathId::new(db, "file:///test.trb".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let i32_ty = core::I32::new(db).as_type();
+
+        // A function with one param named "0" — the printer would normally
+        // start numbering results at %0, which collides with this arg.
+        let func_op = func::Func::build_with_named_params(
+            db,
+            location,
+            "f",
+            None,
+            vec![(i32_ty, Some(Symbol::from_dynamic("0")))],
+            i32_ty,
+            None,
+            |entry, args| {
+                // %0 is taken by the arg, so this result must get %1
+                let c = entry.op(arith::Const::i32(db, location, 42));
+                let add = entry.op(arith::add(db, location, args[0], c.result(db), i32_ty));
+                entry.op(func::Return::value(db, location, add.result(db)));
+            },
+        );
+
+        core::Module::build(db, location, "test".into(), |top| {
+            top.op(func_op);
+        })
+        .as_operation()
+    }
+
+    #[salsa_test]
+    fn test_result_name_skips_collisions(db: &salsa::DatabaseImpl) {
+        let module = build_module_with_arg_named_0(db);
+        let text = print_op(db, module);
+        // The arg is named %0, so result numbering must skip %0
+        // and start at %1 (or higher).
+        assert!(
+            !text.contains("%0 = "),
+            "result should not be numbered %0 (collides with arg), got:\n{}",
+            text
+        );
+        // There should be result values starting from %1
+        assert!(
+            text.contains("%1 = "),
+            "first result should be %1 (skipping %0), got:\n{}",
+            text
+        );
     }
 
     #[salsa::tracked]

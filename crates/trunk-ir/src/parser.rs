@@ -51,7 +51,7 @@ struct RawOperation<'a> {
     dialect: &'a str,
     op_name: &'a str,
     /// Optional symbol name parsed from `@name` after `dialect.op`.
-    sym_name: Option<&'a str>,
+    sym_name: Option<String>,
     /// Optional function-style parameters: `(%arg: type, ...)`.
     func_params: Vec<(&'a str, RawType<'a>)>,
     /// Optional return type from `-> type`.
@@ -90,7 +90,7 @@ enum RawAttribute<'a> {
     Int(u64),
     Float(f64),
     String(String),
-    Symbol(&'a str),
+    Symbol(String),
     Type(RawType<'a>),
     List(Vec<RawAttribute<'a>>),
     Unit,
@@ -129,17 +129,20 @@ fn value_ref<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
 }
 
 /// Parse a symbol reference: @name or @"quoted name"
-fn symbol_ref<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
-    preceded(
-        '@',
-        alt((
-            // Quoted: @"name with special chars"
-            delimited('"', take_while(0.., |c: char| c != '"'), '"'),
-            // Bare: @name
-            take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
-        )),
-    )
-    .parse_next(input)
+///
+/// Quoted symbols use the same escape sequences as string literals
+/// (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`, `\xNN`).
+fn symbol_ref(input: &mut &str) -> ModalResult<String> {
+    '@'.parse_next(input)?;
+    if input.starts_with('"') {
+        // Quoted symbol — reuse string_lit which handles all escapes
+        string_lit.parse_next(input)
+    } else {
+        // Bare symbol
+        take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_')
+            .map(|s: &str| s.to_owned())
+            .parse_next(input)
+    }
 }
 
 /// Parse a block label: ^bbN or ^name
@@ -583,7 +586,7 @@ impl<'db> IrBuilder<'db> {
             RawAttribute::Int(n) => Attribute::IntBits(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => Attribute::String(s.clone()),
-            RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s)),
+            RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)),
             RawAttribute::List(items) => {
                 Attribute::List(items.iter().map(|a| self.build_attribute(a)).collect())
@@ -714,10 +717,10 @@ impl<'db> IrBuilder<'db> {
             .collect();
 
         // Add sym_name attribute if present
-        if let Some(name) = raw.sym_name {
+        if let Some(ref name) = raw.sym_name {
             attributes.insert(
                 Symbol::new("sym_name"),
-                Attribute::Symbol(Symbol::from_dynamic(name)),
+                Attribute::Symbol(Symbol::from_dynamic(name.as_str())),
             );
         }
 
@@ -951,7 +954,7 @@ mod tests {
         let attr = raw_attr_value
             .parse_next(&mut input)
             .expect("should parse symbol");
-        assert!(matches!(attr, RawAttribute::Symbol("foo")));
+        assert!(matches!(attr, RawAttribute::Symbol(ref s) if s == "foo"));
     }
 
     #[salsa_test]
@@ -1061,6 +1064,69 @@ mod tests {
         let op2 = do_parse(db, input2);
         let printed2 = print_op(db, op2);
         assert_eq!(printed, printed2, "string escape round-trip failed");
+    }
+
+    #[test]
+    fn test_parse_symbol_ref_escapes() {
+        use winnow::prelude::*;
+
+        // Bare symbol
+        let mut input = "@foo";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "foo");
+
+        // Quoted symbol with colons
+        let mut input = "@\"std::List::map\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "std::List::map");
+
+        // Quoted symbol with escaped backslash
+        let mut input = "@\"a\\\\b\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "a\\b");
+
+        // Quoted symbol with escaped quote
+        let mut input = "@\"say\\\"hi\\\"\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "say\"hi\"");
+
+        // Quoted symbol with newline escape
+        let mut input = "@\"line1\\nline2\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "line1\nline2");
+
+        // Quoted symbol with hex escape
+        let mut input = "@\"x\\x01y\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "x\x01y");
+
+        // Empty quoted symbol
+        let mut input = "@\"\"";
+        let result = symbol_ref.parse_next(&mut input).expect("should parse");
+        assert_eq!(result, "");
+    }
+
+    #[salsa_test]
+    fn test_symbol_escape_roundtrip(db: &salsa::DatabaseImpl) {
+        // Module with a function whose name contains special characters
+        // that need escaping in quoted symbols
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @\"has\\\\slash\"() -> core.nil {\n",
+                "    func.return\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "symbol escape round-trip failed");
     }
 
     #[test]
