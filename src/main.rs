@@ -12,7 +12,9 @@ use salsa::Database;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
-use tribute::pipeline::{compile_to_wasm_binary, compile_with_diagnostics};
+use tribute::pipeline::{
+    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
+};
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
@@ -71,6 +73,73 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         match target {
+            "native" => {
+                println!("Compiling {} to native executable...", input_path.display());
+
+                if let Some(object_bytes) = compile_to_native_binary(db, source) {
+                    // Write object file to a temp file
+                    let obj_file = tempfile::Builder::new()
+                        .suffix(".o")
+                        .tempfile()
+                        .unwrap_or_else(|e| {
+                            eprintln!("Error creating temp file: {}", e);
+                            std::process::exit(1);
+                        });
+                    std::fs::write(obj_file.path(), &object_bytes).unwrap_or_else(|e| {
+                        eprintln!("Error writing object file: {}", e);
+                        std::process::exit(1);
+                    });
+
+                    // Determine output path
+                    let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
+
+                    // Link with system cc
+                    let status = std::process::Command::new("cc")
+                        .arg(obj_file.path())
+                        .arg("-o")
+                        .arg(&output)
+                        .status();
+
+                    match status {
+                        Ok(s) if s.success() => {
+                            println!(
+                                "Successfully compiled native executable: {}",
+                                output.display()
+                            );
+                        }
+                        Ok(s) => {
+                            eprintln!("Linker failed with exit code: {}", s.code().unwrap_or(-1));
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to run linker (cc): {}", e);
+                            eprintln!("Make sure a C compiler is installed and available in PATH.");
+                            std::process::exit(1);
+                        }
+                    }
+                } else {
+                    let file_path = input_path.display().to_string();
+                    let source_text = source.text(db);
+
+                    let native_diags: Vec<_> =
+                        compile_to_native_binary::accumulated::<Diagnostic>(db, source);
+                    if !native_diags.is_empty() {
+                        for diag in &native_diags {
+                            print_diagnostic(diag, source_text, &file_path);
+                        }
+                    } else {
+                        let result = compile_with_diagnostics(db, source);
+                        if !result.diagnostics.is_empty() {
+                            for diag in &result.diagnostics {
+                                print_diagnostic(diag, source_text, &file_path);
+                            }
+                        } else {
+                            eprintln!("Native compilation failed (unknown error)");
+                        }
+                    }
+                    std::process::exit(1);
+                }
+            }
             "wasm" => {
                 println!("Compiling {} to WebAssembly...", input_path.display());
 
@@ -131,7 +200,10 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
                 }
             }
             _ => {
-                eprintln!("Unknown target: {}. Use 'wasm' or 'none'", target);
+                eprintln!(
+                    "Unknown target: {}. Use 'native', 'wasm', or 'none'",
+                    target
+                );
                 std::process::exit(1);
             }
         }

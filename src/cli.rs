@@ -30,8 +30,8 @@ pub enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Compilation target (wasm, none)
-        #[arg(long, default_value = "wasm")]
+        /// Compilation target (native, wasm, none)
+        #[arg(long, default_value = "native")]
         target: String,
     },
 

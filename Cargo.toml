@@ -76,10 +76,11 @@ tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
 trunk-ir.workspace = true
+tempfile.workspace = true
+trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
-tempfile.workspace = true

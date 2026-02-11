@@ -52,7 +52,8 @@
 //!     ▼ resolve_casts
 //! Core IR Module
 //!     │
-//!     └─► [target: wasm] ─► compile_to_wasm ─► WasmBinary
+//!     ├─► [target: wasm]   ─► compile_to_wasm   ─► WasmBinary
+//!     └─► [target: native] ─► compile_to_native ─► ObjectFile ─► cc ─► Executable
 //! ```
 //!
 //! ## Diagnostics
@@ -93,6 +94,10 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
+use trunk_ir_cranelift_backend::passes::{arith_to_clif, func_to_clif};
+use trunk_ir_cranelift_backend::{
+    CompilationResult as NativeCompilationResult, emit_module_to_native,
+};
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
 };
@@ -651,6 +656,90 @@ pub fn compile_to_wasm_binary<'db>(
 
     // Lower to WebAssembly
     stage_lower_to_wasm(db, module)
+}
+
+// =============================================================================
+// Native Pipeline (Cranelift)
+// =============================================================================
+
+/// Compile a TrunkIR module to a native object file.
+///
+/// This function:
+/// 1. Lowers `func.*` operations to `clif.*`
+/// 2. Lowers `arith.*` operations to `clif.*`
+/// 3. Resolves unrealized conversion casts using native type converter
+/// 4. Validates and emits the native object file via Cranelift
+#[salsa::tracked]
+fn compile_module_to_native<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> NativeCompilationResult<Vec<u8>> {
+    use tribute_passes::native_type_converter;
+
+    // Phase 1 - Lower func dialect to clif dialect
+    let module = func_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 2 - Lower arith dialect to clif dialect
+    let module = arith_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 3 - Resolve unrealized_conversion_cast operations
+    let module = {
+        let type_converter = native_type_converter();
+        let result = resolve_unrealized_casts(db, module, &type_converter);
+        if !result.unresolved.is_empty() {
+            return Err(trunk_ir_cranelift_backend::CompilationError::ir_validation(
+                format!(
+                    "{} unresolved cast(s) remain after native type conversion",
+                    result.unresolved.len()
+                ),
+            ));
+        }
+        result.module
+    };
+
+    // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
+    let _span = tracing::info_span!("emit_module_to_native").entered();
+    emit_module_to_native(db, module)
+}
+
+/// Compile to native object bytes.
+///
+/// Runs the full pipeline and then lowers to a native object file via Cranelift.
+/// Returns `None` if compilation fails, with diagnostics accumulated.
+#[salsa::tracked]
+pub fn compile_to_native_binary<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<Vec<u8>> {
+    let module = match run_full_pipeline(db, source) {
+        Ok(m) => m,
+        Err(e) => {
+            Diagnostic {
+                message: format!("Pipeline failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            return None;
+        }
+    };
+
+    match compile_module_to_native(db, module) {
+        Ok(bytes) => Some(bytes),
+        Err(e) => {
+            Diagnostic {
+                message: format!("Native compilation failed: {}", e),
+                span: Span::new(0, 0),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            None
+        }
+    }
 }
 
 // =============================================================================

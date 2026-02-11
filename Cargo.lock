@@ -1460,6 +1460,7 @@ dependencies = [
  "tribute-ir",
  "tribute-passes",
  "trunk-ir",
+ "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
 ]
 
