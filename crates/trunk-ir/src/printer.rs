@@ -498,13 +498,20 @@ pub fn print_attribute<'db>(state: &mut PrintState<'db>, attr: &Attribute<'db>) 
             state.output.push(']');
         }
         Attribute::Location(loc) => {
-            write!(
-                state.output,
-                "loc(\"{}\" {}:{})",
-                loc.path.uri(state.db),
-                loc.span.start,
-                loc.span.end
-            )?;
+            state.output.push_str("loc(\"");
+            for c in loc.path.uri(state.db).chars() {
+                match c {
+                    '\\' => state.output.push_str("\\\\"),
+                    '"' => state.output.push_str("\\\""),
+                    '\n' => state.output.push_str("\\n"),
+                    '\t' => state.output.push_str("\\t"),
+                    '\r' => state.output.push_str("\\r"),
+                    '\0' => state.output.push_str("\\0"),
+                    c if c.is_control() => write!(state.output, "\\x{:02x}", c as u32)?,
+                    c => state.output.push(c),
+                }
+            }
+            write!(state.output, "\" {}:{})", loc.span.start, loc.span.end)?;
         }
     }
     Ok(())

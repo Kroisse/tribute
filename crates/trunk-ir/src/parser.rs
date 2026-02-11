@@ -166,23 +166,41 @@ fn integer_lit(input: &mut &str) -> ModalResult<u64> {
     let negative = opt('-').parse_next(input)?.is_some();
     let value: u64 = ascii::dec_uint(input)?;
     if negative {
-        // Store as two's complement for negative values
-        let signed = -(value as i64);
-        Ok(u64::from_ne_bytes(signed.to_ne_bytes()))
+        // Two's complement: the magnitude must fit in i64 range.
+        // i64::MIN magnitude (9223372036854775808) needs special handling.
+        let i64_min_magnitude = i64::MAX as u64 + 1; // 9223372036854775808
+        if value > i64_min_magnitude {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::new(),
+            ));
+        }
+        if value == i64_min_magnitude {
+            // Exactly i64::MIN
+            Ok(u64::from_ne_bytes(i64::MIN.to_ne_bytes()))
+        } else {
+            let signed = -(value as i64);
+            Ok(u64::from_ne_bytes(signed.to_ne_bytes()))
+        }
     } else {
         Ok(value)
     }
 }
 
 /// Parse a float literal that MUST contain a decimal point.
+/// Accepts optional exponent notation: `3.14`, `-1.0e10`, `2.5e-3`.
 /// This prevents `42` from being parsed as a float.
 fn float_with_dot(input: &mut &str) -> ModalResult<f64> {
-    // Match: [-]digits.digits
+    // Match: [-]digits.digits[e[+-]digits]
     let s = (
         opt('-'),
         take_while(1.., |c: char| c.is_ascii_digit()),
         '.',
         take_while(1.., |c: char| c.is_ascii_digit()),
+        opt((
+            one_of(['e', 'E']),
+            opt(one_of(['+', '-'])),
+            take_while(1.., |c: char| c.is_ascii_digit()),
+        )),
     )
         .take()
         .parse_next(input)?;
@@ -234,29 +252,42 @@ fn string_lit(input: &mut &str) -> ModalResult<String> {
     Ok(result)
 }
 
-/// Parse a type: dialect.name or dialect.name(params)
+/// Parse a type: `dialect.name`, `dialect.name(params)`, or
+/// `dialect.name(params) {key = value, ...}`.
 ///
-/// Note: type attributes `{...}` are NOT parsed here to avoid ambiguity with
-/// operation attribute dicts. Type attrs are only used in specific contexts
-/// (e.g., effect rows) and are handled by the printer, but for parsing we
-/// rely on the type parameters to carry all necessary info.
+/// The optional `{...}` block carries type-level attributes (e.g., the
+/// `effect` attribute on function types).  Type attributes are only parsed
+/// when explicit parentheses `()` are present to avoid ambiguity with the
+/// opening `{` of operation body regions.
 fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     let (dialect, name) = qualified_name.parse_next(input)?;
 
     // Optional type parameters
-    let params = opt(delimited(
+    let opt_params = opt(delimited(
         ('(', ws),
         separated(0.., (ws, raw_type, ws).map(|(_, t, _)| t), ','),
         (ws, ')'),
     ))
-    .parse_next(input)?
-    .unwrap_or_default();
+    .parse_next(input)?;
+    let has_parens = opt_params.is_some();
+    let params = opt_params.unwrap_or_default();
+
+    // Optional type attributes: {key = value, ...}
+    // Only attempted after explicit parens `()` to avoid ambiguity with
+    // the opening `{` of operation body regions (e.g. `-> core.nil { ... }`).
+    let attrs = if has_parens {
+        opt(preceded(ws, raw_attr_dict))
+            .parse_next(input)?
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
 
     Ok(RawType {
         dialect,
         name,
         params,
-        attrs: vec![],
+        attrs,
     })
 }
 
@@ -605,15 +636,28 @@ impl<'db> IrBuilder<'db> {
     }
 
     /// Pre-assign BlockIds for all blocks in a region.
-    fn pre_assign_blocks(&mut self, raw_region: &RawRegion<'_>) {
+    ///
+    /// Returns an error if the same label appears more than once *within the
+    /// same region*. Labels in different (possibly nested) regions are
+    /// independent and may legitimately share the same name (e.g. `^bb0`).
+    fn pre_assign_blocks(&mut self, raw_region: &RawRegion<'_>) -> Result<(), ParseError> {
+        let mut seen_in_region = std::collections::HashSet::new();
         for block in &raw_region.blocks {
+            let label = block.label.to_string();
+            if !seen_in_region.insert(label.clone()) {
+                return Err(ParseError {
+                    message: format!("duplicate block label '^{}'", label),
+                    offset: 0,
+                });
+            }
             let block_id = BlockId::fresh();
-            self.block_id_map.insert(block.label.to_string(), block_id);
+            self.block_id_map.insert(label, block_id);
         }
+        Ok(())
     }
 
     fn build_region(&mut self, raw: &RawRegion<'_>) -> Result<Region<'db>, ParseError> {
-        self.pre_assign_blocks(raw);
+        self.pre_assign_blocks(raw)?;
         let blocks: IdVec<Block<'db>> = raw
             .blocks
             .iter()
@@ -635,14 +679,56 @@ impl<'db> IrBuilder<'db> {
 
         // Build block args: merge extra_args (from func params) with block's own args.
         // If the block already has args that match the extra_args, use the block's args.
+        // When both are present, validate that they agree in count and types.
         let all_args = if raw.args.is_empty() && !extra_args.is_empty() {
             extra_args.to_vec()
+        } else if !raw.args.is_empty() && !extra_args.is_empty() {
+            // Both present — validate arity and types match
+            if raw.args.len() != extra_args.len() {
+                return Err(ParseError {
+                    message: format!(
+                        "entry block has {} args but function signature has {} params",
+                        raw.args.len(),
+                        extra_args.len()
+                    ),
+                    offset: 0,
+                });
+            }
+            for (i, ((_, block_ty), (_, param_ty))) in
+                raw.args.iter().zip(extra_args.iter()).enumerate()
+            {
+                let bt = self.build_type(block_ty);
+                let pt = self.build_type(param_ty);
+                if bt != pt {
+                    return Err(ParseError {
+                        message: format!(
+                            "entry block arg {} type mismatch: block has {}.{} but function param has {}.{}",
+                            i,
+                            bt.dialect(self.db),
+                            bt.name(self.db),
+                            pt.dialect(self.db),
+                            pt.name(self.db),
+                        ),
+                        offset: 0,
+                    });
+                }
+            }
+            raw.args.clone()
         } else {
             raw.args.clone()
         };
 
         let mut block_args = IdVec::new();
+        let mut seen_names = std::collections::HashSet::new();
         for (i, (name, raw_ty)) in all_args.iter().enumerate() {
+            // Detect duplicate argument names
+            if !seen_names.insert(name.to_string()) {
+                return Err(ParseError {
+                    message: format!("duplicate block argument name '%{}' at index {}", name, i),
+                    offset: 0,
+                });
+            }
+
             let ty = self.build_type(raw_ty);
             let is_default_name = name
                 .strip_prefix("arg")
@@ -772,7 +858,7 @@ impl<'db> IrBuilder<'db> {
             .map(|(i, r)| {
                 if i == 0 && !raw.func_params.is_empty() {
                     // First region: inject func_params as entry block args
-                    self.pre_assign_blocks(r);
+                    self.pre_assign_blocks(r)?;
                     let blocks: IdVec<Block<'db>> = r
                         .blocks
                         .iter()
@@ -791,6 +877,23 @@ impl<'db> IrBuilder<'db> {
                 }
             })
             .collect::<Result<_, _>>()?;
+
+        // Validate result name count matches declared result types
+        if !raw.results.is_empty()
+            && !raw.result_types.is_empty()
+            && raw.results.len() != results.len()
+        {
+            return Err(ParseError {
+                message: format!(
+                    "operation '{}.{}' declares {} result names but {} result types",
+                    raw.dialect,
+                    raw.op_name,
+                    raw.results.len(),
+                    results.len()
+                ),
+                offset: 0,
+            });
+        }
 
         let op = Operation::of(self.db, self.location, dialect, op_name)
             .operands(operands)
@@ -1158,6 +1261,231 @@ mod tests {
             "error should mention the operation: {}",
             err.message
         );
+    }
+
+    // ---- Fix 4: type attributes round-trip ----
+
+    #[salsa_test]
+    fn test_type_attrs_roundtrip(db: &salsa::DatabaseImpl) {
+        // A function type with an effect attribute: core.func(...) {effect = ...}
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.i32 effects core.nil {\n",
+                "    %0 = arith.const {value = 1} : core.i32\n",
+                "    func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "type attrs round-trip failed");
+    }
+
+    #[test]
+    fn test_parse_type_with_attrs() {
+        use winnow::prelude::*;
+
+        let mut input = "core.func(core.nil, core.i32) {effect = core.nil}";
+        let result = raw_type.parse_next(&mut input).expect("should parse");
+        assert_eq!(result.dialect, "core");
+        assert_eq!(result.name, "func");
+        assert_eq!(result.params.len(), 2);
+        assert_eq!(result.attrs.len(), 1);
+        assert_eq!(result.attrs[0].0, "effect");
+    }
+
+    // ---- Fix 2: duplicate block labels ----
+
+    #[test]
+    fn test_parse_duplicate_block_label() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f() -> core.i32 {\n",
+                    "    ^bb0:\n",
+                    "      %0 = arith.const {value = 1} : core.i32\n",
+                    "      func.return %0\n",
+                    "    ^bb0:\n",
+                    "      %1 = arith.const {value = 2} : core.i32\n",
+                    "      func.return %1\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on duplicate block label");
+        assert!(
+            err.message.contains("duplicate block label"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    // ---- Fix 1: entry-block arg validation ----
+
+    #[test]
+    fn test_parse_entry_block_arity_mismatch() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                // func declares 2 params but entry block has 1 arg
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {\n",
+                    "    ^bb0(%x: core.i32):\n",
+                    "      func.return %x\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on arity mismatch");
+        assert!(
+            err.message.contains("args") && err.message.contains("params"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_parse_entry_block_type_mismatch() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                // func param is i32, block arg is f64
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f(%x: core.i32) -> core.i32 {\n",
+                    "    ^bb0(%x: core.f64):\n",
+                    "      func.return %x\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on type mismatch");
+        assert!(
+            err.message.contains("type mismatch"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_parse_duplicate_block_arg_name() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f(%x: core.i32, %x: core.i32) -> core.i32 {\n",
+                    "    func.return %x\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on duplicate arg name");
+        assert!(
+            err.message.contains("duplicate block argument name"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    // ---- Fix 3: result count arity ----
+
+    #[test]
+    fn test_parse_result_count_mismatch() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                // 2 result names but only 1 type
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f() -> core.nil {\n",
+                    "    %0, %1 = test.op : core.i32\n",
+                    "    func.return %0\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail on result count mismatch");
+        assert!(
+            err.message.contains("result names") && err.message.contains("result types"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    // ---- Fix 5: integer_lit overflow ----
+
+    #[test]
+    fn test_parse_integer_lit_overflow() {
+        use winnow::prelude::*;
+
+        // i64::MIN magnitude is valid
+        let mut input = "-9223372036854775808";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i64::MIN should parse");
+        assert_eq!(val, u64::from_ne_bytes(i64::MIN.to_ne_bytes()));
+
+        // One beyond i64::MIN magnitude should fail
+        let mut input = "-9223372036854775809";
+        let result = integer_lit.parse_next(&mut input);
+        assert!(result.is_err(), "beyond i64::MIN should fail");
+
+        // Positive i64::MAX should be fine
+        let mut input = "9223372036854775807";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i64::MAX should parse");
+        assert_eq!(val, i64::MAX as u64);
+    }
+
+    // ---- Fix 7: float exponent notation ----
+
+    #[test]
+    fn test_parse_float_exponent() {
+        use winnow::prelude::*;
+
+        let mut input = "1.5e10";
+        let val = float_with_dot.parse_next(&mut input).expect("should parse");
+        assert_eq!(val, 1.5e10);
+
+        let mut input = "2.0E-3";
+        let val = float_with_dot.parse_next(&mut input).expect("should parse");
+        assert_eq!(val, 2.0e-3);
+
+        let mut input = "-3.14e+2";
+        let val = float_with_dot.parse_next(&mut input).expect("should parse");
+        assert_eq!(val, -3.14e2);
+
+        // Plain float still works
+        let mut input = "3.25";
+        let val = float_with_dot.parse_next(&mut input).expect("should parse");
+        assert_eq!(val, 3.25);
     }
 
     // ========================================================================
