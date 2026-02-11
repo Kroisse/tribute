@@ -19,4 +19,5 @@ pub mod scf;
 pub mod trampoline;
 
 // === Low-level (target specific) ===
+pub mod clif;
 pub mod wasm;
