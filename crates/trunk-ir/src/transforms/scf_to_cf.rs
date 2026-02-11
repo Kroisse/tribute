@@ -1229,4 +1229,414 @@ mod tests {
             block_count
         );
     }
+
+    // === Nested scf.if tests ===
+
+    /// Create module with nested scf.if: outer if → then has inner if.
+    /// Simulates case matching patterns like `if x then (if y then a else b) else c`.
+    #[salsa::tracked]
+    fn make_nested_scf_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I1::new(db).as_type();
+
+        // Outer condition
+        let outer_cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
+        // Inner condition
+        let inner_cond = arith::r#const(db, location, i1_ty, Attribute::Bool(false));
+
+        // Inner then: yield 1
+        let inner_then_const = arith::Const::i32(db, location, 1);
+        let inner_then_yield = scf::r#yield(db, location, [inner_then_const.result(db)]);
+        let inner_then_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                inner_then_const.as_operation(),
+                inner_then_yield.as_operation()
+            ],
+        );
+        let inner_then_region = Region::new(db, location, idvec![inner_then_block]);
+
+        // Inner else: yield 2
+        let inner_else_const = arith::Const::i32(db, location, 2);
+        let inner_else_yield = scf::r#yield(db, location, [inner_else_const.result(db)]);
+        let inner_else_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                inner_else_const.as_operation(),
+                inner_else_yield.as_operation()
+            ],
+        );
+        let inner_else_region = Region::new(db, location, idvec![inner_else_block]);
+
+        // Inner scf.if
+        let inner_if = scf::r#if(
+            db,
+            location,
+            inner_cond.result(db),
+            i32_ty,
+            inner_then_region,
+            inner_else_region,
+        );
+
+        // Outer then region: inner_cond + inner_if + yield(inner_if result)
+        let outer_then_yield = scf::r#yield(db, location, [inner_if.result(db)]);
+        let outer_then_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                inner_cond.as_operation(),
+                inner_if.as_operation(),
+                outer_then_yield.as_operation()
+            ],
+        );
+        let outer_then_region = Region::new(db, location, idvec![outer_then_block]);
+
+        // Outer else: yield 3
+        let outer_else_const = arith::Const::i32(db, location, 3);
+        let outer_else_yield = scf::r#yield(db, location, [outer_else_const.result(db)]);
+        let outer_else_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                outer_else_const.as_operation(),
+                outer_else_yield.as_operation()
+            ],
+        );
+        let outer_else_region = Region::new(db, location, idvec![outer_else_block]);
+
+        // Outer scf.if
+        let outer_if = scf::r#if(
+            db,
+            location,
+            outer_cond.result(db),
+            i32_ty,
+            outer_then_region,
+            outer_else_region,
+        );
+
+        let ret = func::r#return(db, location, [outer_if.result(db)]);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                outer_cond.as_operation(),
+                outer_if.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_nested_if".into(), body)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_check_nested_if(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+        (blocks.len(), all_ops, last_ops)
+    }
+
+    #[salsa_test]
+    fn test_scf_if_nested(db: &salsa::DatabaseImpl) {
+        let module = make_nested_scf_if_module(db);
+        let (block_count, all_ops, last_ops) = lower_and_check_nested_if(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain after nested lowering, found: {:?}",
+            all_ops
+        );
+
+        // Should have at least 7 blocks:
+        // outer_entry, outer_then_entry(=inner_entry), inner_then, inner_else,
+        // inner_merge(→outer_then_merge), outer_else, outer_merge
+        assert!(
+            block_count >= 7,
+            "Expected at least 7 blocks for nested if, got {}",
+            block_count
+        );
+
+        // All blocks should end with a branch op or func.return
+        for (i, last_op) in last_ops.iter().enumerate() {
+            assert!(
+                last_op == "cf.cond_br" || last_op == "cf.br" || last_op == "func.return",
+                "Block {} should end with a branch or return, got: {}",
+                i,
+                last_op
+            );
+        }
+
+        // Exactly one func.return should exist
+        let return_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "func.return")
+            .count();
+        assert_eq!(return_count, 1, "Should have exactly 1 func.return");
+    }
+
+    // === scf.loop break/continue test ===
+
+    /// Lower loop module and return detailed info:
+    /// (block_count, all_op_names, per_block_last_ops, header_has_block_arg).
+    #[salsa::tracked]
+    fn lower_and_check_loop_detail(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>, bool) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+
+        // The header block is the one with a block argument (loop-carried variable)
+        // It should be the second block (after entry which has cf.br to header)
+        let header_has_block_arg = blocks
+            .get(1)
+            .map(|b| !b.args(db).is_empty())
+            .unwrap_or(false);
+
+        (blocks.len(), all_ops, last_ops, header_has_block_arg)
+    }
+
+    #[salsa_test]
+    fn test_scf_loop_break_continue(db: &salsa::DatabaseImpl) {
+        let module = make_scf_loop_module(db);
+        let (block_count, all_ops, last_ops, header_has_block_arg) =
+            lower_and_check_loop_detail(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain, found: {:?}",
+            all_ops
+        );
+
+        // Header block should have a block argument (loop-carried variable)
+        assert!(
+            header_has_block_arg,
+            "Header block should have a block argument for loop-carried variable"
+        );
+
+        // Entry block should end with cf.br (to header)
+        assert_eq!(
+            last_ops[0], "cf.br",
+            "Entry block should end with cf.br to header"
+        );
+
+        // Count cf.br ops: at least 3 (entry→header, continue→header, break→exit)
+        let br_count = all_ops.iter().filter(|n| n.as_str() == "cf.br").count();
+        assert!(
+            br_count >= 3,
+            "Expected at least 3 cf.br (entry→header, continue→header, break→exit), got {}",
+            br_count
+        );
+
+        // Should have cf.cond_br for the loop condition
+        let cond_br_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "cf.cond_br")
+            .count();
+        assert!(
+            cond_br_count >= 1,
+            "Expected at least 1 cf.cond_br for loop condition, got {}",
+            cond_br_count
+        );
+
+        // Last block should be the exit block with func.return
+        assert_eq!(
+            last_ops.last().unwrap(),
+            "func.return",
+            "Last block should end with func.return"
+        );
+
+        // Verify block count is reasonable (entry, header, then/else from if, merge, exit)
+        assert!(
+            block_count >= 5,
+            "Expected at least 5 blocks, got {}",
+            block_count
+        );
+    }
+
+    // === scf.switch test ===
+
+    /// Create module with scf.switch: 2 cases + default.
+    #[salsa::tracked]
+    fn make_scf_switch_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+
+        // Discriminant
+        let disc = arith::Const::i32(db, location, 1);
+
+        // Case 0: yield 10
+        let case0_const = arith::Const::i32(db, location, 10);
+        let case0_yield = scf::r#yield(db, location, [case0_const.result(db)]);
+        let case0_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![case0_const.as_operation(), case0_yield.as_operation()],
+        );
+        let case0_region = Region::new(db, location, idvec![case0_block]);
+        let case0 = scf::r#case(db, location, Attribute::IntBits(0), case0_region);
+
+        // Case 1: yield 20
+        let case1_const = arith::Const::i32(db, location, 20);
+        let case1_yield = scf::r#yield(db, location, [case1_const.result(db)]);
+        let case1_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![case1_const.as_operation(), case1_yield.as_operation()],
+        );
+        let case1_region = Region::new(db, location, idvec![case1_block]);
+        let case1 = scf::r#case(db, location, Attribute::IntBits(1), case1_region);
+
+        // Default: yield 99
+        let default_const = arith::Const::i32(db, location, 99);
+        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
+        let default_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![default_const.as_operation(), default_yield.as_operation()],
+        );
+        let default_region = Region::new(db, location, idvec![default_block]);
+        let default_op = scf::default(db, location, default_region);
+
+        // Switch body: case ops + default
+        let switch_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                case0.as_operation(),
+                case1.as_operation(),
+                default_op.as_operation()
+            ],
+        );
+        let switch_body = Region::new(db, location, idvec![switch_body_block]);
+
+        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
+
+        let ret = func::r#return(db, location, []);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                disc.as_operation(),
+                switch_op.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_switch".into(), body)
+    }
+
+    #[salsa::tracked]
+    fn lower_and_check_switch(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+        (blocks.len(), all_ops, last_ops)
+    }
+
+    #[salsa_test]
+    fn test_scf_switch_basic(db: &salsa::DatabaseImpl) {
+        let module = make_scf_switch_module(db);
+        let (block_count, all_ops, last_ops) = lower_and_check_switch(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain after switch lowering, found: {:?}",
+            all_ops
+        );
+
+        // Should have arith.cmp_eq for each case comparison (2 cases)
+        let cmp_eq_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "arith.cmp_eq")
+            .count();
+        assert_eq!(
+            cmp_eq_count, 2,
+            "Expected 2 arith.cmp_eq (one per case), got {}",
+            cmp_eq_count
+        );
+
+        // Should have cf.cond_br for each case check (2)
+        let cond_br_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "cf.cond_br")
+            .count();
+        assert_eq!(
+            cond_br_count, 2,
+            "Expected 2 cf.cond_br (one per case check), got {}",
+            cond_br_count
+        );
+
+        // Should have cf.br for each case + default → merge (3)
+        let br_count = all_ops.iter().filter(|n| n.as_str() == "cf.br").count();
+        assert!(
+            br_count >= 3,
+            "Expected at least 3 cf.br (case0→merge, case1→merge, default→merge), got {}",
+            br_count
+        );
+
+        // Should have multiple blocks:
+        // entry(check0), check1, case0, case1, default, merge
+        assert!(
+            block_count >= 6,
+            "Expected at least 6 blocks for 2-case switch, got {}",
+            block_count
+        );
+
+        // Last block should end with func.return
+        assert_eq!(
+            last_ops.last().unwrap(),
+            "func.return",
+            "Last block should end with func.return"
+        );
+    }
 }
