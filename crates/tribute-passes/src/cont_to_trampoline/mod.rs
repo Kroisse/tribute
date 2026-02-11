@@ -211,7 +211,6 @@ pub fn lower_cont_to_trampoline<'db>(
         return Ok(module);
     }
 
-    let _location = module.location(db);
     let resume_funcs: Vec<Operation<'db>> = specs
         .iter()
         .map(|spec| create_resume_function_with_continuation(db, spec))

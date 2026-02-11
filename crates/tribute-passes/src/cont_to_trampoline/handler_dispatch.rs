@@ -536,7 +536,7 @@ pub(crate) fn build_nested_dispatch<'db>(
 /// IMPORTANT: The arm block may contain unrealized_conversion_cast operations that
 /// convert the Step result to the user's expected type (e.g., i32). We need to find
 /// the actual Step result and yield that, not the converted result.
-fn build_arm_region<'db>(
+pub(crate) fn build_arm_region<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
     arm_block: &Block<'db>,
@@ -743,6 +743,12 @@ fn build_arm_region<'db>(
             let step_done_op = trampoline::step_done(db, location, result_value, step_ty);
             ops.push(step_done_op.as_operation());
             ops.push(scf::r#yield(db, location, vec![step_done_op.result(db)]).as_operation());
+        } else {
+            // Defensive fallback: no Step value and no usable result from last op.
+            // This path should be unreachable in well-formed IR, but emit a
+            // terminator to keep the region valid (consistent with
+            // build_suspend_dispatch_region's empty-arms fallback).
+            ops.push(func::unreachable(db, location).as_operation());
         }
 
         IdVec::from(ops)

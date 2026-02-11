@@ -112,7 +112,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         };
 
         let operands: Vec<_> = adaptor.operands().iter().copied().collect();
-        let tag_operand = operands[0]; // First operand is tag
+        let tag_operand = *operands.first().expect("cont.shift requires a tag operand");
         let value_operands: Vec<Value<'db>> = operands.into_iter().skip(1).collect(); // Rest are values
 
         let location = op.location(db);
@@ -166,13 +166,16 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let i32_ty = core::I32::new(db).as_type();
         let resume_name = fresh_resume_name(&self.resume_counter);
 
-        // Determine next resume name if not the last shift point
+        // Determine next resume name if not the last shift point.
+        // Invariant: patterns are applied sequentially per shift point, so peeking
+        // at the current counter value gives the ID that the *next*
+        // `fresh_resume_name` call will produce. Do not reorder pattern application
+        // or increment the counter between this peek and that call.
         let next_resume_name = if shift_point_info.index + 1 >= shift_point_info.total_shifts {
             None
         } else {
-            // Pre-compute next resume function name
             let counter = self.resume_counter.borrow();
-            let next_id = *counter; // This will be the next ID
+            let next_id = *counter;
             Some(format!("__resume_{}", next_id))
         };
 

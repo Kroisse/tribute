@@ -6,7 +6,7 @@ use std::rc::Rc;
 use trunk_ir::dialect::{arith, cont, func, trampoline};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
-use trunk_ir::{Attribute, BlockArg, BlockId, PathId, Span};
+use trunk_ir::{Attribute, BlockArg, BlockId, IdVec, PathId, Span};
 
 fn test_location(db: &dyn salsa::Database) -> trunk_ir::Location<'_> {
     let path = PathId::new(db, "test.trb".to_owned());
@@ -1022,6 +1022,140 @@ fn run_truncate_scf_if_block_mixed_branches(db: &dyn salsa::Database) -> Result<
 #[salsa_test]
 fn test_truncate_scf_if_block_mixed_branches(db: &salsa::DatabaseImpl) {
     if let Err(msg) = run_truncate_scf_if_block_mixed_branches(db) {
+        panic!("{}", msg);
+    }
+}
+
+// ========================================================================
+// Test: push_prompt body does not propagate effectfulness
+// ========================================================================
+
+/// A function that only calls effectful functions inside a push_prompt body
+/// should NOT be identified as effectful itself, because push_prompt bodies
+/// are handled by the enclosing handler.
+#[salsa::tracked]
+fn run_push_prompt_does_not_propagate_effectfulness(
+    db: &dyn salsa::Database,
+) -> Result<(), String> {
+    let location = test_location(db);
+    let i32_ty = core::I32::new(db).as_type();
+
+    // Create an effectful function (has non-empty effect row in its type)
+    let ability_ty = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
+    let effect_row = core::EffectRowType::concrete(db, IdVec::from(vec![ability_ty]));
+    let effectful_fn = func::Func::build_with_effect(
+        db,
+        location,
+        "effectful_fn",
+        IdVec::new(),
+        i32_ty,
+        Some(effect_row.as_type()),
+        |entry| {
+            let c = entry.op(arith::Const::i32(db, location, 42));
+            entry.op(func::Return::value(db, location, c.result(db)));
+        },
+    );
+
+    // Create a "caller" function that calls effectful_fn ONLY inside a push_prompt body.
+    // This function should NOT be marked as effectful.
+    let caller_fn = func::Func::build(db, location, "caller_fn", IdVec::new(), i32_ty, |entry| {
+        // Build push_prompt body region that calls effectful_fn
+        let mut body_builder = BlockBuilder::new(db, location);
+        let call = body_builder.op(func::call(
+            db,
+            location,
+            vec![],
+            i32_ty,
+            Symbol::new("effectful_fn"),
+        ));
+        body_builder.op(func::Return::value(db, location, call.result(db)));
+        let body_region = Region::new(db, location, IdVec::from(vec![body_builder.build()]));
+        let handlers_region = Region::new(db, location, IdVec::new());
+
+        let pp = entry.op(cont::push_prompt(
+            db,
+            location,
+            i32_ty,
+            0,
+            body_region,
+            handlers_region,
+        ));
+        entry.op(func::Return::value(db, location, pp.result(db)));
+    });
+
+    // Build module with both functions
+    let module = core::Module::build(db, location, "test".into(), |top| {
+        top.op(effectful_fn);
+        top.op(caller_fn);
+    });
+
+    let effectful = identify_effectful_functions(db, &module);
+
+    // effectful_fn should be in the set (it has an effect row)
+    if !effectful.contains(&Symbol::new("effectful_fn")) {
+        return Err("effectful_fn should be identified as effectful".to_string());
+    }
+
+    // caller_fn should NOT be in the set — its call to effectful_fn is inside push_prompt
+    if effectful.contains(&Symbol::new("caller_fn")) {
+        return Err(
+            "caller_fn should NOT be effectful: its effectful call is inside push_prompt"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+#[salsa_test]
+fn test_push_prompt_does_not_propagate_effectfulness(db: &salsa::DatabaseImpl) {
+    if let Err(msg) = run_push_prompt_does_not_propagate_effectfulness(db) {
+        panic!("{}", msg);
+    }
+}
+
+// ========================================================================
+// Test: build_arm_region emits unreachable for empty arm
+// ========================================================================
+
+/// When an arm block has no operations (and thus no result to yield),
+/// build_arm_region should emit a func.unreachable as a defensive terminator.
+#[salsa::tracked]
+fn run_build_arm_region_empty_arm_has_terminator(db: &dyn salsa::Database) -> Result<(), String> {
+    let location = test_location(db);
+
+    // Create an empty arm block (no operations, no results)
+    let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+
+    let effectful_funcs = HashSet::new();
+    let region = build_arm_region(db, location, &empty_block, &effectful_funcs);
+
+    let blocks = region.blocks(db);
+    if blocks.is_empty() {
+        return Err("build_arm_region should produce at least one block".to_string());
+    }
+
+    let ops: Vec<_> = blocks[0].operations(db).iter().copied().collect();
+    if ops.is_empty() {
+        return Err("arm region block should have at least one operation (terminator)".to_string());
+    }
+
+    // The last op should be func.unreachable (defensive fallback)
+    let last_op = ops.last().unwrap();
+    if func::Unreachable::from_operation(db, *last_op).is_err() {
+        return Err(format!(
+            "last op should be func.unreachable, got {}.{}",
+            last_op.dialect(db),
+            last_op.name(db),
+        ));
+    }
+
+    Ok(())
+}
+
+#[salsa_test]
+fn test_build_arm_region_empty_arm_has_terminator(db: &salsa::DatabaseImpl) {
+    if let Err(msg) = run_build_arm_region_empty_arm_has_terminator(db) {
         panic!("{}", msg);
     }
 }

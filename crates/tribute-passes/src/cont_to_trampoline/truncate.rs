@@ -172,23 +172,27 @@ fn truncate_func_after_shift<'db>(
     if is_effectful {
         // Get the existing function type and modify its return type
         let old_func_ty = func.r#type(db);
-        if let Some(func_ty) = core::Func::from_type(db, old_func_ty) {
-            let original_result = func_ty.result(db);
-            let params = func_ty.params(db);
-            let effect = func_ty.effect(db);
-            let new_func_ty = core::Func::with_effect(db, params, step_ty, effect);
-            builder = builder
-                .attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()))
-                .attr(
-                    Symbol::new("original_result_type"),
-                    Attribute::Type(original_result),
-                );
-            tracing::debug!(
-                "truncate_func_after_shift: {} changed return type to Step (original: {:?})",
-                func_name,
-                original_result
+        let func_ty = core::Func::from_type(db, old_func_ty).unwrap_or_else(|| {
+            panic!(
+                "truncate_func_after_shift: effectful function {} has non-function type {:?}",
+                func_name, old_func_ty
+            )
+        });
+        let original_result = func_ty.result(db);
+        let params = func_ty.params(db);
+        let effect = func_ty.effect(db);
+        let new_func_ty = core::Func::with_effect(db, params, step_ty, effect);
+        builder = builder
+            .attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()))
+            .attr(
+                Symbol::new("original_result_type"),
+                Attribute::Type(original_result),
             );
-        }
+        tracing::debug!(
+            "truncate_func_after_shift: {} changed return type to Step (original: {:?})",
+            func_name,
+            original_result
+        );
     }
 
     let new_op = builder.build();

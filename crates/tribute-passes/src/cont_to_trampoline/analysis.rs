@@ -332,9 +332,12 @@ fn block_calls_effectful_inner<'db>(
         {
             return true;
         }
-        // Recursively check nested regions (but skip nested functions)
+        // Recursively check nested regions (but skip nested functions and push_prompt bodies)
         if Func::from_operation(db, *op).is_ok() {
             continue; // Skip nested function definitions
+        }
+        if cont::PushPrompt::from_operation(db, *op).is_ok() {
+            continue; // Skip push_prompt body — effects there are handled by the enclosing handler
         }
         for region in op.regions(db).iter() {
             for nested_block in region.blocks(db).iter() {
