@@ -924,4 +924,207 @@ mod tests {
         let printed2 = print_op(db, op2);
         assert_eq!(printed, printed2, "round-trip failed");
     }
+
+    // ========================================================================
+    // Property-based tests (proptest)
+    // ========================================================================
+
+    mod proptest_fuzz {
+        use super::{parse_module, raw_attr_value, raw_type, TextInput};
+        use crate::printer::print_op;
+        use proptest::prelude::*;
+        use salsa::Database;
+        use winnow::prelude::*;
+
+        /// Tracked wrapper: attempts parse and returns whether it succeeded.
+        /// Panics from Salsa tracked struct creation are avoided because
+        /// this function IS a tracked function.
+        #[salsa::tracked]
+        fn try_parse<'db>(
+            db: &'db dyn salsa::Database,
+            input: TextInput,
+        ) -> Option<crate::Operation<'db>> {
+            parse_module(db, input.text(db)).ok()
+        }
+
+        /// Parse and print, returning the printed text (or None on parse failure).
+        #[salsa::tracked]
+        fn parse_and_print(db: &dyn salsa::Database, input: TextInput) -> Option<String> {
+            let op = parse_module(db, input.text(db)).ok()?;
+            Some(print_op(db, op))
+        }
+
+        /// Valid IR texts used as seed corpus for mutation.
+        fn seed_corpus() -> Vec<&'static str> {
+            vec![
+                // Simple module with no-arg function
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @main() -> core.i32 {\n",
+                    "      %0 = arith.const {value = 40} : core.i32\n",
+                    "      %1 = arith.const {value = 2} : core.i32\n",
+                    "      %2 = arith.add %0, %1 : core.i32\n",
+                    "      func.return %2\n",
+                    "  }\n",
+                    "}",
+                ),
+                // Function with named params
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @add(%x: core.i32, %y: core.i32) -> core.i32 {\n",
+                    "      %0 = arith.add %x, %y : core.i32\n",
+                    "      func.return %0\n",
+                    "  }\n",
+                    "}",
+                ),
+                // Multiple functions
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @foo() -> core.nil {\n",
+                    "      %0 = arith.const {value = 42} : core.i32\n",
+                    "      func.return %0\n",
+                    "  }\n",
+                    "  func.func @bar(%a: core.f64) -> core.f64 {\n",
+                    "      func.return %a\n",
+                    "  }\n",
+                    "}",
+                ),
+                // Explicit block labels
+                concat!(
+                    "core.module @m {\n",
+                    "  func.func @f() -> core.i32 {\n",
+                    "    ^bb0:\n",
+                    "      %0 = arith.const {value = 1} : core.i32\n",
+                    "      func.return %0\n",
+                    "  }\n",
+                    "}",
+                ),
+                // Various attribute types
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @g() -> core.nil {\n",
+                    "      %0 = test.op {a = true, b = 99, c = \"hello\", d = @sym, e = unit} : core.nil\n",
+                    "      func.return %0\n",
+                    "  }\n",
+                    "}",
+                ),
+            ]
+        }
+
+        /// Strategy: pick a seed and apply a random mutation.
+        fn mutated_ir() -> impl Strategy<Value = String> {
+            let seeds = seed_corpus();
+            let n = seeds.len();
+            (0..n, 0..1000usize, 0..5u8, proptest::num::u8::ANY).prop_map(
+                move |(seed_idx, pos_raw, mutation_kind, random_byte)| {
+                    let text = seeds[seed_idx];
+                    let mut bytes = text.as_bytes().to_vec();
+                    if bytes.is_empty() {
+                        return String::new();
+                    }
+                    let pos = pos_raw % bytes.len();
+
+                    match mutation_kind {
+                        0 => {
+                            // Replace byte
+                            bytes[pos] = random_byte;
+                        }
+                        1 => {
+                            // Delete byte
+                            bytes.remove(pos);
+                        }
+                        2 => {
+                            // Insert byte
+                            bytes.insert(pos, random_byte);
+                        }
+                        3 => {
+                            // Delete a chunk (up to 8 bytes)
+                            let end = (pos + 8).min(bytes.len());
+                            bytes.drain(pos..end);
+                        }
+                        _ => {
+                            // Duplicate a chunk
+                            let end = (pos + 8).min(bytes.len());
+                            let chunk: Vec<u8> = bytes[pos..end].to_vec();
+                            bytes.splice(pos..pos, chunk);
+                        }
+                    }
+
+                    String::from_utf8(bytes).unwrap_or_default()
+                },
+            )
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(2000))]
+
+            /// Parser must never panic on arbitrary mutated input.
+            #[test]
+            fn parser_never_panics(input in mutated_ir()) {
+                let db = salsa::DatabaseImpl::default();
+                db.attach(|db| {
+                    let ti = TextInput::new(db, input.clone());
+                    let _ = try_parse(db, ti);
+                });
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(500))]
+
+            /// Completely random strings must not panic the parser.
+            #[test]
+            fn parser_handles_random_strings(input in "\\PC{0,200}") {
+                let db = salsa::DatabaseImpl::default();
+                db.attach(|db| {
+                    let ti = TextInput::new(db, input.clone());
+                    let _ = try_parse(db, ti);
+                });
+            }
+        }
+
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(200))]
+
+            /// Valid seed texts must round-trip: print(parse(text)) → parse → print = same.
+            #[test]
+            fn seed_corpus_round_trips(seed_idx in 0..3usize) {
+                let seeds = seed_corpus();
+                let text = seeds[seed_idx].to_string();
+                let db = salsa::DatabaseImpl::default();
+                db.attach(|db| {
+                    let ti = TextInput::new(db, text.clone());
+                    if let Some(printed) = parse_and_print(db, ti) {
+                        let ti2 = TextInput::new(db, printed.clone());
+                        if let Some(printed2) = parse_and_print(db, ti2) {
+                            prop_assert_eq!(printed, printed2, "round-trip mismatch");
+                        }
+                    }
+                    Ok(())
+                })?;
+            }
+        }
+
+        // Individual combinator fuzzing: type parser.
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn type_parser_never_panics(input in "[a-z_.()0-9, ]{0,80}") {
+                let mut s = input.as_str();
+                let _ = raw_type.parse_next(&mut s);
+            }
+        }
+
+        // Individual combinator fuzzing: attribute value parser.
+        proptest! {
+            #![proptest_config(ProptestConfig::with_cases(1000))]
+
+            #[test]
+            fn attr_parser_never_panics(input in "[a-z0-9_.@\"\\[\\]{}, =truefalsnui]{0,60}") {
+                let mut s = input.as_str();
+                let _ = raw_attr_value.parse_next(&mut s);
+            }
+        }
+    }
 }
