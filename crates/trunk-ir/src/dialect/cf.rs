@@ -95,4 +95,37 @@ mod tests {
         let recovered = CondBr::from_operation(db, op).unwrap();
         assert_eq!(recovered.as_operation().successors(db).len(), 2);
     }
+
+    /// Manually constructing a cf.cond_br with missing successors should
+    /// return ConversionError::MissingSuccessor (not MissingRegion).
+    ///
+    /// Returns true if from_operation correctly returns MissingSuccessor.
+    #[salsa::tracked]
+    fn check_cond_br_missing_successor(db: &dyn salsa::Database) -> bool {
+        let location = test_location(db);
+        let i1_ty = core::I1::new(db).as_type();
+
+        let cond_val =
+            crate::dialect::arith::r#const(db, location, i1_ty, crate::Attribute::Bool(true));
+
+        // Build a cf.cond_br operation manually with only 1 successor (needs 2)
+        let one_block = BlockBuilder::new(db, location).build();
+        let op = crate::ir::OperationBuilder::new(db, location, DIALECT_NAME(), COND_BR())
+            .operand(cond_val.result(db))
+            .successors(crate::idvec![one_block])
+            .build();
+
+        matches!(
+            CondBr::from_operation(db, op),
+            Err(crate::ConversionError::MissingSuccessor)
+        )
+    }
+
+    #[salsa_test]
+    fn test_cf_cond_br_missing_successor(db: &salsa::DatabaseImpl) {
+        assert!(
+            check_cond_br_missing_successor(db),
+            "Expected ConversionError::MissingSuccessor for cond_br with 1 successor"
+        );
+    }
 }

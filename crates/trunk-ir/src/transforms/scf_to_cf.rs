@@ -1722,6 +1722,238 @@ mod tests {
         );
     }
 
+    // === scf.switch with 3 cases (exercises pre-allocated BlockId chain) ===
+
+    /// Create module with scf.switch: 3 cases + default.
+    /// This tests that the pre-allocated check block IDs form a valid chain
+    /// across multiple intermediate cond_br blocks.
+    #[salsa::tracked]
+    fn make_scf_switch_3cases_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+
+        let disc = arith::Const::i32(db, location, 2);
+
+        // Helper to make a case region that yields a constant
+        let make_case_region = |val: i32| -> Region<'_> {
+            let c = arith::Const::i32(db, location, val);
+            let y = scf::r#yield(db, location, [c.result(db)]);
+            let block = Block::new(
+                db,
+                BlockId::fresh(),
+                location,
+                idvec![],
+                idvec![c.as_operation(), y.as_operation()],
+            );
+            Region::new(db, location, idvec![block])
+        };
+
+        let case0 = scf::r#case(db, location, Attribute::IntBits(0), make_case_region(100));
+        let case1 = scf::r#case(db, location, Attribute::IntBits(1), make_case_region(200));
+        let case2 = scf::r#case(db, location, Attribute::IntBits(2), make_case_region(300));
+
+        let default_region = make_case_region(999);
+        let default_op = scf::default(db, location, default_region);
+
+        let switch_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                case0.as_operation(),
+                case1.as_operation(),
+                case2.as_operation(),
+                default_op.as_operation()
+            ],
+        );
+        let switch_body = Region::new(db, location, idvec![switch_body_block]);
+
+        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
+        let ret = func::r#return(db, location, []);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                disc.as_operation(),
+                switch_op.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_switch_3cases".into(), body)
+    }
+
+    #[salsa_test]
+    fn test_scf_switch_3cases(db: &salsa::DatabaseImpl) {
+        let module = make_scf_switch_3cases_module(db);
+        let (block_count, all_ops, last_ops) = lower_and_check_switch(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain after 3-case switch lowering, found: {:?}",
+            all_ops
+        );
+
+        // Should have 3 arith.cmp_eq (one per case)
+        let cmp_eq_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "arith.cmp_eq")
+            .count();
+        assert_eq!(
+            cmp_eq_count, 3,
+            "Expected 3 arith.cmp_eq (one per case), got {}",
+            cmp_eq_count
+        );
+
+        // Should have 3 cf.cond_br (one per case check)
+        let cond_br_count = all_ops
+            .iter()
+            .filter(|n| n.as_str() == "cf.cond_br")
+            .count();
+        assert_eq!(
+            cond_br_count, 3,
+            "Expected 3 cf.cond_br (one per case check), got {}",
+            cond_br_count
+        );
+
+        // Should have cf.br for each case + default → merge (4)
+        let br_count = all_ops.iter().filter(|n| n.as_str() == "cf.br").count();
+        assert!(br_count >= 4, "Expected at least 4 cf.br, got {}", br_count);
+
+        // Should have at least 8 blocks:
+        // entry(check0), case0, check1, case1, check2, case2, default, merge
+        assert!(
+            block_count >= 8,
+            "Expected at least 8 blocks for 3-case switch, got {}",
+            block_count
+        );
+
+        // All blocks should end with branch or return
+        for (i, last_op) in last_ops.iter().enumerate() {
+            assert!(
+                last_op == "cf.cond_br" || last_op == "cf.br" || last_op == "func.return",
+                "Block {} should end with a branch or return, got: {}",
+                i,
+                last_op
+            );
+        }
+
+        // Last block should end with func.return
+        assert_eq!(
+            last_ops.last().unwrap(),
+            "func.return",
+            "Last block should end with func.return"
+        );
+    }
+
+    // === scf.switch with block argument discriminant ===
+
+    /// Create module where switch discriminant is a block argument,
+    /// testing that discriminant_type resolves the actual type.
+    #[salsa::tracked]
+    fn make_scf_switch_block_arg_disc_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        // Entry block has a block argument as discriminant
+        let entry_id = BlockId::fresh();
+        let entry_arg = BlockArg::of_type(db, i32_ty);
+        let disc_value = Value::new(db, ValueDef::BlockArg(entry_id), 0);
+
+        // Case 0: yield 10
+        let case0_const = arith::Const::i32(db, location, 10);
+        let case0_yield = scf::r#yield(db, location, [case0_const.result(db)]);
+        let case0_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![case0_const.as_operation(), case0_yield.as_operation()],
+        );
+        let case0_region = Region::new(db, location, idvec![case0_block]);
+        let case0 = scf::r#case(db, location, Attribute::IntBits(0), case0_region);
+
+        // Default: yield 99
+        let default_const = arith::Const::i32(db, location, 99);
+        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
+        let default_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![default_const.as_operation(), default_yield.as_operation()],
+        );
+        let default_region = Region::new(db, location, idvec![default_block]);
+        let default_op = scf::default(db, location, default_region);
+
+        let switch_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![case0.as_operation(), default_op.as_operation()],
+        );
+        let switch_body = Region::new(db, location, idvec![switch_body_block]);
+
+        let switch_op = scf::switch(db, location, disc_value, switch_body);
+        let ret = func::r#return(db, location, []);
+
+        let entry = Block::new(
+            db,
+            entry_id,
+            location,
+            idvec![entry_arg],
+            idvec![switch_op.as_operation(), ret.as_operation()],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_switch_block_arg".into(), body)
+    }
+
+    #[salsa_test]
+    fn test_scf_switch_block_arg_discriminant(db: &salsa::DatabaseImpl) {
+        let module = make_scf_switch_block_arg_disc_module(db);
+        let (block_count, all_ops, last_ops) = lower_and_check_switch(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain, found: {:?}",
+            all_ops
+        );
+
+        // Should have arith.const for comparison value (discriminant_type resolved correctly)
+        assert!(
+            all_ops.iter().any(|n| n == "arith.const"),
+            "Should have arith.const for case comparison, got: {:?}",
+            all_ops
+        );
+
+        // Should have arith.cmp_eq
+        assert!(
+            all_ops.iter().any(|n| n == "arith.cmp_eq"),
+            "Should have arith.cmp_eq, got: {:?}",
+            all_ops
+        );
+
+        // Should have at least 4 blocks: entry, case0, default, merge
+        assert!(
+            block_count >= 4,
+            "Expected at least 4 blocks, got {}",
+            block_count
+        );
+
+        // Last block should end with func.return
+        assert_eq!(
+            last_ops.last().unwrap(),
+            "func.return",
+            "Last block should end with func.return"
+        );
+    }
+
     #[salsa_test]
     fn test_scf_switch_basic(db: &salsa::DatabaseImpl) {
         let module = make_scf_switch_module(db);
