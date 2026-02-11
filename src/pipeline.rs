@@ -1319,6 +1319,10 @@ mod tests {
         let result = link_native_binary(b"not valid object code", &output);
         assert!(result.is_err());
         match result.unwrap_err() {
+            LinkError::LinkerNotFound(_) => {
+                eprintln!("warning: system linker (cc) not found, skipping test");
+                return;
+            }
             LinkError::LinkerFailed(code) => {
                 assert_ne!(code, 0, "linker should fail with non-zero exit code");
             }
