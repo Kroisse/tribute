@@ -38,7 +38,7 @@ target-lexicon = "0.13"
 tempfile = "3.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tree-sitter = "0.25.6"
+tree-sitter = "0.26.5"
 tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", tag = "v0.5.1" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-front = { path = "crates/tribute-front" }
