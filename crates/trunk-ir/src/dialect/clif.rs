@@ -116,6 +116,15 @@ dialect! {
         /// `clif.ushr` operation: unsigned shift right.
         fn ushr(lhs, rhs) -> result;
 
+        /// `clif.trap` operation: trigger a trap (unreachable code).
+        /// `code` specifies the trap reason (e.g., "unreachable").
+        #[attr(code: Symbol)]
+        fn trap();
+
+        /// `clif.return_call` operation: tail call (returns callee's result directly).
+        #[attr(callee: Symbol)]
+        fn return_call(#[rest] args);
+
         // === Control Flow ===
 
         /// `clif.brif` operation: conditional branch.

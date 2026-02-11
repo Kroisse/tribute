@@ -3,7 +3,7 @@
 //! This crate provides language-agnostic lowering passes and emission for converting
 //! TrunkIR dialects to native object files via Cranelift.
 //!
-//! ## Passes (planned)
+//! ## Passes
 //!
 //! - `func_to_clif`: Lowers `func.*` operations to `clif.*`
 //! - `arith_to_clif`: Lowers `arith.*` operations to `clif.*`
