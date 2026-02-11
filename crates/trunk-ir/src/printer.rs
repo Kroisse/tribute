@@ -428,6 +428,10 @@ pub fn print_type<'db>(state: &mut PrintState<'db>, ty: Type<'db>) -> fmt::Resul
             print_type(state, p)?;
         }
         state.output.push(')');
+    } else if !attrs.is_empty() {
+        // Emit empty parens so the parser knows to expect type attributes.
+        // Without parens, `{...}` is ambiguous with a region body.
+        state.output.push_str("()");
     }
 
     if !attrs.is_empty() {
@@ -453,10 +457,30 @@ pub fn print_attribute<'db>(state: &mut PrintState<'db>, attr: &Attribute<'db>) 
         Attribute::IntBits(n) => write!(state.output, "{}", n)?,
         Attribute::FloatBits(bits) => {
             let f = f64::from_bits(*bits);
-            if f.fract() == 0.0 && f.is_finite() {
+            if !f.is_finite() {
+                // inf / NaN — print as-is (parser will reject, but that's
+                // correct: these aren't valid IR float literals).
+                write!(state.output, "{}", f)?;
+            } else if f.fract() == 0.0 {
+                // Whole number — force decimal point: 42.0
                 write!(state.output, "{:.1}", f)?;
             } else {
-                write!(state.output, "{}", f)?;
+                // General case — Display may produce exponent forms without
+                // a decimal point (e.g. `1e-10`).  Ensure a `.` is present
+                // so float_with_dot can parse it back.
+                let s = format!("{}", f);
+                if s.contains('.') {
+                    state.output.push_str(&s);
+                } else if let Some(e_pos) = s.find(['e', 'E']) {
+                    // Insert `.0` before the exponent: `1e-10` → `1.0e-10`
+                    state.output.push_str(&s[..e_pos]);
+                    state.output.push_str(".0");
+                    state.output.push_str(&s[e_pos..]);
+                } else {
+                    // Fallback: append `.0`
+                    state.output.push_str(&s);
+                    state.output.push_str(".0");
+                }
             }
         }
         Attribute::String(s) => {
@@ -976,5 +1000,82 @@ mod tests {
             "second arg should get a collision-avoiding name, got:\n{}",
             text
         );
+    }
+
+    #[salsa_test]
+    fn test_float_bits_always_has_decimal_point(db: &salsa::DatabaseImpl) {
+        let mut state = PrintState::new(db);
+
+        // Whole number — should get .0
+        print_attribute(&mut state, &Attribute::FloatBits(42.0_f64.to_bits())).unwrap();
+        assert!(
+            state.output.contains('.'),
+            "whole float should have decimal point: {}",
+            state.output
+        );
+        assert_eq!(state.output, "42.0");
+
+        // Fractional number
+        state.output.clear();
+        print_attribute(&mut state, &Attribute::FloatBits(3.25_f64.to_bits())).unwrap();
+        assert!(
+            state.output.contains('.'),
+            "fractional float should have decimal point: {}",
+            state.output
+        );
+
+        // Very large number (Display may use exponent form without '.')
+        state.output.clear();
+        print_attribute(&mut state, &Attribute::FloatBits(1e300_f64.to_bits())).unwrap();
+        assert!(
+            state.output.contains('.'),
+            "large float should have decimal point: {}",
+            state.output
+        );
+
+        // Very small number
+        state.output.clear();
+        print_attribute(&mut state, &Attribute::FloatBits(1e-300_f64.to_bits())).unwrap();
+        assert!(
+            state.output.contains('.'),
+            "small float should have decimal point: {}",
+            state.output
+        );
+    }
+
+    #[salsa_test]
+    fn test_type_with_attrs_no_params_prints_empty_parens(db: &salsa::DatabaseImpl) {
+        use std::collections::BTreeMap;
+
+        let mut attrs = BTreeMap::new();
+        attrs.insert(
+            Symbol::new("effect"),
+            Attribute::Type(Type::new(
+                db,
+                Symbol::new("core"),
+                Symbol::new("nil"),
+                crate::IdVec::new(),
+                BTreeMap::new(),
+            )),
+        );
+
+        let ty = Type::new(
+            db,
+            Symbol::new("custom"),
+            Symbol::new("mytype"),
+            crate::IdVec::new(),
+            attrs,
+        );
+
+        let mut state = PrintState::new(db);
+        print_type(&mut state, ty).unwrap();
+
+        // Must contain "()" before "{" so the parser knows to look for attrs
+        assert!(
+            state.output.contains("()"),
+            "type with attrs but no params should emit empty parens: {}",
+            state.output
+        );
+        assert_eq!(state.output, "custom.mytype() {effect = core.nil}");
     }
 }

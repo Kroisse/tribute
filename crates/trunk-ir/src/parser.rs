@@ -656,14 +656,47 @@ impl<'db> IrBuilder<'db> {
         Ok(())
     }
 
+    /// Save the current `block_id_map` entries for the given labels, so they
+    /// can be restored after an inner region is built.  Returns the entries
+    /// that existed before (if any) for each label.
+    fn save_block_labels(&self, raw_region: &RawRegion<'_>) -> Vec<(String, Option<BlockId>)> {
+        raw_region
+            .blocks
+            .iter()
+            .map(|b| {
+                let label = b.label.to_string();
+                let prev = self.block_id_map.get(&label).copied();
+                (label, prev)
+            })
+            .collect()
+    }
+
+    /// Restore previously saved `block_id_map` entries, undoing the insertions
+    /// made by `pre_assign_blocks` for an inner region.
+    fn restore_block_labels(&mut self, saved: Vec<(String, Option<BlockId>)>) {
+        for (label, prev) in saved {
+            match prev {
+                Some(id) => {
+                    self.block_id_map.insert(label, id);
+                }
+                None => {
+                    self.block_id_map.remove(&label);
+                }
+            }
+        }
+    }
+
     fn build_region(&mut self, raw: &RawRegion<'_>) -> Result<Region<'db>, ParseError> {
+        let saved = self.save_block_labels(raw);
         self.pre_assign_blocks(raw)?;
         let blocks: IdVec<Block<'db>> = raw
             .blocks
             .iter()
             .map(|b| self.build_block(b))
             .collect::<Result<_, _>>()?;
-        Ok(Region::new(self.db, self.location, blocks))
+        let region = Region::new(self.db, self.location, blocks);
+        self.restore_block_labels(saved);
+        Ok(region)
     }
 
     fn build_block_with_extra_args(
@@ -857,7 +890,10 @@ impl<'db> IrBuilder<'db> {
             .enumerate()
             .map(|(i, r)| {
                 if i == 0 && !raw.func_params.is_empty() {
-                    // First region: inject func_params as entry block args
+                    // First region: inject func_params as entry block args.
+                    // Save/restore block_id_map so inner labels don't clobber
+                    // outer mappings.
+                    let saved = self.save_block_labels(r);
                     self.pre_assign_blocks(r)?;
                     let blocks: IdVec<Block<'db>> = r
                         .blocks
@@ -871,18 +907,19 @@ impl<'db> IrBuilder<'db> {
                             }
                         })
                         .collect::<Result<_, _>>()?;
-                    Ok(Region::new(self.db, self.location, blocks))
+                    let region = Region::new(self.db, self.location, blocks);
+                    self.restore_block_labels(saved);
+                    Ok(region)
                 } else {
                     self.build_region(r)
                 }
             })
             .collect::<Result<_, _>>()?;
 
-        // Validate result name count matches declared result types
-        if !raw.results.is_empty()
-            && !raw.result_types.is_empty()
-            && raw.results.len() != results.len()
-        {
+        // Validate result name count matches declared result types.
+        // This catches both mismatches (2 names vs 1 type) and names-without-
+        // types (1 name vs 0 types), preventing semantically invalid Values.
+        if !raw.results.is_empty() && raw.results.len() != results.len() {
             return Err(ParseError {
                 message: format!(
                     "operation '{}.{}' declares {} result names but {} result types",
@@ -1486,6 +1523,125 @@ mod tests {
         let mut input = "3.25";
         let val = float_with_dot.parse_next(&mut input).expect("should parse");
         assert_eq!(val, 3.25);
+    }
+
+    // ---- Fix: result names without types ----
+
+    #[test]
+    fn test_parse_result_names_without_types() {
+        let db = salsa::DatabaseImpl::default();
+        let result: Result<(), ParseError> = db.attach(|db| {
+            parse_module(
+                db,
+                // Result name but no `: type` annotation
+                concat!(
+                    "core.module @test {\n",
+                    "  func.func @f() -> core.nil {\n",
+                    "    %0 = test.op\n",
+                    "    func.return\n",
+                    "  }\n",
+                    "}",
+                ),
+            )
+            .map(|_| ())
+        });
+        let err = result.expect_err("should fail: result name without type");
+        assert!(
+            err.message.contains("result names") && err.message.contains("result types"),
+            "unexpected error: {}",
+            err.message
+        );
+    }
+
+    // ---- Fix: nested regions with shared block labels ----
+
+    #[salsa_test]
+    fn test_nested_regions_shared_block_labels(db: &salsa::DatabaseImpl) {
+        // Two sibling functions inside a module, each with ^bb0.
+        // After parsing the first func, ^bb0 must NOT be clobbered for the
+        // second func (or vice versa).  Round-trip verifies correctness.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.i32 {\n",
+                "    ^bb0:\n",
+                "      %0 = arith.const {value = 1} : core.i32\n",
+                "      func.return %0\n",
+                "  }\n",
+                "  func.func @g() -> core.i32 {\n",
+                "    ^bb0:\n",
+                "      %0 = arith.const {value = 2} : core.i32\n",
+                "      func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "nested-region round-trip failed");
+    }
+
+    // ---- Fix: FloatBits round-trip (exponent forms) ----
+
+    #[salsa_test]
+    fn test_float_bits_roundtrip(db: &salsa::DatabaseImpl) {
+        // Use a value that Rust's Display formats with exponent notation.
+        // The printer must ensure a decimal point so the parser accepts it.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.nil {\n",
+                "    %0 = test.op {big = 1.0e300, small = 1.0e-300} : core.nil\n",
+                "    func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        // The printed text must be re-parseable
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(printed, printed2, "float-bits round-trip failed");
+    }
+
+    // ---- Fix: type with attrs + empty parens round-trip ----
+
+    #[salsa_test]
+    fn test_type_empty_parens_attrs_roundtrip(db: &salsa::DatabaseImpl) {
+        // Type with attrs but no params: printer emits `custom.t() {k = v}`.
+        let input = TextInput::new(
+            db,
+            concat!(
+                "core.module @test {\n",
+                "  func.func @f() -> core.nil {\n",
+                "    %0 = test.op {ty = custom.t() {size = 4}} : core.nil\n",
+                "    func.return %0\n",
+                "  }\n",
+                "}",
+            )
+            .to_string(),
+        );
+
+        let op = do_parse(db, input);
+        let printed = print_op(db, op);
+        let input2 = TextInput::new(db, printed.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+        assert_eq!(
+            printed, printed2,
+            "type empty-parens attrs round-trip failed"
+        );
     }
 
     // ========================================================================
