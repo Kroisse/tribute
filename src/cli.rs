@@ -33,6 +33,10 @@ pub enum Command {
         /// Compilation target (wasm, none)
         #[arg(long, default_value = "wasm")]
         target: String,
+
+        /// Dump the TrunkIR text representation after compilation
+        #[arg(long)]
+        dump_ir: bool,
     },
 
     /// Debug compilation of a source file

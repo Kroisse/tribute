@@ -1,7 +1,7 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-expression: ir_module
+assertion_line: 4615
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
-Module(test) {
-    operations: [],
+core.module @test {
 }

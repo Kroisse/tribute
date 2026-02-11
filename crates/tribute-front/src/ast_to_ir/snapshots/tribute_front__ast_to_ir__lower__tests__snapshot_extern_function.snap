@@ -1,13 +1,11 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-expression: ir_module
+assertion_line: 3804
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
-Module(test) {
-    operations: [
-        func @__add(core.i32, core.i32) -> core.i32 {
-            body: [
-                "func.unreachable",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @__add(%a: core.i32, %b: core.i32) -> core.i32 {
+    ^bb0(%a: core.i32, %b: core.i32):
+      func.unreachable
+  }
 }

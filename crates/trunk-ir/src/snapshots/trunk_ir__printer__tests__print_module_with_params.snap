@@ -1,0 +1,11 @@
+---
+source: crates/trunk-ir/src/printer.rs
+expression: text
+---
+core.module @test {
+  func.func @add(%x: core.i32, %y: core.i32) -> core.i32 {
+    ^bb0(%x: core.i32, %y: core.i32):
+      %0 = arith.add %x, %y : core.i32
+      func.return %0
+  }
+}

@@ -1,15 +1,28 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-expression: ir_module
+assertion_line: 4582
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
-Module(test) {
-    operations: [
-        func @main(core.i32) -> core.nil {
-            body: [
-                "adt.variant_is",
-                "scf.if",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @main(%x: core.i32) -> core.nil {
+    ^bb0(%x: core.i32):
+      %0 = adt.variant_is %x {type = tribute_rt.any, tag = @Some} : core.i1
+      %1 = scf.if %0 : tribute_rt.any {
+        %2 = adt.variant_cast %x {type = tribute_rt.any, tag = @Some} : tribute_rt.any
+        %3 = adt.variant_get %2 {field = 0} : tribute_rt.any
+        scf.yield %3
+      } {
+        %4 = adt.variant_is %x {type = tribute_rt.any, tag = @None} : core.i1
+        %5 = scf.if %4 : tribute_rt.any {
+          %6 = adt.variant_cast %x {type = tribute_rt.any, tag = @None} : tribute_rt.any
+          %7 = arith.const {value = 0} : core.i32
+          scf.yield %7
+        } {
+          %8 = arith.const {value = unit} : core.nil
+          scf.yield %8
+        }
+        scf.yield %5
+      }
+      func.return %1
+  }
 }

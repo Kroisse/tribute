@@ -14,6 +14,8 @@ pub mod ir;
 pub mod location;
 pub mod op_interface;
 pub mod ops;
+pub mod parser;
+pub mod printer;
 pub mod rewrite;
 pub mod transforms;
 pub mod type_interface;

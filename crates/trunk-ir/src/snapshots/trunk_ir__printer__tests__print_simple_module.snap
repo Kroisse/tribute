@@ -1,0 +1,13 @@
+---
+source: crates/trunk-ir/src/printer.rs
+expression: text
+---
+core.module @test {
+  func.func @main() -> core.i32 {
+    ^bb0:
+      %0 = arith.const {value = 40} : core.i32
+      %1 = arith.const {value = 2} : core.i32
+      %2 = arith.add %0, %1 : core.i32
+      func.return %2
+  }
+}

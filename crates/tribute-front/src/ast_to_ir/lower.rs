@@ -2540,7 +2540,7 @@ mod tests {
         FuncDefId, LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, Stmt,
         Type as AstType, TypeKind, TypedRef,
     };
-    use insta::assert_debug_snapshot;
+    use insta::assert_snapshot;
     use salsa_test_macros::salsa_test;
     use trunk_ir::DialectOp;
     use trunk_ir::SymbolVec;
@@ -3711,7 +3711,7 @@ mod tests {
             nat_lit_expr(42),
         ))]);
         let ir_module = test_lower(db, path, SpanMap::default(), module);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -3723,7 +3723,7 @@ mod tests {
             add_expr,
         ))]);
         let ir_module = test_lower(db, path, SpanMap::default(), module);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -3741,7 +3741,7 @@ mod tests {
             block,
         ))]);
         let ir_module = test_lower(db, path, SpanMap::default(), module);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -3801,7 +3801,7 @@ mod tests {
 
         let ir_module =
             test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -3866,7 +3866,7 @@ mod tests {
 
         let ir_module =
             test_lower_with_scheme(db, path, SpanMap::default(), module, scheme_entries);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     // ========================================================================
@@ -4182,7 +4182,7 @@ mod tests {
     fn test_snapshot_function_call(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let ir_module = test_lower_direct_call(db, path, Symbol::new("add"), 10, 20);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -4195,7 +4195,7 @@ mod tests {
             Symbol::new("Some"),
             vec![42],
         );
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     // ========================================================================
@@ -4579,7 +4579,7 @@ mod tests {
     fn test_snapshot_case_variant(db: &salsa::DatabaseImpl) {
         let path = PathId::new(db, "test.trb".to_owned());
         let ir_module = test_lower_case_variant_module(db, path);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     #[salsa_test]
@@ -4612,7 +4612,7 @@ mod tests {
         };
         let module = simple_module(vec![Decl::Enum(enum_decl)]);
         let ir_module = test_lower(db, path, SpanMap::default(), module);
-        assert_debug_snapshot!(ir_module);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
     // ========================================================================
