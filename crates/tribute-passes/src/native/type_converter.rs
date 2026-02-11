@@ -323,6 +323,7 @@ mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
+    use trunk_ir::rewrite::MaterializeResult;
 
     // === Type conversion tests ===
 
@@ -347,6 +348,14 @@ mod tests {
         let converter = native_type_converter();
         let bool_ty = tribute_rt::Bool::new(db).as_type();
         let result = converter.convert_type(db, bool_ty);
+        assert_eq!(result, Some(core::I32::new(db).as_type()));
+    }
+
+    #[salsa_test]
+    fn test_convert_i1_to_i32(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let i1_ty = core::I::<1>::new(db).as_type();
+        let result = converter.convert_type(db, i1_ty);
         assert_eq!(result, Some(core::I32::new(db).as_type()));
     }
 
@@ -383,6 +392,23 @@ mod tests {
     }
 
     #[salsa_test]
+    fn test_convert_closure_to_ptr(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let func_ty = core::I32::new(db).as_type(); // simplified
+        let closure_ty = closure::Closure::new(db, func_ty).as_type();
+        let result = converter.convert_type(db, closure_ty);
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+    }
+
+    #[salsa_test]
+    fn test_convert_evidence_to_ptr(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let evidence_ty = ability::evidence_adt_type(db);
+        let result = converter.convert_type(db, evidence_ty);
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+    }
+
+    #[salsa_test]
     fn test_convert_array_to_ptr(db: &salsa::DatabaseImpl) {
         let converter = native_type_converter();
         let i32_ty = core::I32::new(db).as_type();
@@ -403,39 +429,85 @@ mod tests {
     fn test_no_conversion_for_core_types(db: &salsa::DatabaseImpl) {
         let converter = native_type_converter();
 
-        // core.i32 should not be converted
+        assert!(
+            converter
+                .convert_type(db, core::I32::new(db).as_type())
+                .is_none()
+        );
+        assert!(
+            converter
+                .convert_type(db, core::I64::new(db).as_type())
+                .is_none()
+        );
+        assert!(
+            converter
+                .convert_type(db, core::F64::new(db).as_type())
+                .is_none()
+        );
+        assert!(
+            converter
+                .convert_type(db, core::Ptr::new(db).as_type())
+                .is_none()
+        );
+    }
+
+    // === is_ptr_like tests ===
+
+    #[salsa_test]
+    fn test_is_ptr_like_adt_struct(db: &salsa::DatabaseImpl) {
         let i32_ty = core::I32::new(db).as_type();
-        assert!(converter.convert_type(db, i32_ty).is_none());
+        let struct_ty = adt::struct_type(db, Symbol::new("Foo"), vec![(Symbol::new("x"), i32_ty)]);
+        assert!(is_ptr_like(db, struct_ty));
+    }
 
-        // core.i64 should not be converted
-        let i64_ty = core::I64::new(db).as_type();
-        assert!(converter.convert_type(db, i64_ty).is_none());
+    #[salsa_test]
+    fn test_is_ptr_like_typeref(db: &salsa::DatabaseImpl) {
+        let typeref_ty = adt::typeref(db, Symbol::new("T"));
+        assert!(is_ptr_like(db, typeref_ty));
+    }
 
-        // core.f64 should not be converted
-        let f64_ty = core::F64::new(db).as_type();
-        assert!(converter.convert_type(db, f64_ty).is_none());
+    #[salsa_test]
+    fn test_is_ptr_like_core_ptr(db: &salsa::DatabaseImpl) {
+        assert!(is_ptr_like(db, core::Ptr::new(db).as_type()));
+    }
 
-        // core.ptr should not be converted
-        let ptr_ty = core::Ptr::new(db).as_type();
-        assert!(converter.convert_type(db, ptr_ty).is_none());
+    #[salsa_test]
+    fn test_is_ptr_like_closure(db: &salsa::DatabaseImpl) {
+        let func_ty = core::I32::new(db).as_type();
+        let closure_ty = closure::Closure::new(db, func_ty).as_type();
+        assert!(is_ptr_like(db, closure_ty));
+    }
+
+    #[salsa_test]
+    fn test_is_not_ptr_like_primitives(db: &salsa::DatabaseImpl) {
+        assert!(!is_ptr_like(db, core::I32::new(db).as_type()));
+        assert!(!is_ptr_like(db, core::F64::new(db).as_type()));
+        assert!(!is_ptr_like(db, core::Nil::new(db).as_type()));
     }
 
     // === Materialization tests ===
+    //
+    // Each tracked function is needed because Salsa materializations
+    // must run inside a tracked context.
+
+    // --- Primitive equivalences (NoOp) ---
 
     #[salsa::tracked]
     fn do_materialize_int_to_i32(db: &dyn salsa::Database) -> bool {
-        use trunk_ir::rewrite::MaterializeResult;
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
         let path = PathId::new(db, "test".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let block_id = BlockId::fresh();
-        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        let int_ty = tribute_rt::Int::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-        let result = converter.materialize(db, location, value, int_ty, i32_ty);
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            tribute_rt::Int::new(db).as_type(),
+            core::I32::new(db).as_type(),
+        );
         matches!(result, Some(MaterializeResult::NoOp))
     }
 
@@ -445,19 +517,95 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn do_materialize_any_to_ptr(db: &dyn salsa::Database) -> bool {
-        use trunk_ir::rewrite::MaterializeResult;
+    fn do_materialize_float_to_f64(db: &dyn salsa::Database) -> bool {
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
         let path = PathId::new(db, "test".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let block_id = BlockId::fresh();
-        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        let any_ty = tribute_rt::Any::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let result = converter.materialize(db, location, value, any_ty, ptr_ty);
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            tribute_rt::Float::new(db).as_type(),
+            core::F64::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_float_to_f64_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_float_to_f64(db));
+    }
+
+    #[salsa::tracked]
+    fn do_materialize_i1_to_i32(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::I::<1>::new(db).as_type(),
+            core::I32::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_i1_to_i32_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_i1_to_i32(db));
+    }
+
+    #[salsa::tracked]
+    fn do_materialize_prompt_tag_to_i32(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            cont::PromptTag::new(db).as_type(),
+            core::I32::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_prompt_tag_to_i32_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_prompt_tag_to_i32(db));
+    }
+
+    // --- Pointer equivalences (NoOp) ---
+
+    #[salsa::tracked]
+    fn do_materialize_any_to_ptr(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            tribute_rt::Any::new(db).as_type(),
+            core::Ptr::new(db).as_type(),
+        );
         matches!(result, Some(MaterializeResult::NoOp))
     }
 
@@ -468,14 +616,12 @@ mod tests {
 
     #[salsa::tracked]
     fn do_materialize_struct_to_ptr(db: &dyn salsa::Database) -> bool {
-        use trunk_ir::rewrite::MaterializeResult;
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
         let path = PathId::new(db, "test".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let block_id = BlockId::fresh();
-        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
         let i32_ty = core::I32::new(db).as_type();
         let struct_ty = adt::struct_type(
@@ -483,8 +629,8 @@ mod tests {
             Symbol::new("Point"),
             vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
         );
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let result = converter.materialize(db, location, value, struct_ty, ptr_ty);
+        let result =
+            converter.materialize(db, location, value, struct_ty, core::Ptr::new(db).as_type());
         matches!(result, Some(MaterializeResult::NoOp))
     }
 
@@ -495,28 +641,181 @@ mod tests {
 
     #[salsa::tracked]
     fn do_materialize_ptr_to_struct(db: &dyn salsa::Database) -> bool {
-        use trunk_ir::rewrite::MaterializeResult;
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
         let path = PathId::new(db, "test".to_owned());
         let location = Location::new(path, Span::new(0, 0));
-        let block_id = BlockId::fresh();
-        let value = Value::new(db, ValueDef::BlockArg(block_id), 0);
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        let ptr_ty = core::Ptr::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
         let struct_ty = adt::struct_type(
             db,
             Symbol::new("Point"),
             vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
         );
-        let result = converter.materialize(db, location, value, ptr_ty, struct_ty);
+        let result =
+            converter.materialize(db, location, value, core::Ptr::new(db).as_type(), struct_ty);
         matches!(result, Some(MaterializeResult::NoOp))
     }
 
     #[salsa_test]
     fn test_materialize_ptr_to_struct_is_noop(db: &salsa::DatabaseImpl) {
         assert!(do_materialize_ptr_to_struct(db));
+    }
+
+    #[salsa::tracked]
+    fn do_materialize_closure_to_ptr(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let func_ty = core::I32::new(db).as_type();
+        let closure_ty = closure::Closure::new(db, func_ty).as_type();
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            closure_ty,
+            core::Ptr::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_closure_to_ptr_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_closure_to_ptr(db));
+    }
+
+    #[salsa::tracked]
+    fn do_materialize_between_struct_types(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let i32_ty = core::I32::new(db).as_type();
+        let from_ty = adt::struct_type(db, Symbol::new("Base"), vec![(Symbol::new("tag"), i32_ty)]);
+        let to_ty = adt::struct_type(
+            db,
+            Symbol::new("Variant"),
+            vec![(Symbol::new("tag"), i32_ty), (Symbol::new("val"), i32_ty)],
+        );
+        let result = converter.materialize(db, location, value, from_ty, to_ty);
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_between_struct_types_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_between_struct_types(db));
+    }
+
+    // --- Boxing placeholder (i32 -> ptr) ---
+
+    #[salsa::tracked]
+    fn do_materialize_i32_to_ptr(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::I32::new(db).as_type(),
+            core::Ptr::new(db).as_type(),
+        );
+        // Phase 1: placeholder NoOp (will emit alloc+store in M3)
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_i32_to_ptr_boxing_placeholder(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_i32_to_ptr(db));
+    }
+
+    // --- Unboxing placeholder (ptr -> i32) ---
+
+    #[salsa::tracked]
+    fn do_materialize_ptr_to_i32(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::Ptr::new(db).as_type(),
+            core::I32::new(db).as_type(),
+        );
+        // Phase 1: placeholder NoOp (will emit load in M3)
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_ptr_to_i32_unboxing_placeholder(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_ptr_to_i32(db));
+    }
+
+    // --- Nil conversions ---
+
+    #[salsa::tracked]
+    fn do_materialize_nil_to_ptr(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::Nil::new(db).as_type(),
+            core::Ptr::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_nil_to_ptr_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_nil_to_ptr(db));
+    }
+
+    #[salsa::tracked]
+    fn do_materialize_ptr_to_nil(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::Ptr::new(db).as_type(),
+            core::Nil::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::NoOp))
+    }
+
+    #[salsa_test]
+    fn test_materialize_ptr_to_nil_is_noop(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_ptr_to_nil(db));
     }
 }
