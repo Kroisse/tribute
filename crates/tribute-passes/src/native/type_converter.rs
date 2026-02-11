@@ -15,6 +15,8 @@
 //! | `tribute_rt.float`  | `core.f64`  | Float as f64                       |
 //! | `tribute_rt.intref` | `core.ptr`  | Boxed integer as heap pointer      |
 //! | `tribute_rt.any`    | `core.ptr`  | Uniform representation as pointer  |
+//! | `adt.struct`        | `core.ptr`  | Struct as heap pointer             |
+//! | `adt.variant_inst`  | `core.ptr`  | Variant instance as heap pointer   |
 //! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
 //! | `closure.closure`   | `core.ptr`  | Closure as pointer                 |
 //! | `core.array<T>`     | `core.ptr`  | Array as heap pointer              |
@@ -94,6 +96,16 @@ pub fn native_type_converter() -> TypeConverter {
         // Convert adt.typeref -> core.ptr (generic struct reference)
         .add_conversion(|db, ty| {
             if adt::is_typeref(db, ty) {
+                Some(core::Ptr::new(db).as_type())
+            } else {
+                None
+            }
+        })
+        // Convert adt.struct / variant instance -> core.ptr (opaque reference)
+        .add_conversion(|db, ty| {
+            if (adt::is_struct_type(db, ty) || adt::is_variant_instance_type(db, ty))
+                && !ability::is_marker_type(db, ty)
+            {
                 Some(core::Ptr::new(db).as_type())
             } else {
                 None
@@ -224,13 +236,11 @@ pub fn native_type_converter() -> TypeConverter {
                 return MaterializeResult::Skip;
             }
 
-            // i32/i64 -> ptr: will need heap allocation (RC Phase)
-            // For now, treat as no-op placeholder
+            // i32/i64 -> ptr: requires heap allocation (RC Phase)
             if core::I32::from_type(db, from_ty).is_some()
                 || core::I64::from_type(db, from_ty).is_some()
             {
-                // TODO(M3): emit alloc + store for boxing
-                return MaterializeResult::NoOp;
+                unreachable!("boxing not implemented: i32/i64 -> ptr requires RC phase (M3)");
             }
 
             // nil -> ptr: null pointer
@@ -250,12 +260,11 @@ pub fn native_type_converter() -> TypeConverter {
                 return MaterializeResult::Skip;
             }
 
-            // ptr -> i32: will need load from heap (RC Phase)
+            // ptr -> i32: requires load from heap (RC Phase)
             if core::I32::from_type(db, to_ty).is_some()
                 || tribute_rt::Int::from_type(db, to_ty).is_some()
             {
-                // TODO(M3): emit load for unboxing
-                return MaterializeResult::NoOp;
+                unreachable!("unboxing not implemented: ptr -> i32 requires RC phase (M3)");
             }
 
             // ptr -> nil: discard the pointer value
@@ -322,8 +331,8 @@ fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::Symbol;
     use trunk_ir::rewrite::MaterializeResult;
+    use trunk_ir::{Attribute, Attrs, IdVec, Symbol};
 
     // === Type conversion tests ===
 
@@ -389,6 +398,51 @@ mod tests {
         let typeref_ty = adt::typeref(db, Symbol::new("MyStruct"));
         let result = converter.convert_type(db, typeref_ty);
         assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+    }
+
+    #[salsa_test]
+    fn test_convert_struct_to_ptr(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let i32_ty = core::I32::new(db).as_type();
+        let struct_ty = adt::struct_type(db, Symbol::new("Foo"), vec![(Symbol::new("x"), i32_ty)]);
+        let result = converter.convert_type(db, struct_ty);
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+    }
+
+    #[salsa_test]
+    fn test_convert_variant_instance_to_ptr(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let i32_ty = core::I32::new(db).as_type();
+        let base_ty = adt::struct_type(db, Symbol::new("Expr"), vec![(Symbol::new("tag"), i32_ty)]);
+
+        // Build a variant instance type with is_variant=true attribute
+        let mut attrs = Attrs::new();
+        attrs.insert(adt::ATTR_IS_VARIANT(), Attribute::Bool(true));
+        attrs.insert(adt::ATTR_BASE_ENUM(), Attribute::Type(base_ty));
+        attrs.insert(
+            adt::ATTR_VARIANT_TAG(),
+            Attribute::Symbol(Symbol::new("Add")),
+        );
+        let variant_ty = Type::new(
+            db,
+            base_ty.dialect(db),
+            Symbol::from_dynamic("Expr$Add"),
+            IdVec::new(),
+            attrs,
+        );
+
+        assert!(adt::is_variant_instance_type(db, variant_ty));
+        let result = converter.convert_type(db, variant_ty);
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+    }
+
+    #[salsa_test]
+    fn test_convert_marker_type_not_to_ptr(db: &salsa::DatabaseImpl) {
+        let converter = native_type_converter();
+        let marker_ty = ability::marker_adt_type(db);
+        let result = converter.convert_type(db, marker_ty);
+        // marker type should NOT be converted to ptr, it passes through
+        assert_ne!(result, Some(core::Ptr::new(db).as_type()));
     }
 
     #[salsa_test]
@@ -715,10 +769,10 @@ mod tests {
         assert!(do_materialize_between_struct_types(db));
     }
 
-    // --- Boxing placeholder (i32 -> ptr) ---
+    // --- Boxing fail-fast (i32 -> ptr, not yet implemented) ---
 
     #[salsa::tracked]
-    fn do_materialize_i32_to_ptr(db: &dyn salsa::Database) -> bool {
+    fn do_materialize_i32_to_ptr(db: &dyn salsa::Database) {
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
@@ -726,26 +780,26 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        let result = converter.materialize(
+        // Should panic: boxing not implemented
+        converter.materialize(
             db,
             location,
             value,
             core::I32::new(db).as_type(),
             core::Ptr::new(db).as_type(),
         );
-        // Phase 1: placeholder NoOp (will emit alloc+store in M3)
-        matches!(result, Some(MaterializeResult::NoOp))
     }
 
     #[salsa_test]
-    fn test_materialize_i32_to_ptr_boxing_placeholder(db: &salsa::DatabaseImpl) {
-        assert!(do_materialize_i32_to_ptr(db));
+    #[should_panic(expected = "boxing not implemented")]
+    fn test_materialize_i32_to_ptr_panics(db: &salsa::DatabaseImpl) {
+        do_materialize_i32_to_ptr(db);
     }
 
-    // --- Unboxing placeholder (ptr -> i32) ---
+    // --- Unboxing fail-fast (ptr -> i32, not yet implemented) ---
 
     #[salsa::tracked]
-    fn do_materialize_ptr_to_i32(db: &dyn salsa::Database) -> bool {
+    fn do_materialize_ptr_to_i32(db: &dyn salsa::Database) {
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
@@ -753,20 +807,20 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        let result = converter.materialize(
+        // Should panic: unboxing not implemented
+        converter.materialize(
             db,
             location,
             value,
             core::Ptr::new(db).as_type(),
             core::I32::new(db).as_type(),
         );
-        // Phase 1: placeholder NoOp (will emit load in M3)
-        matches!(result, Some(MaterializeResult::NoOp))
     }
 
     #[salsa_test]
-    fn test_materialize_ptr_to_i32_unboxing_placeholder(db: &salsa::DatabaseImpl) {
-        assert!(do_materialize_ptr_to_i32(db));
+    #[should_panic(expected = "unboxing not implemented")]
+    fn test_materialize_ptr_to_i32_panics(db: &salsa::DatabaseImpl) {
+        do_materialize_ptr_to_i32(db);
     }
 
     // --- Nil conversions ---
