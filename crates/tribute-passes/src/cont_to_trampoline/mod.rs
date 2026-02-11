@@ -211,6 +211,23 @@ pub fn lower_cont_to_trampoline<'db>(
         return Ok(module);
     }
 
+    // Validate next_resume_name references: every referenced name must exist
+    // in the collected specs. A mismatch indicates a resume counter
+    // synchronization bug (see shift_lower.rs next_resume_name invariant).
+    for spec in specs.iter() {
+        if let Some(ref next_name) = spec.next_resume_name {
+            debug_assert!(
+                specs.iter().any(|s| s.name == *next_name),
+                "resume spec '{}' references next_resume_name '{}' which does not exist \
+                 in the collected specs ({:?}). This may indicate a resume counter \
+                 synchronization bug.",
+                spec.name,
+                next_name,
+                specs.iter().map(|s| &s.name).collect::<Vec<_>>(),
+            );
+        }
+    }
+
     let resume_funcs: Vec<Operation<'db>> = specs
         .iter()
         .map(|spec| create_resume_function_with_continuation(db, spec))

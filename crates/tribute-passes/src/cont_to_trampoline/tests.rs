@@ -8,6 +8,11 @@ use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
 use trunk_ir::{Attribute, BlockArg, BlockId, IdVec, PathId, Span};
 
+/// Create a shared test location with a fixed span `(0, 0)`.
+///
+/// **Caution:** `ShiftAnalysis` keys by `Span`, so tests exercising multiple
+/// shift operations must use distinct spans (not this helper) to avoid
+/// key collisions.
 fn test_location(db: &dyn salsa::Database) -> trunk_ir::Location<'_> {
     let path = PathId::new(db, "test.trb".to_owned());
     trunk_ir::Location::new(path, Span::new(0, 0))
@@ -1156,6 +1161,57 @@ fn run_build_arm_region_empty_arm_has_terminator(db: &dyn salsa::Database) -> Re
 #[salsa_test]
 fn test_build_arm_region_empty_arm_has_terminator(db: &salsa::DatabaseImpl) {
     if let Err(msg) = run_build_arm_region_empty_arm_has_terminator(db) {
+        panic!("{}", msg);
+    }
+}
+
+// ========================================================================
+// Test: truncate_scf_if_block — no yield defensive fallback
+// ========================================================================
+
+/// Defensive fallback: a block with no scf.yield and no effectful calls
+/// should produce func.unreachable as a terminator (malformed IR recovery).
+#[salsa::tracked]
+fn run_truncate_scf_if_block_no_yield_unreachable(db: &dyn salsa::Database) -> Result<(), String> {
+    let location = test_location(db);
+    let step_ty = trampoline::Step::new(db).as_type();
+
+    // Build a block with only arith.const — no scf.yield, no effectful calls
+    let mut builder = BlockBuilder::new(db, location);
+    builder.op(arith::Const::i32(db, location, 42));
+    let block = builder.build();
+
+    let effectful_funcs: HashSet<Symbol> = HashSet::new();
+    let result = truncate_scf_if_block(db, &block, &effectful_funcs, step_ty);
+
+    let ops: Vec<_> = result.operations(db).iter().copied().collect();
+
+    // Expect 2 ops: arith.const + func.unreachable
+    if ops.len() != 2 {
+        return Err(format!(
+            "Expected 2 ops (const + unreachable), got {}",
+            ops.len()
+        ));
+    }
+
+    if arith::Const::from_operation(db, ops[0]).is_err() {
+        return Err("ops[0] should be arith.const".to_string());
+    }
+
+    if func::Unreachable::from_operation(db, ops[1]).is_err() {
+        return Err(format!(
+            "ops[1] should be func.unreachable, got {}.{}",
+            ops[1].dialect(db),
+            ops[1].name(db),
+        ));
+    }
+
+    Ok(())
+}
+
+#[salsa_test]
+fn test_truncate_scf_if_block_no_yield_unreachable(db: &salsa::DatabaseImpl) {
+    if let Err(msg) = run_truncate_scf_if_block_no_yield_unreachable(db) {
         panic!("{}", msg);
     }
 }

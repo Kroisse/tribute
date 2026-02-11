@@ -329,8 +329,10 @@ impl LowerHandlerDispatchPattern {
     ) -> Region<'db> {
         let mut builder = BlockBuilder::new(db, location);
 
-        // For closed handlers, we could trap here
-        // For now, just yield the current step (will cause type error if reached)
+        // For closed handlers, this path should never be reached at runtime
+        // (the tag always matches). We keep the yield (instead of trapping)
+        // for forward compatibility with open handlers, which will need to
+        // propagate unhandled effects up the call stack.
         builder.op(scf::r#yield(db, location, vec![current_step]));
 
         let block = builder.build();
@@ -357,6 +359,7 @@ pub(crate) fn collect_suspend_arms<'db>(
     blocks: &IdVec<Block<'db>>,
 ) -> Vec<SuspendArm<'db>> {
     let mut arms = Vec::new();
+    let mut seen_op_indices: HashSet<u32> = HashSet::new();
 
     // Skip block 0 (done case), process blocks 1+ (suspend cases)
     for block in blocks.iter().skip(1) {
@@ -384,6 +387,15 @@ pub(crate) fn collect_suspend_arms<'db>(
             // same hash function, so the index matches regardless of handler
             // registration order.
             let expected_op_idx = compute_op_idx(ability_ref, op_name);
+            assert!(
+                seen_op_indices.insert(expected_op_idx),
+                "compute_op_idx collision in handler dispatch: op_idx {} appears twice \
+                 (ability={:?}, op={:?}). This indicates a hash collision that would \
+                 cause silent mis-dispatch at runtime.",
+                expected_op_idx,
+                ability_ref.map(|s| s.to_string()),
+                op_name.map(|s| s.to_string()),
+            );
             arms.push(SuspendArm {
                 expected_op_idx,
                 block: *block,

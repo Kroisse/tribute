@@ -309,6 +309,16 @@ pub(crate) fn truncate_scf_if_block<'db>(
         new_ops.push(step_done_op.as_operation());
         let yield_op = scf::r#yield(db, block.location(db), vec![step_done_op.result(db)]);
         new_ops.push(yield_op.as_operation());
+    } else {
+        // Defensive fallback: no Step value and no yield operand found.
+        // This should be unreachable for well-formed scf.if branches (which
+        // always end with scf.yield), but emit a terminator to keep the
+        // block valid rather than producing malformed IR.
+        tracing::warn!(
+            "truncate_scf_if_block: block has neither step_value nor yield operand; \
+             emitting func.unreachable as defensive terminator"
+        );
+        new_ops.push(func::unreachable(db, block.location(db)).as_operation());
     }
 
     Block::new(
@@ -329,6 +339,13 @@ fn rebuild_with_step_result<'db>(
     if op.results(db).is_empty() {
         return *op;
     }
+    debug_assert!(
+        op.results(db).len() <= 1,
+        "rebuild_with_step_result: expected at most 1 result, got {} for {}.{}",
+        op.results(db).len(),
+        op.dialect(db),
+        op.name(db),
+    );
     let step_ty = trampoline::Step::new(db).as_type();
     op.modify(db).results(IdVec::from(vec![step_ty])).build()
 }
