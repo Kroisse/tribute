@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a694902a16f34b4e02ed5b265884dc8aa340ca3921a0cf417594e29b819f099d # shrinks to seed_idx = 0
+cc 56eaa1169256d91eb7f0169abd2f66edbf32d6c8c0adff2226f654cbbd2c2f9d # shrinks to input = "core.module @test {\n  func.func @add(%x: core.i32, %y: core.i32) -> core.i32 {\n      %0 = arith.add %x, %y :Acore.i32\n      func.return %0\n  }\n}"

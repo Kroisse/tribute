@@ -930,7 +930,7 @@ mod tests {
     // ========================================================================
 
     mod proptest_fuzz {
-        use super::{parse_module, raw_attr_value, raw_type, TextInput};
+        use super::{TextInput, parse_module, raw_attr_value, raw_type};
         use crate::printer::print_op;
         use proptest::prelude::*;
         use salsa::Database;
