@@ -264,6 +264,8 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
 
         let is_float = matches!(category, "f32" | "f64");
 
+        let is_unsigned = !is_float && is_unsigned_int(db, operand_ty);
+
         let (cond, use_fcmp) = if name == arith::CMP_EQ() {
             ("eq", is_float)
         } else if name == arith::CMP_NE() {
@@ -271,24 +273,32 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
         } else if name == arith::CMP_LT() {
             if is_float {
                 ("lt", true)
+            } else if is_unsigned {
+                ("ult", false)
             } else {
                 ("slt", false)
             }
         } else if name == arith::CMP_LE() {
             if is_float {
                 ("le", true)
+            } else if is_unsigned {
+                ("ule", false)
             } else {
                 ("sle", false)
             }
         } else if name == arith::CMP_GT() {
             if is_float {
                 ("gt", true)
+            } else if is_unsigned {
+                ("ugt", false)
             } else {
                 ("sgt", false)
             }
         } else if name == arith::CMP_GE() {
             if is_float {
                 ("ge", true)
+            } else if is_unsigned {
+                ("uge", false)
             } else {
                 ("sge", false)
             }
@@ -515,6 +525,7 @@ fn is_wider_int(dst: Symbol, src: Option<Symbol>) -> bool {
         } else if s == Symbol::new("i16") {
             16
         } else if s == Symbol::new("i8") || s == Symbol::new("bool") || s == Symbol::new("i1") {
+            // i1 is treated as width 8 because Cranelift represents booleans as i8
             8
         } else {
             32 // default
@@ -532,7 +543,8 @@ mod tests {
     use super::*;
     use insta::assert_snapshot;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, DialectOp, Location, PathId, Region, Span, idvec};
+    use std::collections::BTreeMap;
+    use trunk_ir::{Block, BlockId, DialectOp, IdVec, Location, PathId, Region, Span, Type, idvec};
 
     fn test_converter() -> TypeConverter {
         TypeConverter::new()
@@ -787,6 +799,279 @@ mod tests {
         clif.iconst value=1 -> i32
         clif.iconst value=2 -> i32
         clif.icmp cond=slt operands=2 -> i32
+        ");
+    }
+
+    // === Unsigned (nat) type tests ===
+
+    /// Create a `nat` type (unsigned integer).
+    fn nat_type(db: &dyn salsa::Database) -> Type<'_> {
+        Type::new(
+            db,
+            Symbol::new("tribute_rt"),
+            Symbol::new("nat"),
+            IdVec::new(),
+            BTreeMap::new(),
+        )
+    }
+
+    /// Create an arith.const with a custom result type.
+    fn arith_const_with_type<'db>(
+        db: &'db dyn salsa::Database,
+        location: Location<'db>,
+        ty: Type<'db>,
+        value: i64,
+    ) -> arith::Const<'db> {
+        arith::r#const(db, location, ty, value.into())
+    }
+
+    #[salsa::tracked]
+    fn make_unsigned_div_rem_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let nat_ty = nat_type(db);
+
+        let const1 = arith_const_with_type(db, location, nat_ty, 10);
+        let const2 = arith_const_with_type(db, location, nat_ty, 3);
+        let div = arith::div(db, location, const1.result(db), const2.result(db), nat_ty);
+        let rem = arith::rem(db, location, const1.result(db), const2.result(db), nat_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                div.as_operation(),
+                rem.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_unsigned_div_rem(db: &salsa::DatabaseImpl) {
+        let module = make_unsigned_div_rem_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=10 -> nat
+        clif.iconst value=3 -> nat
+        clif.udiv operands=2 -> nat
+        clif.urem operands=2 -> nat
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_unsigned_cmp_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let nat_ty = nat_type(db);
+
+        let const1 = arith_const_with_type(db, location, nat_ty, 1);
+        let const2 = arith_const_with_type(db, location, nat_ty, 2);
+        let lt = arith::cmp_lt(db, location, const1.result(db), const2.result(db), nat_ty);
+        let ge = arith::cmp_ge(db, location, const1.result(db), const2.result(db), nat_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                lt.as_operation(),
+                ge.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_unsigned_cmp(db: &salsa::DatabaseImpl) {
+        let module = make_unsigned_cmp_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=1 -> nat
+        clif.iconst value=2 -> nat
+        clif.icmp cond=ult operands=2 -> nat
+        clif.icmp cond=uge operands=2 -> nat
+        ");
+    }
+
+    // === Bitwise operation tests ===
+
+    #[salsa::tracked]
+    fn make_bitwise_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        let const1 = arith::Const::i32(db, location, 0xFF);
+        let const2 = arith::Const::i32(db, location, 0x0F);
+        let and = arith::and(db, location, const1.result(db), const2.result(db), i32_ty);
+        let or = arith::or(db, location, const1.result(db), const2.result(db), i32_ty);
+        let xor = arith::xor(db, location, const1.result(db), const2.result(db), i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                and.as_operation(),
+                or.as_operation(),
+                xor.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_bitwise_ops(db: &salsa::DatabaseImpl) {
+        let module = make_bitwise_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=255 -> i32
+        clif.iconst value=15 -> i32
+        clif.band operands=2 -> i32
+        clif.bor operands=2 -> i32
+        clif.bxor operands=2 -> i32
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_shift_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+
+        let value = arith::Const::i32(db, location, 0xFF);
+        let amount = arith::Const::i32(db, location, 4);
+        let shl = arith::shl(db, location, value.result(db), amount.result(db), i32_ty);
+        let shr = arith::shr(db, location, value.result(db), amount.result(db), i32_ty);
+        let shru = arith::shru(db, location, value.result(db), amount.result(db), i32_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                value.as_operation(),
+                amount.as_operation(),
+                shl.as_operation(),
+                shr.as_operation(),
+                shru.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_shift_ops(db: &salsa::DatabaseImpl) {
+        let module = make_shift_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.iconst value=255 -> i32
+        clif.iconst value=4 -> i32
+        clif.ishl operands=2 -> i32
+        clif.sshr operands=2 -> i32
+        clif.ushr operands=2 -> i32
+        ");
+    }
+
+    // === Float arithmetic tests ===
+
+    #[salsa::tracked]
+    fn make_float_arith_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let f64_ty = core::F64::new(db).as_type();
+
+        let const1 = arith::Const::f64(db, location, 1.5);
+        let const2 = arith::Const::f64(db, location, 2.5);
+        let add = arith::add(db, location, const1.result(db), const2.result(db), f64_ty);
+        let sub = arith::sub(db, location, const1.result(db), const2.result(db), f64_ty);
+        let mul = arith::mul(db, location, const1.result(db), const2.result(db), f64_ty);
+        let div = arith::div(db, location, const1.result(db), const2.result(db), f64_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                add.as_operation(),
+                sub.as_operation(),
+                mul.as_operation(),
+                div.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_float_arith(db: &salsa::DatabaseImpl) {
+        let module = make_float_arith_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.f64const value=1.5 -> f64
+        clif.f64const value=2.5 -> f64
+        clif.fadd operands=2 -> f64
+        clif.fsub operands=2 -> f64
+        clif.fmul operands=2 -> f64
+        clif.fdiv operands=2 -> f64
+        ");
+    }
+
+    #[salsa::tracked]
+    fn make_float_cmp_module(db: &dyn salsa::Database) -> Module<'_> {
+        let location = test_location(db);
+        let f64_ty = core::F64::new(db).as_type();
+
+        let const1 = arith::Const::f64(db, location, 1.0);
+        let const2 = arith::Const::f64(db, location, 2.0);
+        let lt = arith::cmp_lt(db, location, const1.result(db), const2.result(db), f64_ty);
+        let eq = arith::cmp_eq(db, location, const1.result(db), const2.result(db), f64_ty);
+
+        let block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                const1.as_operation(),
+                const2.as_operation(),
+                lt.as_operation(),
+                eq.as_operation()
+            ],
+        );
+        let region = Region::new(db, location, idvec![block]);
+        Module::create(db, location, "test".into(), region)
+    }
+
+    #[salsa_test]
+    fn test_float_cmp(db: &salsa::DatabaseImpl) {
+        let module = make_float_cmp_module(db);
+        let formatted = format_lowered_module(db, module);
+
+        assert_snapshot!(formatted, @r"
+        clif.f64const value=1 -> f64
+        clif.f64const value=2 -> f64
+        clif.fcmp cond=lt operands=2 -> f64
+        clif.fcmp cond=eq operands=2 -> f64
         ");
     }
 }
