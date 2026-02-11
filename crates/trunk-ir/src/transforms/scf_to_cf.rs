@@ -2064,4 +2064,318 @@ mod tests {
             "Last block should end with func.return"
         );
     }
+
+    // === value_map propagation into nested regions ===
+
+    /// Create module where an scf.if result is captured inside a func.func body
+    /// (nested region). After lowering, the reference inside the func body must
+    /// be remapped from the old scf.if result to the merge block argument.
+    ///
+    /// ```text
+    /// %cond  = arith.const true
+    /// %x     = scf.if(%cond) { yield 42 } { yield 0 }
+    /// func.func @inner() {
+    ///     func.return(%x)          // captures %x from outer scope
+    /// }
+    /// func.return(%x)
+    /// ```
+    #[salsa::tracked]
+    fn make_scf_if_with_nested_capture_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I1::new(db).as_type();
+        let nil_ty = core::Nil::new(db).as_type();
+
+        // Condition
+        let cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
+
+        // Then: yield 42
+        let then_const = arith::Const::i32(db, location, 42);
+        let then_yield = scf::r#yield(db, location, [then_const.result(db)]);
+        let then_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![then_const.as_operation(), then_yield.as_operation()],
+        );
+        let then_region = Region::new(db, location, idvec![then_block]);
+
+        // Else: yield 0
+        let else_const = arith::Const::i32(db, location, 0);
+        let else_yield = scf::r#yield(db, location, [else_const.result(db)]);
+        let else_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![else_const.as_operation(), else_yield.as_operation()],
+        );
+        let else_region = Region::new(db, location, idvec![else_block]);
+
+        // scf.if -> %x
+        let if_op = scf::r#if(
+            db,
+            location,
+            cond.result(db),
+            i32_ty,
+            then_region,
+            else_region,
+        );
+        let if_result = if_op.result(db);
+
+        // func.func @inner whose body captures %x (the scf.if result)
+        let inner_func = func::Func::build(db, location, "inner", idvec![], nil_ty, |bb| {
+            // Use the scf.if result inside the nested func body
+            let inner_ret = func::r#return(db, location, [if_result]);
+            bb.op(inner_ret);
+        });
+
+        // Outer return
+        let ret = func::r#return(db, location, [if_result]);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                cond.as_operation(),
+                if_op.as_operation(),
+                inner_func.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_nested_capture".into(), body)
+    }
+
+    /// Recursively collect all values referenced as operands in a region.
+    fn collect_all_operand_values<'db>(
+        db: &'db dyn salsa::Database,
+        region: &Region<'db>,
+    ) -> Vec<Value<'db>> {
+        let mut values = Vec::new();
+        for block in region.blocks(db).iter() {
+            for op in block.operations(db).iter() {
+                values.extend(op.operands(db).iter().copied());
+                for nested in op.regions(db).iter() {
+                    values.extend(collect_all_operand_values(db, nested));
+                }
+            }
+        }
+        values
+    }
+
+    /// Lower the nested-capture module and verify value_map propagation.
+    /// Returns (has_no_scf, merge_has_arg, inner_body_refs_merge_arg, outer_ret_refs_merge_arg).
+    #[salsa::tracked]
+    fn lower_and_check_nested_capture(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (bool, bool, bool, bool) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+
+        let all_ops = collect_all_op_names(db, &body);
+        let has_no_scf = !all_ops.iter().any(|n| n.starts_with("scf."));
+
+        // Find the merge block (last block, should contain func.func + func.return)
+        let merge_block = blocks.last().unwrap();
+        let merge_has_arg = !merge_block.args(db).is_empty();
+
+        if !merge_has_arg {
+            return (has_no_scf, false, false, false);
+        }
+
+        let merge_arg = Value::new(db, ValueDef::BlockArg(merge_block.id(db)), 0);
+
+        // Check func.func body references merge block arg
+        let inner_body_refs_merge_arg = merge_block
+            .operations(db)
+            .iter()
+            .find(|op| func::Func::matches(db, **op))
+            .map(|op| {
+                let inner_func = func::Func::from_operation(db, *op).unwrap();
+                let inner_body = inner_func.body(db);
+                let inner_operands = collect_all_operand_values(db, &inner_body);
+                inner_operands.contains(&merge_arg)
+            })
+            .unwrap_or(false);
+
+        // Check outer func.return references merge block arg
+        let outer_ret_refs_merge_arg = merge_block
+            .operations(db)
+            .iter()
+            .find(|op| func::Return::matches(db, **op))
+            .map(|op| op.operands(db).contains(&merge_arg))
+            .unwrap_or(false);
+
+        (
+            has_no_scf,
+            merge_has_arg,
+            inner_body_refs_merge_arg,
+            outer_ret_refs_merge_arg,
+        )
+    }
+
+    #[salsa_test]
+    fn test_value_map_propagates_into_nested_regions(db: &salsa::DatabaseImpl) {
+        let module = make_scf_if_with_nested_capture_module(db);
+        let (has_no_scf, merge_has_arg, inner_refs, outer_refs) =
+            lower_and_check_nested_capture(db, module);
+
+        assert!(has_no_scf, "No scf ops should remain after lowering");
+        assert!(
+            merge_has_arg,
+            "Merge block should have a block argument for the if result"
+        );
+        assert!(
+            inner_refs,
+            "func.func body should reference merge block arg after value_map propagation"
+        );
+        assert!(
+            outer_refs,
+            "Outer func.return should reference merge block arg"
+        );
+    }
+
+    // === switch with default only (no cases) ===
+
+    /// Create module with scf.switch that has no cases, only a default branch
+    /// that yields a value. Tests that result_ty falls back to default_region.
+    ///
+    /// ```text
+    /// %disc   = arith.const 0
+    /// %result = scf.switch(%disc) { default { yield 99 } }
+    /// func.return(%result)
+    /// ```
+    #[salsa::tracked]
+    fn make_scf_switch_default_only_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        let location = test_location(db);
+
+        let disc = arith::Const::i32(db, location, 0);
+
+        // Default: yield 99
+        let default_const = arith::Const::i32(db, location, 99);
+        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
+        let default_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![default_const.as_operation(), default_yield.as_operation()],
+        );
+        let default_region = Region::new(db, location, idvec![default_block]);
+        let default_op = scf::default(db, location, default_region);
+
+        // Switch body: only default, no cases
+        let switch_body_block = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![default_op.as_operation()],
+        );
+        let switch_body = Region::new(db, location, idvec![switch_body_block]);
+
+        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
+
+        // We need a func that returns the switch result — but scf.switch doesn't
+        // produce a result directly. Use a dummy return to exercise the merge block.
+        let ret = func::r#return(db, location, []);
+
+        let entry = Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            idvec![],
+            idvec![
+                disc.as_operation(),
+                switch_op.as_operation(),
+                ret.as_operation()
+            ],
+        );
+        let body = Region::new(db, location, idvec![entry]);
+        core::Module::create(db, location, "test_switch_default_only".into(), body)
+    }
+
+    /// Lower the default-only switch module and return check results.
+    /// Returns (block_count, all_ops, has_cmp_eq, has_cond_br, merge_arg_count, last_op_name).
+    #[salsa::tracked]
+    fn lower_and_check_switch_default_only(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, bool, bool, usize, String) {
+        let lowered = lower_scf_to_cf(db, module);
+        let body = lowered.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+
+        let has_cmp_eq = all_ops.iter().any(|n| n == "arith.cmp_eq");
+        let has_cond_br = all_ops.iter().any(|n| n == "cf.cond_br");
+
+        let merge_block = blocks.last().unwrap();
+        let merge_arg_count = merge_block.args(db).len();
+        let last_op_name = merge_block
+            .operations(db)
+            .last()
+            .map(|op| op.full_name(db))
+            .unwrap_or_default();
+
+        (
+            blocks.len(),
+            all_ops,
+            has_cmp_eq,
+            has_cond_br,
+            merge_arg_count,
+            last_op_name,
+        )
+    }
+
+    #[salsa_test]
+    fn test_scf_switch_default_only(db: &salsa::DatabaseImpl) {
+        let module = make_scf_switch_default_only_module(db);
+        let (block_count, all_ops, has_cmp_eq, has_cond_br, merge_arg_count, last_op_name) =
+            lower_and_check_switch_default_only(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain, found: {:?}",
+            all_ops
+        );
+
+        // With no cases, entry should branch directly to default
+        // Blocks: entry, default, merge
+        assert!(
+            block_count >= 3,
+            "Expected at least 3 blocks (entry, default, merge), got {}",
+            block_count
+        );
+
+        // Should have no cmp_eq or cond_br (no cases to compare)
+        assert!(!has_cmp_eq, "Should have no arith.cmp_eq with no cases");
+        assert!(!has_cond_br, "Should have no cf.cond_br with no cases");
+
+        // Default block should yield via cf.br to merge
+        assert!(
+            all_ops.iter().any(|n| n == "cf.br"),
+            "Should have cf.br from default to merge"
+        );
+
+        // Merge block should have a block argument (from default's yield type)
+        assert_eq!(
+            merge_arg_count, 1,
+            "Merge block should have 1 block arg from default yield type, got {}",
+            merge_arg_count
+        );
+
+        // Last block should end with func.return
+        assert_eq!(
+            last_op_name, "func.return",
+            "Last block should end with func.return"
+        );
+    }
 }
