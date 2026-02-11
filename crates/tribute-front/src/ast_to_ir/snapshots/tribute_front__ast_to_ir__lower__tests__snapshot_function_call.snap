@@ -1,17 +1,13 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-assertion_line: 2329
-expression: ir_module
+assertion_line: 4185
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
-Module(test) {
-    operations: [
-        func @main() -> core.nil {
-            body: [
-                "arith.const",
-                "arith.const",
-                "func.call",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @main() -> core.nil {
+    %0 = arith.const {value = 10} : core.i32
+    %1 = arith.const {value = 20} : core.i32
+    %2 = func.call %0, %1 {callee = @add} : core.i32
+    func.return %2
+  }
 }

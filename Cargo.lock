@@ -1522,6 +1522,7 @@ dependencies = [
 name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
+ "insta",
  "inventory",
  "lasso",
  "parking_lot",
@@ -1532,6 +1533,7 @@ dependencies = [
  "serde",
  "smallvec",
  "tracing",
+ "winnow",
 ]
 
 [[package]]
@@ -1764,6 +1766,15 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "0.7.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wit-bindgen"

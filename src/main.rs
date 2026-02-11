@@ -19,6 +19,7 @@ use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
 use tribute_passes::diagnostic::Diagnostic;
+use trunk_ir::DialectOp;
 
 fn main() {
     let cli = Cli::parse();
@@ -34,9 +35,10 @@ fn main() {
             file,
             output,
             target,
+            dump_ir,
         } => {
             init_tracing(&cli.log);
-            compile_file(file, output, &target);
+            compile_file(file, output, &target, dump_ir);
         }
         Command::Debug { file, show_env } => {
             init_tracing(&cli.log);
@@ -57,7 +59,7 @@ fn init_tracing(log_filter: &str) {
         .init();
 }
 
-fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str) {
+fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str, dump_ir: bool) {
     let source_code = {
         match std::fs::File::open(&input_path).and_then(Rope::from_reader) {
             Ok(content) => content,
@@ -71,6 +73,21 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str)
     TributeDatabaseImpl::default().attach(|db| {
         let tree = parse_with_thread_local(&source_code, None);
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
+
+        if dump_ir {
+            let result = compile_with_diagnostics(db, source);
+            if !result.diagnostics.is_empty() {
+                let file_path = input_path.display().to_string();
+                let source_text = source.text(db);
+                for diag in &result.diagnostics {
+                    print_diagnostic(diag, source_text, &file_path);
+                }
+                std::process::exit(1);
+            }
+            let ir_text = trunk_ir::printer::print_op(db, result.module.as_operation());
+            println!("{}", ir_text);
+            return;
+        }
 
         match target {
             "native" => {

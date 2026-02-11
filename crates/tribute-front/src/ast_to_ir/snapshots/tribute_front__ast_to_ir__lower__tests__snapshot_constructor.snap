@@ -1,16 +1,12 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-assertion_line: 2342
-expression: ir_module
+assertion_line: 4198
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
-Module(test) {
-    operations: [
-        func @main() -> core.nil {
-            body: [
-                "arith.const",
-                "adt.variant_new",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @main() -> core.nil {
+    %0 = arith.const {value = 42} : core.i32
+    %1 = adt.variant_new %0 {type = tribute_rt.any, tag = @Some} : tribute_rt.any
+    func.return %1
+  }
 }
