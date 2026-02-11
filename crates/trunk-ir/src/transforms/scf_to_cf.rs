@@ -376,10 +376,13 @@ fn lower_region_to_br<'db>(
                 // Replace scf.yield with cf.br to merge block
                 let yield_op = scf::Yield::from_operation(db, *op).unwrap();
                 let values: Vec<Value<'db>> = yield_op.values(db).to_vec();
-                assert!(
-                    values.len() <= 1,
-                    "scf.yield must have at most 1 value, got {}",
-                    values.len()
+                let expected = merge_block.args(db).len();
+                assert_eq!(
+                    values.len(),
+                    expected,
+                    "scf.yield must pass {} value(s) to match merge block args, got {}",
+                    expected,
+                    values.len(),
                 );
                 let br_op = cf::br(db, location, values, merge_block);
                 new_ops.push(br_op.as_operation());
