@@ -875,11 +875,11 @@ mod tests {
         assert!(matches!(attr, RawAttribute::Int(42)));
 
         // Float
-        let mut input = "3.14";
+        let mut input = "3.25";
         let attr = raw_attr_value
             .parse_next(&mut input)
             .expect("should parse float");
-        assert!(matches!(attr, RawAttribute::Float(f) if (f - 3.14).abs() < 1e-10));
+        assert!(matches!(attr, RawAttribute::Float(f) if (f - 3.25).abs() < 1e-10));
 
         // Bool
         let mut input = "true";
