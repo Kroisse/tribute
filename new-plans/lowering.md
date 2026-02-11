@@ -646,6 +646,116 @@ Pure wasm IR
 
 ---
 
+## Native (Cranelift) Lowering Passes
+
+WASM lowering과 대칭 구조로 native 타겟을 위한 pass를 정의한다.
+
+### func_to_clif
+
+함수 정의 및 호출을 Cranelift 연산으로 변환.
+
+```text
+func.func          → clif.func
+func.call          → clif.call
+func.return        → clif.return
+func.call_indirect → clif.call_indirect
+func.constant      → clif.symbol_addr (함수 포인터)
+```
+
+**필요 Analysis**: 없음
+
+### arith_to_clif
+
+산술 연산을 타입별 Cranelift 명령어로 변환.
+
+```text
+arith.add(i32, i32) → clif.iadd
+arith.add(f64, f64) → clif.fadd
+arith.mul(...)      → clif.imul / clif.fmul
+arith.const(int)    → clif.iconst
+arith.const(float)  → clif.f64const
+```
+
+**필요 Analysis**: 없음 (type-directed dispatch)
+
+### scf_to_clif
+
+Structured control flow를 CFG 기반 제어 흐름으로 변환.
+
+```text
+scf.if    → clif.brif + then/else/merge blocks
+scf.while → loop_header + body + clif.jump
+scf.for   → loop_header + body + clif.jump
+scf.case  → clif.br_table 또는 연쇄 clif.brif
+```
+
+WASM의 structured control flow와 달리 Cranelift는 CFG를 직접 사용하므로
+block/loop 래핑이 불필요하다.
+
+**필요 Analysis**: 없음 (structural transformation only)
+
+### adt_to_clif
+
+ADT 연산을 포인터 기반 메모리 연산으로 변환.
+
+```text
+adt.struct_new(fields...) → clif.call @malloc + clif.store at offsets
+adt.struct_get(ref, field) → clif.load(ref, offset)
+adt.variant_new(tag, payload) → clif.call @malloc + clif.store tag + payload
+adt.array_get(ref, index) → clif.load(ref, index * elem_size + header_size)
+```
+
+**ADT 메모리 레이아웃:**
+
+```text
+Struct: [fields in order, naturally aligned]
+Enum:   [tag: i32] [padding] [payload: max(variant sizes)]
+Array:  [length: i64] [elements...]
+```
+
+**필요 Analysis**: `StructLayoutAnalysis` (타입 → 필드 오프셋/크기)
+
+### intrinsic_to_posix
+
+Intrinsic 함수 호출을 POSIX syscall로 변환.
+
+```text
+func.call @std::intrinsics::posix::write(...) → clif.call @write(...)
+func.call @std::intrinsics::posix::read(...)  → clif.call @read(...)
+```
+
+**필요 Analysis**: 없음
+
+### const_to_clif
+
+상수를 Cranelift 상수 또는 data section 참조로 변환.
+
+```text
+func.constant(int)    → clif.iconst
+func.constant(float)  → clif.f64const
+func.constant(string) → clif.symbol_addr(@data_symbol)
+```
+
+**필요 Analysis**: `DataSectionPlan` (문자열 → data symbol)
+
+### Native Pass Pipeline
+
+```mermaid
+flowchart TB
+    input["TrunkIR Module\n(cont.*, func.*, arith.*, scf.*, adt.*, mem.*)"]
+    arith["arith_to_clif\nclif.iadd, clif.iconst 등"]
+    scf["scf_to_clif\nclif.brif, clif.jump, clif.br_table"]
+    adt["adt_to_clif\nclif.load, clif.store, clif.call @malloc"]
+    func["func_to_clif\nclif.func, clif.call, clif.return"]
+    intrinsic["intrinsic_to_posix\nclif.call @write 등"]
+    const_pass["const_to_clif\nclif.* only"]
+    output["Pure clif IR"]
+
+    input --> arith --> scf --> adt --> func --> intrinsic --> const_pass --> output
+```
+
+---
+
 ## PatternApplicator 설계 철학
 
 ### Stateless by Design

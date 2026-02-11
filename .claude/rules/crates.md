@@ -66,6 +66,20 @@ separated responsibilities.
 
 **Location**: `crates/tribute-cranelift/`
 
+## trunk-ir-cranelift-backend
+
+**Role**: Native code generation via Cranelift (language-agnostic)
+
+**Key Modules**:
+
+- `lib.rs` - Public API: `emit_module_to_native`
+- `translate.rs` - Module-level orchestration (ObjectModule → object file)
+- `function.rs` - `clif.*` → Cranelift FunctionBuilder emit
+- `validation.rs` - Pre-emit validation (all ops must be `clif.*`)
+- `passes/` - Lowering passes (`func_to_clif`, `arith_to_clif`, etc.)
+
+**Location**: `crates/trunk-ir-cranelift-backend/`
+
 ## tribute (main crate)
 
 **Role**: CLI entry point, LSP server, and pipeline orchestration
@@ -87,6 +101,10 @@ tribute (main)
 ├── tribute-passes
 │   ├── trunk-ir
 ├── trunk-ir
+├── trunk-ir-wasm-backend
+│   └── trunk-ir
+├── trunk-ir-cranelift-backend
+│   └── trunk-ir
 └── tree-sitter-tribute
 
 tribute-front
@@ -96,3 +114,5 @@ tribute-front
 
 Note: `trunk-ir` is now fully independent with no dependencies on other
 tribute crates (not even as dev-dependencies). It's a standalone IR system.
+Both `trunk-ir-wasm-backend` and `trunk-ir-cranelift-backend` depend only
+on `trunk-ir`, keeping them language-agnostic.

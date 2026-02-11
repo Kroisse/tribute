@@ -19,6 +19,7 @@ See **[../new-plans/](../new-plans/)** directory:
 | [type-inference.md](../new-plans/type-inference.md) | Type inference and effect rows |
 | [ir.md](../new-plans/ir.md) | TrunkIR multi-level dialect IR |
 | [implementation.md](../new-plans/implementation.md) | Ability implementation strategy |
+| [cranelift-backend.md](../new-plans/cranelift-backend.md) | Cranelift native backend architecture |
 
 ---
 
@@ -29,6 +30,7 @@ See **[../new-plans/](../new-plans/)** directory:
 | Plan | Description | Priority |
 | ---- | ----------- | -------- |
 | [02.04-wasm-translation.md](02.04-wasm-translation.md) | Wasm backend (see #38-41 for remaining work) | High |
+| Cranelift backend | Native backend via libmprompt + RC (see [cranelift-backend.md](../new-plans/cranelift-backend.md)) | High |
 
 ### Future
 

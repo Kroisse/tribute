@@ -502,10 +502,87 @@ wasm.ref_cast : (ref: ref) -> ref
 
 ### clif Dialect
 
-Cranelift 타겟. (상세 정의 추후)
+Cranelift IR과 1:1 대응하는 저수준 연산. `wasm.*`과 대칭 구조.
 
 ```text
-clif.* : Cranelift IR에 대응하는 연산들
+// 모듈/함수 정의
+clif.func          : (sym_name, type) { body } — 함수 정의
+clif.call          : (callee: Symbol, args...) -> result — 직접 호출
+clif.call_indirect : (sig: Type, callee_ptr, args...) -> result — 간접 호출
+clif.return        : (values...) — 함수 반환
+
+// 상수
+clif.iconst        : (value: i64) -> result — 정수 상수
+clif.f32const      : (value: f32) -> result — f32 상수
+clif.f64const      : (value: f64) -> result — f64 상수
+
+// 정수 산술
+clif.iadd          : (lhs, rhs) -> result
+clif.isub          : (lhs, rhs) -> result
+clif.imul          : (lhs, rhs) -> result
+clif.sdiv          : (lhs, rhs) -> result
+clif.udiv          : (lhs, rhs) -> result
+clif.srem          : (lhs, rhs) -> result
+clif.urem          : (lhs, rhs) -> result
+clif.ineg          : (val) -> result
+
+// 부동소수점 산술
+clif.fadd          : (lhs, rhs) -> result
+clif.fsub          : (lhs, rhs) -> result
+clif.fmul          : (lhs, rhs) -> result
+clif.fdiv          : (lhs, rhs) -> result
+clif.fneg          : (val) -> result
+
+// 비교
+clif.icmp          : (cond: Cond, lhs, rhs) -> i8
+clif.fcmp          : (cond: Cond, lhs, rhs) -> i8
+
+// 비트 연산
+clif.band          : (lhs, rhs) -> result
+clif.bor           : (lhs, rhs) -> result
+clif.bxor          : (lhs, rhs) -> result
+clif.ishl          : (lhs, rhs) -> result
+clif.sshr          : (lhs, rhs) -> result
+clif.ushr          : (lhs, rhs) -> result
+
+// 제어 흐름
+clif.brif          : (cond, then_block, else_block) — 조건 분기
+clif.jump          : (target_block, args...) — 무조건 점프
+clif.br_table      : (index, targets...) — 테이블 분기
+
+// 메모리
+clif.load          : (addr, offset: i32) -> result
+clif.store         : (val, addr, offset: i32)
+clif.stack_slot    : (size: i32, align: i32) -> slot
+clif.stack_addr    : (slot) -> ptr
+clif.symbol_addr   : (sym: Symbol) -> ptr
+
+// 타입 변환
+clif.ireduce       : (val) -> result — 정수 축소
+clif.uextend       : (val) -> result — 부호 없는 확장
+clif.sextend       : (val) -> result — 부호 있는 확장
+clif.fpromote      : (val) -> result — 부동소수점 확장 (f32 → f64)
+clif.fdemote       : (val) -> result — 부동소수점 축소 (f64 → f32)
+clif.fcvt_to_sint  : (val) -> result — float → signed int
+clif.fcvt_from_sint: (val) -> result — signed int → float
+clif.fcvt_to_uint  : (val) -> result — float → unsigned int
+clif.fcvt_from_uint: (val) -> result — unsigned int → float
+```
+
+**`wasm.*`과 비교:**
+
+| 측면 | `wasm.*` | `clif.*` |
+| ---- | -------- | -------- |
+| GC 타입 (struct/array/ref) | 있음 | 없음 — 포인터 + load/store |
+| 제어 흐름 | Structured (block/loop/if) | CFG (brif/jump/br_table) |
+| 메모리 | Linear memory (i32 addr) | 포인터 기반 (i64 addr) |
+| 함수 참조 | funcref + table | 함수 포인터 |
+| 스택 할당 | 없음 | stack_slot |
+
+**타입:**
+
+```text
+clif.i8, clif.i16, clif.i32, clif.i64, clif.f32, clif.f64
 ```
 
 ---

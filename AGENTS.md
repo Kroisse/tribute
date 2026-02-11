@@ -19,6 +19,7 @@ current language and compiler design. If code/tests/older docs conflict,
 - `new-plans/ir.md`: TrunkIR (multi-level dialect IR) and pipeline
 - `new-plans/implementation.md`: ability implementation strategy
   (evidence passing, prompts/continuations)
+- `new-plans/cranelift-backend.md`: Cranelift native backend architecture
 
 ## Project Overview (Updated)
 
@@ -64,6 +65,7 @@ Use `gh issue list` to browse.
 | `syntax` | Parser and syntax features |
 | `lsp` | Language Server Protocol (#31-37) |
 | `wasm` | WebAssembly backend (#38-41) |
+| `cranelift` | Cranelift native backend |
 | `good first issue` | Good for newcomers |
 | `enhancement` | New feature |
 | `bug` | Something isn't working |
