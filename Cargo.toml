@@ -29,7 +29,7 @@ proptest = "1.10"
 quote = "1.0"
 ropey = "1.6"
 rustc-hash = "2.1"
-salsa = "0.25.2"
+salsa = "0.26.0"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
