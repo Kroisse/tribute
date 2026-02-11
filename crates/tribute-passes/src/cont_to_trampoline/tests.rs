@@ -751,6 +751,41 @@ fn test_collect_suspend_arms_done_only(db: &salsa::DatabaseImpl) {
     }
 }
 
+/// Helper tracked function to test panic on missing marker arg.
+#[salsa::tracked]
+fn run_collect_suspend_arms_missing_marker_test(db: &dyn salsa::Database) {
+    let location = test_location(db);
+
+    let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+    // Suspend block with NO block arguments — violates the invariant
+    let bad_suspend_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+    let blocks = IdVec::from(vec![done_block, bad_suspend_block]);
+
+    collect_suspend_arms(db, &blocks);
+}
+
+/// Test that collect_suspend_arms panics when a suspend block has no block arguments.
+#[salsa_test]
+fn test_collect_suspend_arms_panics_on_missing_marker_arg(db: &salsa::DatabaseImpl) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_collect_suspend_arms_missing_marker_test(db);
+    }));
+
+    assert!(
+        result.is_err(),
+        "expected panic for suspend block without marker arg"
+    );
+    let msg = result
+        .unwrap_err()
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        msg.contains("suspend block at index 1 has no block arguments"),
+        "panic message should identify the block index, got: {msg}",
+    );
+}
+
 // ========================================================================
 // compute_op_idx tests
 // ========================================================================
