@@ -37,6 +37,10 @@ pub(crate) fn translate_type(
     if core::F64::from_type(db, ty).is_some() {
         return Ok(cl_types::F64);
     }
+    // core.ptr -> i64 (pointers are 64-bit on the target platform)
+    if core::Ptr::from_type(db, ty).is_some() {
+        return Ok(cl_types::I64);
+    }
     Err(CompilationError::type_error(format!(
         "unsupported type for Cranelift: {}.{}",
         ty.dialect(db),
@@ -217,6 +221,63 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
                 .map(|v| self.lookup(*v))
                 .collect::<CompilationResult<_>>()?;
             self.builder.ins().return_(&vals);
+            return Ok(());
+        }
+
+        // === Memory ===
+        if let Ok(load) = clif::Load::from_operation(db, *op) {
+            let addr = self.lookup(load.addr(db))?;
+            let ty = translate_type(db, load.result_ty(db))?;
+            let val = self
+                .builder
+                .ins()
+                .load(ty, cl_ir::MemFlags::new(), addr, load.offset(db));
+            self.values.insert(load.result(db), val);
+            return Ok(());
+        }
+        if let Ok(store) = clif::Store::from_operation(db, *op) {
+            let value = self.lookup(store.value(db))?;
+            let addr = self.lookup(store.addr(db))?;
+            self.builder
+                .ins()
+                .store(cl_ir::MemFlags::new(), value, addr, store.offset(db));
+            return Ok(());
+        }
+
+        // === Symbol Address ===
+        if let Ok(sym_addr) = clif::SymbolAddr::from_operation(db, *op) {
+            let sym = sym_addr.sym(db);
+            let func_ref = self
+                .func_refs
+                .get(&sym)
+                .copied()
+                .ok_or_else(|| CompilationError::function_not_found(&sym.to_string()))?;
+            let val = self.builder.ins().func_addr(cl_types::I64, func_ref);
+            self.values.insert(sym_addr.result(db), val);
+            return Ok(());
+        }
+
+        // === Indirect Call ===
+        if let Ok(call_ind) = clif::CallIndirect::from_operation(db, *op) {
+            let callee = self.lookup(call_ind.callee(db))?;
+            let args: Vec<cl_ir::Value> = call_ind
+                .args(db)
+                .iter()
+                .map(|v| self.lookup(*v))
+                .collect::<CompilationResult<_>>()?;
+
+            let sig_ty = call_ind.sig(db);
+            let func_ty = core::Func::from_type(db, sig_ty).ok_or_else(|| {
+                CompilationError::type_error("call_indirect sig must be core.func type")
+            })?;
+            let sig = translate_signature(db, func_ty, CallConv::SystemV)?;
+            let sig_ref = self.builder.import_signature(sig);
+
+            let inst = self.builder.ins().call_indirect(sig_ref, callee, &args);
+            let results = self.builder.inst_results(inst);
+            if !results.is_empty() {
+                self.values.insert(call_ind.result(db), results[0]);
+            }
             return Ok(());
         }
 

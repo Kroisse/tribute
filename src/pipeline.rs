@@ -95,7 +95,7 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{arith_to_clif, func_to_clif};
+use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, func_to_clif};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
@@ -679,6 +679,10 @@ fn compile_module_to_native<'db>(
 
     // Phase 1 - Lower func dialect to clif dialect
     let module = func_to_clif::lower(db, module, native_type_converter())
+        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    // Phase 1.5 - Lower ADT struct operations to clif dialect
+    let module = adt_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
     // Phase 2 - Lower arith dialect to clif dialect
