@@ -5,8 +5,8 @@ expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
 core.module @test {
   func.func @main() -> core.nil {
-      %0 = arith.const {value = 42} : core.i32
-      %1 = adt.variant_new %0 {type = tribute_rt.any, tag = @Some} : tribute_rt.any
-      func.return %1
+    %0 = arith.const {value = 42} : core.i32
+    %1 = adt.variant_new %0 {type = tribute_rt.any, tag = @Some} : tribute_rt.any
+    func.return %1
   }
 }

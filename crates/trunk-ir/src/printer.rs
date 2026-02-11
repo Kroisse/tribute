@@ -370,6 +370,10 @@ fn print_block<'db>(
     }
 
     // Operations
+    // With label:   indent +2 (ops are indented relative to their label)
+    // Without label: indent +2 (ops are indented relative to enclosing `{`)
+    // The difference: with label there are two +2 levels (region→label, label→ops),
+    // without label there is one +2 level (region→ops).
     state.indent += 2;
     for op in block.operations(db).iter() {
         state.write_indent();
@@ -645,13 +649,19 @@ fn print_func_func<'db>(
     }
 
     // Elide entry block label when function body has a single block
-    // (block args are already shown in the function signature)
+    // (block args are already shown in the function signature).
+    // When eliding, skip the region-level indent — print_block's own
+    // indent is enough (avoids double-indenting ops).
     let single_block = blocks.len() == 1;
-    state.indent += 2;
+    if !single_block {
+        state.indent += 2;
+    }
     for block in blocks.iter() {
         print_block(state, *block, single_block)?;
     }
-    state.indent -= 2;
+    if !single_block {
+        state.indent -= 2;
+    }
 
     state.write_indent();
     state.output.push('}');

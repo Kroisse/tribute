@@ -5,9 +5,9 @@ expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
 core.module @test {
   func.func @main() -> core.nil {
-      %0 = arith.const {value = 10} : core.i32
-      %1 = arith.const {value = 5} : core.i32
-      %2 = arith.add %0, %1 : core.i32
-      func.return %2
+    %0 = arith.const {value = 10} : core.i32
+    %1 = arith.const {value = 5} : core.i32
+    %2 = arith.add %0, %1 : core.i32
+    func.return %2
   }
 }
