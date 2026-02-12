@@ -16,6 +16,8 @@
 //!
 //! - `tribute_rt.box_int` - box an integer: int → intref
 //! - `tribute_rt.unbox_int` - unbox an integer: intref → int
+//! - `tribute_rt.retain` - increment reference count: ptr → ptr
+//! - `tribute_rt.release` - decrement reference count (free if zero): ptr → ()
 //!
 //! ## Type Hierarchy
 //!
@@ -104,6 +106,18 @@ dialect! {
         /// `tribute_rt.unbox_bool` operation: unbox a boolean.
         /// Converts a boxed intref back to an unboxed bool (i32).
         fn unbox_bool(value) -> result;
+
+        // === RC Operations ===
+
+        /// `tribute_rt.retain` operation: increment reference count.
+        /// Takes a pointer and returns the same pointer (for chaining).
+        /// Lowered to inline refcount increment in native backend.
+        fn retain(ptr) -> result;
+
+        /// `tribute_rt.release` operation: decrement reference count.
+        /// If the count reaches zero, the object is freed.
+        /// Lowered to inline refcount decrement + conditional free.
+        fn release(ptr);
     }
 }
 
