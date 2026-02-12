@@ -209,12 +209,13 @@ fn declare_runtime_functions(
     func_ids: &mut HashMap<Symbol, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
+    let ptr_ty = obj_module.target_config().pointer_type();
     let i64_ty = cranelift_codegen::ir::types::I64;
 
     // __tribute_alloc(size: i64) -> ptr
     let mut alloc_sig = cl_ir::Signature::new(call_conv);
     alloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
-    alloc_sig.returns.push(cl_ir::AbiParam::new(i64_ty));
+    alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
 
     let alloc_sym = Symbol::new("__tribute_alloc");
     if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
@@ -226,7 +227,7 @@ fn declare_runtime_functions(
 
     // __tribute_dealloc(ptr: ptr, size: i64)
     let mut dealloc_sig = cl_ir::Signature::new(call_conv);
-    dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty)); // ptr
+    dealloc_sig.params.push(cl_ir::AbiParam::new(ptr_ty)); // ptr
     dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty)); // size
     // no return value
 

@@ -102,7 +102,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
         let size_val = size_op.result(db);
         ops.push(size_op.as_operation());
 
-        // 2. Call tribute_rt_alloc
+        // 2. Call __tribute_alloc
         let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
         let ptr_val = call_op.result(db);
         ops.push(call_op.as_operation());
