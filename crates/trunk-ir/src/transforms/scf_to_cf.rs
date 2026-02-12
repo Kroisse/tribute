@@ -1564,7 +1564,7 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_switch_block_arg {
-  ^bb0(%disc: core.i32):
+  func.func @test_fn(%disc: core.i32) -> core.nil {
     scf.switch %disc {
       scf.case {value = 0} {
         %0 = arith.const {value = 10} : core.i32
@@ -1576,14 +1576,36 @@ mod tests {
       }
     }
     func.return
+  }
 }"#,
         )
+    }
+
+    /// Lower and check switch for modules where scf ops are inside func.func.
+    /// Returns (block_count, all_ops, last_ops) from the function body.
+    #[salsa::tracked]
+    fn lower_and_check_switch_in_func(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>) {
+        let lowered = lower_scf_to_cf(db, module);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
+        let blocks = body.blocks(db);
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+        (blocks.len(), all_ops, last_ops)
     }
 
     #[salsa_test]
     fn test_scf_switch_block_arg_discriminant(db: &salsa::DatabaseImpl) {
         let module = make_scf_switch_block_arg_disc_module(db);
-        let (block_count, all_ops, last_ops) = lower_and_check_switch(db, module);
+        let (block_count, all_ops, last_ops) = lower_and_check_switch_in_func(db, module);
 
         // No scf ops should remain
         assert!(

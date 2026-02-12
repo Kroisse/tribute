@@ -645,7 +645,7 @@ fn collect_from_region<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{arith, core};
+    use crate::dialect::{arith, core, func};
     use crate::parser::parse_test_module;
     use crate::rewrite::TypeConverter;
     use crate::types::DialectType;
@@ -898,9 +898,11 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test {
-  ^bb0(%arg0: core.i32):
+  func.func @test_fn(%arg0: core.i32) -> core.i32 {
     %0 = arith.const {value = 42} : core.i32
     %1 = arith.mul %arg0, %0 : core.i32
+    func.return %1
+  }
 }"#,
         )
     }
@@ -949,13 +951,20 @@ mod tests {
 
         let module = make_module_with_block_arg_usage(db);
 
-        // Get original block ID and verify structure
-        let original_block = &module.body(db).blocks(db)[0];
+        // Navigate into func.func body
+        let func_op =
+            func::Func::from_operation(db, module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let original_block = &func_op.body(db).blocks(db)[0];
         let original_block_id = original_block.id(db);
 
         // Verify the mul operation uses block arg as first operand
         let ops = original_block.operations(db);
-        assert_eq!(ops.len(), 2, "Should have const and mul operations");
+        assert_eq!(
+            ops.len(),
+            3,
+            "Should have const, mul, and return operations"
+        );
         let mul_op = &ops[1];
         let mul_operands = mul_op.operands(db);
         assert_eq!(mul_operands.len(), 2);
@@ -973,8 +982,11 @@ mod tests {
         let (reached_fixpoint, result_module) = apply_to_block_arg_module(db, module);
         assert!(reached_fixpoint);
 
-        // Verify the block ID is preserved
-        let result_block = &result_module.body(db).blocks(db)[0];
+        // Navigate into func.func body of result
+        let result_func_op =
+            func::Func::from_operation(db, result_module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let result_block = &result_func_op.body(db).blocks(db)[0];
         let result_block_id = result_block.id(db);
         assert_eq!(
             result_block_id, original_block_id,
@@ -983,7 +995,7 @@ mod tests {
 
         // Verify the mul operation still references the correct block arg
         let result_ops = result_block.operations(db);
-        assert_eq!(result_ops.len(), 2);
+        assert_eq!(result_ops.len(), 3);
         let result_mul_op = &result_ops[1];
         let result_mul_operands = result_mul_op.operands(db);
 
@@ -1014,7 +1026,7 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test {
-  ^bb0(%arg0: core.i32):
+  func.func @test_fn(%arg0: core.i32) -> core.i32 {
     %0 = arith.const {value = true} : core.i1
     %1 = scf.if %0 : core.i32 {
       %2 = arith.const {value = 42} : core.i32
@@ -1024,6 +1036,8 @@ mod tests {
       %4 = arith.const {value = 0} : core.i32
       scf.yield %4
     }
+    func.return %1
+  }
 }"#,
         )
     }
@@ -1072,8 +1086,11 @@ mod tests {
 
         let module = make_module_with_nested_block_args(db);
 
-        // Get original outer block ID
-        let original_outer_block = &module.body(db).blocks(db)[0];
+        // Navigate into func.func body
+        let func_op =
+            func::Func::from_operation(db, module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let original_outer_block = &func_op.body(db).blocks(db)[0];
         let original_outer_block_id = original_outer_block.id(db);
 
         // Verify the if operation's then region uses the outer block arg
@@ -1100,8 +1117,11 @@ mod tests {
         let (reached_fixpoint, result_module) = apply_to_nested_block_arg_module(db, module);
         assert!(reached_fixpoint);
 
-        // Verify outer block ID is preserved
-        let result_outer_block = &result_module.body(db).blocks(db)[0];
+        // Navigate into func.func body of result
+        let result_func_op =
+            func::Func::from_operation(db, result_module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let result_outer_block = &result_func_op.body(db).blocks(db)[0];
         let result_outer_block_id = result_outer_block.id(db);
         assert_eq!(
             result_outer_block_id, original_outer_block_id,
@@ -1232,16 +1252,22 @@ mod tests {
     fn test_region_reconstruction_stale_block_arg_reference(db: &salsa::DatabaseImpl) {
         let module = make_module_with_nested_block_args(db);
 
-        // Get original outer block ID
-        let original_outer_block = &module.body(db).blocks(db)[0];
+        // Navigate into func.func body
+        let func_op =
+            func::Func::from_operation(db, module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let original_outer_block = &func_op.body(db).blocks(db)[0];
         let original_outer_block_id = original_outer_block.id(db);
 
         // Apply the pattern that reconstructs regions with fresh BlockIds
         let (reached_fixpoint, result_module) = apply_region_reconstruct_pattern(db, module);
         assert!(reached_fixpoint);
 
-        // The outer block ID should still be preserved (we didn't touch it)
-        let result_outer_block = &result_module.body(db).blocks(db)[0];
+        // Navigate into func.func body of result
+        let result_func_op =
+            func::Func::from_operation(db, result_module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let result_outer_block = &result_func_op.body(db).blocks(db)[0];
         let result_outer_block_id = result_outer_block.id(db);
         assert_eq!(
             result_outer_block_id, original_outer_block_id,
