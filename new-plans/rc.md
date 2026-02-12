@@ -172,4 +172,232 @@ clif.store(%value, %ptr, offset=0)
 
 ---
 
-*Sections on RC Pipeline and Phasing will be added in subsequent PRs.*
+## RC Pipeline
+
+The RC implementation is divided into three passes:
+
+### 1. RC Insertion Pass (PR 3)
+
+**Location:** `tribute-passes/src/native/rc_insertion.rs`
+
+**Purpose:** Insert `tribute_rt.retain` and `tribute_rt.release` operations
+based on SSA liveness analysis.
+
+**Algorithm:**
+1. **Liveness analysis** — determine last use of each SSA value
+2. **Ownership rules:**
+   - Function parameters: `retain` at entry block
+   - Return values: ownership transfer (no retain/release)
+   - Local allocations: refcount=1 at creation, `release` at last use
+   - Struct field loads: `retain` after load, `release` at last use
+   - Struct field stores: `release` old value before store
+   - Branch targets: `retain` for each successor path
+
+**Pointer detection:** Use `core::Ptr::from_type()` to identify RC-managed values.
+
+### 2. RC Optimization Pass (Future)
+
+**Location:** `tribute-passes/src/native/rc_optimization.rs`
+
+**Purpose:** Eliminate redundant retain/release pairs.
+
+**Optimizations:**
+- **Paired elimination:** Remove adjacent `retain` followed by `release` on same value
+- **Borrow analysis:** Identify temporary borrows that don't need RC ops
+- **Constant propagation:** Elide RC for compile-time-known lifetimes
+
+### 3. RC Lowering Pass (PR 4)
+
+**Location:** `tribute-passes/src/native/rc_lowering.rs`
+
+**Purpose:** Lower `tribute_rt.retain` and `tribute_rt.release` to inline
+`clif.*` operations.
+
+**Lowering patterns:**
+
+```text
+tribute_rt.retain(ptr) ->
+    %rc_addr = clif.iadd(ptr, clif.iconst(-8))
+    %rc = clif.load(%rc_addr)
+    %new_rc = clif.iadd(%rc, clif.iconst(1))
+    clif.store(%new_rc, %rc_addr)
+    // result: ptr (unchanged)
+
+tribute_rt.release(ptr) ->
+    %rc_addr = clif.iadd(ptr, clif.iconst(-8))
+    %rc = clif.load(%rc_addr)
+    %new_rc = clif.isub(%rc, clif.iconst(1))
+    clif.store(%new_rc, %rc_addr)
+    %is_zero = clif.icmp(%new_rc, clif.iconst(0), cond="eq")
+    clif.brif(%is_zero, then_dest=free_block, else_dest=continue_block)
+
+free_block:
+    %raw_ptr = clif.iadd(ptr, clif.iconst(-8))
+    %size = clif.iconst(<object_size> + 8)
+    clif.call(@__tribute_dealloc, %raw_ptr, %size)
+    clif.jump(continue_block)
+
+continue_block:
+    // continue execution
+```
+
+**Pipeline position:** After `resolve_unrealized_casts`, before `emit_module_to_native`.
+
+---
+
+## Phasing
+
+RC is implemented in three phases:
+
+### Phase 3a: Shallow Free (Current PR + Next PR)
+
+**Goal:** Basic RC infrastructure without deep release.
+
+**Components:**
+- ✅ **PR 1:** Allocator indirection (`__tribute_alloc`, `__tribute_dealloc`)
+- ✅ **PR 2:** Boxing/unboxing + `retain`/`release` ops (this PR)
+- ⏳ **PR 3:** RC insertion pass (SSA-based liveness)
+- ⏳ **PR 4:** RC lowering pass (inline refcount ops)
+
+**State after Phase 3a:**
+- All heap objects have 8-byte headers (refcount + rtti_idx)
+- Boxing/unboxing work for primitives
+- `retain`/`release` inserted and lowered to inline code
+- **Limitation:** `release` only does shallow free (no recursive release of fields)
+- Leak detection: Use Valgrind/AddressSanitizer to verify no double-frees
+
+### Phase 3b: Deep Release (Deferred)
+
+**Goal:** Recursive release of pointer fields.
+
+**New components:**
+- **Type-specific release functions:** Compiler generates `__tribute_release_T(ptr)` for each struct type
+- **RTTI table:** Maps `rtti_idx` to release function pointer
+- **Deep release logic:** Release function calls `tribute_rt.release` on pointer fields before dealloc
+
+**Example (struct with pointer field):**
+```text
+struct Point { x: Int, y: Ref<Node> }
+
+// Compiler generates:
+__tribute_release_Point(ptr):
+    %y_addr = clif.iadd(ptr, clif.iconst(4))  // field offset
+    %y_val = clif.load(%y_addr)
+    tribute_rt.release(%y_val)                 // recursive release
+    %raw = clif.iadd(ptr, clif.iconst(-8))
+    call @__tribute_dealloc(%raw, clif.iconst(16))
+```
+
+**RTTI dispatch:**
+```text
+tribute_rt.release(ptr) ->
+    %rc = decrement_refcount(ptr)
+    if %rc == 0:
+        %rtti_idx = load(ptr - 4)
+        %release_fn = RTTI_TABLE[%rtti_idx].release_fn
+        call %release_fn(ptr)
+```
+
+### Phase 4: Continuations (Deferred)
+
+**Goal:** Integrate RC with libmprompt-based continuations.
+
+**Challenges:**
+- Continuations capture stack frames with RC pointers
+- Stack frames are heap-allocated by libmprompt
+- Need to track and release captured pointers when continuation is dropped
+
+**Approach:**
+- Mark continuation stack frames as RC objects
+- Generate release functions for continuation frames
+- Ensure proper RC semantics across `yield`/`resume` boundaries
+
+---
+
+## RTTI Table
+
+**Location (future):** Emitted as static data by `trunk-ir-cranelift-backend`
+
+**Structure:**
+```rust
+struct TypeInfo {
+    release_fn: extern "C" fn(*mut u8),  // Type-specific destructor
+    size: u32,                            // Object size (excluding header)
+    // Future: field_count, field_offsets, name, etc.
+}
+
+// Emitted as static data in each compiled module
+static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
+```
+
+**Index allocation:**
+- Compile-time sequential assignment per module
+- Reserved indices:
+  - `0` = boxed i32 (Int)
+  - `1` = boxed f64 (Float)
+  - `2` = boxed i32 (Bool/Nat)
+  - `3+` = user-defined structs/enums
+
+**Phase 3a behavior:** `rtti_idx` is recorded but not used (all objects use shallow free).
+
+**Phase 3b behavior:** `release` dispatch via RTTI table for deep release.
+
+---
+
+## Field Reordering
+
+**Goal:** Minimize struct padding by reordering fields by alignment.
+
+**Rules:**
+- Compiler MAY reorder struct fields for optimal layout
+- Original field order preserved in `field_offsets` mapping
+- All access via `adt.struct_get(field_idx)` uses offset from mapping
+
+**Example:**
+```text
+// Source:
+struct Foo { a: i8, b: i64, c: i16 }
+
+// Reordered layout (8-byte alignment):
+[b: i64] [c: i16] [a: i8] [padding: 5 bytes]  // total: 16 bytes
+
+// vs. original order:
+[a: i8] [padding: 7] [b: i64] [c: i16] [padding: 6]  // total: 24 bytes
+
+// field_offsets mapping:
+field_offsets[0] = 9   // a at byte 9
+field_offsets[1] = 0   // b at byte 0
+field_offsets[2] = 8   // c at byte 8
+```
+
+**Future:** Add `@repr(c)` attribute to disable reordering for FFI compatibility.
+
+---
+
+## Testing Strategy
+
+### Unit Tests
+- RC insertion: Verify retain/release placement via hand-crafted IR
+- RC lowering: Verify inline code generation (refcount ops, conditional free)
+- Boxing: Verify allocation + store sequences
+
+### Integration Tests
+- E2E: Tribute source → native binary with RC
+- Memory safety: Valgrind/AddressSanitizer (no leaks, no double-frees)
+
+### Test Scenarios
+- **Pointer parameters:** Retain at entry, release at last use
+- **Struct fields:** Release old value on field update
+- **Polymorphic boxing:** Int → any → Int round-trip
+- **Control flow:** Retain for multiple successors
+- **Cyclic references:** (Future) Detect and handle cycles
+
+---
+
+## Deferred Decisions
+
+- **Cycle detection:** Weak references? Tracing GC fallback?
+- **Thread-safety:** Atomic refcount for multi-threaded code?
+- **Continuation integration:** libmprompt stack frame RC tracking
+- **FFI boundaries:** How to handle RC objects at C FFI boundaries?
+- **Optimization:** Compile-time escape analysis to elide RC?
