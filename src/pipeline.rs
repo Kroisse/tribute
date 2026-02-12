@@ -39,21 +39,15 @@
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
 //!     │
+//!     ├─── Shared Pipeline (run_shared_pipeline) ─────┤
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
 //!     │
-//!     ├─────────────── Final Lowering ────────────────┤
-//!     ▼ cont_to_trampoline
-//! Module (cont.* → trampoline)
+//!     ▼ resolve_evidence
+//! Module (cont.shift uses dynamic tags)
 //!     │
-//!     ▼ dce
-//! Module (dead code eliminated)
-//!     │
-//!     ▼ resolve_casts
-//! Core IR Module
-//!     │
-//!     ├─► [target: wasm]   ─► compile_to_wasm   ─► WasmBinary
-//!     └─► [target: native] ─► compile_to_native ─► ObjectFile ─► cc ─► Executable
+//!     ├─► [wasm]   cont_to_trampoline ─► dce ─► resolve_casts ─► compile_to_wasm
+//!     └─► [native] cont_to_libmprompt ─► dce ─► resolve_casts ─► compile_to_native
 //! ```
 //!
 //! ## Diagnostics
@@ -523,15 +517,13 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 // Full Pipeline (Orchestration)
 // =============================================================================
 
-/// Run the full middle-end pipeline (backend-independent).
+/// Run the shared middle-end pipeline (backend-independent).
 ///
-/// This function runs all the transformation passes from the closure-lowered
-/// module through to the final resolved module. It is shared by all backends.
+/// Runs frontend + closure processing, evidence call transformation,
+/// and evidence-based dispatch resolution. This produces a module with
+/// `cont.*` operations that backend-specific pipelines then lower.
 #[salsa::tracked]
-pub fn run_full_pipeline<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
+pub fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     // Frontend + closure processing
     let module = run_closure_lower(db, source);
 
@@ -584,7 +576,19 @@ pub fn run_full_pipeline<'db>(
     let module = stage_evidence_calls(db, module);
 
     // Evidence-based dispatch resolution - transforms cont.shift to use dynamic tags
-    let module = stage_resolve_evidence(db, module);
+    stage_resolve_evidence(db, module)
+}
+
+/// Run the WASM pipeline: shared passes + cont_to_trampoline + DCE + resolve_casts.
+///
+/// This produces a module ready for WASM backend lowering (trampoline-based
+/// continuation implementation).
+#[salsa::tracked]
+pub fn run_wasm_pipeline<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    let module = run_shared_pipeline(db, source);
 
     // DEBUG: List all functions before cont_to_trampoline
     {
@@ -606,7 +610,7 @@ pub fn run_full_pipeline<'db>(
         );
     }
 
-    // Continuation lowering (backend-agnostic trampoline implementation)
+    // Continuation lowering (trampoline/yield-bubbling strategy for WASM)
     let module = stage_cont_to_trampoline(db, module)?;
 
     // DEBUG: List all functions before DCE
@@ -633,15 +637,45 @@ pub fn run_full_pipeline<'db>(
     Ok(stage_resolve_casts(db, module))
 }
 
+/// Run the native pipeline: shared passes + cont lowering + DCE + resolve_casts.
+///
+/// Currently uses `cont_to_trampoline` (same as WASM). This will be replaced
+/// by `cont_to_libmprompt` for native delimited continuations.
+#[salsa::tracked]
+pub fn run_native_pipeline<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    let module = run_shared_pipeline(db, source);
+
+    // TODO(#352): replace with cont_to_libmprompt
+    let module = stage_cont_to_trampoline(db, module)?;
+
+    let module = stage_dce(db, module);
+    Ok(stage_resolve_casts(db, module))
+}
+
+/// Run the full middle-end pipeline.
+///
+/// Delegates to `run_wasm_pipeline`. Prefer using the backend-specific
+/// `run_wasm_pipeline` or `run_native_pipeline` directly.
+#[salsa::tracked]
+pub fn run_full_pipeline<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Result<Module<'db>, ConversionError> {
+    run_wasm_pipeline(db, source)
+}
+
 /// Compile to WebAssembly binary.
 ///
-/// Runs the full pipeline and then lowers to WebAssembly.
+/// Runs the WASM pipeline and then lowers to WebAssembly.
 #[salsa::tracked]
 pub fn compile_to_wasm_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<WasmBinary<'db>> {
-    let module = match run_full_pipeline(db, source) {
+    let module = match run_wasm_pipeline(db, source) {
         Ok(m) => m,
         Err(e) => {
             Diagnostic {
@@ -719,14 +753,14 @@ fn compile_module_to_native<'db>(
 
 /// Compile to native object bytes.
 ///
-/// Runs the full pipeline and then lowers to a native object file via Cranelift.
+/// Runs the native pipeline and then lowers to a native object file via Cranelift.
 /// Returns `None` if compilation fails, with diagnostics accumulated.
 #[salsa::tracked]
 pub fn compile_to_native_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Vec<u8>> {
-    let module = match run_full_pipeline(db, source) {
+    let module = match run_native_pipeline(db, source) {
         Ok(m) => m,
         Err(e) => {
             Diagnostic {
