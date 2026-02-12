@@ -65,7 +65,7 @@ fn box_primitive<'db>(
     ops.push(store_op.as_operation());
 
     // 4. Identity pass-through so the last op produces the ptr result.
-    let zero_op = clif::iconst(db, location, i64_ty, 0);
+    let zero_op = clif::iconst(db, location, ptr_ty, 0);
     let zero_val = zero_op.result(db);
     ops.push(zero_op.as_operation());
 
@@ -316,6 +316,13 @@ pub fn native_type_converter() -> TypeConverter {
             {
                 let i32_ty = core::I32::new(db).as_type();
                 let load_op = clif::load(db, location, value, i32_ty, 0);
+                return MaterializeResult::single(load_op.as_operation());
+            }
+
+            // ptr -> i64: load i64 from offset 0
+            if core::I64::from_type(db, to_ty).is_some() {
+                let i64_ty = core::I64::new(db).as_type();
+                let load_op = clif::load(db, location, value, i64_ty, 0);
                 return MaterializeResult::single(load_op.as_operation());
             }
 
@@ -880,6 +887,32 @@ mod tests {
     #[salsa_test]
     fn test_materialize_ptr_to_i32_generates_ops(db: &salsa::DatabaseImpl) {
         assert!(do_materialize_ptr_to_i32(db));
+    }
+
+    // --- Unboxing: ptr -> i64 (generates load op) ---
+
+    #[salsa::tracked]
+    fn do_materialize_ptr_to_i64(db: &dyn salsa::Database) -> bool {
+        use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
+
+        let converter = native_type_converter();
+        let path = PathId::new(db, "test".to_owned());
+        let location = Location::new(path, Span::new(0, 0));
+        let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
+
+        let result = converter.materialize(
+            db,
+            location,
+            value,
+            core::Ptr::new(db).as_type(),
+            core::I64::new(db).as_type(),
+        );
+        matches!(result, Some(MaterializeResult::Ops(_)))
+    }
+
+    #[salsa_test]
+    fn test_materialize_ptr_to_i64_generates_ops(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_ptr_to_i64(db));
     }
 
     // --- Nil conversions ---

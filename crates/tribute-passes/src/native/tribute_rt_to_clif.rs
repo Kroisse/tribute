@@ -65,7 +65,7 @@ fn box_value<'db>(
 
     // 4. Identity pass-through so the last op produces the ptr result.
     //    Cranelift will optimize away iadd(ptr, 0).
-    let zero_op = clif::iconst(db, location, i64_ty, 0);
+    let zero_op = clif::iconst(db, location, ptr_ty, 0);
     let zero_val = zero_op.result(db);
     ops.push(zero_op.as_operation());
 
@@ -86,7 +86,9 @@ pub fn lower<'db>(
 ) -> Module<'db> {
     let target = ConversionTarget::new()
         .legal_dialect("clif")
-        .illegal_dialect("tribute_rt");
+        .illegal_dialect("tribute_rt")
+        .legal_op("tribute_rt", "retain")
+        .legal_op("tribute_rt", "release");
 
     PatternApplicator::new(type_converter)
         .add_pattern(BoxIntPattern)
@@ -435,5 +437,60 @@ mod tests {
 
         let result_ty = ops[1].results(db)[0];
         assert_eq!(result_ty, core::F64::new(db).as_type());
+    }
+
+    // === retain/release passthrough ===
+
+    #[salsa::tracked]
+    fn make_and_lower_retain_release(db: &dyn salsa::Database) -> Module<'_> {
+        let module = trunk_ir::parser::parse_test_module(
+            db,
+            r#"
+            core.module @test {
+                %0 = clif.iconst {value = 0} : core.ptr
+                %1 = tribute_rt.retain %0 : core.ptr
+                tribute_rt.release %1
+            }
+            "#,
+        );
+        lower(db, module, test_converter())
+    }
+
+    #[salsa_test]
+    fn test_retain_release_pass_through(db: &salsa::DatabaseImpl) {
+        let lowered = make_and_lower_retain_release(db);
+        let ir = trunk_ir::printer::print_op(db, lowered.as_operation());
+
+        // retain and release should survive the boxing lowering pass
+        assert!(
+            ir.contains("tribute_rt.retain"),
+            "retain should pass through"
+        );
+        assert!(
+            ir.contains("tribute_rt.release"),
+            "release should pass through"
+        );
+        // box/unbox ops should not remain (none were present)
+        assert!(!ir.contains("tribute_rt.box_"), "no box ops should remain");
+    }
+
+    // === boxing identity iadd operand type consistency ===
+
+    #[salsa_test]
+    fn test_box_int_identity_operand_types(db: &salsa::DatabaseImpl) {
+        let lowered = make_and_lower_box_int(db);
+        let ops = get_ops(db, &lowered);
+        let ptr_ty = core::Ptr::new(db).as_type();
+
+        // ops[4] = iconst(0) used as iadd zero operand — should be ptr type
+        let zero_result_ty = ops[4].results(db)[0];
+        assert_eq!(
+            zero_result_ty, ptr_ty,
+            "iadd zero operand should be core.ptr"
+        );
+
+        // ops[5] = iadd — both operands should be ptr type
+        let iadd_result_ty = ops[5].results(db)[0];
+        assert_eq!(iadd_result_ty, ptr_ty);
     }
 }
