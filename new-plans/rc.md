@@ -184,6 +184,7 @@ The RC implementation is divided into three passes:
 based on SSA liveness analysis.
 
 **Algorithm:**
+
 1. **Liveness analysis** — determine last use of each SSA value
 2. **Ownership rules:**
    - Function parameters: `retain` at entry block
@@ -202,7 +203,9 @@ based on SSA liveness analysis.
 **Purpose:** Eliminate redundant retain/release pairs.
 
 **Optimizations:**
-- **Paired elimination:** Remove adjacent `retain` followed by `release` on same value
+
+- **Paired elimination:** Remove adjacent `retain` followed by `release` on
+  same value
 - **Borrow analysis:** Identify temporary borrows that don't need RC ops
 - **Constant propagation:** Elide RC for compile-time-known lifetimes
 
@@ -254,12 +257,14 @@ RC is implemented in three phases:
 **Goal:** Basic RC infrastructure without deep release.
 
 **Components:**
+
 - ✅ **PR 1:** Allocator indirection (`__tribute_alloc`, `__tribute_dealloc`)
 - ✅ **PR 2:** Boxing/unboxing + `retain`/`release` ops (this PR)
 - ⏳ **PR 3:** RC insertion pass (SSA-based liveness)
 - ⏳ **PR 4:** RC lowering pass (inline refcount ops)
 
 **State after Phase 3a:**
+
 - All heap objects have 8-byte headers (refcount + rtti_idx)
 - Boxing/unboxing work for primitives
 - `retain`/`release` inserted and lowered to inline code
@@ -271,11 +276,15 @@ RC is implemented in three phases:
 **Goal:** Recursive release of pointer fields.
 
 **New components:**
-- **Type-specific release functions:** Compiler generates `__tribute_release_T(ptr)` for each struct type
+
+- **Type-specific release functions:** Compiler generates
+  `__tribute_release_T(ptr)` for each struct type
 - **RTTI table:** Maps `rtti_idx` to release function pointer
-- **Deep release logic:** Release function calls `tribute_rt.release` on pointer fields before dealloc
+- **Deep release logic:** Release function calls `tribute_rt.release` on
+  pointer fields before dealloc
 
 **Example (struct with pointer field):**
+
 ```text
 struct Point { x: Int, y: Ref<Node> }
 
@@ -289,6 +298,7 @@ __tribute_release_Point(ptr):
 ```
 
 **RTTI dispatch:**
+
 ```text
 tribute_rt.release(ptr) ->
     %rc = decrement_refcount(ptr)
@@ -303,11 +313,13 @@ tribute_rt.release(ptr) ->
 **Goal:** Integrate RC with libmprompt-based continuations.
 
 **Challenges:**
+
 - Continuations capture stack frames with RC pointers
 - Stack frames are heap-allocated by libmprompt
 - Need to track and release captured pointers when continuation is dropped
 
 **Approach:**
+
 - Mark continuation stack frames as RC objects
 - Generate release functions for continuation frames
 - Ensure proper RC semantics across `yield`/`resume` boundaries
@@ -319,6 +331,7 @@ tribute_rt.release(ptr) ->
 **Location (future):** Emitted as static data by `trunk-ir-cranelift-backend`
 
 **Structure:**
+
 ```rust
 struct TypeInfo {
     release_fn: extern "C" fn(*mut u8),  // Type-specific destructor
@@ -331,6 +344,7 @@ static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
 ```
 
 **Index allocation:**
+
 - Compile-time sequential assignment per module
 - Reserved indices:
   - `0` = boxed i32 (Int)
@@ -338,7 +352,8 @@ static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
   - `2` = boxed i32 (Bool/Nat)
   - `3+` = user-defined structs/enums
 
-**Phase 3a behavior:** `rtti_idx` is recorded but not used (all objects use shallow free).
+**Phase 3a behavior:** `rtti_idx` is recorded but not used (all objects
+use shallow free).
 
 **Phase 3b behavior:** `release` dispatch via RTTI table for deep release.
 
@@ -349,11 +364,13 @@ static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
 **Goal:** Minimize struct padding by reordering fields by alignment.
 
 **Rules:**
+
 - Compiler MAY reorder struct fields for optimal layout
 - Original field order preserved in `field_offsets` mapping
 - All access via `adt.struct_get(field_idx)` uses offset from mapping
 
 **Example:**
+
 ```text
 // Source:
 struct Foo { a: i8, b: i64, c: i16 }
@@ -377,15 +394,18 @@ field_offsets[2] = 8   // c at byte 8
 ## Testing Strategy
 
 ### Unit Tests
+
 - RC insertion: Verify retain/release placement via hand-crafted IR
 - RC lowering: Verify inline code generation (refcount ops, conditional free)
 - Boxing: Verify allocation + store sequences
 
 ### Integration Tests
+
 - E2E: Tribute source → native binary with RC
 - Memory safety: Valgrind/AddressSanitizer (no leaks, no double-frees)
 
 ### Test Scenarios
+
 - **Pointer parameters:** Retain at entry, release at last use
 - **Struct fields:** Release old value on field update
 - **Polymorphic boxing:** Int → any → Int round-trip
