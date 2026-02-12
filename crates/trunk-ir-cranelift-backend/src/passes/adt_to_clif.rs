@@ -1,13 +1,13 @@
 //! Lower ADT dialect struct operations to clif dialect.
 //!
 //! This pass converts struct-related ADT operations to their Cranelift equivalents:
-//! - `adt.struct_new(fields...)` -> `clif.call @tribute_rt_alloc` + `clif.store` per field
+//! - `adt.struct_new(fields...)` -> `clif.call @__tribute_alloc` + `clif.store` per field
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
 //!
 //! ## Allocation strategy
 //!
-//! Struct allocation uses `tribute_rt_alloc(size: i64) -> ptr`, an imported runtime
+//! Struct allocation uses `__tribute_alloc(size: i64) -> ptr`, an imported runtime
 //! function. Phase 1 is a simple malloc wrapper; Phase 3 will add RC headers.
 //!
 //! ## Limitations
@@ -26,7 +26,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
 
 /// Name of the runtime allocation function.
-const ALLOC_FN: &str = "tribute_rt_alloc";
+const ALLOC_FN: &str = "__tribute_alloc";
 
 /// Lower ADT struct operations to clif dialect.
 ///
@@ -60,7 +60,7 @@ pub fn lower<'db>(
 /// Generates:
 /// ```text
 /// %size   = clif.iconst(layout.total_size)
-/// %ptr    = clif.call @tribute_rt_alloc(%size)
+/// %ptr    = clif.call @__tribute_alloc(%size)
 /// clif.store(%field0, %ptr, offset=0)
 /// clif.store(%field1, %ptr, offset=4)
 /// ...
@@ -102,7 +102,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
         let size_val = size_op.result(db);
         ops.push(size_op.as_operation());
 
-        // 2. Call tribute_rt_alloc
+        // 2. Call __tribute_alloc
         let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
         let ptr_val = call_op.result(db);
         ops.push(call_op.as_operation());
@@ -337,7 +337,7 @@ mod tests {
         clif.iconst value=10 -> i32
         clif.iconst value=20 -> i32
         clif.iconst value=8 -> i64
-        clif.call callee=tribute_rt_alloc operands=1 -> ptr
+        clif.call callee=__tribute_alloc operands=1 -> ptr
         clif.store offset=0 operands=2
         clif.store offset=4 operands=2
         clif.iconst value=0 -> i64
@@ -407,7 +407,7 @@ mod tests {
 
         assert_snapshot!(formatted, @r"
         clif.iconst value=0 -> i64
-        clif.call callee=tribute_rt_alloc operands=1 -> ptr
+        clif.call callee=__tribute_alloc operands=1 -> ptr
         clif.iconst value=0 -> i64
         clif.iadd operands=2 -> ptr
         ");

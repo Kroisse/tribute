@@ -198,26 +198,43 @@ fn emit_module_impl<'db>(
 /// Declare runtime functions that are imported (provided by the linker).
 ///
 /// Currently declares:
-/// - `tribute_rt_alloc(i64) -> ptr`: heap allocation (Phase 1: malloc wrapper)
+/// - `__tribute_alloc(i64) -> ptr`: heap allocation (malloc wrapper)
+/// - `__tribute_dealloc(ptr, i64)`: heap deallocation (free wrapper)
+///
+/// These use `Import` linkage so they can be overridden at link time
+/// with custom allocator implementations.
 fn declare_runtime_functions(
     _db: &dyn salsa::Database,
     obj_module: &mut ObjectModule,
     func_ids: &mut HashMap<Symbol, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
-    // tribute_rt_alloc(size: i64) -> ptr (i64 on 64-bit)
-    let mut alloc_sig = cl_ir::Signature::new(call_conv);
-    alloc_sig
-        .params
-        .push(cl_ir::AbiParam::new(cranelift_codegen::ir::types::I64));
-    alloc_sig
-        .returns
-        .push(cl_ir::AbiParam::new(cranelift_codegen::ir::types::I64));
+    let ptr_ty = obj_module.target_config().pointer_type();
+    let i64_ty = cranelift_codegen::ir::types::I64;
 
-    let alloc_sym = Symbol::new("tribute_rt_alloc");
+    // __tribute_alloc(size: i64) -> ptr
+    let mut alloc_sig = cl_ir::Signature::new(call_conv);
+    alloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
+    alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
+
+    let alloc_sym = Symbol::new("__tribute_alloc");
     if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
         let func_id = obj_module
-            .declare_function("tribute_rt_alloc", Linkage::Import, &alloc_sig)
+            .declare_function("__tribute_alloc", Linkage::Import, &alloc_sig)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+        e.insert(func_id);
+    }
+
+    // __tribute_dealloc(ptr: ptr, size: i64)
+    let mut dealloc_sig = cl_ir::Signature::new(call_conv);
+    dealloc_sig.params.push(cl_ir::AbiParam::new(ptr_ty)); // ptr
+    dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty)); // size
+    // no return value
+
+    let dealloc_sym = Symbol::new("__tribute_dealloc");
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym) {
+        let func_id = obj_module
+            .declare_function("__tribute_dealloc", Linkage::Import, &dealloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
         e.insert(func_id);
     }
