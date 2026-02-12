@@ -244,22 +244,21 @@ impl<'db> RewritePattern<'db> for WasmFuncSignatureConversionPattern {
 mod tests {
     use super::*;
     use crate::dialect::core;
+    use crate::parser::parse_test_module;
     use crate::rewrite::{ConversionTarget, PatternApplicator};
-    use crate::{Location, PathId, Span, Symbol, idvec};
     use salsa_test_macros::salsa_test;
 
     /// Create a test module with a function that has i32 params and result.
     #[salsa::tracked]
     fn make_i32_func_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        core::Module::build(db, location, Symbol::new("test"), |builder| {
-            let func_op =
-                func::Func::build(db, location, "test_fn", idvec![i32_ty], i32_ty, |_| {});
-            builder.op(func_op.as_operation());
-        })
+        parse_test_module(
+            db,
+            r#"core.module @test {
+  func.func @test_fn(%arg0: core.i32) -> core.i32 {
+    func.return %arg0
+  }
+}"#,
+        )
     }
 
     /// Apply i32 -> i64 signature conversion pattern.

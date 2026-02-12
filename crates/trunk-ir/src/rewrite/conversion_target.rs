@@ -306,10 +306,11 @@ impl ConversionTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::{arith, cont, core};
+    use crate::dialect::{arith, core};
     use crate::ops::DialectOp;
+    use crate::parser::parse_test_module;
     use crate::types::DialectType;
-    use crate::{Block, BlockId, IdVec, Location, PathId, Region, Span, Symbol};
+    use crate::{Location, PathId, Span, Symbol};
     use salsa_test_macros::salsa_test;
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -389,63 +390,26 @@ mod tests {
     /// Create a module with arith.const operations only (no illegal ops).
     #[salsa::tracked]
     fn make_legal_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        let op1 =
-            arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(42)).as_operation();
-        let op2 =
-            arith::r#const(db, location, i32_ty, crate::Attribute::IntBits(100)).as_operation();
-        let block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            IdVec::new(),
-            IdVec::from(vec![op1, op2]),
-        );
-        let region = Region::new(db, location, IdVec::from(vec![block]));
-        Module::create(db, location, Symbol::new("test"), region)
+            r#"core.module @test {
+  %0 = arith.const {value = 42} : core.i32
+  %1 = arith.const {value = 100} : core.i32
+}"#,
+        )
     }
 
     /// Create a module with cont.shift operation (illegal op).
     #[salsa::tracked]
     fn make_illegal_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-        let ability_ref_ty =
-            core::AbilityRefType::with_params(db, Symbol::new("State"), IdVec::from(vec![i32_ty]))
-                .as_type();
-
-        // Create a tag constant
-        let tag_const = arith::r#const(db, location, prompt_tag_ty, crate::Attribute::IntBits(0));
-        let tag_val = tag_const.result(db);
-
-        // Create cont.shift which should be illegal
-        let handler_region = Region::new(db, location, IdVec::new());
-        let shift_op = cont::shift(
+        parse_test_module(
             db,
-            location,
-            tag_val,
-            vec![],
-            i32_ty,
-            ability_ref_ty,
-            Symbol::new("get"),
-            None, // op_table_index
-            None, // op_offset
-            handler_region,
+            r#"core.module @test {
+  %0 = arith.const {value = 0} : cont.prompt_tag
+  %1 = cont.shift %0 {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get} : core.i32 {
+  }
+}"#,
         )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            IdVec::new(),
-            IdVec::from(vec![tag_const.as_operation(), shift_op]),
-        );
-        let region = Region::new(db, location, IdVec::from(vec![block]));
-        Module::create(db, location, Symbol::new("test"), region)
     }
 
     #[salsa_test]
