@@ -18,8 +18,8 @@ use winnow::prelude::*;
 use winnow::token::{any, one_of, take_while};
 
 use crate::{
-    Attribute, Block, BlockArg, BlockId, IdVec, Location, Operation, PathId, Region, Span, Symbol,
-    Type, Value, ValueDef,
+    Attribute, Block, BlockArg, BlockId, DialectOp, IdVec, Location, Operation, PathId, Region,
+    Span, Symbol, Type, Value, ValueDef,
 };
 
 // ============================================================================
@@ -1018,6 +1018,34 @@ pub fn parse_module<'db>(
     builder.build_operation(&raw_op)
 }
 
+/// Parse textual IR into a [`core::Module`], panicking on failure.
+///
+/// This is a convenience wrapper around [`parse_module`] for tests that
+/// construct IR from textual format.  Parse errors and non-module top-level
+/// operations cause a panic with a descriptive message.
+///
+/// # Salsa context
+///
+/// This function creates Salsa tracked structs internally, so it **must** be
+/// called from within a `#[salsa::tracked]` function context.
+pub fn parse_test_module<'db>(
+    db: &'db dyn salsa::Database,
+    input: &str,
+) -> crate::dialect::core::Module<'db> {
+    let op = parse_module(db, input).unwrap_or_else(|e| {
+        panic!(
+            "Failed to parse test IR at offset {}:\n  {}\n\nInput:\n{}",
+            e.offset, e.message, input
+        );
+    });
+    crate::dialect::core::Module::from_operation(db, op).unwrap_or_else(|_| {
+        panic!(
+            "Parsed operation is not a core.module.\n\nInput:\n{}",
+            input
+        );
+    })
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -1838,6 +1866,195 @@ mod tests {
         let op2 = do_parse(db, input2);
         let printed2 = print_op(db, op2);
         assert_eq!(printed, printed2, "effect-only signature round-trip failed");
+    }
+
+    // ========================================================================
+    // Round-trip verification tests
+    // ========================================================================
+
+    /// Helper: parse textual IR, print it, re-parse, re-print, and assert
+    /// the two printed forms are identical.  Returns the canonical printed
+    /// form for snapshot testing.
+    fn assert_roundtrip(db: &salsa::DatabaseImpl, input: &str) -> String {
+        let input1 = TextInput::new(db, input.to_string());
+        let op1 = do_parse(db, input1);
+        let printed1 = print_op(db, op1);
+
+        let input2 = TextInput::new(db, printed1.clone());
+        let op2 = do_parse(db, input2);
+        let printed2 = print_op(db, op2);
+
+        assert_eq!(printed1, printed2, "round-trip mismatch");
+        printed1
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_scf_if(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f(%cond: core.i1) -> core.i32 {
+    %0 = scf.if %cond : core.i32 {
+      %1 = arith.const {value = 1} : core.i32
+      scf.yield %1
+    } {
+      %2 = arith.const {value = 0} : core.i32
+      scf.yield %2
+    }
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_scf_loop(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %init = arith.const {value = 0} : core.i32
+    %0 = scf.loop %init : core.i32 {
+      ^bb0(%acc: core.i32):
+        %limit = arith.const {value = 10} : core.i32
+        %done = arith.cmp_ge %acc, %limit : core.i1
+        %1 = scf.if %done : core.i32 {
+          scf.break %acc
+        } {
+          %one = arith.const {value = 1} : core.i32
+          %next = arith.add %acc, %one : core.i32
+          scf.continue %next
+        }
+        scf.yield %1
+    }
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_scf_switch(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f(%disc: core.i32) -> core.i32 {
+    scf.switch %disc {
+      scf.case {value = 0} {
+        %0 = arith.const {value = 100} : core.i32
+        scf.yield %0
+      }
+      scf.case {value = 1} {
+        %1 = arith.const {value = 200} : core.i32
+        scf.yield %1
+      }
+      scf.default {
+        %2 = arith.const {value = 0} : core.i32
+        scf.yield %2
+      }
+    }
+    func.return %disc
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_func_call(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @add(%x: core.i32, %y: core.i32) -> core.i32 {
+    %0 = arith.add %x, %y : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %a = arith.const {value = 3} : core.i32
+    %b = arith.const {value = 4} : core.i32
+    %r = func.call %a, %b {callee = @add} : core.i32
+    func.return %r
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_adt_struct(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %x = arith.const {value = 10} : core.i32
+    %y = arith.const {value = 20} : core.i32
+    %s = adt.struct_new %x, %y {type = adt.struct() {name = @Point, fields = [@x, @y]}} : adt.struct() {name = @Point, fields = [@x, @y]}
+    %0 = adt.struct_get %s {type = adt.struct() {name = @Point, fields = [@x, @y]}, field = 0} : core.i32
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_arith_ops(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f(%a: core.i32, %b: core.i32) -> core.i1 {
+    %sum = arith.add %a, %b : core.i32
+    %diff = arith.sub %a, %b : core.i32
+    %prod = arith.mul %a, %b : core.i32
+    %quot = arith.div %a, %b : core.i32
+    %neg = arith.neg %a : core.i32
+    %eq = arith.cmp_eq %a, %b : core.i1
+    %lt = arith.cmp_lt %a, %b : core.i1
+    func.return %eq
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    #[salsa_test]
+    fn test_roundtrip_func_effects(db: &salsa::DatabaseImpl) {
+        let printed = assert_roundtrip(
+            db,
+            r#"core.module @test {
+  func.func @f() -> core.i32 effects core.nil {
+    %0 = arith.const {value = 42} : core.i32
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(printed);
+    }
+
+    /// Verify that `parse_test_module` returns a proper `Module` wrapper.
+    #[salsa::tracked]
+    fn do_parse_test_module<'db>(
+        db: &'db dyn salsa::Database,
+        input: TextInput,
+    ) -> core::Module<'db> {
+        parse_test_module(db, input.text(db))
+    }
+
+    #[salsa_test]
+    fn test_parse_test_module_helper(db: &salsa::DatabaseImpl) {
+        let input = TextInput::new(
+            db,
+            r#"core.module @mymod {
+  func.func @f() -> core.nil {
+    func.return
+  }
+}"#
+            .to_string(),
+        );
+        let module = do_parse_test_module(db, input);
+        assert_eq!(module.name(db).to_string(), "mymod");
     }
 
     // ========================================================================
