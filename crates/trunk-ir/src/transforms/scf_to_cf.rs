@@ -835,7 +835,7 @@ mod tests {
     use super::*;
     use crate::dialect::{arith, core, func, scf};
     use crate::parser::parse_test_module;
-    use crate::{Attribute, DialectOp, DialectType, PathId, Span};
+    use crate::{DialectOp, DialectType, PathId, Span};
     use salsa_test_macros::salsa_test;
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
@@ -868,15 +868,17 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test {
-  %0 = arith.const {value = true} : core.i1
-  %1 = scf.if %0 : core.i32 {
-    %2 = arith.const {value = 42} : core.i32
-    scf.yield %2
-  } {
-    %3 = arith.const {value = 0} : core.i32
-    scf.yield %3
+  func.func @test_fn() -> core.i32 {
+    %0 = arith.const {value = true} : core.i1
+    %1 = scf.if %0 : core.i32 {
+      %2 = arith.const {value = 42} : core.i32
+      scf.yield %2
+    } {
+      %3 = arith.const {value = 0} : core.i32
+      scf.yield %3
+    }
+    func.return %1
   }
-  func.return %1
 }"#,
         )
     }
@@ -888,7 +890,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, Vec<String>, usize) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let block_count = blocks.len();
         let all_ops = collect_all_op_names(db, &body);
@@ -942,74 +947,24 @@ mod tests {
 
     #[salsa::tracked]
     fn make_scf_if_with_surrounding_ops(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        // op_before: const 10
-        let before_const = arith::Const::i32(db, location, 10);
-
-        // Condition
-        let cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
-
-        // Then: yield 42
-        let then_const = arith::Const::i32(db, location, 42);
-        let then_yield = scf::r#yield(db, location, [then_const.result(db)]);
-        let then_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![then_const.as_operation(), then_yield.as_operation()],
-        );
-        let then_region = Region::new(db, location, idvec![then_block]);
-
-        // Else: yield 0
-        let else_const = arith::Const::i32(db, location, 0);
-        let else_yield = scf::r#yield(db, location, [else_const.result(db)]);
-        let else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![else_const.as_operation(), else_yield.as_operation()],
-        );
-        let else_region = Region::new(db, location, idvec![else_block]);
-
-        let if_op = scf::r#if(
-            db,
-            location,
-            cond.result(db),
-            i32_ty,
-            then_region,
-            else_region,
-        );
-
-        // op_after: add(before_const, if_result)
-        let add_op = arith::add(
-            db,
-            location,
-            before_const.result(db),
-            if_op.result(db),
-            i32_ty,
-        );
-        let ret = func::r#return(db, location, [add_op.result(db)]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                before_const.as_operation(),
-                cond.as_operation(),
-                if_op.as_operation(),
-                add_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test".into(), body)
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %before = arith.const {value = 10} : core.i32
+    %cond = arith.const {value = true} : core.i1
+    %1 = scf.if %cond : core.i32 {
+      %2 = arith.const {value = 42} : core.i32
+      scf.yield %2
+    } {
+      %3 = arith.const {value = 0} : core.i32
+      scf.yield %3
+    }
+    %4 = arith.add %before, %1 : core.i32
+    func.return %4
+  }
+}"#,
+        )
     }
 
     /// Lower module and return detailed info for surrounding ops test.
@@ -1020,7 +975,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, usize, String, Vec<String>, bool) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
 
         let entry_ops = blocks[0].operations(db);
@@ -1085,20 +1043,22 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_loop {
-  %init = arith.const {value = 0} : core.i32
-  %0 = scf.loop %init : core.i32 {
-    ^bb0(%loop_var: core.i32):
-      %limit = arith.const {value = 10} : core.i32
-      %cond = arith.cmp_lt %loop_var, %limit : core.i1
-      %1 = scf.if %cond : core.i32 {
-        %one = arith.const {value = 1} : core.i32
-        %next = arith.add %loop_var, %one : core.i32
-        scf.continue %next
-      } {
-        scf.break %loop_var
-      }
+  func.func @test_fn() -> core.i32 {
+    %init = arith.const {value = 0} : core.i32
+    %0 = scf.loop %init : core.i32 {
+      ^bb0(%loop_var: core.i32):
+        %limit = arith.const {value = 10} : core.i32
+        %cond = arith.cmp_lt %loop_var, %limit : core.i1
+        %1 = scf.if %cond : core.i32 {
+          %one = arith.const {value = 1} : core.i32
+          %next = arith.add %loop_var, %one : core.i32
+          scf.continue %next
+        } {
+          scf.break %loop_var
+        }
+    }
+    func.return %0
   }
-  func.return %0
 }"#,
         )
     }
@@ -1110,7 +1070,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
         (blocks.len(), all_ops)
@@ -1157,22 +1120,24 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_nested_if {
-  %outer_cond = arith.const {value = true} : core.i1
-  %0 = scf.if %outer_cond : core.i32 {
-    %inner_cond = arith.const {value = false} : core.i1
-    %1 = scf.if %inner_cond : core.i32 {
-      %2 = arith.const {value = 1} : core.i32
-      scf.yield %2
+  func.func @test_fn() -> core.i32 {
+    %outer_cond = arith.const {value = true} : core.i1
+    %0 = scf.if %outer_cond : core.i32 {
+      %inner_cond = arith.const {value = false} : core.i1
+      %1 = scf.if %inner_cond : core.i32 {
+        %2 = arith.const {value = 1} : core.i32
+        scf.yield %2
+      } {
+        %3 = arith.const {value = 2} : core.i32
+        scf.yield %3
+      }
+      scf.yield %1
     } {
-      %3 = arith.const {value = 2} : core.i32
-      scf.yield %3
+      %4 = arith.const {value = 3} : core.i32
+      scf.yield %4
     }
-    scf.yield %1
-  } {
-    %4 = arith.const {value = 3} : core.i32
-    scf.yield %4
+    func.return %0
   }
-  func.return %0
 }"#,
         )
     }
@@ -1183,7 +1148,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, Vec<String>) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
         let last_ops: Vec<String> = blocks
@@ -1242,7 +1210,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, Vec<String>, bool) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
         let last_ops: Vec<String> = blocks
@@ -1327,22 +1298,24 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_switch {
-  %disc = arith.const {value = 1} : core.i32
-  scf.switch %disc {
-    scf.case {value = 0} {
-      %0 = arith.const {value = 10} : core.i32
-      scf.yield %0
+  func.func @test_fn() -> core.nil {
+    %disc = arith.const {value = 1} : core.i32
+    scf.switch %disc {
+      scf.case {value = 0} {
+        %0 = arith.const {value = 10} : core.i32
+        scf.yield %0
+      }
+      scf.case {value = 1} {
+        %1 = arith.const {value = 20} : core.i32
+        scf.yield %1
+      }
+      scf.default {
+        %2 = arith.const {value = 99} : core.i32
+        scf.yield %2
+      }
     }
-    scf.case {value = 1} {
-      %1 = arith.const {value = 20} : core.i32
-      scf.yield %1
-    }
-    scf.default {
-      %2 = arith.const {value = 99} : core.i32
-      scf.yield %2
-    }
+    func.return
   }
-  func.return
 }"#,
         )
     }
@@ -1353,7 +1326,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, Vec<String>) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
         let last_ops: Vec<String> = blocks
@@ -1373,24 +1349,26 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_consecutive_if {
-  %cond1 = arith.const {value = true} : core.i1
-  %0 = scf.if %cond1 : core.i32 {
-    %1 = arith.const {value = 1} : core.i32
-    scf.yield %1
-  } {
-    %2 = arith.const {value = 2} : core.i32
-    scf.yield %2
+  func.func @test_fn() -> core.i32 {
+    %cond1 = arith.const {value = true} : core.i1
+    %0 = scf.if %cond1 : core.i32 {
+      %1 = arith.const {value = 1} : core.i32
+      scf.yield %1
+    } {
+      %2 = arith.const {value = 2} : core.i32
+      scf.yield %2
+    }
+    %cond2 = arith.const {value = false} : core.i1
+    %3 = scf.if %cond2 : core.i32 {
+      %4 = arith.const {value = 10} : core.i32
+      scf.yield %4
+    } {
+      %5 = arith.const {value = 20} : core.i32
+      scf.yield %5
+    }
+    %6 = arith.add %0, %3 : core.i32
+    func.return %6
   }
-  %cond2 = arith.const {value = false} : core.i1
-  %3 = scf.if %cond2 : core.i32 {
-    %4 = arith.const {value = 10} : core.i32
-    scf.yield %4
-  } {
-    %5 = arith.const {value = 20} : core.i32
-    scf.yield %5
-  }
-  %6 = arith.add %0, %3 : core.i32
-  func.return %6
 }"#,
         )
     }
@@ -1401,7 +1379,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, Vec<String>) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
         let last_ops: Vec<String> = blocks
@@ -1467,26 +1448,28 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_switch_3cases {
-  %disc = arith.const {value = 2} : core.i32
-  scf.switch %disc {
-    scf.case {value = 0} {
-      %0 = arith.const {value = 100} : core.i32
-      scf.yield %0
+  func.func @test_fn() -> core.nil {
+    %disc = arith.const {value = 2} : core.i32
+    scf.switch %disc {
+      scf.case {value = 0} {
+        %0 = arith.const {value = 100} : core.i32
+        scf.yield %0
+      }
+      scf.case {value = 1} {
+        %1 = arith.const {value = 200} : core.i32
+        scf.yield %1
+      }
+      scf.case {value = 2} {
+        %2 = arith.const {value = 300} : core.i32
+        scf.yield %2
+      }
+      scf.default {
+        %3 = arith.const {value = 999} : core.i32
+        scf.yield %3
+      }
     }
-    scf.case {value = 1} {
-      %1 = arith.const {value = 200} : core.i32
-      scf.yield %1
-    }
-    scf.case {value = 2} {
-      %2 = arith.const {value = 300} : core.i32
-      scf.yield %2
-    }
-    scf.default {
-      %3 = arith.const {value = 999} : core.i32
-      scf.yield %3
-    }
+    func.return
   }
-  func.return
 }"#,
         )
     }
@@ -1581,31 +1564,10 @@ mod tests {
         )
     }
 
-    /// Lower and check switch for modules where scf ops are inside func.func.
-    /// Returns (block_count, all_ops, last_ops) from the function body.
-    #[salsa::tracked]
-    fn lower_and_check_switch_in_func(
-        db: &dyn salsa::Database,
-        module: core::Module<'_>,
-    ) -> (usize, Vec<String>, Vec<String>) {
-        let lowered = lower_scf_to_cf(db, module);
-        let func_op =
-            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
-                .unwrap();
-        let body = func_op.body(db);
-        let blocks = body.blocks(db);
-        let all_ops = collect_all_op_names(db, &body);
-        let last_ops: Vec<String> = blocks
-            .iter()
-            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
-            .collect();
-        (blocks.len(), all_ops, last_ops)
-    }
-
     #[salsa_test]
     fn test_scf_switch_block_arg_discriminant(db: &salsa::DatabaseImpl) {
         let module = make_scf_switch_block_arg_disc_module(db);
-        let (block_count, all_ops, last_ops) = lower_and_check_switch_in_func(db, module);
+        let (block_count, all_ops, last_ops) = lower_and_check_switch(db, module);
 
         // No scf ops should remain
         assert!(
@@ -1720,18 +1682,20 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_nested_capture {
-  %cond = arith.const {value = true} : core.i1
-  %x = scf.if %cond : core.i32 {
-    %0 = arith.const {value = 42} : core.i32
-    scf.yield %0
-  } {
-    %1 = arith.const {value = 0} : core.i32
-    scf.yield %1
-  }
-  func.func @inner() -> core.nil {
+  func.func @test_fn() -> core.i32 {
+    %cond = arith.const {value = true} : core.i1
+    %x = scf.if %cond : core.i32 {
+      %0 = arith.const {value = 42} : core.i32
+      scf.yield %0
+    } {
+      %1 = arith.const {value = 0} : core.i32
+      scf.yield %1
+    }
+    func.func @inner() -> core.nil {
+      func.return %x
+    }
     func.return %x
   }
-  func.return %x
 }"#,
         )
     }
@@ -1761,7 +1725,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (bool, bool, bool, bool) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
 
         let all_ops = collect_all_op_names(db, &body);
@@ -1842,14 +1809,16 @@ mod tests {
         parse_test_module(
             db,
             r#"core.module @test_switch_default_only {
-  %disc = arith.const {value = 0} : core.i32
-  scf.switch %disc {
-    scf.default {
-      %0 = arith.const {value = 99} : core.i32
-      scf.yield %0
+  func.func @test_fn() -> core.nil {
+    %disc = arith.const {value = 0} : core.i32
+    scf.switch %disc {
+      scf.default {
+        %0 = arith.const {value = 99} : core.i32
+        scf.yield %0
+      }
     }
+    func.return
   }
-  func.return
 }"#,
         )
     }
@@ -1862,7 +1831,10 @@ mod tests {
         module: core::Module<'_>,
     ) -> (usize, Vec<String>, bool, bool, usize, String) {
         let lowered = lower_scf_to_cf(db, module);
-        let body = lowered.body(db);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
         let blocks = body.blocks(db);
         let all_ops = collect_all_op_names(db, &body);
 
