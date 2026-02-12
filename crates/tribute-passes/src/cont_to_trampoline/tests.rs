@@ -56,8 +56,11 @@ fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
     let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
 
     // Create marker block args for suspend blocks (required by collect_suspend_arms)
+    let state_ref =
+        trunk_ir::dialect::core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
     let marker_arg1 = {
         let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
         attrs.insert(
             Symbol::new("op_name"),
             Attribute::Symbol(Symbol::new("get")),
@@ -67,6 +70,7 @@ fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
 
     let marker_arg2 = {
         let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
         attrs.insert(
             Symbol::new("op_name"),
             Attribute::Symbol(Symbol::new("set")),

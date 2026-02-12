@@ -99,31 +99,51 @@ pub fn collect_suspend_arms<'db>(
             )
         });
         let attrs = marker_arg.attrs(db);
-        let ability_ref = attrs.get(&Symbol::new("ability_ref")).and_then(|a| {
-            if let Attribute::Type(ty) = a {
-                core::AbilityRefType::from_type(db, *ty).and_then(|ar| ar.name(db))
-            } else {
-                None
-            }
-        });
-        let op_name = attrs.get(&Symbol::new("op_name")).and_then(|a| {
-            if let Attribute::Symbol(s) = a {
-                Some(*s)
-            } else {
-                None
-            }
-        });
+        let ability_ref = attrs
+            .get(&Symbol::new("ability_ref"))
+            .and_then(|a| {
+                if let Attribute::Type(ty) = a {
+                    core::AbilityRefType::from_type(db, *ty).and_then(|ar| ar.name(db))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "collect_suspend_arms: suspend block at index {} has no valid \
+                     'ability_ref' attribute on marker arg. \
+                     Attrs: {:?}, Block: {:?}",
+                    i, attrs, block,
+                )
+            });
+        let op_name = attrs
+            .get(&Symbol::new("op_name"))
+            .and_then(|a| {
+                if let Attribute::Symbol(s) = a {
+                    Some(*s)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "collect_suspend_arms: suspend block at index {} has no valid \
+                     'op_name' attribute on marker arg. \
+                     Attrs: {:?}, Block: {:?}",
+                    i, attrs, block,
+                )
+            });
 
         // Use hash-based dispatch: compute a stable index from ability+op_name.
-        let expected_op_idx = compute_op_idx(ability_ref, op_name);
+        let expected_op_idx = compute_op_idx(Some(ability_ref), Some(op_name));
         assert!(
             seen_op_indices.insert(expected_op_idx),
             "compute_op_idx collision in handler dispatch: op_idx {} appears twice \
-             (ability={:?}, op={:?}). This indicates a hash collision that would \
+             (ability={}, op={}). This indicates a hash collision that would \
              cause silent mis-dispatch at runtime.",
             expected_op_idx,
-            ability_ref.map(|s| s.to_string()),
-            op_name.map(|s| s.to_string()),
+            ability_ref,
+            op_name,
         );
         arms.push(SuspendArm {
             expected_op_idx,
