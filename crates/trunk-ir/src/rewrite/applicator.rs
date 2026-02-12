@@ -646,6 +646,7 @@ fn collect_from_region<'db>(
 mod tests {
     use super::*;
     use crate::dialect::{arith, core};
+    use crate::parser::parse_test_module;
     use crate::rewrite::TypeConverter;
     use crate::types::DialectType;
     use crate::{Attribute, BlockId, DialectOp, Location, PathId, Span, Symbol, ValueDef, idvec};
@@ -698,39 +699,24 @@ mod tests {
     /// Create a test module with an arith.const operation.
     #[salsa::tracked]
     fn make_const_module(db: &dyn salsa::Database) -> Module<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        let op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42)).as_operation();
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![op]);
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, Symbol::new("test"), region)
+        parse_test_module(
+            db,
+            r#"core.module @test {
+  %0 = arith.const {value = 42} : core.i32
+}"#,
+        )
     }
 
     /// Create a test module with an arith.mul operation (not matched by pattern).
     #[salsa::tracked]
     fn make_other_module(db: &dyn salsa::Database) -> Module<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create dummy values for mul operands
-        let dummy_const = arith::r#const(db, location, i32_ty, Attribute::IntBits(5));
-        let lhs = dummy_const.result(db);
-        let rhs = dummy_const.result(db);
-
-        let const_op = dummy_const.as_operation();
-        let mul_op = arith::mul(db, location, lhs, rhs, i32_ty).as_operation();
-        let block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![const_op, mul_op],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, Symbol::new("test"), region)
+            r#"core.module @test {
+  %0 = arith.const {value = 5} : core.i32
+  %1 = arith.mul %0, %0 : core.i32
+}"#,
+        )
     }
 
     /// Apply patterns and return results (tracked to enable IR creation during rewrite).
@@ -836,23 +822,14 @@ mod tests {
     /// Create a module with a mul operation that uses i32 operands.
     #[salsa::tracked]
     fn make_mul_module_i32(db: &dyn salsa::Database) -> Module<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        let lhs = arith::r#const(db, location, i32_ty, Attribute::IntBits(3));
-        let rhs = arith::r#const(db, location, i32_ty, Attribute::IntBits(4));
-        let mul = arith::mul(db, location, lhs.result(db), rhs.result(db), i32_ty);
-
-        let block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![lhs.as_operation(), rhs.as_operation(), mul.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, Symbol::new("test"), region)
+            r#"core.module @test {
+  %0 = arith.const {value = 3} : core.i32
+  %1 = arith.const {value = 4} : core.i32
+  %2 = arith.mul %0, %1 : core.i32
+}"#,
+        )
     }
 
     /// Apply with type converter that converts i32 → i64.
@@ -918,31 +895,14 @@ mod tests {
     /// This tests that block argument references are preserved after rewriting.
     #[salsa::tracked]
     fn make_module_with_block_arg_usage(db: &dyn salsa::Database) -> Module<'_> {
-        use crate::BlockArg;
-
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create a block with one argument
-        let block_id = BlockId::fresh();
-        let block_arg = BlockArg::of_type(db, i32_ty);
-        let block_arg_value = Value::new(db, ValueDef::BlockArg(block_id), 0);
-
-        // Create an operation that uses the block argument
-        // mul(block_arg, 42) - using block_arg as first operand
-        let const42 = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
-        let mul = arith::mul(db, location, block_arg_value, const42.result(db), i32_ty);
-
-        let block = Block::new(
+        parse_test_module(
             db,
-            block_id,
-            location,
-            idvec![block_arg],
-            idvec![const42.as_operation(), mul.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, Symbol::new("test"), region)
+            r#"core.module @test {
+  ^bb0(%arg0: core.i32):
+    %0 = arith.const {value = 42} : core.i32
+    %1 = arith.mul %arg0, %0 : core.i32
+}"#,
+        )
     }
 
     /// Apply patterns to module with block arg usage.
@@ -1051,77 +1011,21 @@ mod tests {
     /// Test that block arguments in nested regions are handled correctly.
     #[salsa::tracked]
     fn make_module_with_nested_block_args(db: &dyn salsa::Database) -> Module<'_> {
-        use crate::BlockArg;
-        use crate::dialect::scf;
-
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        let location = Location::new(path, Span::new(0, 0));
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create outer block with an argument
-        let outer_block_id = BlockId::fresh();
-        let outer_block_arg = BlockArg::of_type(db, i32_ty);
-        let outer_arg_value = Value::new(db, ValueDef::BlockArg(outer_block_id), 0);
-
-        // Create a condition for scf.if
-        let const1 = arith::r#const(
+        parse_test_module(
             db,
-            location,
-            core::I1::new(db).as_type(),
-            Attribute::Bool(true),
-        );
-
-        // Create then block that uses the outer block argument
-        let then_block_id = BlockId::fresh();
-        // Use the outer block argument inside the then region
-        let const42 = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
-        let then_add = arith::add(db, location, outer_arg_value, const42.result(db), i32_ty);
-        let then_yield = scf::r#yield(db, location, [then_add.result(db)]);
-        let then_block = Block::new(
-            db,
-            then_block_id,
-            location,
-            idvec![],
-            idvec![
-                const42.as_operation(),
-                then_add.as_operation(),
-                then_yield.as_operation(),
-            ],
-        );
-        let then_region = Region::new(db, location, idvec![then_block]);
-
-        // Create else block
-        let else_block_id = BlockId::fresh();
-        let const0 = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
-        let else_yield = scf::r#yield(db, location, [const0.result(db)]);
-        let else_block = Block::new(
-            db,
-            else_block_id,
-            location,
-            idvec![],
-            idvec![const0.as_operation(), else_yield.as_operation()],
-        );
-        let else_region = Region::new(db, location, idvec![else_block]);
-
-        // Create scf.if operation
-        let if_op = scf::r#if(
-            db,
-            location,
-            const1.result(db),
-            i32_ty,
-            then_region,
-            else_region,
-        );
-
-        let outer_block = Block::new(
-            db,
-            outer_block_id,
-            location,
-            idvec![outer_block_arg],
-            idvec![const1.as_operation(), if_op.as_operation()],
-        );
-        let outer_region = Region::new(db, location, idvec![outer_block]);
-        Module::create(db, location, Symbol::new("test"), outer_region)
+            r#"core.module @test {
+  ^bb0(%arg0: core.i32):
+    %0 = arith.const {value = true} : core.i1
+    %1 = scf.if %0 : core.i32 {
+      %2 = arith.const {value = 42} : core.i32
+      %3 = arith.add %arg0, %2 : core.i32
+      scf.yield %3
+    } {
+      %4 = arith.const {value = 0} : core.i32
+      scf.yield %4
+    }
+}"#,
+        )
     }
 
     /// Apply patterns to module with nested regions.

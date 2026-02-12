@@ -834,6 +834,7 @@ fn discriminant_type<'db>(
 mod tests {
     use super::*;
     use crate::dialect::{arith, core, func, scf};
+    use crate::parser::parse_test_module;
     use crate::{Attribute, DialectOp, DialectType, PathId, Span};
     use salsa_test_macros::salsa_test;
 
@@ -864,63 +865,20 @@ mod tests {
     /// Create module: scf.if with simple then/else yielding constants.
     #[salsa::tracked]
     fn make_scf_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        // Condition
-        let cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
-
-        // Then region: yield 42
-        let then_const = arith::Const::i32(db, location, 42);
-        let then_yield = scf::r#yield(db, location, [then_const.result(db)]);
-        let then_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![then_const.as_operation(), then_yield.as_operation()],
-        );
-        let then_region = Region::new(db, location, idvec![then_block]);
-
-        // Else region: yield 0
-        let else_const = arith::Const::i32(db, location, 0);
-        let else_yield = scf::r#yield(db, location, [else_const.result(db)]);
-        let else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![else_const.as_operation(), else_yield.as_operation()],
-        );
-        let else_region = Region::new(db, location, idvec![else_block]);
-
-        // scf.if
-        let if_op = scf::r#if(
-            db,
-            location,
-            cond.result(db),
-            i32_ty,
-            then_region,
-            else_region,
-        );
-
-        // Return the if result
-        let ret = func::r#return(db, location, [if_op.result(db)]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                cond.as_operation(),
-                if_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test".into(), body)
+            r#"core.module @test {
+  %0 = arith.const {value = true} : core.i1
+  %1 = scf.if %0 : core.i32 {
+    %2 = arith.const {value = 42} : core.i32
+    scf.yield %2
+  } {
+    %3 = arith.const {value = 0} : core.i32
+    scf.yield %3
+  }
+  func.return %1
+}"#,
+        )
     }
 
     /// Lower module and return (block_count, all_op_names, per-block last op names, merge_block_arg_count).
@@ -1124,91 +1082,25 @@ mod tests {
 
     #[salsa::tracked]
     fn make_scf_loop_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        // Init value
-        let init = arith::Const::i32(db, location, 0);
-
-        // Loop body: receives loop var, condition check, break or continue
-        let body_id = BlockId::fresh();
-        let body_arg = BlockArg::of_type(db, i32_ty);
-        let loop_var = Value::new(db, ValueDef::BlockArg(body_id), 0);
-
-        // Condition: loop_var < 10
-        let limit = arith::Const::i32(db, location, 10);
-        let cond = arith::cmp_lt(db, location, loop_var, limit.result(db), i1_ty);
-
-        // Then: continue with loop_var + 1
-        let one = arith::Const::i32(db, location, 1);
-        let next = arith::add(db, location, loop_var, one.result(db), i32_ty);
-        let cont_op = scf::r#continue(db, location, vec![next.result(db)]);
-        let then_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                one.as_operation(),
-                next.as_operation(),
-                cont_op.as_operation()
-            ],
-        );
-        let then_region = Region::new(db, location, idvec![then_block]);
-
-        // Else: break with loop_var
-        let break_op = scf::r#break(db, location, loop_var);
-        let else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![break_op.as_operation()],
-        );
-        let else_region = Region::new(db, location, idvec![else_block]);
-
-        // Inner if
-        let if_op = scf::r#if(
-            db,
-            location,
-            cond.result(db),
-            i32_ty,
-            then_region,
-            else_region,
-        );
-
-        let body_block = Block::new(
-            db,
-            body_id,
-            location,
-            idvec![body_arg],
-            idvec![
-                limit.as_operation(),
-                cond.as_operation(),
-                if_op.as_operation()
-            ],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        // scf.loop
-        let loop_op = scf::r#loop(db, location, vec![init.result(db)], i32_ty, body_region);
-
-        let ret = func::r#return(db, location, [loop_op.result(db)]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                init.as_operation(),
-                loop_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_loop".into(), body)
+            r#"core.module @test_loop {
+  %init = arith.const {value = 0} : core.i32
+  %0 = scf.loop %init : core.i32 {
+    ^bb0(%loop_var: core.i32):
+      %limit = arith.const {value = 10} : core.i32
+      %cond = arith.cmp_lt %loop_var, %limit : core.i1
+      %1 = scf.if %cond : core.i32 {
+        %one = arith.const {value = 1} : core.i32
+        %next = arith.add %loop_var, %one : core.i32
+        scf.continue %next
+      } {
+        scf.break %loop_var
+      }
+  }
+  func.return %0
+}"#,
+        )
     }
 
     /// Lower loop module and return (block_count, all_op_names).
@@ -1262,110 +1154,27 @@ mod tests {
     /// Simulates case matching patterns like `if x then (if y then a else b) else c`.
     #[salsa::tracked]
     fn make_nested_scf_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        // Outer condition
-        let outer_cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
-        // Inner condition
-        let inner_cond = arith::r#const(db, location, i1_ty, Attribute::Bool(false));
-
-        // Inner then: yield 1
-        let inner_then_const = arith::Const::i32(db, location, 1);
-        let inner_then_yield = scf::r#yield(db, location, [inner_then_const.result(db)]);
-        let inner_then_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                inner_then_const.as_operation(),
-                inner_then_yield.as_operation()
-            ],
-        );
-        let inner_then_region = Region::new(db, location, idvec![inner_then_block]);
-
-        // Inner else: yield 2
-        let inner_else_const = arith::Const::i32(db, location, 2);
-        let inner_else_yield = scf::r#yield(db, location, [inner_else_const.result(db)]);
-        let inner_else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                inner_else_const.as_operation(),
-                inner_else_yield.as_operation()
-            ],
-        );
-        let inner_else_region = Region::new(db, location, idvec![inner_else_block]);
-
-        // Inner scf.if
-        let inner_if = scf::r#if(
-            db,
-            location,
-            inner_cond.result(db),
-            i32_ty,
-            inner_then_region,
-            inner_else_region,
-        );
-
-        // Outer then region: inner_cond + inner_if + yield(inner_if result)
-        let outer_then_yield = scf::r#yield(db, location, [inner_if.result(db)]);
-        let outer_then_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                inner_cond.as_operation(),
-                inner_if.as_operation(),
-                outer_then_yield.as_operation()
-            ],
-        );
-        let outer_then_region = Region::new(db, location, idvec![outer_then_block]);
-
-        // Outer else: yield 3
-        let outer_else_const = arith::Const::i32(db, location, 3);
-        let outer_else_yield = scf::r#yield(db, location, [outer_else_const.result(db)]);
-        let outer_else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                outer_else_const.as_operation(),
-                outer_else_yield.as_operation()
-            ],
-        );
-        let outer_else_region = Region::new(db, location, idvec![outer_else_block]);
-
-        // Outer scf.if
-        let outer_if = scf::r#if(
-            db,
-            location,
-            outer_cond.result(db),
-            i32_ty,
-            outer_then_region,
-            outer_else_region,
-        );
-
-        let ret = func::r#return(db, location, [outer_if.result(db)]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                outer_cond.as_operation(),
-                outer_if.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_nested_if".into(), body)
+            r#"core.module @test_nested_if {
+  %outer_cond = arith.const {value = true} : core.i1
+  %0 = scf.if %outer_cond : core.i32 {
+    %inner_cond = arith.const {value = false} : core.i1
+    %1 = scf.if %inner_cond : core.i32 {
+      %2 = arith.const {value = 1} : core.i32
+      scf.yield %2
+    } {
+      %3 = arith.const {value = 2} : core.i32
+      scf.yield %3
+    }
+    scf.yield %1
+  } {
+    %4 = arith.const {value = 3} : core.i32
+    scf.yield %4
+  }
+  func.return %0
+}"#,
+        )
     }
 
     #[salsa::tracked]
@@ -1515,81 +1324,27 @@ mod tests {
     /// Create module with scf.switch: 2 cases + default.
     #[salsa::tracked]
     fn make_scf_switch_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-
-        // Discriminant
-        let disc = arith::Const::i32(db, location, 1);
-
-        // Case 0: yield 10
-        let case0_const = arith::Const::i32(db, location, 10);
-        let case0_yield = scf::r#yield(db, location, [case0_const.result(db)]);
-        let case0_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![case0_const.as_operation(), case0_yield.as_operation()],
-        );
-        let case0_region = Region::new(db, location, idvec![case0_block]);
-        let case0 = scf::r#case(db, location, Attribute::IntBits(0), case0_region);
-
-        // Case 1: yield 20
-        let case1_const = arith::Const::i32(db, location, 20);
-        let case1_yield = scf::r#yield(db, location, [case1_const.result(db)]);
-        let case1_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![case1_const.as_operation(), case1_yield.as_operation()],
-        );
-        let case1_region = Region::new(db, location, idvec![case1_block]);
-        let case1 = scf::r#case(db, location, Attribute::IntBits(1), case1_region);
-
-        // Default: yield 99
-        let default_const = arith::Const::i32(db, location, 99);
-        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
-        let default_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![default_const.as_operation(), default_yield.as_operation()],
-        );
-        let default_region = Region::new(db, location, idvec![default_block]);
-        let default_op = scf::default(db, location, default_region);
-
-        // Switch body: case ops + default
-        let switch_body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                case0.as_operation(),
-                case1.as_operation(),
-                default_op.as_operation()
-            ],
-        );
-        let switch_body = Region::new(db, location, idvec![switch_body_block]);
-
-        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
-
-        let ret = func::r#return(db, location, []);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                disc.as_operation(),
-                switch_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_switch".into(), body)
+            r#"core.module @test_switch {
+  %disc = arith.const {value = 1} : core.i32
+  scf.switch %disc {
+    scf.case {value = 0} {
+      %0 = arith.const {value = 10} : core.i32
+      scf.yield %0
+    }
+    scf.case {value = 1} {
+      %1 = arith.const {value = 20} : core.i32
+      scf.yield %1
+    }
+    scf.default {
+      %2 = arith.const {value = 99} : core.i32
+      scf.yield %2
+    }
+  }
+  func.return
+}"#,
+        )
     }
 
     #[salsa::tracked]
@@ -1615,100 +1370,29 @@ mod tests {
     /// merge block successor references remain valid after transformation.
     #[salsa::tracked]
     fn make_consecutive_scf_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        // First condition
-        let cond1 = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
-
-        // First scf.if: yield 1 or 2
-        let then1_const = arith::Const::i32(db, location, 1);
-        let then1_yield = scf::r#yield(db, location, [then1_const.result(db)]);
-        let then1_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![then1_const.as_operation(), then1_yield.as_operation()],
-        );
-        let then1_region = Region::new(db, location, idvec![then1_block]);
-
-        let else1_const = arith::Const::i32(db, location, 2);
-        let else1_yield = scf::r#yield(db, location, [else1_const.result(db)]);
-        let else1_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![else1_const.as_operation(), else1_yield.as_operation()],
-        );
-        let else1_region = Region::new(db, location, idvec![else1_block]);
-
-        let if1 = scf::r#if(
-            db,
-            location,
-            cond1.result(db),
-            i32_ty,
-            then1_region,
-            else1_region,
-        );
-
-        // Second condition
-        let cond2 = arith::r#const(db, location, i1_ty, Attribute::Bool(false));
-
-        // Second scf.if: yield 10 or 20
-        let then2_const = arith::Const::i32(db, location, 10);
-        let then2_yield = scf::r#yield(db, location, [then2_const.result(db)]);
-        let then2_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![then2_const.as_operation(), then2_yield.as_operation()],
-        );
-        let then2_region = Region::new(db, location, idvec![then2_block]);
-
-        let else2_const = arith::Const::i32(db, location, 20);
-        let else2_yield = scf::r#yield(db, location, [else2_const.result(db)]);
-        let else2_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![else2_const.as_operation(), else2_yield.as_operation()],
-        );
-        let else2_region = Region::new(db, location, idvec![else2_block]);
-
-        let if2 = scf::r#if(
-            db,
-            location,
-            cond2.result(db),
-            i32_ty,
-            then2_region,
-            else2_region,
-        );
-
-        // Use both results: add(if1_result, if2_result)
-        let add_op = arith::add(db, location, if1.result(db), if2.result(db), i32_ty);
-        let ret = func::r#return(db, location, [add_op.result(db)]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                cond1.as_operation(),
-                if1.as_operation(),
-                cond2.as_operation(),
-                if2.as_operation(),
-                add_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_consecutive_if".into(), body)
+            r#"core.module @test_consecutive_if {
+  %cond1 = arith.const {value = true} : core.i1
+  %0 = scf.if %cond1 : core.i32 {
+    %1 = arith.const {value = 1} : core.i32
+    scf.yield %1
+  } {
+    %2 = arith.const {value = 2} : core.i32
+    scf.yield %2
+  }
+  %cond2 = arith.const {value = false} : core.i1
+  %3 = scf.if %cond2 : core.i32 {
+    %4 = arith.const {value = 10} : core.i32
+    scf.yield %4
+  } {
+    %5 = arith.const {value = 20} : core.i32
+    scf.yield %5
+  }
+  %6 = arith.add %0, %3 : core.i32
+  func.return %6
+}"#,
+        )
     }
 
     #[salsa::tracked]
@@ -1780,61 +1464,31 @@ mod tests {
     /// across multiple intermediate cond_br blocks.
     #[salsa::tracked]
     fn make_scf_switch_3cases_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-
-        let disc = arith::Const::i32(db, location, 2);
-
-        // Helper to make a case region that yields a constant
-        let make_case_region = |val: i32| -> Region<'_> {
-            let c = arith::Const::i32(db, location, val);
-            let y = scf::r#yield(db, location, [c.result(db)]);
-            let block = Block::new(
-                db,
-                BlockId::fresh(),
-                location,
-                idvec![],
-                idvec![c.as_operation(), y.as_operation()],
-            );
-            Region::new(db, location, idvec![block])
-        };
-
-        let case0 = scf::r#case(db, location, Attribute::IntBits(0), make_case_region(100));
-        let case1 = scf::r#case(db, location, Attribute::IntBits(1), make_case_region(200));
-        let case2 = scf::r#case(db, location, Attribute::IntBits(2), make_case_region(300));
-
-        let default_region = make_case_region(999);
-        let default_op = scf::default(db, location, default_region);
-
-        let switch_body_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                case0.as_operation(),
-                case1.as_operation(),
-                case2.as_operation(),
-                default_op.as_operation()
-            ],
-        );
-        let switch_body = Region::new(db, location, idvec![switch_body_block]);
-
-        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
-        let ret = func::r#return(db, location, []);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                disc.as_operation(),
-                switch_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_switch_3cases".into(), body)
+            r#"core.module @test_switch_3cases {
+  %disc = arith.const {value = 2} : core.i32
+  scf.switch %disc {
+    scf.case {value = 0} {
+      %0 = arith.const {value = 100} : core.i32
+      scf.yield %0
+    }
+    scf.case {value = 1} {
+      %1 = arith.const {value = 200} : core.i32
+      scf.yield %1
+    }
+    scf.case {value = 2} {
+      %2 = arith.const {value = 300} : core.i32
+      scf.yield %2
+    }
+    scf.default {
+      %3 = arith.const {value = 999} : core.i32
+      scf.yield %3
+    }
+  }
+  func.return
+}"#,
+        )
     }
 
     #[salsa_test]
@@ -1907,61 +1561,23 @@ mod tests {
     /// testing that discriminant_type resolves the actual type.
     #[salsa::tracked]
     fn make_scf_switch_block_arg_disc_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Entry block has a block argument as discriminant
-        let entry_id = BlockId::fresh();
-        let entry_arg = BlockArg::of_type(db, i32_ty);
-        let disc_value = Value::new(db, ValueDef::BlockArg(entry_id), 0);
-
-        // Case 0: yield 10
-        let case0_const = arith::Const::i32(db, location, 10);
-        let case0_yield = scf::r#yield(db, location, [case0_const.result(db)]);
-        let case0_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![case0_const.as_operation(), case0_yield.as_operation()],
-        );
-        let case0_region = Region::new(db, location, idvec![case0_block]);
-        let case0 = scf::r#case(db, location, Attribute::IntBits(0), case0_region);
-
-        // Default: yield 99
-        let default_const = arith::Const::i32(db, location, 99);
-        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
-        let default_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![default_const.as_operation(), default_yield.as_operation()],
-        );
-        let default_region = Region::new(db, location, idvec![default_block]);
-        let default_op = scf::default(db, location, default_region);
-
-        let switch_body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![case0.as_operation(), default_op.as_operation()],
-        );
-        let switch_body = Region::new(db, location, idvec![switch_body_block]);
-
-        let switch_op = scf::switch(db, location, disc_value, switch_body);
-        let ret = func::r#return(db, location, []);
-
-        let entry = Block::new(
-            db,
-            entry_id,
-            location,
-            idvec![entry_arg],
-            idvec![switch_op.as_operation(), ret.as_operation()],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_switch_block_arg".into(), body)
+            r#"core.module @test_switch_block_arg {
+  ^bb0(%disc: core.i32):
+    scf.switch %disc {
+      scf.case {value = 0} {
+        %0 = arith.const {value = 10} : core.i32
+        scf.yield %0
+      }
+      scf.default {
+        %1 = arith.const {value = 99} : core.i32
+        scf.yield %1
+      }
+    }
+    func.return
+}"#,
+        )
     }
 
     #[salsa_test]
@@ -2079,73 +1695,23 @@ mod tests {
     /// ```
     #[salsa::tracked]
     fn make_scf_if_with_nested_capture_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-
-        // Condition
-        let cond = arith::r#const(db, location, i1_ty, Attribute::Bool(true));
-
-        // Then: yield 42
-        let then_const = arith::Const::i32(db, location, 42);
-        let then_yield = scf::r#yield(db, location, [then_const.result(db)]);
-        let then_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![then_const.as_operation(), then_yield.as_operation()],
-        );
-        let then_region = Region::new(db, location, idvec![then_block]);
-
-        // Else: yield 0
-        let else_const = arith::Const::i32(db, location, 0);
-        let else_yield = scf::r#yield(db, location, [else_const.result(db)]);
-        let else_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![else_const.as_operation(), else_yield.as_operation()],
-        );
-        let else_region = Region::new(db, location, idvec![else_block]);
-
-        // scf.if -> %x
-        let if_op = scf::r#if(
-            db,
-            location,
-            cond.result(db),
-            i32_ty,
-            then_region,
-            else_region,
-        );
-        let if_result = if_op.result(db);
-
-        // func.func @inner whose body captures %x (the scf.if result)
-        let inner_func = func::Func::build(db, location, "inner", idvec![], nil_ty, |bb| {
-            // Use the scf.if result inside the nested func body
-            let inner_ret = func::r#return(db, location, [if_result]);
-            bb.op(inner_ret);
-        });
-
-        // Outer return
-        let ret = func::r#return(db, location, [if_result]);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                cond.as_operation(),
-                if_op.as_operation(),
-                inner_func.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_nested_capture".into(), body)
+            r#"core.module @test_nested_capture {
+  %cond = arith.const {value = true} : core.i1
+  %x = scf.if %cond : core.i32 {
+    %0 = arith.const {value = 42} : core.i32
+    scf.yield %0
+  } {
+    %1 = arith.const {value = 0} : core.i32
+    scf.yield %1
+  }
+  func.func @inner() -> core.nil {
+    func.return %x
+  }
+  func.return %x
+}"#,
+        )
     }
 
     /// Recursively collect all values referenced as operands in a region.
@@ -2251,52 +1817,19 @@ mod tests {
     /// ```
     #[salsa::tracked]
     fn make_scf_switch_default_only_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-
-        let disc = arith::Const::i32(db, location, 0);
-
-        // Default: yield 99
-        let default_const = arith::Const::i32(db, location, 99);
-        let default_yield = scf::r#yield(db, location, [default_const.result(db)]);
-        let default_block = Block::new(
+        parse_test_module(
             db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![default_const.as_operation(), default_yield.as_operation()],
-        );
-        let default_region = Region::new(db, location, idvec![default_block]);
-        let default_op = scf::default(db, location, default_region);
-
-        // Switch body: only default, no cases
-        let switch_body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![default_op.as_operation()],
-        );
-        let switch_body = Region::new(db, location, idvec![switch_body_block]);
-
-        let switch_op = scf::switch(db, location, disc.result(db), switch_body);
-
-        // We need a func that returns the switch result — but scf.switch doesn't
-        // produce a result directly. Use a dummy return to exercise the merge block.
-        let ret = func::r#return(db, location, []);
-
-        let entry = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                disc.as_operation(),
-                switch_op.as_operation(),
-                ret.as_operation()
-            ],
-        );
-        let body = Region::new(db, location, idvec![entry]);
-        core::Module::create(db, location, "test_switch_default_only".into(), body)
+            r#"core.module @test_switch_default_only {
+  %disc = arith.const {value = 0} : core.i32
+  scf.switch %disc {
+    scf.default {
+      %0 = arith.const {value = 99} : core.i32
+      scf.yield %0
+    }
+  }
+  func.return
+}"#,
+        )
     }
 
     /// Lower the default-only switch module and return check results.
