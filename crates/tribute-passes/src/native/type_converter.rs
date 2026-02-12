@@ -29,9 +29,51 @@
 //! reference types. Most conversions between pointer types are no-ops.
 
 use tribute_ir::dialect::{ability, closure, tribute_rt};
-use trunk_ir::dialect::{adt, cont, core};
+use trunk_ir::dialect::{adt, clif, cont, core};
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
-use trunk_ir::{DialectType, Type};
+use trunk_ir::{DialectOp, DialectType, Symbol, Type};
+
+/// Name of the runtime allocation function.
+const ALLOC_FN: &str = "__tribute_alloc";
+
+/// Generate boxing operations: allocate + store value, return pointer.
+///
+/// The last operation produces a `core.ptr` result for value mapping.
+fn box_primitive<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    value: trunk_ir::Value<'db>,
+    payload_size: i64,
+) -> Vec<trunk_ir::Operation<'db>> {
+    let ptr_ty = core::Ptr::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
+
+    let mut ops = Vec::new();
+
+    // 1. Allocation size
+    let size_op = clif::iconst(db, location, i64_ty, payload_size);
+    let size_val = size_op.result(db);
+    ops.push(size_op.as_operation());
+
+    // 2. Allocate heap memory
+    let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
+    let ptr_val = call_op.result(db);
+    ops.push(call_op.as_operation());
+
+    // 3. Store value at offset 0
+    let store_op = clif::store(db, location, value, ptr_val, 0);
+    ops.push(store_op.as_operation());
+
+    // 4. Identity pass-through so the last op produces the ptr result.
+    let zero_op = clif::iconst(db, location, i64_ty, 0);
+    let zero_val = zero_op.result(db);
+    ops.push(zero_op.as_operation());
+
+    let identity_op = clif::iadd(db, location, ptr_val, zero_val, ptr_ty);
+    ops.push(identity_op.as_operation());
+
+    ops
+}
 
 /// Create a TypeConverter configured for native backend type conversions.
 ///
@@ -229,18 +271,26 @@ pub fn native_type_converter() -> TypeConverter {
             MaterializeResult::Skip
         })
         // Boxing: primitive -> core.ptr (for polymorphic calls)
-        // Phase 1: treat as no-op (will be properly implemented with RC in M3)
-        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+        // Generates heap allocation + store via clif ops.
+        .add_materialization(|db, location, value, from_ty, to_ty| {
             let to_is_ptr = core::Ptr::from_type(db, to_ty).is_some();
             if !to_is_ptr {
                 return MaterializeResult::Skip;
             }
 
-            // i32/i64 -> ptr: requires heap allocation (RC Phase)
-            if core::I32::from_type(db, from_ty).is_some()
-                || core::I64::from_type(db, from_ty).is_some()
-            {
-                unreachable!("boxing not implemented: i32/i64 -> ptr requires RC phase (M3)");
+            // i32 -> ptr: allocate 4 bytes, store i32
+            if core::I32::from_type(db, from_ty).is_some() {
+                return MaterializeResult::ops(box_primitive(db, location, value, 4));
+            }
+
+            // i64 -> ptr: allocate 8 bytes, store i64
+            if core::I64::from_type(db, from_ty).is_some() {
+                return MaterializeResult::ops(box_primitive(db, location, value, 8));
+            }
+
+            // f64 -> ptr: allocate 8 bytes, store f64
+            if core::F64::from_type(db, from_ty).is_some() {
+                return MaterializeResult::ops(box_primitive(db, location, value, 8));
             }
 
             // nil -> ptr: null pointer
@@ -252,19 +302,28 @@ pub fn native_type_converter() -> TypeConverter {
             MaterializeResult::Skip
         })
         // Unboxing: core.ptr -> primitive (for extracting values)
-        // Phase 1: treat as no-op (will be properly implemented with RC in M3)
-        .add_materialization(|db, _location, _value, from_ty, to_ty| {
+        // Generates clif.load from heap pointer.
+        .add_materialization(|db, location, value, from_ty, to_ty| {
             let from_is_ptr = core::Ptr::from_type(db, from_ty).is_some()
                 || tribute_rt::Any::from_type(db, from_ty).is_some();
             if !from_is_ptr {
                 return MaterializeResult::Skip;
             }
 
-            // ptr -> i32: requires load from heap (RC Phase)
+            // ptr -> i32: load i32 from offset 0
             if core::I32::from_type(db, to_ty).is_some()
                 || tribute_rt::Int::from_type(db, to_ty).is_some()
             {
-                unreachable!("unboxing not implemented: ptr -> i32 requires RC phase (M3)");
+                let i32_ty = core::I32::new(db).as_type();
+                let load_op = clif::load(db, location, value, i32_ty, 0);
+                return MaterializeResult::single(load_op.as_operation());
+            }
+
+            // ptr -> f64: load f64 from offset 0
+            if core::F64::from_type(db, to_ty).is_some() {
+                let f64_ty = core::F64::new(db).as_type();
+                let load_op = clif::load(db, location, value, f64_ty, 0);
+                return MaterializeResult::single(load_op.as_operation());
             }
 
             // ptr -> nil: discard the pointer value
@@ -769,10 +828,10 @@ mod tests {
         assert!(do_materialize_between_struct_types(db));
     }
 
-    // --- Boxing fail-fast (i32 -> ptr, not yet implemented) ---
+    // --- Boxing: i32 -> ptr (generates alloc + store ops) ---
 
     #[salsa::tracked]
-    fn do_materialize_i32_to_ptr(db: &dyn salsa::Database) {
+    fn do_materialize_i32_to_ptr(db: &dyn salsa::Database) -> bool {
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
@@ -780,26 +839,26 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        // Should panic: boxing not implemented
-        converter.materialize(
+        let result = converter.materialize(
             db,
             location,
             value,
             core::I32::new(db).as_type(),
             core::Ptr::new(db).as_type(),
         );
+        // Should produce Ops (alloc + store + identity)
+        matches!(result, Some(MaterializeResult::Ops(_)))
     }
 
     #[salsa_test]
-    #[should_panic(expected = "boxing not implemented")]
-    fn test_materialize_i32_to_ptr_panics(db: &salsa::DatabaseImpl) {
-        do_materialize_i32_to_ptr(db);
+    fn test_materialize_i32_to_ptr_generates_ops(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_i32_to_ptr(db));
     }
 
-    // --- Unboxing fail-fast (ptr -> i32, not yet implemented) ---
+    // --- Unboxing: ptr -> i32 (generates load op) ---
 
     #[salsa::tracked]
-    fn do_materialize_ptr_to_i32(db: &dyn salsa::Database) {
+    fn do_materialize_ptr_to_i32(db: &dyn salsa::Database) -> bool {
         use trunk_ir::{BlockId, Location, PathId, Span, Value, ValueDef};
 
         let converter = native_type_converter();
@@ -807,20 +866,20 @@ mod tests {
         let location = Location::new(path, Span::new(0, 0));
         let value = Value::new(db, ValueDef::BlockArg(BlockId::fresh()), 0);
 
-        // Should panic: unboxing not implemented
-        converter.materialize(
+        let result = converter.materialize(
             db,
             location,
             value,
             core::Ptr::new(db).as_type(),
             core::I32::new(db).as_type(),
         );
+        // Should produce Ops (clif.load)
+        matches!(result, Some(MaterializeResult::Ops(_)))
     }
 
     #[salsa_test]
-    #[should_panic(expected = "unboxing not implemented")]
-    fn test_materialize_ptr_to_i32_panics(db: &salsa::DatabaseImpl) {
-        do_materialize_ptr_to_i32(db);
+    fn test_materialize_ptr_to_i32_generates_ops(db: &salsa::DatabaseImpl) {
+        assert!(do_materialize_ptr_to_i32(db));
     }
 
     // --- Nil conversions ---

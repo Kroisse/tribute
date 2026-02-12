@@ -697,6 +697,10 @@ fn compile_module_to_native<'db>(
     let module = arith_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
+    // Phase 2.7 - Lower tribute_rt boxing/unboxing operations to clif dialect
+    let module =
+        tribute_passes::native::tribute_rt_to_clif::lower(db, module, native_type_converter());
+
     // Phase 3 - Resolve unrealized_conversion_cast operations
     let module = {
         let type_converter = native_type_converter();
