@@ -1,12 +1,13 @@
 use super::*;
+use crate::cont_util::{SuspendArm, collect_suspend_arms, compute_op_idx};
 use salsa_test_macros::salsa_test;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use trunk_ir::dialect::{arith, cont, func, trampoline};
+use trunk_ir::dialect::{arith, cont, func, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
-use trunk_ir::{Attribute, BlockArg, BlockId, IdVec, PathId, Span};
+use trunk_ir::{Attribute, BlockArg, BlockId, DialectOp, IdVec, PathId, Span};
 
 /// Create a shared test location with a fixed span `(0, 0)`.
 ///
@@ -55,8 +56,11 @@ fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
     let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
 
     // Create marker block args for suspend blocks (required by collect_suspend_arms)
+    let state_ref =
+        trunk_ir::dialect::core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
     let marker_arg1 = {
         let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
         attrs.insert(
             Symbol::new("op_name"),
             Attribute::Symbol(Symbol::new("get")),
@@ -66,6 +70,7 @@ fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
 
     let marker_arg2 = {
         let mut attrs = std::collections::BTreeMap::new();
+        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
         attrs.insert(
             Symbol::new("op_name"),
             Attribute::Symbol(Symbol::new("set")),

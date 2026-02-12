@@ -15,6 +15,7 @@ pub mod diagnostic;
 pub mod boxing;
 pub mod closure_lower;
 pub mod cont_to_trampoline;
+pub mod cont_util;
 pub mod evidence;
 pub mod live_vars;
 pub mod native;
