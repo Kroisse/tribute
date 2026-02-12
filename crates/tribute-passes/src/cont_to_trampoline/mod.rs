@@ -36,11 +36,11 @@ use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::scf;
 use trunk_ir::rewrite::{ConversionError, ConversionTarget, PatternApplicator, TypeConverter};
-use trunk_ir::{
-    Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type, Value,
-};
+use trunk_ir::{Block, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type, Value};
+
+// Re-export shared utilities from cont_util so existing internal callers still work.
+pub(crate) use crate::cont_util::{collect_suspend_arms, compute_op_idx, get_region_result_value};
 
 // ============================================================================
 // Public API
@@ -255,50 +255,4 @@ pub fn lower_cont_to_trampoline<'db>(
     Ok(module)
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-pub(crate) fn get_region_result_value<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-) -> Option<Value<'db>> {
-    let blocks = region.blocks(db);
-    let last_block = blocks.last()?;
-    let ops = last_block.operations(db);
-    let last_op = ops.last()?;
-
-    // If the last op is scf.yield, return its first operand (the yielded value)
-    if let Ok(yield_op) = scf::Yield::from_operation(db, *last_op) {
-        return yield_op.values(db).first().copied();
-    }
-
-    // Otherwise, return the first result of the last op
-    last_op.results(db).first().map(|_| last_op.result(db, 0))
-}
-
-/// Compute operation index using hash-based dispatch.
-///
-/// Computes a stable, handler-independent index from ability name and
-/// operation name. Both shift sites and handler dispatch use this function,
-/// ensuring they always agree on the op index regardless of handler
-/// registration order.
-///
-/// NOTE: Uses `FxHasher` from `rustc-hash` for deterministic hashing within
-/// a single compilation session. Cross-version stability is not required
-/// because op indices are never persisted or compared across binaries.
-pub(crate) fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
-    use rustc_hash::FxHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = FxHasher::default();
-
-    if let Some(ability) = ability_ref {
-        ability.to_string().hash(&mut hasher);
-    }
-    if let Some(name) = op_name {
-        name.to_string().hash(&mut hasher);
-    }
-
-    (hasher.finish() % 0x7FFFFFFF) as u32
-}
+// Helpers: see crate::cont_util for shared utilities (compute_op_idx, get_region_result_value, etc.)

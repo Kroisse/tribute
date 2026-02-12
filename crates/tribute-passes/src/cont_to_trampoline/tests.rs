@@ -1,12 +1,13 @@
 use super::*;
+use crate::cont_util::{SuspendArm, collect_suspend_arms, compute_op_idx};
 use salsa_test_macros::salsa_test;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use trunk_ir::dialect::{arith, cont, func, trampoline};
+use trunk_ir::dialect::{arith, cont, func, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
-use trunk_ir::{Attribute, BlockArg, BlockId, IdVec, PathId, Span};
+use trunk_ir::{Attribute, BlockArg, BlockId, DialectOp, IdVec, PathId, Span};
 
 /// Create a shared test location with a fixed span `(0, 0)`.
 ///
