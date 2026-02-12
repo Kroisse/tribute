@@ -1,0 +1,23 @@
+---
+source: crates/trunk-ir/src/parser.rs
+expression: printed
+---
+core.module @test {
+  func.func @f(%disc: core.i32) -> core.i32 {
+    scf.switch %disc {
+      scf.case {value = 0} {
+        %0 = arith.const {value = 100} : core.i32
+        scf.yield %0
+      }
+      scf.case {value = 1} {
+        %1 = arith.const {value = 200} : core.i32
+        scf.yield %1
+      }
+      scf.default {
+        %2 = arith.const {value = 0} : core.i32
+        scf.yield %2
+      }
+    }
+    func.return %disc
+  }
+}

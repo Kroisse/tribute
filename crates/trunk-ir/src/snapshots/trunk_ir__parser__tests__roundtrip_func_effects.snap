@@ -1,0 +1,10 @@
+---
+source: crates/trunk-ir/src/parser.rs
+expression: printed
+---
+core.module @test {
+  func.func @f() -> core.i32 effects core.nil {
+    %0 = arith.const {value = 42} : core.i32
+    func.return %0
+  }
+}

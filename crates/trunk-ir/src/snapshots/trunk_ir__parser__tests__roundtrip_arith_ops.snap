@@ -1,0 +1,16 @@
+---
+source: crates/trunk-ir/src/parser.rs
+expression: printed
+---
+core.module @test {
+  func.func @f(%a: core.i32, %b: core.i32) -> core.i1 {
+    %0 = arith.add %a, %b : core.i32
+    %1 = arith.sub %a, %b : core.i32
+    %2 = arith.mul %a, %b : core.i32
+    %3 = arith.div %a, %b : core.i32
+    %4 = arith.neg %a : core.i32
+    %5 = arith.cmp_eq %a, %b : core.i1
+    %6 = arith.cmp_lt %a, %b : core.i1
+    func.return %5
+  }
+}

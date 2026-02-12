@@ -1,0 +1,16 @@
+---
+source: crates/trunk-ir/src/parser.rs
+expression: printed
+---
+core.module @test {
+  func.func @f(%cond: core.i1) -> core.i32 {
+    %0 = scf.if %cond : core.i32 {
+      %1 = arith.const {value = 1} : core.i32
+      scf.yield %1
+    } {
+      %2 = arith.const {value = 0} : core.i32
+      scf.yield %2
+    }
+    func.return %0
+  }
+}
