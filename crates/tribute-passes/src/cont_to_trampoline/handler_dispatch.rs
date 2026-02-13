@@ -53,11 +53,7 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         let user_result_ty = dispatch.result_type(db);
 
         // Get the body region with child ops (cont.done + cont.suspend)
-        let body_region = op
-            .regions(db)
-            .first()
-            .cloned()
-            .unwrap_or_else(|| Region::new(db, location, IdVec::new()));
+        let body_region = dispatch.body(db);
 
         // Collect suspend arms with their expected op_idx
         let suspend_arms = collect_suspend_arms(db, &body_region);
@@ -474,6 +470,103 @@ pub(crate) fn build_nested_dispatch<'db>(
     if_op.result(db)
 }
 
+/// Remap a value through a substitution chain.
+///
+/// Follows the chain in `value_remap` until a fixed point is reached.
+/// Panics if a cycle is detected.
+fn remap_value<'db>(
+    v: Value<'db>,
+    value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+) -> Value<'db> {
+    let mut current = v;
+    let mut steps = 0u32;
+    while let Some(&remapped) = value_remap.get(&current) {
+        current = remapped;
+        steps += 1;
+        assert!(
+            steps < 1000,
+            "cycle detected in value_remap after {steps} steps"
+        );
+    }
+    current
+}
+
+/// Recursively rebuild a region, remapping all operand values.
+///
+/// This is necessary because handler arm bodies may contain nested regions
+/// (e.g. `scf.if` branches) that reference block args of the enclosing block.
+/// When those block args are replaced by trampoline ops, the references inside
+/// nested regions must be updated too.
+fn rebuild_region_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+) -> Region<'db> {
+    let new_blocks: Vec<Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| rebuild_block_with_remap(db, block, value_remap))
+        .collect();
+    Region::new(db, region.location(db), IdVec::from(new_blocks))
+}
+
+/// Recursively rebuild a block, remapping all operand values in its operations.
+fn rebuild_block_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+) -> Block<'db> {
+    let new_ops: Vec<Operation<'db>> = block
+        .operations(db)
+        .iter()
+        .map(|op| rebuild_op_with_remap(db, op, value_remap))
+        .collect();
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        IdVec::from(new_ops),
+    )
+}
+
+/// Rebuild a single operation, remapping operands and recursing into regions.
+fn rebuild_op_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+) -> Operation<'db> {
+    let operands = op.operands(db);
+    let remapped_operands: IdVec<Value<'db>> = operands
+        .iter()
+        .map(|v| remap_value(*v, value_remap))
+        .collect::<Vec<_>>()
+        .into();
+
+    let regions = op.regions(db);
+    let remapped_regions: IdVec<Region<'db>> = regions
+        .iter()
+        .map(|r| rebuild_region_with_remap(db, r, value_remap))
+        .collect::<Vec<_>>()
+        .into();
+
+    if remapped_operands == *operands && remapped_regions == *regions {
+        return *op;
+    }
+
+    Operation::new(
+        db,
+        op.location(db),
+        op.dialect(db),
+        op.name(db),
+        remapped_operands,
+        op.results(db).clone(),
+        op.attributes(db).clone(),
+        remapped_regions,
+        op.successors(db).clone(),
+    )
+}
+
 /// Build a single-block region from a handler arm's body region.
 ///
 /// The arm body contains user's handler code ending with cont.resume (lowered to
@@ -584,26 +677,6 @@ pub(crate) fn build_arm_region<'db>(
             }
         }
 
-        // Helper to remap a value through the remap chain
-        // Note: This closure is called in the loop below, where value_remap may be mutated
-        // So we use a function that takes the map as a parameter instead
-        fn remap_value_inner<'db>(
-            v: Value<'db>,
-            value_remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
-        ) -> Value<'db> {
-            let mut current = v;
-            let mut steps = 0u32;
-            while let Some(&remapped) = value_remap.get(&current) {
-                current = remapped;
-                steps += 1;
-                assert!(
-                    steps < 1000,
-                    "cycle detected in value_remap after {steps} steps"
-                );
-            }
-            current
-        }
-
         // Build operations, skipping ALL casts and scf.yield
         let mut ops: Vec<Operation<'db>> = Vec::new();
         let mut last_step_value: Option<Value<'db>> = None;
@@ -662,24 +735,37 @@ pub(crate) fn build_arm_region<'db>(
             let operands = op.operands(db);
             let remapped_operands: IdVec<Value<'db>> = operands
                 .iter()
-                .map(|v| remap_value_inner(*v, &value_remap))
+                .map(|v| remap_value(*v, &value_remap))
                 .collect::<Vec<_>>()
                 .into();
 
             // Determine result types - effectful calls and resume need Step type
             let result_types = if produces_step {
-                // Replace the first result type with Step
-                let mut types = op.results(db).clone();
-                if !types.is_empty() {
-                    types = IdVec::from(vec![step_ty]);
-                }
-                types
+                assert_eq!(
+                    op.results(db).len(),
+                    1,
+                    "build_arm_region: produces_step op must have exactly 1 result, got {}",
+                    op.results(db).len(),
+                );
+                IdVec::from(vec![step_ty])
             } else {
                 op.results(db).clone()
             };
 
-            // If operands or result types changed, create new operation
-            if remapped_operands != *operands || produces_step {
+            // Rebuild nested regions with remap so block-arg references inside
+            // e.g. scf.if branches are updated too.
+            let remapped_regions: IdVec<Region<'db>> = op
+                .regions(db)
+                .iter()
+                .map(|r| rebuild_region_with_remap(db, r, &value_remap))
+                .collect::<Vec<_>>()
+                .into();
+
+            // If operands, regions, or result types changed, create new operation
+            let needs_rebuild = remapped_operands != *operands
+                || remapped_regions != *op.regions(db)
+                || produces_step;
+            if needs_rebuild {
                 let new_op = Operation::new(
                     db,
                     op.location(db),
@@ -688,7 +774,7 @@ pub(crate) fn build_arm_region<'db>(
                     remapped_operands,
                     result_types,
                     op.attributes(db).clone(),
-                    op.regions(db).clone(),
+                    remapped_regions,
                     op.successors(db).clone(),
                 );
                 // Map old result values → new result values so subsequent ops

@@ -4,10 +4,11 @@ use salsa_test_macros::salsa_test;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use trunk_ir::dialect::{arith, cont, func, scf, trampoline};
+use tribute_ir::dialect::tribute_rt;
+use trunk_ir::dialect::{arith, cont, core, func, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
-use trunk_ir::{BlockId, DialectOp, IdVec, PathId, Span};
+use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, PathId, Span, Value};
 
 /// Create a shared test location with a fixed span `(0, 0)`.
 ///
@@ -1175,6 +1176,166 @@ fn run_truncate_scf_if_block_no_yield_unreachable(db: &dyn salsa::Database) -> R
 #[salsa_test]
 fn test_truncate_scf_if_block_no_yield_unreachable(db: &salsa::DatabaseImpl) {
     if let Err(msg) = run_truncate_scf_if_block_no_yield_unreachable(db) {
+        panic!("{}", msg);
+    }
+}
+
+// ========================================================================
+// Test: build_arm_region remaps block-arg references in nested regions
+// ========================================================================
+
+/// Build a suspend arm body where block args are referenced inside an
+/// scf.if branch. Verify that build_arm_region produces a region
+/// without stale block-arg references (i.e. all block-arg references
+/// are replaced by trampoline.get_yield_* ops).
+#[salsa::tracked]
+fn run_build_arm_region_nested_remap(db: &dyn salsa::Database) -> Result<(), String> {
+    let location = test_location(db);
+    let cont_ty = trampoline::Continuation::new(db).as_type();
+    let anyref_ty = tribute_rt::Any::new(db).as_type();
+    let i1_ty = core::I::<1>::new(db).as_type();
+    let step_ty = trampoline::Step::new(db).as_type();
+
+    // Build a suspend arm body with block args (%k: continuation, %v: shift_value)
+    // that are referenced inside an scf.if branch:
+    //
+    //   ^bb0(%k: continuation, %v: any):
+    //     %cond = arith.const true
+    //     %r = scf.if(%cond) {
+    //       cont.resume(%k, %v) -> step    // references %k and %v inside nested region
+    //       scf.yield(%step)
+    //     } else {
+    //       cont.resume(%k, %v) -> step
+    //       scf.yield(%step)
+    //     }
+    //     scf.yield(%r)
+    let block_id = BlockId::fresh();
+    let k_value = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+    let v_value = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+
+    // Build then-branch: cont.resume(%k, %v)
+    let then_region = {
+        let mut b = BlockBuilder::new(db, location);
+        let resume = b.op(cont::resume(db, location, k_value, v_value, step_ty));
+        b.op(scf::r#yield(db, location, vec![resume.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
+    };
+
+    // Build else-branch: cont.resume(%k, %v)
+    let else_region = {
+        let mut b = BlockBuilder::new(db, location);
+        let resume = b.op(cont::resume(db, location, k_value, v_value, step_ty));
+        b.op(scf::r#yield(db, location, vec![resume.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
+    };
+
+    // Build outer block with block args, scf.if, and yield
+    let mut outer = BlockBuilder::new(db, location);
+    let cond = outer.op(arith::r#const(db, location, i1_ty, true.into()));
+    let if_op = outer.op(scf::r#if(
+        db,
+        location,
+        cond.result(db),
+        step_ty,
+        then_region,
+        else_region,
+    ));
+    outer.op(scf::r#yield(db, location, vec![if_op.result(db)]));
+
+    let cont_arg = trunk_ir::BlockArg::of_type(db, cont_ty);
+    let shift_arg = trunk_ir::BlockArg::of_type(db, anyref_ty);
+    let arm_block = Block::new(
+        db,
+        block_id,
+        location,
+        IdVec::from(vec![cont_arg, shift_arg]),
+        outer.build().operations(db).clone(),
+    );
+    let arm_body = Region::new(db, location, IdVec::from(vec![arm_block]));
+
+    // Apply build_arm_region
+    let effectful_funcs = HashSet::new();
+    let result = handler_dispatch::build_arm_region(db, location, &arm_body, &effectful_funcs);
+
+    // Verify: the result region should have no block args (they were stripped)
+    let result_block = result.blocks(db).first().ok_or("empty result region")?;
+    if !result_block.args(db).is_empty() {
+        return Err(format!(
+            "result block should have no args, got {}",
+            result_block.args(db).len()
+        ));
+    }
+
+    // Verify: should start with prefix ops (get_yield_continuation, get_yield_shift_value)
+    let ops: Vec<_> = result_block.operations(db).iter().copied().collect();
+    if ops.len() < 2 {
+        return Err(format!("expected at least 2 prefix ops, got {}", ops.len()));
+    }
+    if trampoline::GetYieldContinuation::from_operation(db, ops[0]).is_err() {
+        return Err(format!(
+            "ops[0] should be trampoline.get_yield_continuation, got {}.{}",
+            ops[0].dialect(db),
+            ops[0].name(db),
+        ));
+    }
+    if trampoline::GetYieldShiftValue::from_operation(db, ops[1]).is_err() {
+        return Err(format!(
+            "ops[1] should be trampoline.get_yield_shift_value, got {}.{}",
+            ops[1].dialect(db),
+            ops[1].name(db),
+        ));
+    }
+
+    let get_cont_result = ops[0].result(db, 0);
+    let get_shift_result = ops[1].result(db, 0);
+
+    // Verify: the scf.if inside should have nested regions where
+    // cont.resume operands reference the prefix op results, not the old block args.
+    // Find scf.if
+    let if_op = ops
+        .iter()
+        .find(|op| scf::If::from_operation(db, **op).is_ok());
+    let if_op = if_op.ok_or("expected scf.if in result")?;
+
+    // Check then-branch
+    let then_region = &if_op.regions(db)[0];
+    let then_ops: Vec<_> = then_region
+        .blocks(db)
+        .first()
+        .ok_or("empty then region")?
+        .operations(db)
+        .iter()
+        .copied()
+        .collect();
+    let resume_op = then_ops
+        .iter()
+        .find(|op| cont::Resume::from_operation(db, **op).is_ok())
+        .ok_or("expected cont.resume in then branch")?;
+    let resume_operands = resume_op.operands(db);
+
+    // The first operand (continuation) should be the get_yield_continuation result
+    if resume_operands[0] != get_cont_result {
+        return Err(format!(
+            "then-branch cont.resume operand[0] should reference get_yield_continuation result, \
+             but references a different value (stale block arg?)"
+        ));
+    }
+    // The second operand (shift_value) should be the get_yield_shift_value result
+    if resume_operands[1] != get_shift_result {
+        return Err(format!(
+            "then-branch cont.resume operand[1] should reference get_yield_shift_value result, \
+             but references a different value (stale block arg?)"
+        ));
+    }
+
+    Ok(())
+}
+
+/// Test that build_arm_region correctly remaps block-arg references in nested
+/// scf.if regions (not just top-level operands).
+#[salsa_test]
+fn test_build_arm_region_remaps_block_args_in_nested_regions(db: &salsa::DatabaseImpl) {
+    if let Err(msg) = run_build_arm_region_nested_remap(db) {
         panic!("{}", msg);
     }
 }

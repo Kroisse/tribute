@@ -193,7 +193,12 @@ pub fn lower_cont_to_trampoline<'db>(
     let result = applicator.apply_partial(db, module, empty_target);
     let module = result.module;
 
-    // Verify all cont.* ops (except cont.drop) are converted
+    // Verify all cont.* ops (except cont.drop) are converted.
+    // cont.done and cont.suspend are child ops consumed by handler_dispatch
+    // lowering. They are marked legal here because handler_dispatch itself is
+    // illegal — if a handler_dispatch survives, verification catches it, and
+    // any orphaned done/suspend would indicate a deeper bug (not a missing
+    // lowering pattern).
     let conversion_target = ConversionTarget::new()
         .illegal_dialect("cont")
         .legal_op("cont", "drop")
