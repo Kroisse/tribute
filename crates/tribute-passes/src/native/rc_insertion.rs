@@ -543,6 +543,11 @@ fn insert_rc_in_block<'db>(
                     }
                 }
             }
+            // Unused block arg that is not live-out → release at block start
+            else if let ValueDef::BlockArg(_) = v.def(db) {
+                let release_op = tribute_rt::release(db, location, *v);
+                plan.at_start.push(release_op.as_operation());
+            }
         }
     }
 
