@@ -509,8 +509,21 @@ fn insert_rc_in_block<'db>(
         }
     }
 
+    // Sort dying values for deterministic release emission order
+    let mut dying_sorted: Vec<Value<'db>> = dying_values.into_iter().collect();
+    dying_sorted.sort_by_key(|v| match v.def(db) {
+        ValueDef::BlockArg(_) => (0usize, v.index(db)),
+        ValueDef::OpResult(def_op) => {
+            let pos = ops
+                .iter()
+                .position(|op| *op == def_op)
+                .unwrap_or(usize::MAX);
+            (1 + pos, v.index(db))
+        }
+    });
+
     // For each dying value, determine where to insert the release
-    for v in &dying_values {
+    for v in &dying_sorted {
         if let Some(&last_use_idx) = last_use_in_block.get(v) {
             // Release after last use
             // But if last use is in a return, skip (already handled above)
@@ -814,6 +827,42 @@ mod tests {
             "#,
         );
         insta::assert_snapshot!(ir);
+    }
+
+    #[salsa_test]
+    fn test_release_order_deterministic(db: &salsa::DatabaseImpl) {
+        // Multiple ptr params dying in the same block — release order must be stable
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr, core.ptr)} {
+                    ^entry(%a: core.ptr, %b: core.ptr, %c: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // Run twice to verify determinism
+        let ir2 = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr, core.ptr)} {
+                    ^entry(%a: core.ptr, %b: core.ptr, %c: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+        assert_eq!(ir, ir2, "release order should be deterministic across runs");
+
+        // 3 params → 3 retains + 3 releases
+        let retain_count = ir.matches("tribute_rt.retain").count();
+        let release_count = ir.matches("tribute_rt.release").count();
+        assert_eq!(retain_count, 3, "should retain all 3 ptr params: {ir}");
+        assert_eq!(release_count, 3, "should release all 3 ptr params: {ir}");
     }
 
     #[salsa_test]
