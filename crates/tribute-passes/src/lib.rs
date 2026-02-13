@@ -14,6 +14,7 @@ pub mod diagnostic;
 // === TrunkIR passes ===
 pub mod boxing;
 pub mod closure_lower;
+pub mod cont_to_libmprompt;
 pub mod cont_to_trampoline;
 pub mod cont_util;
 pub mod evidence;
@@ -27,6 +28,7 @@ pub mod wasm;
 #[allow(deprecated)]
 pub use boxing::insert_boxing; // DEPRECATED: kept for compatibility
 pub use closure_lower::lower_closures;
+pub use cont_to_libmprompt::lower_cont_to_libmprompt;
 pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use evidence::{
