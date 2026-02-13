@@ -17,4 +17,5 @@ trunk-ir.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 salsa-test-macros = { path = "../salsa-test-macros" }

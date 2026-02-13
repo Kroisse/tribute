@@ -733,6 +733,9 @@ fn compile_module_to_native<'db>(
     let module =
         tribute_passes::native::tribute_rt_to_clif::lower(db, module, native_type_converter());
 
+    // Phase 2.8 - Insert reference counting (retain/release) for pointer values
+    let module = tribute_passes::native::rc_insertion::insert_rc(db, module);
+
     // Phase 3 - Resolve unrealized_conversion_cast operations
     let module = {
         let type_converter = native_type_converter();
