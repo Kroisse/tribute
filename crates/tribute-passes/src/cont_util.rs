@@ -5,9 +5,10 @@
 
 use std::collections::HashSet;
 
+use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::scf;
-use trunk_ir::{Attribute, Block, DialectOp, DialectType, IdVec, Region, Symbol, Value};
+use trunk_ir::{DialectOp, DialectType, Region, Symbol, Value};
 
 // ============================================================================
 // Region Utilities
@@ -67,72 +68,46 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
 pub struct SuspendArm<'db> {
     /// Expected op_idx for this arm
     pub expected_op_idx: u32,
-    /// The block containing the handler arm code
-    pub block: Block<'db>,
+    /// The body region containing the handler arm code
+    pub body: Region<'db>,
 }
 
-/// Collect suspend arms from handler blocks with their expected op_idx.
+/// Collect suspend arms from handler_dispatch's body region.
 ///
 /// Uses hash-based dispatch: each arm's op_idx is computed from the ability
 /// name and operation name via `compute_op_idx`. This is handler-independent --
 /// both shift sites and handler dispatch use the same hash function, so the
 /// index matches regardless of handler registration order.
 ///
-/// Blocks layout: block 0 is the "done" case; blocks 1+ are suspend arms.
+/// The body region contains a single block with `cont.done` and `cont.suspend`
+/// child operations. This function iterates `cont.suspend` ops.
 pub fn collect_suspend_arms<'db>(
     db: &'db dyn salsa::Database,
-    blocks: &IdVec<Block<'db>>,
+    body: &Region<'db>,
 ) -> Vec<SuspendArm<'db>> {
     let mut arms = Vec::new();
     let mut seen_op_indices: HashSet<u32> = HashSet::new();
 
-    // Skip block 0 (done case), process blocks 1+ (suspend cases)
-    for (i, block) in blocks.iter().enumerate().skip(1) {
-        // Extract ability_ref and op_name from marker block arg
-        let block_args = block.args(db);
-        let marker_arg = block_args.first().unwrap_or_else(|| {
-            panic!(
-                "collect_suspend_arms: suspend block at index {} has no block arguments; \
-                 expected a marker arg with ability_ref and op_name attributes. \
-                 Block: {:?}",
-                i, block,
-            )
-        });
-        let attrs = marker_arg.attrs(db);
-        let ability_ref = attrs
-            .get(&Symbol::new("ability_ref"))
-            .and_then(|a| {
-                if let Attribute::Type(ty) = a {
-                    core::AbilityRefType::from_type(db, *ty).and_then(|ar| ar.name(db))
-                } else {
-                    None
-                }
-            })
+    let blocks = body.blocks(db);
+    let Some(first_block) = blocks.first() else {
+        return arms;
+    };
+
+    for op in first_block.operations(db).iter() {
+        let Ok(suspend_op) = cont::Suspend::from_operation(db, *op) else {
+            continue;
+        };
+
+        let ability_ref_ty = suspend_op.ability_ref(db);
+        let ability_ref = core::AbilityRefType::from_type(db, ability_ref_ty)
+            .and_then(|ar| ar.name(db))
             .unwrap_or_else(|| {
                 panic!(
-                    "collect_suspend_arms: suspend block at index {} has no valid \
-                     'ability_ref' attribute on marker arg. \
-                     Attrs: {:?}, Block: {:?}",
-                    i, attrs, block,
+                    "collect_suspend_arms: cont.suspend has invalid ability_ref type: {:?}",
+                    ability_ref_ty,
                 )
             });
-        let op_name = attrs
-            .get(&Symbol::new("op_name"))
-            .and_then(|a| {
-                if let Attribute::Symbol(s) = a {
-                    Some(*s)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| {
-                panic!(
-                    "collect_suspend_arms: suspend block at index {} has no valid \
-                     'op_name' attribute on marker arg. \
-                     Attrs: {:?}, Block: {:?}",
-                    i, attrs, block,
-                )
-            });
+        let op_name = suspend_op.op_name(db);
 
         // Use hash-based dispatch: compute a stable index from ability+op_name.
         let expected_op_idx = compute_op_idx(Some(ability_ref), Some(op_name));
@@ -147,11 +122,30 @@ pub fn collect_suspend_arms<'db>(
         );
         arms.push(SuspendArm {
             expected_op_idx,
-            block: *block,
+            body: suspend_op.body(db),
         });
     }
 
     arms
+}
+
+/// Get the done region from handler_dispatch's body.
+///
+/// Finds the first `cont.done` child op and returns its body region.
+pub fn get_done_region<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+) -> Option<Region<'db>> {
+    let blocks = body.blocks(db);
+    let first_block = blocks.first()?;
+
+    for op in first_block.operations(db).iter() {
+        if let Ok(done_op) = cont::Done::from_operation(db, *op) {
+            return Some(done_op.body(db));
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -160,7 +154,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::dialect::arith;
     use trunk_ir::ir::BlockBuilder;
-    use trunk_ir::{BlockArg, BlockId, PathId, Span};
+    use trunk_ir::{Block, BlockId, IdVec, PathId, Span};
 
     fn test_location(db: &dyn salsa::Database) -> trunk_ir::Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
@@ -276,42 +270,48 @@ mod tests {
     // collect_suspend_arms
     // ====================================================================
 
-    /// Helper: build a suspend block with ability_ref and op_name marker.
-    fn make_suspend_block<'db>(
+    /// Helper: build a simple body region for child ops.
+    fn make_simple_body<'db>(
         db: &'db dyn salsa::Database,
         loc: trunk_ir::Location<'db>,
-        ability: &'static str,
-        op: &'static str,
-    ) -> Block<'db> {
-        let ability_ref_ty = core::AbilityRefType::simple(db, Symbol::new(ability)).as_type();
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(ability_ref_ty));
-        attrs.insert(Symbol::new("op_name"), Attribute::Symbol(Symbol::new(op)));
-        let i32_ty = core::I32::new(db).as_type();
-        let marker_arg = BlockArg::new(db, i32_ty, attrs);
-
+    ) -> Region<'db> {
         let mut b = BlockBuilder::new(db, loc);
         let c = b.op(arith::Const::i32(db, loc, 0));
         b.op(scf::r#yield(db, loc, vec![c.result(db)]));
         let block = b.build();
-        Block::new(
-            db,
-            block.id(db),
-            loc,
-            IdVec::from(vec![marker_arg]),
-            block.operations(db).clone(),
-        )
+        Region::new(db, loc, IdVec::from(vec![block]))
     }
 
     #[salsa::tracked]
     fn run_collect_suspend_arms_extracts_all(db: &dyn salsa::Database) -> (usize, bool, bool) {
         let loc = test_location(db);
-        let done_block = Block::new(db, BlockId(0), loc, IdVec::default(), IdVec::default());
-        let get_block = make_suspend_block(db, loc, "State", "get");
-        let set_block = make_suspend_block(db, loc, "State", "set");
 
-        let blocks = IdVec::from(vec![done_block, get_block, set_block]);
-        let arms = collect_suspend_arms(db, &blocks);
+        // Build body region: single block with done + 2 suspend ops
+        let done_body = make_simple_body(db, loc);
+        let get_body = make_simple_body(db, loc);
+        let set_body = make_simple_body(db, loc);
+
+        let state_ref_ty = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
+        let mut builder = BlockBuilder::new(db, loc);
+        builder.op(cont::done(db, loc, done_body));
+        builder.op(cont::suspend(
+            db,
+            loc,
+            state_ref_ty,
+            Symbol::new("get"),
+            get_body,
+        ));
+        builder.op(cont::suspend(
+            db,
+            loc,
+            state_ref_ty,
+            Symbol::new("set"),
+            set_body,
+        ));
+        let block = builder.build();
+        let body = Region::new(db, loc, IdVec::from(vec![block]));
+
+        let arms = collect_suspend_arms(db, &body);
 
         let expected_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
         let expected_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
@@ -333,13 +333,45 @@ mod tests {
     #[salsa::tracked]
     fn run_collect_suspend_arms_done_only(db: &dyn salsa::Database) -> usize {
         let loc = test_location(db);
-        let done_block = Block::new(db, BlockId(0), loc, IdVec::default(), IdVec::default());
-        let blocks = IdVec::from(vec![done_block]);
-        collect_suspend_arms(db, &blocks).len()
+        let done_body = make_simple_body(db, loc);
+        let mut builder = BlockBuilder::new(db, loc);
+        builder.op(cont::done(db, loc, done_body));
+        let block = builder.build();
+        let body = Region::new(db, loc, IdVec::from(vec![block]));
+        collect_suspend_arms(db, &body).len()
     }
 
     #[salsa_test]
     fn collect_suspend_arms_done_only_returns_empty(db: &salsa::DatabaseImpl) {
         assert_eq!(run_collect_suspend_arms_done_only(db), 0);
+    }
+
+    #[salsa::tracked]
+    fn run_get_done_region_found(db: &dyn salsa::Database) -> bool {
+        let loc = test_location(db);
+        let done_body = make_simple_body(db, loc);
+        let mut builder = BlockBuilder::new(db, loc);
+        builder.op(cont::done(db, loc, done_body));
+        let block = builder.build();
+        let body = Region::new(db, loc, IdVec::from(vec![block]));
+        get_done_region(db, &body).is_some()
+    }
+
+    #[salsa_test]
+    fn get_done_region_returns_region(db: &salsa::DatabaseImpl) {
+        assert!(run_get_done_region_found(db));
+    }
+
+    #[salsa::tracked]
+    fn run_get_done_region_empty(db: &dyn salsa::Database) -> bool {
+        let loc = test_location(db);
+        let block = Block::new(db, BlockId(0), loc, IdVec::default(), IdVec::default());
+        let body = Region::new(db, loc, IdVec::from(vec![block]));
+        get_done_region(db, &body).is_none()
+    }
+
+    #[salsa_test]
+    fn get_done_region_returns_none_when_no_done(db: &salsa::DatabaseImpl) {
+        assert!(run_get_done_region_empty(db));
     }
 }

@@ -2216,9 +2216,9 @@ fn lower_handle<'db>(
 
 /// Build the body region for handler_dispatch.
 ///
-/// Creates multiple blocks:
-/// - Block 0: "done" case for when the body completes normally
-/// - Block 1+: "suspend" cases for each effect handler
+/// Creates a single block with child operations:
+/// - `cont.done`: "done" case for when the body completes normally
+/// - `cont.suspend`: "suspend" cases, one per handled effect operation
 fn build_handler_dispatch_body<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     location: Location<'db>,
@@ -2226,7 +2226,7 @@ fn build_handler_dispatch_body<'db>(
     result_ty: trunk_ir::Type<'db>,
 ) -> Region<'db> {
     let db = ctx.db;
-    let mut blocks = Vec::new();
+    let mut block_builder = BlockBuilder::new(db, location);
 
     // Separate result handlers from effect handlers
     let mut result_handler: Option<&HandlerArm<TypedRef<'db>>> = None;
@@ -2243,48 +2243,45 @@ fn build_handler_dispatch_body<'db>(
         }
     }
 
-    // Block 0: Done case
-    let done_block = build_done_handler_block(ctx, location, result_handler, result_ty);
-    blocks.push(done_block);
+    // cont.done child op
+    let done_body = build_done_handler_region(ctx, location, result_handler, result_ty);
+    block_builder.op(cont::done(db, location, done_body));
 
-    // Block 1+: Suspend cases
+    // cont.suspend child ops
     for effect_handler in &effect_handlers {
-        let suspend_block = build_suspend_handler_block(ctx, location, effect_handler, result_ty);
-        blocks.push(suspend_block);
+        let (ability_ref_ty, op_name) =
+            extract_ability_ref_and_op_name(ctx, location, effect_handler);
+        let suspend_body = build_suspend_handler_region(ctx, location, effect_handler);
+        block_builder.op(cont::suspend(
+            db,
+            location,
+            ability_ref_ty,
+            op_name,
+            suspend_body,
+        ));
     }
 
-    Region::new(db, location, trunk_ir::IdVec::from(blocks))
+    let block = block_builder.build();
+    Region::new(db, location, trunk_ir::IdVec::from(vec![block]))
 }
 
-/// Build the "done" handler block (block 0).
+/// Build the "done" handler region for `cont.done`.
 ///
-/// This block:
-/// 1. Receives the step as a block argument
-/// 2. Gets the done value from the step
-/// 3. Binds the result pattern
-/// 4. Evaluates the result handler body
-/// 5. Yields the result
-///
-/// Note: The step is passed as a block argument and will be provided
-/// by the cont_to_trampoline pass when it transforms handler_dispatch.
-fn build_done_handler_block<'db>(
+/// The region's entry block receives the done value directly as a block argument.
+/// This eliminates the need for `cont.get_done_value`.
+fn build_done_handler_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     location: Location<'db>,
     result_handler: Option<&HandlerArm<TypedRef<'db>>>,
     result_ty: trunk_ir::Type<'db>,
-) -> trunk_ir::Block<'db> {
+) -> Region<'db> {
     let db = ctx.db;
     let block_id = trunk_ir::BlockId::fresh();
     let mut block_builder = BlockBuilder::new(db, location);
 
-    // The step is the first block argument
-    let step_ty = tribute_rt::any_type(db);
-    let step_arg = trunk_ir::BlockArg::of_type(db, step_ty);
-    let step_value = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-
-    // Get the done value from the step
-    let get_done_op = block_builder.op(cont::get_done_value(db, location, step_value, result_ty));
-    let done_value = get_done_op.as_operation().result(db, 0);
+    // The done value is the first block argument (provided by the lowering pass)
+    let done_value_arg = trunk_ir::BlockArg::of_type(db, result_ty);
+    let done_value = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
 
     let result = if let Some(handler) = result_handler {
         // Bind the result pattern and evaluate the body
@@ -2315,45 +2312,79 @@ fn build_done_handler_block<'db>(
     });
     block_builder.op(scf::r#yield(db, location, vec![yield_val]));
 
-    trunk_ir::Block::new(
+    let block = trunk_ir::Block::new(
         db,
         block_id,
         location,
-        idvec![step_arg], // Step is the block argument
+        idvec![done_value_arg],
         block_builder.build().operations(db).clone(),
-    )
+    );
+    Region::new(db, location, trunk_ir::IdVec::from(vec![block]))
 }
 
-/// Build a "suspend" handler block (block 1+).
+/// Extract ability_ref type and op_name from an effect handler arm.
+fn extract_ability_ref_and_op_name<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    location: Location<'db>,
+    handler: &HandlerArm<TypedRef<'db>>,
+) -> (trunk_ir::Type<'db>, Symbol) {
+    let db = ctx.db;
+    let HandlerKind::Effect { ability, op, .. } = &handler.kind else {
+        unreachable!("extract_ability_ref_and_op_name called with non-effect handler");
+    };
+
+    let ability_name = match &ability.resolved {
+        crate::ast::ResolvedRef::Ability { id } => {
+            Symbol::from_dynamic(&id.qualified_name(db).to_string())
+        }
+        // Legacy support: TypeDef was used before Binding::Ability was introduced
+        crate::ast::ResolvedRef::TypeDef { id } => {
+            Symbol::from_dynamic(&id.qualified_name(db).to_string())
+        }
+        other => {
+            // Report error: expected ability type definition
+            Diagnostic {
+                message: format!(
+                    "Expected ability type definition, got {:?}",
+                    std::mem::discriminant(other)
+                ),
+                span: location.span,
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::Lowering,
+            }
+            .accumulate(db);
+            // Fallback for error recovery
+            Symbol::new("__unknown_ability__")
+        }
+    };
+    let ability_ref_type = core::AbilityRefType::simple(db, ability_name).as_type();
+    (ability_ref_type, *op)
+}
+
+/// Build a "suspend" handler region for `cont.suspend`.
 ///
-/// This block:
-/// 1. Gets the continuation from yield state
-/// 2. Gets the shift value (effect arguments)
-/// 3. Binds the continuation and params patterns
-/// 4. Evaluates the effect handler body
-/// 5. Yields the result
-fn build_suspend_handler_block<'db>(
+/// The region's entry block receives (continuation, shift_value) as block arguments.
+/// This eliminates the need for `cont.get_continuation` and `cont.get_shift_value`.
+fn build_suspend_handler_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     location: Location<'db>,
     handler: &HandlerArm<TypedRef<'db>>,
-    _result_ty: trunk_ir::Type<'db>,
-) -> trunk_ir::Block<'db> {
+) -> Region<'db> {
     let db = ctx.db;
     let block_id = trunk_ir::BlockId::fresh();
     let mut block_builder = BlockBuilder::new(db, location);
 
     let HandlerKind::Effect {
-        ability,
-        op,
         params,
         continuation,
         continuation_local_id,
+        ..
     } = &handler.kind
     else {
-        unreachable!("build_suspend_handler_block called with non-effect handler");
+        unreachable!("build_suspend_handler_region called with non-effect handler");
     };
 
-    // Get the continuation with proper cont::Continuation type
+    // Block args: continuation and shift_value
     let cont_ty = cont::Continuation::new(
         db,
         tribute_rt::any_type(db), // arg type
@@ -2361,13 +2392,12 @@ fn build_suspend_handler_block<'db>(
         tribute_rt::any_type(db), // effect
     )
     .as_type();
-    let get_cont_op = block_builder.op(cont::get_continuation(db, location, cont_ty));
-    let cont_value = get_cont_op.as_operation().result(db, 0);
-
-    // Get the shift value (effect arguments)
     let shift_val_ty = tribute_rt::any_type(db);
-    let get_shift_val_op = block_builder.op(cont::get_shift_value(db, location, shift_val_ty));
-    let shift_value = get_shift_val_op.as_operation().result(db, 0);
+
+    let cont_arg = trunk_ir::BlockArg::of_type(db, cont_ty);
+    let shift_val_arg = trunk_ir::BlockArg::of_type(db, shift_val_ty);
+    let cont_value = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+    let shift_value = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
 
     ctx.enter_scope();
 
@@ -2416,54 +2446,14 @@ fn build_suspend_handler_block<'db>(
     });
     block_builder.op(scf::r#yield(db, location, vec![yield_val]));
 
-    // Create block with marker argument for ability_ref and op_name
-    // The marker argument has attributes that identify which effect this block handles
-    // Extract ability name from resolved reference and construct proper AbilityRefType
-    // Use qualified name to match the name used in cont.shift generation (line 545-546)
-    let ability_name = match &ability.resolved {
-        crate::ast::ResolvedRef::Ability { id } => {
-            Symbol::from_dynamic(&id.qualified_name(db).to_string())
-        }
-        // Legacy support: TypeDef was used before Binding::Ability was introduced
-        crate::ast::ResolvedRef::TypeDef { id } => {
-            Symbol::from_dynamic(&id.qualified_name(db).to_string())
-        }
-        other => {
-            // Report error: expected ability type definition
-            Diagnostic {
-                message: format!(
-                    "Expected ability type definition, got {:?}",
-                    std::mem::discriminant(other)
-                ),
-                span: location.span,
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(db);
-            // Fallback for error recovery
-            Symbol::new("__unknown_ability__")
-        }
-    };
-    let ability_ref_type = core::AbilityRefType::simple(db, ability_name).as_type();
-    let mut marker_attrs = std::collections::BTreeMap::new();
-    marker_attrs.insert(
-        Symbol::new("ability_ref"),
-        Attribute::Type(ability_ref_type),
-    );
-    marker_attrs.insert(Symbol::new("op_name"), Attribute::Symbol(*op));
-    let marker_arg = trunk_ir::BlockArg::new(
-        db,
-        core::Nil::new(db).as_type(), // Marker type is nil
-        marker_attrs,
-    );
-
-    trunk_ir::Block::new(
+    let block = trunk_ir::Block::new(
         db,
         block_id,
         location,
-        idvec![marker_arg],
+        idvec![cont_arg, shift_val_arg],
         block_builder.build().operations(db).clone(),
-    )
+    );
+    Region::new(db, location, trunk_ir::IdVec::from(vec![block]))
 }
 
 /// Fallback: derive parameter and return types from annotations when TypeScheme is unavailable.

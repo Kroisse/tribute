@@ -13,9 +13,8 @@ dialect! {
         /// Handler dispatch logic is instead implemented using `cont.handler_dispatch`,
         /// which examines the Step result returned by push_prompt and dispatches to
         /// appropriate handler arms:
-        /// - "done" handler uses `cont.get_done_value` to extract the result value
-        /// - "suspend" handlers use `cont.get_continuation` and `cont.get_shift_value`
-        ///   to access the captured continuation and effect arguments
+        /// - `cont.done` child op receives the result value as a block argument
+        /// - `cont.suspend` child ops receive (continuation, shift_value) as block arguments
         #[attr(tag: u32)]
         fn push_prompt() -> result {
             #[region(body)] {}
@@ -66,13 +65,12 @@ dialect! {
         /// between the "done" case (normal return) and "suspend" cases
         /// (effect operations).
         ///
-        /// The `body` region contains multiple blocks:
-        /// - Block 0: "done" case, executed when computation completed normally
-        /// - Block 1+: "suspend" cases, one per handled operation
-        ///
-        /// Suspend blocks have a marker block argument (nil type) with attributes:
-        /// - `ability_ref`: the ability type (for distinguishing same-named ops)
-        /// - `op_name`: the operation name symbol
+        /// The `body` region contains a single block with child operations:
+        /// - `cont.done`: "done" case, executed when computation completed normally.
+        ///   Its body region's entry block receives the done value as a block argument.
+        /// - `cont.suspend`: "suspend" cases, one per handled operation.
+        ///   Each has `ability_ref` and `op_name` attributes, and its body region's
+        ///   entry block receives (continuation, shift_value) as block arguments.
         ///
         /// The `tag` attribute identifies which prompt this handler is associated with.
         /// When a shift occurs, the tag is compared to determine which handler should
@@ -83,34 +81,31 @@ dialect! {
         /// operation's output type may be changed to Step during trampoline lowering.
         ///
         /// In yield bubbling, this checks the global yield state:
-        /// - If not yielding: execute block 0 (done)
-        /// - If yielding: dispatch to appropriate suspend block based on ability_ref + op_name
+        /// - If not yielding: execute cont.done arm
+        /// - If yielding: dispatch to appropriate cont.suspend arm based on ability_ref + op_name
         #[attr(tag: u32, result_type: Type)]
         fn handler_dispatch(result) -> output {
             #[region(body)] {}
         };
 
-        /// `cont.get_continuation` operation: gets the current continuation from yield state.
+        /// `cont.done` operation: handler dispatch done arm.
         ///
-        /// This operation can only be used inside handler arm bodies (suspend_body).
-        /// It retrieves the continuation that was captured by the most recent `shift`.
-        /// The WASM backend converts this to global.get + ref_cast to get the continuation struct.
-        fn get_continuation() -> result;
+        /// Used as a child operation inside `cont.handler_dispatch`'s body region.
+        /// The body region's entry block receives the done value (extracted from Step)
+        /// as a block argument, eliminating the need for `cont.get_done_value`.
+        fn done() { #[region(body)] {} };
 
-        /// `cont.get_shift_value` operation: gets the shift_value from the current continuation.
+        /// `cont.suspend` operation: handler dispatch suspend arm.
         ///
-        /// This operation can only be used inside handler arm bodies (suspend_body).
-        /// It retrieves the value that was passed to the effect operation (e.g., the `n` in `State::set!(n)`).
-        /// The WASM backend converts this to struct.get on the continuation struct's field 3.
-        fn get_shift_value() -> result;
-
-        /// `cont.get_done_value` operation: extracts the value from a Done Step.
+        /// Used as a child operation inside `cont.handler_dispatch`'s body region.
+        /// The `ability_ref` attribute identifies the ability type and `op_name`
+        /// identifies the operation name for dispatch.
         ///
-        /// This operation is used inside handler "done" arm bodies to extract the
-        /// result value from a Step struct that was returned by push_prompt.
-        /// The Step layout is (tag, value, prompt, op_idx), and this extracts field 1 (value).
-        /// The WASM backend converts this to struct.get on the Step's value field.
-        fn get_done_value(step) -> result;
+        /// The body region's entry block receives (continuation, shift_value) as
+        /// block arguments, eliminating the need for `cont.get_continuation` and
+        /// `cont.get_shift_value`.
+        #[attr(ability_ref: Type, op_name: Symbol)]
+        fn suspend() { #[region(body)] {} };
 
         // === Types ===
 

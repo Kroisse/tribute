@@ -4,10 +4,11 @@ use salsa_test_macros::salsa_test;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use trunk_ir::dialect::{arith, cont, func, scf, trampoline};
+use tribute_ir::dialect::tribute_rt;
+use trunk_ir::dialect::{arith, cont, core, func, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
 use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
-use trunk_ir::{Attribute, BlockArg, BlockId, DialectOp, IdVec, PathId, Span};
+use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, PathId, Span, Value};
 
 /// Create a shared test location with a fixed span `(0, 0)`.
 ///
@@ -50,81 +51,58 @@ fn count_scf_if_in_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db
 fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
     let location = test_location(db);
     let step_ty = trampoline::Step::new(db).as_type();
-    let i32_ty = core::I32::new(db).as_type();
 
-    // Create 3 blocks: done block + 2 suspend blocks
-    let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
-
-    // Create marker block args for suspend blocks (required by collect_suspend_arms)
-    let state_ref =
+    let state_ref_ty =
         trunk_ir::dialect::core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
-    let marker_arg1 = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("get")),
-        );
-        BlockArg::new(db, i32_ty, attrs)
+
+    // Build suspend arm body regions (each with their own block)
+    let suspend_body1 = {
+        let mut b = BlockBuilder::new(db, location);
+        let c = b.op(arith::Const::i32(db, location, 1));
+        let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+        b.op(scf::r#yield(db, location, vec![step.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
     };
 
-    let marker_arg2 = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(Symbol::new("ability_ref"), Attribute::Type(state_ref));
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("set")),
-        );
-        BlockArg::new(db, i32_ty, attrs)
+    let suspend_body2 = {
+        let mut b = BlockBuilder::new(db, location);
+        let c = b.op(arith::Const::i32(db, location, 2));
+        let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
+        b.op(scf::r#yield(db, location, vec![step.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
     };
 
-    let mut builder1 = BlockBuilder::new(db, location);
-    let zero1 = builder1.op(arith::Const::i32(db, location, 1));
-    let step1 = builder1.op(trampoline::step_done(
+    // Build done body region (empty block)
+    let done_body = Region::new(
         db,
         location,
-        zero1.result(db),
-        step_ty,
-    ));
-    builder1.op(scf::r#yield(db, location, vec![step1.result(db)]));
-    let suspend_block1 = {
-        let block = builder1.build();
-        // Rebuild block with marker arg
-        Block::new(
+        IdVec::from(vec![Block::new(
             db,
-            block.id(db),
+            BlockId::fresh(),
             location,
-            IdVec::from(vec![marker_arg1]),
-            block.operations(db).clone(),
-        )
-    };
-
-    let mut builder2 = BlockBuilder::new(db, location);
-    let zero2 = builder2.op(arith::Const::i32(db, location, 2));
-    let step2 = builder2.op(trampoline::step_done(
-        db,
-        location,
-        zero2.result(db),
-        step_ty,
-    ));
-    builder2.op(scf::r#yield(db, location, vec![step2.result(db)]));
-    let suspend_block2 = {
-        let block = builder2.build();
-        // Rebuild block with marker arg
-        Block::new(
-            db,
-            block.id(db),
-            location,
-            IdVec::from(vec![marker_arg2]),
-            block.operations(db).clone(),
-        )
-    };
-
-    let body_region = Region::new(
-        db,
-        location,
-        IdVec::from(vec![done_block, suspend_block1, suspend_block2]),
+            IdVec::new(),
+            IdVec::new(),
+        )]),
     );
+
+    // Build a single block with cont.done and cont.suspend child ops
+    let mut block_builder = BlockBuilder::new(db, location);
+    block_builder.op(cont::done(db, location, done_body));
+    block_builder.op(cont::suspend(
+        db,
+        location,
+        state_ref_ty,
+        Symbol::new("get"),
+        suspend_body1,
+    ));
+    block_builder.op(cont::suspend(
+        db,
+        location,
+        state_ref_ty,
+        Symbol::new("set"),
+        suspend_body2,
+    ));
+    let body_region = Region::new(db, location, IdVec::from(vec![block_builder.build()]));
 
     // Create a dummy result value for handler_dispatch
     let dummy_const = arith::Const::i32(db, location, 0);
@@ -461,70 +439,33 @@ fn test_state_type_name_module_uniqueness() {
 fn run_build_nested_dispatch_i1_test(db: &dyn salsa::Database) -> Result<(), String> {
     let location = test_location(db);
     let step_ty = trampoline::Step::new(db).as_type();
-    let i32_ty = core::I32::new(db).as_type();
     let i1_ty = core::I::<1>::new(db).as_type();
 
-    // Create 2 simple suspend arm blocks with marker args
-    let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
-
-    let block_get = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("get")),
-        );
-        let marker_arg = BlockArg::new(db, i32_ty, attrs);
+    // Create 2 simple suspend arm body regions
+    let body_get = {
         let mut b = BlockBuilder::new(db, location);
         let c = b.op(arith::Const::i32(db, location, 0));
         let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
         b.op(scf::r#yield(db, location, vec![step.result(db)]));
-        let block = b.build();
-        Block::new(
-            db,
-            block.id(db),
-            location,
-            IdVec::from(vec![marker_arg]),
-            block.operations(db).clone(),
-        )
+        Region::new(db, location, IdVec::from(vec![b.build()]))
     };
 
-    let block_set = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("set")),
-        );
-        let marker_arg = BlockArg::new(db, i32_ty, attrs);
+    let body_set = {
         let mut b = BlockBuilder::new(db, location);
         let c = b.op(arith::Const::i32(db, location, 0));
         let step = b.op(trampoline::step_done(db, location, c.result(db), step_ty));
         b.op(scf::r#yield(db, location, vec![step.result(db)]));
-        let block = b.build();
-        Block::new(
-            db,
-            block.id(db),
-            location,
-            IdVec::from(vec![marker_arg]),
-            block.operations(db).clone(),
-        )
+        Region::new(db, location, IdVec::from(vec![b.build()]))
     };
 
     let arms = vec![
         SuspendArm {
             expected_op_idx: compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get"))),
-            block: block_get,
+            body: body_get,
         },
         SuspendArm {
             expected_op_idx: compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set"))),
-            block: block_set,
+            body: body_set,
         },
     ];
 
@@ -603,86 +544,55 @@ fn test_build_nested_dispatch_uses_i1_conditions(db: &salsa::DatabaseImpl) {
 #[salsa::tracked]
 fn run_collect_suspend_arms_table_based_test(db: &dyn salsa::Database) -> Result<(), String> {
     let location = test_location(db);
-    let i32_ty = core::I32::new(db).as_type();
 
-    // Create done block (block 0)
-    let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+    let state_ref_ty = core::AbilityRefType::simple(db, Symbol::new("State")).as_type();
 
-    // Create suspend blocks with ability_ref and op_name attributes
-    let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
-
-    let marker_arg_get = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("get")),
-        );
-        BlockArg::new(db, i32_ty, attrs)
+    // Build body regions for each suspend arm (can be empty blocks)
+    let empty_body = || {
+        Region::new(
+            db,
+            location,
+            IdVec::from(vec![Block::new(
+                db,
+                BlockId::fresh(),
+                location,
+                IdVec::new(),
+                IdVec::new(),
+            )]),
+        )
     };
 
-    let marker_arg_set = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("set")),
-        );
-        BlockArg::new(db, i32_ty, attrs)
-    };
+    // Build done body region
+    let done_body = empty_body();
 
-    let marker_arg_modify = {
-        let mut attrs = std::collections::BTreeMap::new();
-        attrs.insert(
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        attrs.insert(
-            Symbol::new("op_name"),
-            Attribute::Symbol(Symbol::new("modify")),
-        );
-        BlockArg::new(db, i32_ty, attrs)
-    };
-
-    // Create suspend blocks
-    let suspend_block_get = Block::new(
+    // Build a single block with cont.done and cont.suspend child ops
+    let mut block_builder = BlockBuilder::new(db, location);
+    block_builder.op(cont::done(db, location, done_body));
+    block_builder.op(cont::suspend(
         db,
-        BlockId::fresh(),
         location,
-        IdVec::from(vec![marker_arg_get]),
-        IdVec::new(),
-    );
-    let suspend_block_set = Block::new(
+        state_ref_ty,
+        Symbol::new("get"),
+        empty_body(),
+    ));
+    block_builder.op(cont::suspend(
         db,
-        BlockId::fresh(),
         location,
-        IdVec::from(vec![marker_arg_set]),
-        IdVec::new(),
-    );
-    let suspend_block_modify = Block::new(
+        state_ref_ty,
+        Symbol::new("set"),
+        empty_body(),
+    ));
+    block_builder.op(cont::suspend(
         db,
-        BlockId::fresh(),
         location,
-        IdVec::from(vec![marker_arg_modify]),
-        IdVec::new(),
-    );
-
-    // Collect blocks: done + 3 suspend blocks
-    let blocks = IdVec::from(vec![
-        done_block,
-        suspend_block_get,
-        suspend_block_set,
-        suspend_block_modify,
-    ]);
+        state_ref_ty,
+        Symbol::new("modify"),
+        empty_body(),
+    ));
+    let body_region = Region::new(db, location, IdVec::from(vec![block_builder.build()]));
 
     // Collect suspend arms
-    let arms = collect_suspend_arms(db, &blocks);
+    let arms = collect_suspend_arms(db, &body_region);
 
     // Should have 3 arms (skip done block)
     if arms.len() != 3 {
@@ -729,18 +639,30 @@ fn test_collect_suspend_arms_hash_based_indexing(db: &salsa::DatabaseImpl) {
 fn run_collect_suspend_arms_done_only_test(db: &dyn salsa::Database) -> Result<(), String> {
     let location = test_location(db);
 
-    // Create only done block (block 0)
-    let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+    // Build a body region with a single block containing only cont.done
+    let done_body = Region::new(
+        db,
+        location,
+        IdVec::from(vec![Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            IdVec::new(),
+        )]),
+    );
 
-    let blocks = IdVec::from(vec![done_block]);
+    let mut block_builder = BlockBuilder::new(db, location);
+    block_builder.op(cont::done(db, location, done_body));
+    let body_region = Region::new(db, location, IdVec::from(vec![block_builder.build()]));
 
     // Collect suspend arms
-    let arms = collect_suspend_arms(db, &blocks);
+    let arms = collect_suspend_arms(db, &body_region);
 
-    // Should have no arms (only done block)
+    // Should have no arms (only done op, no suspend ops)
     if !arms.is_empty() {
         return Err(format!(
-            "Expected no suspend arms when only done block exists, got {}",
+            "Expected no suspend arms when only done op exists, got {}",
             arms.len()
         ));
     }
@@ -756,38 +678,39 @@ fn test_collect_suspend_arms_done_only(db: &salsa::DatabaseImpl) {
     }
 }
 
-/// Helper tracked function to test panic on missing marker arg.
+/// Helper tracked function to test that collect_suspend_arms returns empty
+/// when only a cont.done op exists (no cont.suspend ops).
 #[salsa::tracked]
-fn run_collect_suspend_arms_missing_marker_test(db: &dyn salsa::Database) {
+fn run_collect_suspend_arms_no_suspend_ops_test(db: &dyn salsa::Database) -> usize {
     let location = test_location(db);
 
-    let done_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
-    // Suspend block with NO block arguments — violates the invariant
-    let bad_suspend_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
-    let blocks = IdVec::from(vec![done_block, bad_suspend_block]);
+    // Build a body region with a single block containing only cont.done (no cont.suspend)
+    let done_body = Region::new(
+        db,
+        location,
+        IdVec::from(vec![Block::new(
+            db,
+            BlockId::fresh(),
+            location,
+            IdVec::new(),
+            IdVec::new(),
+        )]),
+    );
 
-    collect_suspend_arms(db, &blocks);
+    let mut block_builder = BlockBuilder::new(db, location);
+    block_builder.op(cont::done(db, location, done_body));
+    let body_region = Region::new(db, location, IdVec::from(vec![block_builder.build()]));
+
+    collect_suspend_arms(db, &body_region).len()
 }
 
-/// Test that collect_suspend_arms panics when a suspend block has no block arguments.
+/// Test that collect_suspend_arms returns empty when no cont.suspend ops exist.
 #[salsa_test]
-fn test_collect_suspend_arms_panics_on_missing_marker_arg(db: &salsa::DatabaseImpl) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_collect_suspend_arms_missing_marker_test(db);
-    }));
-
-    assert!(
-        result.is_err(),
-        "expected panic for suspend block without marker arg"
-    );
-    let msg = result
-        .unwrap_err()
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        msg.contains("suspend block at index 1 has no block arguments"),
-        "panic message should identify the block index, got: {msg}",
+fn test_collect_suspend_arms_returns_empty_when_no_suspend_ops(db: &salsa::DatabaseImpl) {
+    let count = run_collect_suspend_arms_no_suspend_ops_test(db);
+    assert_eq!(
+        count, 0,
+        "collect_suspend_arms should return empty when only cont.done exists"
     );
 }
 
@@ -1163,17 +1086,18 @@ fn test_push_prompt_does_not_propagate_effectfulness(db: &salsa::DatabaseImpl) {
 // Test: build_arm_region emits unreachable for empty arm
 // ========================================================================
 
-/// When an arm block has no operations (and thus no result to yield),
+/// When an arm region has an empty block (no operations, and thus no result to yield),
 /// build_arm_region should emit a func.unreachable as a defensive terminator.
 #[salsa::tracked]
 fn run_build_arm_region_empty_arm_has_terminator(db: &dyn salsa::Database) -> Result<(), String> {
     let location = test_location(db);
 
-    // Create an empty arm block (no operations, no results)
+    // Create an empty arm region (single block with no operations)
     let empty_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), IdVec::new());
+    let empty_region = Region::new(db, location, IdVec::from(vec![empty_block]));
 
     let effectful_funcs = HashSet::new();
-    let region = build_arm_region(db, location, &empty_block, &effectful_funcs);
+    let region = build_arm_region(db, location, &empty_region, &effectful_funcs);
 
     let blocks = region.blocks(db);
     if blocks.is_empty() {
@@ -1252,6 +1176,168 @@ fn run_truncate_scf_if_block_no_yield_unreachable(db: &dyn salsa::Database) -> R
 #[salsa_test]
 fn test_truncate_scf_if_block_no_yield_unreachable(db: &salsa::DatabaseImpl) {
     if let Err(msg) = run_truncate_scf_if_block_no_yield_unreachable(db) {
+        panic!("{}", msg);
+    }
+}
+
+// ========================================================================
+// Test: build_arm_region remaps block-arg references in nested regions
+// ========================================================================
+
+/// Build a suspend arm body where block args are referenced inside an
+/// scf.if branch. Verify that build_arm_region produces a region
+/// without stale block-arg references (i.e. all block-arg references
+/// are replaced by trampoline.get_yield_* ops).
+#[salsa::tracked]
+fn run_build_arm_region_nested_remap(db: &dyn salsa::Database) -> Result<(), String> {
+    let location = test_location(db);
+    let cont_ty = trampoline::Continuation::new(db).as_type();
+    let anyref_ty = tribute_rt::Any::new(db).as_type();
+    let i1_ty = core::I::<1>::new(db).as_type();
+    let step_ty = trampoline::Step::new(db).as_type();
+
+    // Build a suspend arm body with block args (%k: continuation, %v: shift_value)
+    // that are referenced inside an scf.if branch:
+    //
+    //   ^bb0(%k: continuation, %v: any):
+    //     %cond = arith.const true
+    //     %r = scf.if(%cond) {
+    //       cont.resume(%k, %v) -> step    // references %k and %v inside nested region
+    //       scf.yield(%step)
+    //     } else {
+    //       cont.resume(%k, %v) -> step
+    //       scf.yield(%step)
+    //     }
+    //     scf.yield(%r)
+    let block_id = BlockId::fresh();
+    let k_value = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+    let v_value = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+
+    // Build then-branch: cont.resume(%k, %v)
+    let then_region = {
+        let mut b = BlockBuilder::new(db, location);
+        let resume = b.op(cont::resume(db, location, k_value, v_value, step_ty));
+        b.op(scf::r#yield(db, location, vec![resume.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
+    };
+
+    // Build else-branch: cont.resume(%k, %v)
+    let else_region = {
+        let mut b = BlockBuilder::new(db, location);
+        let resume = b.op(cont::resume(db, location, k_value, v_value, step_ty));
+        b.op(scf::r#yield(db, location, vec![resume.result(db)]));
+        Region::new(db, location, IdVec::from(vec![b.build()]))
+    };
+
+    // Build outer block with block args, scf.if, and yield
+    let mut outer = BlockBuilder::new(db, location);
+    let cond = outer.op(arith::r#const(db, location, i1_ty, true.into()));
+    let if_op = outer.op(scf::r#if(
+        db,
+        location,
+        cond.result(db),
+        step_ty,
+        then_region,
+        else_region,
+    ));
+    outer.op(scf::r#yield(db, location, vec![if_op.result(db)]));
+
+    let cont_arg = trunk_ir::BlockArg::of_type(db, cont_ty);
+    let shift_arg = trunk_ir::BlockArg::of_type(db, anyref_ty);
+    let arm_block = Block::new(
+        db,
+        block_id,
+        location,
+        IdVec::from(vec![cont_arg, shift_arg]),
+        outer.build().operations(db).clone(),
+    );
+    let arm_body = Region::new(db, location, IdVec::from(vec![arm_block]));
+
+    // Apply build_arm_region
+    let effectful_funcs = HashSet::new();
+    let result = handler_dispatch::build_arm_region(db, location, &arm_body, &effectful_funcs);
+
+    // Verify: the result region should have no block args (they were stripped)
+    let result_block = result.blocks(db).first().ok_or("empty result region")?;
+    if !result_block.args(db).is_empty() {
+        return Err(format!(
+            "result block should have no args, got {}",
+            result_block.args(db).len()
+        ));
+    }
+
+    // Verify: should start with prefix ops (get_yield_continuation, get_yield_shift_value)
+    let ops: Vec<_> = result_block.operations(db).iter().copied().collect();
+    if ops.len() < 2 {
+        return Err(format!("expected at least 2 prefix ops, got {}", ops.len()));
+    }
+    if trampoline::GetYieldContinuation::from_operation(db, ops[0]).is_err() {
+        return Err(format!(
+            "ops[0] should be trampoline.get_yield_continuation, got {}.{}",
+            ops[0].dialect(db),
+            ops[0].name(db),
+        ));
+    }
+    if trampoline::GetYieldShiftValue::from_operation(db, ops[1]).is_err() {
+        return Err(format!(
+            "ops[1] should be trampoline.get_yield_shift_value, got {}.{}",
+            ops[1].dialect(db),
+            ops[1].name(db),
+        ));
+    }
+
+    let get_cont_result = ops[0].result(db, 0);
+    let get_shift_result = ops[1].result(db, 0);
+
+    // Verify: the scf.if inside should have nested regions where
+    // cont.resume operands reference the prefix op results, not the old block args.
+    // Find scf.if
+    let if_op = ops
+        .iter()
+        .find(|op| scf::If::from_operation(db, **op).is_ok());
+    let if_op = if_op.ok_or("expected scf.if in result")?;
+
+    // Check then-branch
+    let then_region = &if_op.regions(db)[0];
+    let then_ops: Vec<_> = then_region
+        .blocks(db)
+        .first()
+        .ok_or("empty then region")?
+        .operations(db)
+        .iter()
+        .copied()
+        .collect();
+    let resume_op = then_ops
+        .iter()
+        .find(|op| cont::Resume::from_operation(db, **op).is_ok())
+        .ok_or("expected cont.resume in then branch")?;
+    let resume_operands = resume_op.operands(db);
+
+    // The first operand (continuation) should be the get_yield_continuation result
+    if resume_operands[0] != get_cont_result {
+        return Err(
+            "then-branch cont.resume operand[0] should reference get_yield_continuation result, \
+             but references a different value (stale block arg?)"
+                .to_string(),
+        );
+    }
+    // The second operand (shift_value) should be the get_yield_shift_value result
+    if resume_operands[1] != get_shift_result {
+        return Err(
+            "then-branch cont.resume operand[1] should reference get_yield_shift_value result, \
+             but references a different value (stale block arg?)"
+                .to_string(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Test that build_arm_region correctly remaps block-arg references in nested
+/// scf.if regions (not just top-level operands).
+#[salsa_test]
+fn test_build_arm_region_remaps_block_args_in_nested_regions(db: &salsa::DatabaseImpl) {
+    if let Err(msg) = run_build_arm_region_nested_remap(db) {
         panic!("{}", msg);
     }
 }
