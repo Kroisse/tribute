@@ -319,10 +319,10 @@ fn find_call_in_op<'db>(
     callee_name: &str,
 ) -> bool {
     // Check if this op is the target call
-    if let Ok(call) = func::Call::from_operation(db, *op) {
-        if call.callee(db) == callee_name {
-            return true;
-        }
+    if let Ok(call) = func::Call::from_operation(db, *op)
+        && call.callee(db) == callee_name
+    {
+        return true;
     }
 
     // Check nested regions
