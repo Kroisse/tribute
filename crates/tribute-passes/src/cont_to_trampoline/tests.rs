@@ -1315,17 +1315,19 @@ fn run_build_arm_region_nested_remap(db: &dyn salsa::Database) -> Result<(), Str
 
     // The first operand (continuation) should be the get_yield_continuation result
     if resume_operands[0] != get_cont_result {
-        return Err(format!(
+        return Err(
             "then-branch cont.resume operand[0] should reference get_yield_continuation result, \
              but references a different value (stale block arg?)"
-        ));
+                .to_string(),
+        );
     }
     // The second operand (shift_value) should be the get_yield_shift_value result
     if resume_operands[1] != get_shift_result {
-        return Err(format!(
+        return Err(
             "then-branch cont.resume operand[1] should reference get_yield_shift_value result, \
              but references a different value (stale block arg?)"
-        ));
+                .to_string(),
+        );
     }
 
     Ok(())
