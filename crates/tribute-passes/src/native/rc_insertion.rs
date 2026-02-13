@@ -606,11 +606,29 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_op;
 
-    // === Tracked helpers (parse_test_module requires tracked context) ===
+    #[salsa::input]
+    struct TextInput {
+        #[returns(ref)]
+        text: String,
+    }
 
     #[salsa::tracked]
-    fn rc_ptr_param_return(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
+    fn do_insert_rc(db: &dyn salsa::Database, input: TextInput) -> core::Module<'_> {
+        let module = parse_test_module(db, input.text(db));
+        insert_rc(db, module)
+    }
+
+    fn run_rc(db: &salsa::DatabaseImpl, ir: &str) -> String {
+        let input = TextInput::new(db, ir.to_string());
+        let result = do_insert_rc(db, input);
+        print_op(db, result.as_operation())
+    }
+
+    // === Tests ===
+
+    #[salsa_test]
+    fn test_ptr_param_retain_release(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
             db,
             r#"
             core.module @test {
@@ -621,136 +639,6 @@ mod tests {
             }
             "#,
         );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_alloc_return(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @f {type = core.func(core.ptr)} {
-                    ^entry():
-                        %size = clif.iconst {value = 8} : core.i64
-                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
-                        clif.return %ptr
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_ptr_param_used_not_returned(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @f {type = core.func(core.i32, core.ptr)} {
-                    ^entry(%p: core.ptr):
-                        %val = clif.load %p {offset = 0} : core.i32
-                        clif.return %val
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_store_ptr(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr)} {
-                    ^entry(%obj: core.ptr, %field_val: core.ptr):
-                        clif.store %field_val, %obj {offset = 0}
-                        clif.return
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_load_ptr(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @f {type = core.func(core.ptr, core.ptr)} {
-                    ^entry(%obj: core.ptr):
-                        %field = clif.load %obj {offset = 8} : core.ptr
-                        clif.return %field
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_no_ptr(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @f {type = core.func(core.i32, core.i32)} {
-                    ^entry(%x: core.i32):
-                        clif.return %x
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_snapshot_simple_param(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @use_ptr {type = core.func(core.i32, core.ptr)} {
-                    ^entry(%p: core.ptr):
-                        %val = clif.load %p {offset = 0} : core.i32
-                        clif.return %val
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    #[salsa::tracked]
-    fn rc_snapshot_alloc_store_return(db: &dyn salsa::Database) -> core::Module<'_> {
-        let module = parse_test_module(
-            db,
-            r#"
-            core.module @test {
-                clif.func @alloc_and_store {type = core.func(core.ptr, core.i32)} {
-                    ^entry(%val: core.i32):
-                        %size = clif.iconst {value = 4} : core.i64
-                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
-                        clif.store %val, %ptr {offset = 0}
-                        clif.return %ptr
-                }
-            }
-            "#,
-        );
-        insert_rc(db, module)
-    }
-
-    // === Tests ===
-
-    #[salsa_test]
-    fn test_ptr_param_retain_release(db: &salsa::DatabaseImpl) {
-        let result = rc_ptr_param_return(db);
-        let ir = print_op(db, result.as_operation());
 
         // Parameter is returned → retain at entry, no release
         assert!(
@@ -766,8 +654,19 @@ mod tests {
 
     #[salsa_test]
     fn test_alloc_return_no_release(db: &salsa::DatabaseImpl) {
-        let result = rc_alloc_return(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr)} {
+                    ^entry():
+                        %size = clif.iconst {value = 8} : core.i64
+                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        clif.return %ptr
+                }
+            }
+            "#,
+        );
 
         // Alloc result returned → no retain or release needed
         assert!(
@@ -778,8 +677,18 @@ mod tests {
 
     #[salsa_test]
     fn test_ptr_param_used_not_returned(db: &salsa::DatabaseImpl) {
-        let result = rc_ptr_param_used_not_returned(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.i32, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %val = clif.load %p {offset = 0} : core.i32
+                        clif.return %val
+                }
+            }
+            "#,
+        );
 
         // ptr param is used (load) but not returned → retain at entry, release after last use
         assert!(
@@ -794,8 +703,18 @@ mod tests {
 
     #[salsa_test]
     fn test_store_ptr_retains(db: &salsa::DatabaseImpl) {
-        let result = rc_store_ptr(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr)} {
+                    ^entry(%obj: core.ptr, %field_val: core.ptr):
+                        clif.store %field_val, %obj {offset = 0}
+                        clif.return
+                }
+            }
+            "#,
+        );
 
         // Should have retains for both params + extra retain before store
         let retain_count = ir.matches("tribute_rt.retain").count();
@@ -808,8 +727,18 @@ mod tests {
 
     #[salsa_test]
     fn test_load_ptr_retains(db: &salsa::DatabaseImpl) {
-        let result = rc_load_ptr(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%obj: core.ptr):
+                        %field = clif.load %obj {offset = 8} : core.ptr
+                        clif.return %field
+                }
+            }
+            "#,
+        );
 
         // Should retain param + retain after load
         let retain_count = ir.matches("tribute_rt.retain").count();
@@ -821,8 +750,17 @@ mod tests {
 
     #[salsa_test]
     fn test_no_ptr_noop(db: &salsa::DatabaseImpl) {
-        let result = rc_no_ptr(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.i32, core.i32)} {
+                    ^entry(%x: core.i32):
+                        clif.return %x
+                }
+            }
+            "#,
+        );
 
         assert!(
             !ir.contains("tribute_rt.retain"),
@@ -834,19 +772,66 @@ mod tests {
         );
     }
 
+    #[salsa_test]
+    fn test_unused_ptr_param_released(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // Unused ptr param → retain at entry + release at start (never used)
+        assert!(
+            ir.contains("tribute_rt.retain"),
+            "should retain ptr param at entry: {ir}"
+        );
+        assert!(
+            ir.contains("tribute_rt.release"),
+            "should release unused ptr param: {ir}"
+        );
+    }
+
     // === Snapshot tests ===
 
     #[salsa_test]
     fn test_snapshot_simple_param(db: &salsa::DatabaseImpl) {
-        let result = rc_snapshot_simple_param(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @use_ptr {type = core.func(core.i32, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %val = clif.load %p {offset = 0} : core.i32
+                        clif.return %val
+                }
+            }
+            "#,
+        );
         insta::assert_snapshot!(ir);
     }
 
     #[salsa_test]
     fn test_snapshot_alloc_store_return(db: &salsa::DatabaseImpl) {
-        let result = rc_snapshot_alloc_store_return(db);
-        let ir = print_op(db, result.as_operation());
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @alloc_and_store {type = core.func(core.ptr, core.i32)} {
+                    ^entry(%val: core.i32):
+                        %size = clif.iconst {value = 4} : core.i64
+                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        clif.store %val, %ptr {offset = 0}
+                        clif.return %ptr
+                }
+            }
+            "#,
+        );
         insta::assert_snapshot!(ir);
     }
 }
