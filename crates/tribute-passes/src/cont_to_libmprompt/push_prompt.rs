@@ -57,7 +57,7 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
@@ -71,8 +71,8 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
         // Get the body region (already recursively transformed by applicator)
         let body = push_prompt.body(db);
 
-        // Compute live-ins for the body region
-        let live_ins = compute_live_ins(db, &body);
+        // Compute live-ins for the body region, using adaptor for type lookup
+        let live_ins = compute_live_ins(db, &body, &|db, v| adaptor.get_value_type(db, v));
 
         // Generate unique name
         let body_idx = {
@@ -167,29 +167,22 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
 /// Compute live-in values for a region.
 ///
 /// A value is a live-in if it is used (as an operand) inside the region
-/// but defined outside (not a block arg or operation result within the region).
+/// but defined outside (not a block arg or operation result within the region,
+/// including nested sub-regions).
+///
+/// The `external_type_lookup` is used to resolve types for values defined
+/// outside the region (e.g., block arguments from enclosing scopes).
 fn compute_live_ins<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
+    external_type_lookup: &dyn Fn(&'db dyn salsa::Database, Value<'db>) -> Option<Type<'db>>,
 ) -> Vec<(Value<'db>, Type<'db>)> {
     let mut defined: HashSet<Value<'db>> = HashSet::new();
     let mut used: Vec<Value<'db>> = Vec::new();
     let mut seen_used: HashSet<Value<'db>> = HashSet::new();
 
-    // Collect all defined values in the region
-    for block in region.blocks(db).iter() {
-        // Block arguments are defined
-        for (i, _) in block.args(db).iter().enumerate() {
-            defined.insert(Value::new(db, ValueDef::BlockArg(block.id(db)), i));
-        }
-
-        // Operation results are defined
-        for op in block.operations(db).iter() {
-            for (i, _) in op.results(db).iter().enumerate() {
-                defined.insert(op.result(db, i));
-            }
-        }
-    }
+    // Collect all defined values in the region, including nested regions
+    collect_defined_in_region(db, region, &mut defined);
 
     // Collect all used values (including in nested regions)
     for block in region.blocks(db).iter() {
@@ -204,13 +197,40 @@ fn compute_live_ins<'db>(
 
     for v in used {
         if !defined.contains(&v) && live_in_set.insert(v) {
-            // Determine type from the value's definition
-            let ty = get_value_type(db, v);
+            // Try external type lookup first, then fall back to definition-based
+            let ty = external_type_lookup(db, v).unwrap_or_else(|| get_value_type(db, v));
             live_ins.push((v, ty));
         }
     }
 
     live_ins
+}
+
+/// Recursively collect all values defined in a region (block args + op results),
+/// including those in nested sub-regions.
+fn collect_defined_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    defined: &mut HashSet<Value<'db>>,
+) {
+    for block in region.blocks(db).iter() {
+        // Block arguments are defined
+        for (i, _) in block.args(db).iter().enumerate() {
+            defined.insert(Value::new(db, ValueDef::BlockArg(block.id(db)), i));
+        }
+
+        // Operation results are defined
+        for op in block.operations(db).iter() {
+            for (i, _) in op.results(db).iter().enumerate() {
+                defined.insert(op.result(db, i));
+            }
+
+            // Recurse into nested regions
+            for nested_region in op.regions(db).iter() {
+                collect_defined_in_region(db, nested_region, defined);
+            }
+        }
+    }
 }
 
 /// Recursively collect all values used as operands.

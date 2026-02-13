@@ -324,15 +324,15 @@ fn build_nested_dispatch<'db>(
     let i1_ty = core::I::<1>::new(db).as_type();
 
     if arm_index >= suspend_arms.len() {
-        // Unreachable — emit func.unreachable for safety
-        builder.op(func::unreachable(db, location));
-        // Return a dummy value — unreachable code, but need a value for SSA
+        // Create a dummy value first — needed for SSA even in unreachable code
         let dummy = builder.op(arith::r#const(
             db,
             location,
             result_ty,
             trunk_ir::Attribute::IntBits(0),
         ));
+        // func.unreachable is a block terminator, so it must come last
+        builder.op(func::unreachable(db, location));
         return dummy.result(db);
     }
 
