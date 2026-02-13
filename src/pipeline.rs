@@ -374,9 +374,7 @@ pub fn stage_resolve_evidence<'db>(
 /// This pass transforms continuation operations to trampoline operations:
 /// - `cont.shift` → `trampoline.build_state` + `trampoline.build_continuation` + etc.
 /// - `cont.resume` → `trampoline.reset_yield_state` + `trampoline.continuation_get` + call
-/// - `cont.get_continuation` → `trampoline.get_yield_continuation`
-/// - `cont.get_shift_value` → `trampoline.get_yield_shift_value`
-/// - `cont.get_done_value` → `trampoline.step_get`
+/// - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
 ///
 /// This is a backend-agnostic pass that prepares continuation operations for
 /// the trampoline (yield-bubbling) implementation strategy.

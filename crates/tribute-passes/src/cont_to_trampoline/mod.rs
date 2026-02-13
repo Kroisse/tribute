@@ -5,9 +5,7 @@
 //! - `cont.resume` → reset_yield_state + continuation_get + build_resume_wrapper + call
 //! - `cont.push_prompt` → trampoline yield check loop + dispatch
 //! - `cont.handler_dispatch` → yield check + multi-arm dispatch
-//! - `cont.get_continuation` → `trampoline.get_yield_continuation`
-//! - `cont.get_shift_value` → `trampoline.get_yield_shift_value`
-//! - `cont.get_done_value` → `trampoline.step_get(field="value")`
+//! - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
 //! - `cont.drop` → pass through (handled later)
 //!
 //! This pass is backend-agnostic and should run after `tribute_to_cont`/`handler_lower`
@@ -134,11 +132,10 @@ pub(crate) struct ShiftPointInfo<'db> {
 /// - `cont.resume` → continuation extraction + resume wrapper call
 /// - `cont.push_prompt` → yield check + dispatch
 /// - `cont.handler_dispatch` → yield check + multi-arm dispatch
-/// - `cont.get_continuation` → `trampoline.get_yield_continuation`
-/// - `cont.get_shift_value` → `trampoline.get_yield_shift_value`
-/// - `cont.get_done_value` → `trampoline.step_get(field="value")`
+/// - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
 ///
-/// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
+/// Returns an error if any `cont.*` operations (except `cont.drop`, `cont.done`,
+/// `cont.suspend`) remain after conversion.
 pub fn lower_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
@@ -168,9 +165,6 @@ pub fn lower_cont_to_trampoline<'db>(
             module_name: module.name(db),
         })
         .add_pattern(LowerResumePattern)
-        .add_pattern(LowerGetContinuationPattern)
-        .add_pattern(LowerGetShiftValuePattern)
-        .add_pattern(LowerGetDoneValuePattern)
         .add_pattern(UpdateEffectfulCallResultTypePattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
         })
@@ -202,7 +196,9 @@ pub fn lower_cont_to_trampoline<'db>(
     // Verify all cont.* ops (except cont.drop) are converted
     let conversion_target = ConversionTarget::new()
         .illegal_dialect("cont")
-        .legal_op("cont", "drop");
+        .legal_op("cont", "drop")
+        .legal_op("cont", "done")
+        .legal_op("cont", "suspend");
 
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();

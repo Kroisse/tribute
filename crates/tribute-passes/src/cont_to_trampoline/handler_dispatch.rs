@@ -52,16 +52,15 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         // This was set by tribute_to_cont when creating the handler_dispatch
         let user_result_ty = dispatch.result_type(db);
 
-        // Get the body region with multiple blocks
+        // Get the body region with child ops (cont.done + cont.suspend)
         let body_region = op
             .regions(db)
             .first()
             .cloned()
             .unwrap_or_else(|| Region::new(db, location, IdVec::new()));
-        let blocks = body_region.blocks(db);
 
         // Collect suspend arms with their expected op_idx
-        let suspend_arms = collect_suspend_arms(db, blocks);
+        let suspend_arms = collect_suspend_arms(db, &body_region);
 
         // Check if this handler is inside an effectful function
         // If so, the loop should return Step type for propagation up the call stack
@@ -414,13 +413,13 @@ pub(crate) fn build_nested_dispatch<'db>(
     let arm = &suspend_arms[arm_index];
     let is_last_arm = arm_index + 1 >= suspend_arms.len();
 
-    // Build then region: execute this arm's block code
-    let then_region = build_arm_region(db, location, &arm.block, effectful_funcs);
+    // Build then region: execute this arm's body code
+    let then_region = build_arm_region(db, location, &arm.body, effectful_funcs);
 
     if is_last_arm {
         // Last arm (or only arm): use always-true condition, duplicate arm for else
         let true_const = builder.op(arith::r#const(db, location, i1_ty, true.into()));
-        let else_region = build_arm_region(db, location, &arm.block, effectful_funcs);
+        let else_region = build_arm_region(db, location, &arm.body, effectful_funcs);
 
         let if_op = builder.op(scf::r#if(
             db,
@@ -475,28 +474,31 @@ pub(crate) fn build_nested_dispatch<'db>(
     if_op.result(db)
 }
 
-/// Build a single-block region from a handler arm block.
+/// Build a single-block region from a handler arm's body region.
 ///
-/// The arm block contains user's handler code ending with cont.resume (lowered to
+/// The arm body contains user's handler code ending with cont.resume (lowered to
 /// trampoline.resume → func.call_indirect which returns Step).
 /// We need to ensure the region yields this Step value.
 ///
-/// IMPORTANT: The arm block may contain unrealized_conversion_cast operations that
+/// IMPORTANT: The arm body may contain unrealized_conversion_cast operations that
 /// convert the Step result to the user's expected type (e.g., i32). We need to find
 /// the actual Step result and yield that, not the converted result.
 pub(crate) fn build_arm_region<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
-    arm_block: &Block<'db>,
+    arm_body: &Region<'db>,
     effectful_funcs: &HashSet<Symbol>,
 ) -> Region<'db> {
-    // Skip the first block arg (marker arg) if present
-    let original_args = arm_block.args(db);
-    let new_args = if !original_args.is_empty() {
-        IdVec::from(original_args.iter().skip(1).cloned().collect::<Vec<_>>())
-    } else {
-        IdVec::new()
+    let Some(arm_block) = arm_body.blocks(db).first() else {
+        // Empty body: emit unreachable
+        let mut builder = BlockBuilder::new(db, location);
+        builder.op(func::unreachable(db, location));
+        return Region::new(db, location, IdVec::from(vec![builder.build()]));
     };
+
+    // Remove block args — arm will be placed inside scf.if which has no block args.
+    // Block arg values (continuation, shift_value) are replaced by trampoline ops below.
+    let new_args = IdVec::new();
 
     let original_ops = arm_block.operations(db);
 
@@ -556,6 +558,29 @@ pub(crate) fn build_arm_region<'db>(
                 let cast_input = cast.value(db);
                 let cast_output = op.result(db, 0);
                 value_remap.insert(cast_output, cast_input);
+            }
+        }
+
+        // Replace suspend body block args with trampoline ops.
+        // cont.suspend body has block args (%k: continuation, %v: shift_value)
+        // which become trampoline.get_yield_* ops in the lowered output.
+        let mut prefix_ops: Vec<Operation<'db>> = Vec::new();
+        {
+            let block_id = arm_block.id(db);
+            let ba = arm_block.args(db);
+            if !ba.is_empty() {
+                let cont_ty = trampoline::Continuation::new(db).as_type();
+                let get_cont = trampoline::get_yield_continuation(db, location, cont_ty);
+                prefix_ops.push(get_cont.as_operation());
+                let orig = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
+                value_remap.insert(orig, get_cont.result(db));
+            }
+            if ba.len() >= 2 {
+                let anyref = tribute_rt::Any::new(db).as_type();
+                let get_shift = trampoline::get_yield_shift_value(db, location, anyref);
+                prefix_ops.push(get_shift.as_operation());
+                let orig = Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
+                value_remap.insert(orig, get_shift.result(db));
             }
         }
 
@@ -666,6 +691,11 @@ pub(crate) fn build_arm_region<'db>(
                     op.regions(db).clone(),
                     op.successors(db).clone(),
                 );
+                // Map old result values → new result values so subsequent ops
+                // that reference the old results pick up the recreated ones.
+                for (i, _ty) in op.results(db).iter().enumerate() {
+                    value_remap.insert(op.result(db, i), new_op.result(db, i));
+                }
                 ops.push(new_op);
                 if produces_step {
                     // Effectful call or resume returns Step at runtime - subsequent ops are handled by continuation
@@ -699,7 +729,9 @@ pub(crate) fn build_arm_region<'db>(
             ops.push(func::unreachable(db, location).as_operation());
         }
 
-        IdVec::from(ops)
+        let mut all_ops = prefix_ops;
+        all_ops.extend(ops);
+        IdVec::from(all_ops)
     };
 
     // Create new block with filtered args and possibly modified operations

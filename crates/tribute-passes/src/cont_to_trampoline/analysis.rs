@@ -298,10 +298,17 @@ pub(crate) fn calls_effectful_function<'db>(
             // Handler arms can call effectful functions that return Step
             if let Ok(dispatch) = cont::HandlerDispatch::from_operation(db, op) {
                 let body_region = dispatch.body(db);
-                // Skip block 0 (done case), check suspend arms (blocks 1+)
-                for block in body_region.blocks(db).iter().skip(1) {
-                    if block_calls_effectful_inner(db, block, effectful) {
-                        return ControlFlow::Break(());
+                // Check cont.suspend child ops' body regions
+                if let Some(first_block) = body_region.blocks(db).first() {
+                    for child_op in first_block.operations(db).iter() {
+                        if let Ok(suspend_op) = cont::Suspend::from_operation(db, *child_op) {
+                            let suspend_body = suspend_op.body(db);
+                            for block in suspend_body.blocks(db).iter() {
+                                if block_calls_effectful_inner(db, block, effectful) {
+                                    return ControlFlow::Break(());
+                                }
+                            }
+                        }
                     }
                 }
                 return ControlFlow::Continue(WalkAction::Skip);

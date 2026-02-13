@@ -1211,21 +1211,15 @@ fn collect_handled_abilities_by_tag<'db>(
             let tag = dispatch_op.tag(db);
             let mut abilities = Vec::new();
 
-            // Extract ability_ref from body blocks (skip block 0 which is the "done" case)
+            // Extract ability_ref from cont.suspend child ops in body
             let body = dispatch_op.body(db);
-            for (i, body_block) in body.blocks(db).iter().enumerate() {
-                if i == 0 {
-                    continue; // Skip "done" block
-                }
-
-                // Check block arguments for ability_ref attribute
-                for arg in body_block.args(db).iter() {
-                    if let Some(Attribute::Type(ability_ref)) =
-                        arg.get_attr(db, Symbol::new("ability_ref"))
-                    {
+            if let Some(first_block) = body.blocks(db).first() {
+                for child_op in first_block.operations(db).iter() {
+                    if let Ok(suspend_op) = cont::Suspend::from_operation(db, *child_op) {
+                        let ability_ref = suspend_op.ability_ref(db);
                         // Avoid duplicates
-                        if !abilities.contains(ability_ref) {
-                            abilities.push(*ability_ref);
+                        if !abilities.contains(&ability_ref) {
+                            abilities.push(ability_ref);
                         }
                     }
                 }
@@ -1257,33 +1251,13 @@ fn collect_operations_for_tag<'db>(
                 continue;
             }
 
-            // Extract (ability_ref, op_name) pairs from body blocks
-            // Skip block 0 which is the "done" case
+            // Extract (ability_ref, op_name) pairs from cont.suspend child ops
             let body = dispatch_op.body(db);
-            for (i, body_block) in body.blocks(db).iter().enumerate() {
-                if i == 0 {
-                    continue; // Skip "done" block
-                }
-
-                // Check block arguments for ability_ref and op_name attributes
-                for arg in body_block.args(db).iter() {
-                    let attrs = arg.attrs(db);
-                    let ability_ref = attrs.get(&Symbol::new("ability_ref")).and_then(|a| {
-                        if let Attribute::Type(ty) = a {
-                            Some(*ty)
-                        } else {
-                            None
-                        }
-                    });
-                    let op_name = attrs.get(&Symbol::new("op_name")).and_then(|a| {
-                        if let Attribute::Symbol(s) = a {
-                            Some(*s)
-                        } else {
-                            None
-                        }
-                    });
-
-                    if let (Some(ability), Some(name)) = (ability_ref, op_name) {
+            if let Some(first_block) = body.blocks(db).first() {
+                for child_op in first_block.operations(db).iter() {
+                    if let Ok(suspend_op) = cont::Suspend::from_operation(db, *child_op) {
+                        let ability = suspend_op.ability_ref(db);
+                        let name = suspend_op.op_name(db);
                         // Avoid duplicates
                         if !operations.contains(&(ability, name)) {
                             operations.push((ability, name));
@@ -1658,27 +1632,46 @@ mod tests {
         // Create handler_dispatch that handles an ability for tag 0
         // This is needed so that evidence_extend is generated
         let state_ref = core::AbilityRefType::simple(db, Symbol::new("State"));
-        let handler_block_arg = BlockArg::with_attr(
+
+        // Build cont.done child op with empty body
+        let done_body = Region::new(
             db,
-            core::Nil::new(db).as_type(),
-            Symbol::new("ability_ref"),
-            Attribute::Type(state_ref.as_type()),
-        );
-        let handler_block = Block::new(
-            db,
-            BlockId::fresh(),
             location,
-            idvec![handler_block_arg],
-            idvec![],
+            idvec![Block::new(
+                db,
+                BlockId::fresh(),
+                location,
+                idvec![BlockArg::of_type(db, i64_ty)],
+                idvec![],
+            )],
         );
-        let done_block = Block::new(
+        let done_op = cont::done(db, location, done_body);
+
+        // Build cont.suspend child op
+        let suspend_body = Region::new(
             db,
-            BlockId::fresh(),
             location,
-            idvec![BlockArg::of_type(db, i64_ty)],
-            idvec![],
+            idvec![Block::new(
+                db,
+                BlockId::fresh(),
+                location,
+                idvec![],
+                idvec![]
+            )],
         );
-        let dispatch_body = Region::new(db, location, idvec![done_block, handler_block]);
+        let suspend_op = cont::suspend(
+            db,
+            location,
+            state_ref.as_type(),
+            Symbol::new("get"),
+            suspend_body,
+        );
+
+        // Single block with child ops
+        let mut dispatch_builder = trunk_ir::ir::BlockBuilder::new(db, location);
+        dispatch_builder.op(done_op);
+        dispatch_builder.op(suspend_op);
+        let dispatch_body = Region::new(db, location, idvec![dispatch_builder.build()]);
         let handler_dispatch = cont::handler_dispatch(
             db,
             location,
