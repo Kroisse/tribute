@@ -16,7 +16,7 @@
 //! primitive value is stored at offset 0. Phase 3 (RC) will prepend an 8-byte
 //! header (refcount + rtti_idx) before the payload.
 
-use tribute_ir::dialect::tribute_rt;
+use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::rewrite::{
@@ -27,16 +27,22 @@ use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Value};
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
 
-/// Generate boxing operations: allocate + store value.
+/// Generate boxing operations: allocate + store RC header + store value.
 ///
-/// Returns a sequence of clif ops where the last op produces the pointer result.
+/// Returns a sequence of clif ops where the last op produces the payload pointer.
 ///
 /// ```text
-/// %size = clif.iconst(<payload_size>)
-/// %ptr  = clif.call @__tribute_alloc(%size)
-/// clif.store(%value, %ptr, offset=0)
-/// %zero = clif.iconst(0)
-/// %result = clif.iadd(%ptr, %zero)   // identity for result mapping
+/// %alloc_size = clif.iconst(<payload_size + 8>)
+/// %raw_ptr    = clif.call @__tribute_alloc(%alloc_size)
+/// %rc_one     = clif.iconst(1)           // initial refcount
+/// clif.store(%rc_one, %raw_ptr, offset=0)
+/// %rtti_zero  = clif.iconst(0)           // rtti_idx placeholder
+/// clif.store(%rtti_zero, %raw_ptr, offset=4)
+/// %hdr_size   = clif.iconst(8)
+/// %payload    = clif.iadd(%raw_ptr, %hdr_size)  // payload_ptr = raw + 8
+/// clif.store(%value, %payload, offset=0)
+/// %zero       = clif.iconst(0)
+/// %result     = clif.iadd(%payload, %zero)      // identity for result mapping
 /// ```
 fn box_value<'db>(
     db: &'db dyn salsa::Database,
@@ -46,30 +52,50 @@ fn box_value<'db>(
 ) -> Vec<Operation<'db>> {
     let ptr_ty = core::Ptr::new(db).as_type();
     let i64_ty = core::I64::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
 
     let mut ops = Vec::new();
 
-    // 1. Allocation size
-    let size_op = clif::iconst(db, location, i64_ty, payload_size);
+    // 1. Allocation size (payload + RC header)
+    let alloc_size = payload_size + RC_HEADER_SIZE;
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size);
     let size_val = size_op.result(db);
     ops.push(size_op.as_operation());
 
     // 2. Allocate heap memory
     let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
-    let ptr_val = call_op.result(db);
+    let raw_ptr = call_op.result(db);
     ops.push(call_op.as_operation());
 
-    // 3. Store value at offset 0
-    let store_op = clif::store(db, location, value, ptr_val, 0);
-    ops.push(store_op.as_operation());
+    // 3. Store refcount = 1 at raw_ptr + 0
+    let rc_one = clif::iconst(db, location, i32_ty, 1);
+    ops.push(rc_one.as_operation());
+    let store_rc = clif::store(db, location, rc_one.result(db), raw_ptr, 0);
+    ops.push(store_rc.as_operation());
 
-    // 4. Identity pass-through so the last op produces the ptr result.
+    // 4. Store rtti_idx = 0 at raw_ptr + 4
+    let rtti_zero = clif::iconst(db, location, i32_ty, 0);
+    ops.push(rtti_zero.as_operation());
+    let store_rtti = clif::store(db, location, rtti_zero.result(db), raw_ptr, 4);
+    ops.push(store_rtti.as_operation());
+
+    // 5. Compute payload pointer = raw_ptr + 8
+    let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    ops.push(hdr_size.as_operation());
+    let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
+    ops.push(payload_ptr.as_operation());
+
+    // 6. Store value at payload offset 0
+    let store_val = clif::store(db, location, value, payload_ptr.result(db), 0);
+    ops.push(store_val.as_operation());
+
+    // 7. Identity pass-through so the last op produces the payload ptr result.
     //    Cranelift will optimize away iadd(ptr, 0).
     let zero_op = clif::iconst(db, location, ptr_ty, 0);
     let zero_val = zero_op.result(db);
     ops.push(zero_op.as_operation());
 
-    let identity_op = clif::iadd(db, location, ptr_val, zero_val, ptr_ty);
+    let identity_op = clif::iadd(db, location, payload_ptr.result(db), zero_val, ptr_ty);
     ops.push(identity_op.as_operation());
 
     ops
@@ -263,203 +289,110 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_op;
     use trunk_ir::rewrite::TypeConverter;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
 
     fn test_converter() -> TypeConverter {
         TypeConverter::new()
     }
 
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
+    #[salsa::input]
+    struct TextInput {
+        #[returns(ref)]
+        text: String,
     }
 
-    fn get_ops<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) -> Vec<Operation<'db>> {
-        module.body(db).blocks(db)[0]
-            .operations(db)
-            .iter()
-            .copied()
-            .collect()
+    #[salsa::tracked]
+    fn do_lower(db: &dyn salsa::Database, input: TextInput) -> Module<'_> {
+        let module = parse_test_module(db, input.text(db));
+        lower(db, module, test_converter())
+    }
+
+    fn run_lower(db: &salsa::DatabaseImpl, ir: &str) -> String {
+        let input = TextInput::new(db, ir.to_string());
+        let result = do_lower(db, input);
+        print_op(db, result.as_operation())
     }
 
     // === box_int ===
 
-    #[salsa::tracked]
-    fn make_and_lower_box_int(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-
-        let const_op = clif::iconst(db, location, i32_ty, 42);
-        let box_op = tribute_rt::box_int(db, location, const_op.result(db), ptr_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![const_op.as_operation(), box_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = Module::create(db, location, "test".into(), region);
-        lower(db, module, test_converter())
-    }
-
     #[salsa_test]
     fn test_box_int_to_clif(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_box_int(db);
-        let ops = get_ops(db, &lowered);
-
-        // iconst(42) + iconst(4) + call alloc + store + iconst(0) + iadd = 6 ops
-        assert_eq!(ops.len(), 6);
-        assert_eq!(ops[0].full_name(db), "clif.iconst");
-        assert_eq!(ops[1].full_name(db), "clif.iconst"); // size=4
-        assert_eq!(ops[2].full_name(db), "clif.call"); // alloc
-        assert_eq!(ops[3].full_name(db), "clif.store"); // store value
-        assert_eq!(ops[4].full_name(db), "clif.iconst"); // zero
-        assert_eq!(ops[5].full_name(db), "clif.iadd"); // identity
-
-        // Last op should produce ptr type
-        let result_ty = ops[5].results(db)[0];
-        assert_eq!(result_ty, core::Ptr::new(db).as_type());
+        let ir = run_lower(
+            db,
+            r#"
+            core.module @test {
+                %val = clif.iconst {value = 42} : core.i32
+                %ptr = tribute_rt.box_int %val : core.ptr
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
     }
 
     // === unbox_int ===
 
-    #[salsa::tracked]
-    fn make_and_lower_unbox_int(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-
-        let placeholder = clif::iconst(db, location, ptr_ty, 0);
-        let unbox_op = tribute_rt::unbox_int(db, location, placeholder.result(db), i32_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![placeholder.as_operation(), unbox_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = Module::create(db, location, "test".into(), region);
-        lower(db, module, test_converter())
-    }
-
     #[salsa_test]
     fn test_unbox_int_to_clif(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_unbox_int(db);
-        let ops = get_ops(db, &lowered);
-
-        // placeholder + load = 2 ops
-        assert_eq!(ops.len(), 2);
-        assert_eq!(ops[0].full_name(db), "clif.iconst");
-        assert_eq!(ops[1].full_name(db), "clif.load");
-
-        // Load should produce i32
-        let result_ty = ops[1].results(db)[0];
-        assert_eq!(result_ty, core::I32::new(db).as_type());
+        let ir = run_lower(
+            db,
+            r#"
+            core.module @test {
+                %ptr = clif.iconst {value = 0} : core.ptr
+                %val = tribute_rt.unbox_int %ptr : core.i32
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
     }
 
     // === box_float ===
 
-    #[salsa::tracked]
-    fn make_and_lower_box_float(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let f64_ty = core::F64::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-
-        let const_op = clif::f64const(db, location, f64_ty, 2.5);
-        let box_op = tribute_rt::box_float(db, location, const_op.result(db), ptr_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![const_op.as_operation(), box_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = Module::create(db, location, "test".into(), region);
-        lower(db, module, test_converter())
-    }
-
     #[salsa_test]
     fn test_box_float_to_clif(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_box_float(db);
-        let ops = get_ops(db, &lowered);
-
-        // f64const + iconst(8) + call alloc + store + iconst(0) + iadd = 6 ops
-        assert_eq!(ops.len(), 6);
-        assert_eq!(ops[0].full_name(db), "clif.f64const");
-        assert_eq!(ops[1].full_name(db), "clif.iconst"); // size=8
-        assert_eq!(ops[2].full_name(db), "clif.call"); // alloc
-        assert_eq!(ops[3].full_name(db), "clif.store");
-        assert_eq!(ops[5].full_name(db), "clif.iadd");
-
-        let result_ty = ops[5].results(db)[0];
-        assert_eq!(result_ty, core::Ptr::new(db).as_type());
+        let ir = run_lower(
+            db,
+            r#"
+            core.module @test {
+                %val = clif.f64const {value = 2.5} : core.f64
+                %ptr = tribute_rt.box_float %val : core.ptr
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
     }
 
     // === unbox_float ===
 
-    #[salsa::tracked]
-    fn make_and_lower_unbox_float(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let f64_ty = core::F64::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-
-        let placeholder = clif::iconst(db, location, ptr_ty, 0);
-        let unbox_op = tribute_rt::unbox_float(db, location, placeholder.result(db), f64_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![placeholder.as_operation(), unbox_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = Module::create(db, location, "test".into(), region);
-        lower(db, module, test_converter())
-    }
-
     #[salsa_test]
     fn test_unbox_float_to_clif(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_unbox_float(db);
-        let ops = get_ops(db, &lowered);
-
-        assert_eq!(ops.len(), 2);
-        assert_eq!(ops[0].full_name(db), "clif.iconst");
-        assert_eq!(ops[1].full_name(db), "clif.load");
-
-        let result_ty = ops[1].results(db)[0];
-        assert_eq!(result_ty, core::F64::new(db).as_type());
+        let ir = run_lower(
+            db,
+            r#"
+            core.module @test {
+                %ptr = clif.iconst {value = 0} : core.ptr
+                %val = tribute_rt.unbox_float %ptr : core.f64
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
     }
 
     // === retain/release passthrough ===
 
-    #[salsa::tracked]
-    fn make_and_lower_retain_release(db: &dyn salsa::Database) -> Module<'_> {
-        let module = trunk_ir::parser::parse_test_module(
+    #[salsa_test]
+    fn test_retain_release_pass_through(db: &salsa::DatabaseImpl) {
+        let ir = run_lower(
             db,
             r#"
             core.module @test {
                 %0 = clif.iconst {value = 0} : core.ptr
                 %1 = tribute_rt.retain %0 : core.ptr
-                tribute_rt.release %1
+                tribute_rt.release %1 {alloc_size = 0}
             }
             "#,
         );
-        lower(db, module, test_converter())
-    }
-
-    #[salsa_test]
-    fn test_retain_release_pass_through(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_retain_release(db);
-        let ir = trunk_ir::printer::print_op(db, lowered.as_operation());
 
         // retain and release should survive the boxing lowering pass
         assert!(
@@ -470,27 +403,5 @@ mod tests {
             ir.contains("tribute_rt.release"),
             "release should pass through"
         );
-        // box/unbox ops should not remain (none were present)
-        assert!(!ir.contains("tribute_rt.box_"), "no box ops should remain");
-    }
-
-    // === boxing identity iadd operand type consistency ===
-
-    #[salsa_test]
-    fn test_box_int_identity_operand_types(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_box_int(db);
-        let ops = get_ops(db, &lowered);
-        let ptr_ty = core::Ptr::new(db).as_type();
-
-        // ops[4] = iconst(0) used as iadd zero operand — should be ptr type
-        let zero_result_ty = ops[4].results(db)[0];
-        assert_eq!(
-            zero_result_ty, ptr_ty,
-            "iadd zero operand should be core.ptr"
-        );
-
-        // ops[5] = iadd — both operands should be ptr type
-        let iadd_result_ty = ops[5].results(db)[0];
-        assert_eq!(iadd_result_ty, ptr_ty);
     }
 }

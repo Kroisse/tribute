@@ -1,0 +1,8 @@
+---
+source: crates/tribute-passes/src/native/tribute_rt_to_clif.rs
+expression: ir
+---
+core.module @test {
+  %0 = clif.iconst {value = 0} : core.ptr
+  %1 = clif.load %0 {offset = 0} : core.f64
+}
