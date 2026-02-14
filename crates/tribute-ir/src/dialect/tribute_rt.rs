@@ -117,6 +117,9 @@ dialect! {
         /// `tribute_rt.release` operation: decrement reference count.
         /// If the count reaches zero, the object is freed.
         /// Lowered to inline refcount decrement + conditional free.
+        /// `alloc_size` is the total allocation size (payload + 8-byte header),
+        /// or 0 if unknown. Used by rc_lowering for dealloc calls.
+        #[attr(alloc_size: i64)]
         fn release(ptr);
     }
 }

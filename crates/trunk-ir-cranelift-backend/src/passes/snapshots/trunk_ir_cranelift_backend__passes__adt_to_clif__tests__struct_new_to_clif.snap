@@ -1,0 +1,20 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
+expression: do_lower_struct_new(db)
+---
+core.module @test {
+  %0 = clif.iconst {value = 10} : core.i32
+  %1 = clif.iconst {value = 20} : core.i32
+  %2 = clif.iconst {value = 16} : core.i64
+  %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
+  %4 = clif.iconst {value = 1} : core.i32
+  clif.store %4, %3 {offset = 0}
+  %5 = clif.iconst {value = 0} : core.i32
+  clif.store %5, %3 {offset = 4}
+  %6 = clif.iconst {value = 8} : core.i64
+  %7 = clif.iadd %3, %6 : core.ptr
+  clif.store %0, %7 {offset = 0}
+  clif.store %1, %7 {offset = 4}
+  %8 = clif.iconst {value = 0} : core.i64
+  %9 = clif.iadd %7, %8 : core.ptr
+}

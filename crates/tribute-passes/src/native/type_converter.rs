@@ -36,9 +36,12 @@ use trunk_ir::{DialectOp, DialectType, Symbol, Type};
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
 
-/// Generate boxing operations: allocate + store value, return pointer.
+/// RC header size: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
+const RC_HEADER_SIZE: i64 = 8;
+
+/// Generate boxing operations: allocate + store RC header + store value, return pointer.
 ///
-/// The last operation produces a `core.ptr` result for value mapping.
+/// The last operation produces a `core.ptr` result (payload pointer) for value mapping.
 fn box_primitive<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
@@ -47,29 +50,49 @@ fn box_primitive<'db>(
 ) -> Vec<trunk_ir::Operation<'db>> {
     let ptr_ty = core::Ptr::new(db).as_type();
     let i64_ty = core::I64::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
 
     let mut ops = Vec::new();
 
-    // 1. Allocation size
-    let size_op = clif::iconst(db, location, i64_ty, payload_size);
+    // 1. Allocation size (payload + RC header)
+    let alloc_size = payload_size + RC_HEADER_SIZE;
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size);
     let size_val = size_op.result(db);
     ops.push(size_op.as_operation());
 
     // 2. Allocate heap memory
     let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
-    let ptr_val = call_op.result(db);
+    let raw_ptr = call_op.result(db);
     ops.push(call_op.as_operation());
 
-    // 3. Store value at offset 0
-    let store_op = clif::store(db, location, value, ptr_val, 0);
-    ops.push(store_op.as_operation());
+    // 3. Store refcount = 1 at raw_ptr + 0
+    let rc_one = clif::iconst(db, location, i32_ty, 1);
+    ops.push(rc_one.as_operation());
+    let store_rc = clif::store(db, location, rc_one.result(db), raw_ptr, 0);
+    ops.push(store_rc.as_operation());
 
-    // 4. Identity pass-through so the last op produces the ptr result.
+    // 4. Store rtti_idx = 0 at raw_ptr + 4
+    let rtti_zero = clif::iconst(db, location, i32_ty, 0);
+    ops.push(rtti_zero.as_operation());
+    let store_rtti = clif::store(db, location, rtti_zero.result(db), raw_ptr, 4);
+    ops.push(store_rtti.as_operation());
+
+    // 5. Compute payload pointer = raw_ptr + 8
+    let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    ops.push(hdr_size.as_operation());
+    let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
+    ops.push(payload_ptr.as_operation());
+
+    // 6. Store value at payload offset 0
+    let store_val = clif::store(db, location, value, payload_ptr.result(db), 0);
+    ops.push(store_val.as_operation());
+
+    // 7. Identity pass-through so the last op produces the payload ptr result.
     let zero_op = clif::iconst(db, location, ptr_ty, 0);
     let zero_val = zero_op.result(db);
     ops.push(zero_op.as_operation());
 
-    let identity_op = clif::iadd(db, location, ptr_val, zero_val, ptr_ty);
+    let identity_op = clif::iadd(db, location, payload_ptr.result(db), zero_val, ptr_ty);
     ops.push(identity_op.as_operation());
 
     ops

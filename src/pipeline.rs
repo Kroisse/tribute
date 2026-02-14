@@ -751,6 +751,9 @@ fn compile_module_to_native<'db>(
         result.module
     };
 
+    // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
+    let module = tribute_passes::native::rc_lowering::lower_rc(db, module);
+
     // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
     let _span = tracing::info_span!("emit_module_to_native").entered();
     emit_module_to_native(db, module)

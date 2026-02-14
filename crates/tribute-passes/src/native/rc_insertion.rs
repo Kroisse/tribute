@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{
-    Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Type, Value, ValueDef,
+    Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value, ValueDef,
 };
 
 /// Insert reference counting operations for all pointer-typed values.
@@ -397,6 +397,47 @@ fn insert_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) 
     Region::new(db, body.location(db), new_blocks)
 }
 
+/// Infer the allocation size for a value by tracing its def chain.
+///
+/// If the value was produced by `clif.call @__tribute_alloc(%size)` and `%size`
+/// is a `clif.iconst`, returns the constant value. Otherwise returns 0 (unknown).
+fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> i64 {
+    let ValueDef::OpResult(def_op) = value.def(db) else {
+        return 0; // block arg — unknown
+    };
+
+    // Check if the defining op is `clif.call @__tribute_alloc`
+    let Ok(call_op) = clif::Call::from_operation(db, def_op) else {
+        // Could be an iadd identity from box_value — trace through it
+        if let Ok(iadd_op) = clif::Iadd::from_operation(db, def_op) {
+            return infer_alloc_size(db, iadd_op.lhs(db));
+        }
+        return 0;
+    };
+
+    let callee = call_op.callee(db);
+    if callee != Symbol::new("__tribute_alloc") {
+        return 0;
+    }
+
+    // The first argument to __tribute_alloc is the size
+    let args = def_op.operands(db);
+    let Some(&size_val) = args.first() else {
+        return 0;
+    };
+
+    // Check if the size argument is a constant
+    let ValueDef::OpResult(size_op) = size_val.def(db) else {
+        return 0;
+    };
+
+    if let Ok(iconst_op) = clif::Iconst::from_operation(db, size_op) {
+        return iconst_op.value(db);
+    }
+
+    0
+}
+
 /// Insert RC operations in a single block.
 fn insert_rc_in_block<'db>(
     db: &'db dyn salsa::Database,
@@ -531,7 +572,8 @@ fn insert_rc_in_block<'db>(
             if is_return_op(db, last_op) {
                 continue;
             }
-            let release_op = tribute_rt::release(db, last_op.location(db), *v);
+            let alloc_size = infer_alloc_size(db, *v);
+            let release_op = tribute_rt::release(db, last_op.location(db), *v, alloc_size);
             plan.after
                 .entry(last_use_idx)
                 .or_default()
@@ -539,7 +581,8 @@ fn insert_rc_in_block<'db>(
         } else {
             // Value is not used in this block but is live-in → release at start
             if live_in.contains(v) {
-                let release_op = tribute_rt::release(db, location, *v);
+                let alloc_size = infer_alloc_size(db, *v);
+                let release_op = tribute_rt::release(db, location, *v, alloc_size);
                 plan.at_start.push(release_op.as_operation());
             }
             // Value defined in this block but never used (dead allocation) → release after def
@@ -547,7 +590,8 @@ fn insert_rc_in_block<'db>(
                 // Find the op index
                 for (op_idx, op) in ops.iter().enumerate() {
                     if *op == def_op {
-                        let release_op = tribute_rt::release(db, op.location(db), *v);
+                        let alloc_size = infer_alloc_size(db, *v);
+                        let release_op = tribute_rt::release(db, op.location(db), *v, alloc_size);
                         plan.after
                             .entry(op_idx)
                             .or_default()
@@ -558,7 +602,8 @@ fn insert_rc_in_block<'db>(
             }
             // Unused block arg that is not live-out → release at block start
             else if let ValueDef::BlockArg(_) = v.def(db) {
-                let release_op = tribute_rt::release(db, location, *v);
+                let alloc_size = infer_alloc_size(db, *v);
+                let release_op = tribute_rt::release(db, location, *v, alloc_size);
                 plan.at_start.push(release_op.as_operation());
             }
         }

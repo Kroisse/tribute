@@ -7,7 +7,7 @@ core.module @test {
   ^bb1(%p: core.ptr):
     %0 = tribute_rt.retain %p : core.ptr
     %1 = clif.load %p {offset = 0} : core.i32
-    tribute_rt.release %p
+    tribute_rt.release %p {alloc_size = 0}
     clif.return %1
   }
 }
