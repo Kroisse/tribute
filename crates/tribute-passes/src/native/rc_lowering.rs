@@ -54,12 +54,13 @@ const DEALLOC_FN: &str = "__tribute_dealloc";
 #[salsa::tracked]
 pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) -> core::Module<'db> {
     let body = module.body(db);
-    let mut changed = false;
+    let mut module_changed = false;
 
     let new_blocks: IdVec<Block<'db>> = body
         .blocks(db)
         .iter()
         .map(|top_op_block| {
+            let mut block_changed = false;
             let new_ops: IdVec<Operation<'db>> = top_op_block
                 .operations(db)
                 .iter()
@@ -68,7 +69,7 @@ pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) ->
                         let func_body = func_op.body(db);
                         let new_body = lower_rc_in_function(db, &func_body);
                         if new_body != func_body {
-                            changed = true;
+                            block_changed = true;
                             op.modify(db).regions(IdVec::from(vec![new_body])).build()
                         } else {
                             *op
@@ -79,7 +80,8 @@ pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) ->
                 })
                 .collect();
 
-            if changed {
+            if block_changed {
+                module_changed = true;
                 Block::new(
                     db,
                     top_op_block.id(db),
@@ -93,7 +95,7 @@ pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) ->
         })
         .collect();
 
-    if !changed {
+    if !module_changed {
         return module;
     }
 
@@ -121,10 +123,34 @@ fn lower_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) -
     Region::new(db, body.location(db), all_new_blocks.into_iter().collect())
 }
 
+/// Info collected for each release op during Phase 1.
+struct ReleaseInfo<'db> {
+    is_zero_val: Value<'db>,
+    rc_addr_val: Value<'db>,
+    alloc_size: i64,
+    free_block_id: BlockId,
+}
+
+/// A segment of operations between release points.
+struct Segment<'db> {
+    ops: Vec<Operation<'db>>,
+    block_id: BlockId,
+    block_args: IdVec<trunk_ir::BlockArg<'db>>,
+    /// If this segment ends with a release, stores info for the block split.
+    release: Option<ReleaseInfo<'db>>,
+}
+
 /// Lower RC ops in a single block, potentially splitting it into multiple blocks.
 ///
 /// Returns a Vec of blocks. If the block contains no release ops, returns the
 /// original block unchanged. Each release op causes a block split.
+///
+/// Uses a two-phase algorithm to ensure `clif.brif` and `clif.jump` operations
+/// reference the actual destination blocks (not empty placeholders):
+///
+/// - **Phase 1**: Iterate ops and collect segments separated by release points.
+/// - **Phase 2**: Build blocks from last to first, so each `brif`/`jump` can
+///   reference the already-created continue block.
 fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Vec<Block<'db>> {
     let ops = block.operations(db);
     let location = block.location(db);
@@ -139,7 +165,8 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         return vec![*block];
     }
 
-    let mut result_blocks: Vec<Block<'db>> = Vec::new();
+    // Phase 1: Collect segments separated by release points.
+    let mut segments: Vec<Segment<'db>> = Vec::new();
     let mut current_ops: Vec<Operation<'db>> = Vec::new();
     let mut current_id = block.id(db);
     let mut current_args = block.args(db).clone();
@@ -158,65 +185,109 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
             let continue_block_id = BlockId::fresh();
             let free_block_id = BlockId::fresh();
 
-            // Generate decrement ops
+            // Generate decrement ops (brif will be appended in Phase 2)
             let (decrement_ops, is_zero_val, rc_addr_val) =
                 gen_release_decrement(db, location, ptr);
             current_ops.extend(decrement_ops);
 
-            // Create empty successor blocks for brif (they need to exist as Block values)
-            let free_block_placeholder =
-                Block::new(db, free_block_id, location, IdVec::new(), IdVec::new());
-            let continue_block_placeholder =
-                Block::new(db, continue_block_id, location, IdVec::new(), IdVec::new());
+            // Finish this segment
+            segments.push(Segment {
+                ops: std::mem::take(&mut current_ops),
+                block_id: current_id,
+                block_args: current_args,
+                release: Some(ReleaseInfo {
+                    is_zero_val,
+                    rc_addr_val,
+                    alloc_size,
+                    free_block_id,
+                }),
+            });
 
-            // Terminate current block with brif
-            let brif_op = clif::brif(
-                db,
-                location,
-                is_zero_val,
-                free_block_placeholder,
-                continue_block_placeholder,
-            );
-            current_ops.push(brif_op.as_operation());
-
-            // Finish current block
-            result_blocks.push(Block::new(
-                db,
-                current_id,
-                location,
-                current_args,
-                current_ops.into_iter().collect(),
-            ));
-
-            // Create free block: dealloc + jump to continue
-            let free_ops =
-                gen_dealloc_call(db, location, rc_addr_val, alloc_size, continue_block_id);
-            let free_block = Block::new(
-                db,
-                free_block_id,
-                location,
-                IdVec::new(),
-                free_ops.into_iter().collect(),
-            );
-            result_blocks.push(free_block);
-
-            // Start a new continue block for remaining ops
+            // Next segment starts as the continue block
             current_id = continue_block_id;
             current_args = IdVec::new();
-            current_ops = Vec::new();
         } else {
             current_ops.push(*op);
         }
     }
 
-    // Finish the last block
-    result_blocks.push(Block::new(
+    // Push the final segment (no release)
+    segments.push(Segment {
+        ops: current_ops,
+        block_id: current_id,
+        block_args: current_args,
+        release: None,
+    });
+
+    // Phase 2: Build blocks from last to first.
+    // The last segment has no release, so it's just a plain block.
+    // Working backwards, each segment with a release creates:
+    //   1. The continue block (already built from previous iteration)
+    //   2. A free block (dealloc + jump to continue block)
+    //   3. The current block (segment ops + brif to free/continue)
+    let mut result_blocks: Vec<Block<'db>> = Vec::new();
+
+    // Build the last segment first
+    let last = segments.pop().expect("at least one segment");
+    let mut continue_block = Block::new(
         db,
-        current_id,
+        last.block_id,
         location,
-        current_args,
-        current_ops.into_iter().collect(),
-    ));
+        last.block_args,
+        last.ops.into_iter().collect(),
+    );
+
+    // Process remaining segments in reverse
+    for segment in segments.into_iter().rev() {
+        let release = segment.release.expect("non-last segment must have release");
+
+        // Build free block: dealloc + jump to continue_block
+        let free_ops = gen_dealloc_call(
+            db,
+            location,
+            release.rc_addr_val,
+            release.alloc_size,
+            continue_block,
+        );
+        let free_block = Block::new(
+            db,
+            release.free_block_id,
+            location,
+            IdVec::new(),
+            free_ops.into_iter().collect(),
+        );
+
+        // Append brif to segment ops
+        let mut ops = segment.ops;
+        let brif_op = clif::brif(
+            db,
+            location,
+            release.is_zero_val,
+            free_block,
+            continue_block,
+        );
+        ops.push(brif_op.as_operation());
+
+        // Build current block
+        let current_block = Block::new(
+            db,
+            segment.block_id,
+            location,
+            segment.block_args,
+            ops.into_iter().collect(),
+        );
+
+        // Prepend free_block and continue_block (they come after current in forward order)
+        result_blocks.push(continue_block);
+        result_blocks.push(free_block);
+        continue_block = current_block;
+    }
+
+    // The first block (entry or first segment)
+    result_blocks.push(continue_block);
+
+    // Reverse to get forward order
+    result_blocks.reverse();
 
     result_blocks
 }
@@ -324,7 +395,7 @@ fn gen_dealloc_call<'db>(
     location: trunk_ir::Location<'db>,
     rc_addr: Value<'db>,
     alloc_size: i64,
-    continue_block_id: BlockId,
+    continue_block: Block<'db>,
 ) -> Vec<Operation<'db>> {
     let i64_ty = core::I64::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
@@ -346,7 +417,6 @@ fn gen_dealloc_call<'db>(
     ops.push(call.as_operation());
 
     // jump to continue block
-    let continue_block = Block::new(db, continue_block_id, location, IdVec::new(), IdVec::new());
     let jump = clif::jump(db, location, [], continue_block);
     ops.push(jump.as_operation());
 
@@ -503,6 +573,125 @@ mod tests {
         // Should be unchanged
         assert!(!ir.contains("clif.brif"), "should not add brif: {ir}");
         assert!(ir.contains("clif.return"), "should have return: {ir}");
+    }
+
+    /// Verify that brif/jump successor blocks are the same Block values as the
+    /// blocks in the function's region. This ensures the Cranelift backend can
+    /// resolve successor references via its block_map (which uses Block identity).
+    #[salsa_test]
+    fn test_release_successors_match_region_blocks(db: &salsa::DatabaseImpl) {
+        let input = TextInput::new(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        tribute_rt.release %p {alloc_size = 12}
+                        clif.return
+                }
+            }
+            "#
+            .to_string(),
+        );
+        let module = do_lower_rc(db, input);
+
+        // Navigate to function body: module → block[0] → op[0] (clif.func) → body region
+        let func_op = module.body(db).blocks(db)[0].operations(db)[0];
+        let func = clif::Func::from_operation(db, func_op).unwrap();
+        let body = func.body(db);
+        let region_blocks: Vec<Block> = body.blocks(db).iter().copied().collect();
+
+        // After release lowering: entry block, free block, continue block
+        assert_eq!(region_blocks.len(), 3, "release should produce 3 blocks");
+
+        // Find brif in entry block
+        let brif_op = region_blocks[0]
+            .operations(db)
+            .iter()
+            .find_map(|op| clif::Brif::from_operation(db, *op).ok())
+            .expect("entry block should end with brif");
+
+        // brif successors must be the actual region blocks, not placeholders
+        assert_eq!(
+            brif_op.then_dest(db),
+            region_blocks[1],
+            "brif.then_dest must be the free block in the region"
+        );
+        assert_eq!(
+            brif_op.else_dest(db),
+            region_blocks[2],
+            "brif.else_dest must be the continue block in the region"
+        );
+
+        // Find jump in free block
+        let jump_op = region_blocks[1]
+            .operations(db)
+            .iter()
+            .find_map(|op| clif::Jump::from_operation(db, *op).ok())
+            .expect("free block should end with jump");
+
+        // jump dest must be the continue block in the region
+        assert_eq!(
+            jump_op.dest(db),
+            region_blocks[2],
+            "jump.dest must be the continue block in the region"
+        );
+    }
+
+    /// Verify successor identity with two releases (chained block splits).
+    #[salsa_test]
+    fn test_two_releases_successors_match_region_blocks(db: &salsa::DatabaseImpl) {
+        let input = TextInput::new(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr)} {
+                    ^entry(%a: core.ptr, %b: core.ptr):
+                        tribute_rt.release %a {alloc_size = 12}
+                        tribute_rt.release %b {alloc_size = 16}
+                        clif.return
+                }
+            }
+            "#
+            .to_string(),
+        );
+        let module = do_lower_rc(db, input);
+
+        let func_op = module.body(db).blocks(db)[0].operations(db)[0];
+        let func = clif::Func::from_operation(db, func_op).unwrap();
+        let body = func.body(db);
+        let region_blocks: Vec<Block> = body.blocks(db).iter().copied().collect();
+
+        // Two releases → 5 blocks: entry, free1, continue1, free2, continue2
+        assert_eq!(
+            region_blocks.len(),
+            5,
+            "two releases should produce 5 blocks"
+        );
+
+        // Verify all brif/jump successors are actual region blocks
+        let region_set: std::collections::HashSet<Block> = region_blocks.iter().copied().collect();
+
+        for (i, block) in region_blocks.iter().enumerate() {
+            for op in block.operations(db).iter() {
+                if let Ok(brif) = clif::Brif::from_operation(db, *op) {
+                    assert!(
+                        region_set.contains(&brif.then_dest(db)),
+                        "block {i}: brif.then_dest not in region"
+                    );
+                    assert!(
+                        region_set.contains(&brif.else_dest(db)),
+                        "block {i}: brif.else_dest not in region"
+                    );
+                }
+                if let Ok(jump) = clif::Jump::from_operation(db, *op) {
+                    assert!(
+                        region_set.contains(&jump.dest(db)),
+                        "block {i}: jump.dest not in region"
+                    );
+                }
+            }
+        }
     }
 
     #[salsa_test]

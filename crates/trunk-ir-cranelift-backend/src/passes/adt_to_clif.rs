@@ -29,6 +29,7 @@ use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
 const ALLOC_FN: &str = "__tribute_alloc";
 
 /// RC header size: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
+/// Canonical definition: `tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE`.
 const RC_HEADER_SIZE: i64 = 8;
 
 /// Lower ADT struct operations to clif dialect.

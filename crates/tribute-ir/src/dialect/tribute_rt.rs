@@ -124,6 +124,16 @@ dialect! {
     }
 }
 
+// === RC Header Layout ===
+
+/// RC header size in bytes: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
+///
+/// All heap-allocated objects are prefixed with this header. The allocation
+/// functions receive `payload_size + RC_HEADER_SIZE` and return a raw pointer.
+/// Callers store the header at the raw pointer and use `raw_ptr + RC_HEADER_SIZE`
+/// as the payload pointer.
+pub const RC_HEADER_SIZE: i64 = 8;
+
 // === Pure operation registrations ===
 // Boxing operations are pure (no side effects)
 

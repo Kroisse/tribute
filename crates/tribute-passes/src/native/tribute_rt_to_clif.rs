@@ -16,7 +16,7 @@
 //! primitive value is stored at offset 0. Phase 3 (RC) will prepend an 8-byte
 //! header (refcount + rtti_idx) before the payload.
 
-use tribute_ir::dialect::tribute_rt;
+use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::rewrite::{
@@ -26,9 +26,6 @@ use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Value};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
-
-/// RC header size: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
-const RC_HEADER_SIZE: i64 = 8;
 
 /// Generate boxing operations: allocate + store RC header + store value.
 ///

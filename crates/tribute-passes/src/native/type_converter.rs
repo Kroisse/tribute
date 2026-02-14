@@ -28,6 +28,7 @@
 //! types, the native backend uses opaque pointers (`core.ptr`) for all
 //! reference types. Most conversions between pointer types are no-ops.
 
+use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use tribute_ir::dialect::{ability, closure, tribute_rt};
 use trunk_ir::dialect::{adt, clif, cont, core};
 use trunk_ir::rewrite::{MaterializeResult, TypeConverter};
@@ -35,9 +36,6 @@ use trunk_ir::{DialectOp, DialectType, Symbol, Type};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
-
-/// RC header size: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
-const RC_HEADER_SIZE: i64 = 8;
 
 /// Generate boxing operations: allocate + store RC header + store value, return pointer.
 ///
