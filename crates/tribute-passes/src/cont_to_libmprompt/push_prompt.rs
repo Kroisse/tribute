@@ -172,7 +172,7 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
 ///
 /// The `external_type_lookup` is used to resolve types for values defined
 /// outside the region (e.g., block arguments from enclosing scopes).
-fn compute_live_ins<'db>(
+pub(super) fn compute_live_ins<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     external_type_lookup: &dyn Fn(&'db dyn salsa::Database, Value<'db>) -> Option<Type<'db>>,
