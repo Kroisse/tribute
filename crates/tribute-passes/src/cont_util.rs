@@ -3,12 +3,12 @@
 //! This module contains functions and types shared between `cont_to_trampoline`
 //! and `cont_to_libmprompt` (and potentially other continuation backends).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::scf;
-use trunk_ir::{DialectOp, DialectType, Region, Symbol, Value};
+use trunk_ir::{Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
 
 // ============================================================================
 // Region Utilities
@@ -146,6 +146,101 @@ pub fn get_done_region<'db>(
     }
 
     None
+}
+
+// ============================================================================
+// Value Remapping
+// ============================================================================
+
+/// Remap a value through a substitution chain.
+///
+/// Follows the chain in `value_remap` until a fixed point is reached.
+/// Panics if a cycle is detected.
+pub fn remap_value<'db>(
+    v: Value<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Value<'db> {
+    let mut current = v;
+    let mut seen: HashSet<Value<'db>> = HashSet::new();
+    while let Some(&remapped) = value_remap.get(&current) {
+        assert!(seen.insert(current), "cycle detected in value_remap");
+        current = remapped;
+    }
+    current
+}
+
+/// Rebuild an operation, remapping operands and recursing into regions.
+pub fn rebuild_op_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Operation<'db> {
+    let operands = op.operands(db);
+    let remapped_operands: IdVec<Value<'db>> = operands
+        .iter()
+        .map(|v| remap_value(*v, value_remap))
+        .collect();
+
+    let regions = op.regions(db);
+    let remapped_regions: IdVec<Region<'db>> = regions
+        .iter()
+        .map(|r| rebuild_region_with_remap(db, r, value_remap))
+        .collect();
+
+    if remapped_operands == *operands && remapped_regions == *regions {
+        return *op;
+    }
+
+    Operation::new(
+        db,
+        op.location(db),
+        op.dialect(db),
+        op.name(db),
+        remapped_operands,
+        op.results(db).clone(),
+        op.attributes(db).clone(),
+        remapped_regions,
+        op.successors(db).clone(),
+    )
+}
+
+/// Recursively rebuild a block, remapping all operand values in its operations.
+pub fn rebuild_block_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Block<'db> {
+    let new_ops: IdVec<Operation<'db>> = block
+        .operations(db)
+        .iter()
+        .map(|op| rebuild_op_with_remap(db, op, value_remap))
+        .collect();
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops,
+    )
+}
+
+/// Recursively rebuild a region, remapping all operand values.
+///
+/// This is necessary because handler arm bodies may contain nested regions
+/// (e.g. `scf.if` branches) that reference block args of the enclosing block.
+/// When those block args are replaced, the references inside nested regions
+/// must be updated too.
+pub fn rebuild_region_with_remap<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Region<'db> {
+    let new_blocks: IdVec<Block<'db>> = region
+        .blocks(db)
+        .iter()
+        .map(|block| rebuild_block_with_remap(db, block, value_remap))
+        .collect();
+    Region::new(db, region.location(db), new_blocks)
 }
 
 #[cfg(test)]
