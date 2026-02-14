@@ -1,0 +1,32 @@
+---
+source: crates/tribute-passes/src/native/rc_lowering.rs
+expression: ir
+---
+core.module @test {
+  clif.func {sym_name = @retain_then_release, type = core.func(core.nil, core.ptr)} {
+  ^bb1(%p: core.ptr):
+    %0 = clif.iconst {value = 18446744073709551608} : core.i64
+    %1 = clif.iadd %p, %0 : core.ptr
+    %2 = clif.load %1 {offset = 0} : core.i32
+    %3 = clif.iconst {value = 1} : core.i32
+    %4 = clif.iadd %2, %3 : core.i32
+    clif.store %4, %1 {offset = 0}
+    %5 = clif.iconst {value = 0} : core.ptr
+    %6 = clif.iadd %p, %5 : core.ptr
+    %7 = clif.iconst {value = 18446744073709551608} : core.i64
+    %8 = clif.iadd %6, %7 : core.ptr
+    %9 = clif.load %8 {offset = 0} : core.i32
+    %10 = clif.iconst {value = 1} : core.i32
+    %11 = clif.isub %9, %10 : core.i32
+    clif.store %11, %8 {offset = 0}
+    %12 = clif.iconst {value = 0} : core.i32
+    %13 = clif.icmp %11, %12 {cond = @eq} : core.i8
+    clif.brif %13
+  ^bb2:
+    %14 = clif.iconst {value = 12} : core.i64
+    %15 = clif.call %8, %14 {callee = @__tribute_dealloc} : core.nil
+    clif.jump
+  ^bb3:
+    clif.return
+  }
+}

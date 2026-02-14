@@ -937,6 +937,181 @@ mod tests {
         );
     }
 
+    /// Verify chained retains: retain(retain(p)) — remap must be transitive.
+    #[salsa_test]
+    fn test_chained_retains(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %r1 = tribute_rt.retain %p : core.ptr
+                        %r2 = tribute_rt.retain %r1 : core.ptr
+                        clif.return %r2
+                }
+            }
+            "#,
+        );
+
+        assert!(!ir.contains("tribute_rt."), "no tribute_rt ops: {ir}");
+        assert!(
+            !ir.contains("%?"),
+            "should not have dangling value refs: {ir}"
+        );
+        // Two retains → two load+iadd+store sequences (two RC increments)
+        let load_count = ir.matches("clif.load").count();
+        assert_eq!(load_count, 2, "should have 2 loads for 2 retains: {ir}");
+    }
+
+    /// Verify lowering processes all functions in a module.
+    #[salsa_test]
+    fn test_multiple_functions(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f1 {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %1 = tribute_rt.retain %p : core.ptr
+                        clif.return %1
+                }
+                clif.func @f2 {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%q: core.ptr):
+                        tribute_rt.release %q {alloc_size = 8}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            !ir.contains("tribute_rt."),
+            "no tribute_rt ops in any function: {ir}"
+        );
+        // f1 should have retain inline ops
+        assert!(ir.contains("clif.load"), "f1 should have load: {ir}");
+        // f2 should have release block split
+        assert!(ir.contains("clif.brif"), "f2 should have brif: {ir}");
+        assert!(
+            ir.contains("__tribute_dealloc"),
+            "f2 should have dealloc: {ir}"
+        );
+    }
+
+    /// Release with alloc_size=0 (unknown allocation size).
+    #[salsa_test]
+    fn test_release_unknown_alloc_size(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        tribute_rt.release %p {alloc_size = 0}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            !ir.contains("tribute_rt."),
+            "no tribute_rt ops should remain: {ir}"
+        );
+        // Should still emit dealloc call with size 0
+        assert!(
+            ir.contains("__tribute_dealloc"),
+            "should still call dealloc: {ir}"
+        );
+        assert!(ir.contains("clif.brif"), "should have brif: {ir}");
+    }
+
+    /// Verify a single retained value used by multiple subsequent ops.
+    #[salsa_test]
+    fn test_retain_result_multiple_uses(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %r = tribute_rt.retain %p : core.ptr
+                        clif.store %r, %r {offset = 0}
+                        clif.return %r
+                }
+            }
+            "#,
+        );
+
+        assert!(!ir.contains("tribute_rt."), "no tribute_rt ops: {ir}");
+        assert!(
+            !ir.contains("%?"),
+            "should not have dangling value refs: {ir}"
+        );
+        // store and return should both reference the same remapped value
+        assert!(ir.contains("clif.store"), "should have store: {ir}");
+        assert!(
+            ir.contains("clif.return %"),
+            "should have return with value: {ir}"
+        );
+    }
+
+    /// Deeply nested regions: scf.if inside scf.if.
+    #[salsa_test]
+    fn test_deeply_nested_regions(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr, core.i8)} {
+                    ^entry(%p: core.ptr, %cond: core.i8):
+                        %result = scf.if %cond : core.ptr {
+                            %inner = scf.if %cond : core.ptr {
+                                %r = tribute_rt.retain %p : core.ptr
+                                scf.yield %r
+                            } {
+                                scf.yield %p
+                            }
+                            scf.yield %inner
+                        } {
+                            scf.yield %p
+                        }
+                        clif.return %result
+                }
+            }
+            "#,
+        );
+
+        // retain inside nested scf.if should be lowered
+        assert!(
+            !ir.contains("tribute_rt."),
+            "deeply nested retain should be lowered: {ir}"
+        );
+        // Both scf.if levels should be preserved
+        let if_count = ir.matches("scf.if").count();
+        assert_eq!(if_count, 2, "both scf.if should remain: {ir}");
+    }
+
+    /// Snapshot: retain + release combined lowering.
+    #[salsa_test]
+    fn test_snapshot_retain_and_release(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @retain_then_release {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %1 = tribute_rt.retain %p : core.ptr
+                        tribute_rt.release %1 {alloc_size = 12}
+                        clif.return
+                }
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
+    }
+
     #[salsa_test]
     fn test_snapshot_retain(db: &salsa::DatabaseImpl) {
         let ir = run_rc_lowering(
