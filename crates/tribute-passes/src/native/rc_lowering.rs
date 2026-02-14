@@ -42,7 +42,9 @@
 //!   // remaining ops from original block
 //! ```
 
-use tribute_ir::dialect::tribute_rt;
+use std::collections::HashMap;
+
+use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
 
@@ -67,7 +69,7 @@ pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) ->
                 .map(|op| {
                     if let Ok(func_op) = clif::Func::from_operation(db, *op) {
                         let func_body = func_op.body(db);
-                        let new_body = lower_rc_in_function(db, &func_body);
+                        let new_body = lower_rc_in_region(db, &func_body);
                         if new_body != func_body {
                             block_changed = true;
                             op.modify(db).regions(IdVec::from(vec![new_body])).build()
@@ -103,24 +105,89 @@ pub fn lower_rc<'db>(db: &'db dyn salsa::Database, module: core::Module<'db>) ->
     core::Module::create(db, module.location(db), module.name(db), new_body)
 }
 
-/// Lower RC ops in a function body.
-fn lower_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) -> Region<'db> {
+/// Recursively lower RC ops in a region.
+///
+/// Processes all blocks in the region (lowering retain/release ops and splitting
+/// blocks for release), then recursively descends into nested regions within
+/// operations (e.g., `scf.if`, `cont.push_prompt`).
+fn lower_rc_in_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Region<'db> {
     let mut all_new_blocks: Vec<Block<'db>> = Vec::new();
     let mut changed = false;
 
-    for block in body.blocks(db).iter() {
-        let result = lower_rc_in_block(db, block);
-        if result.len() != 1 || result[0] != *block {
+    for block in region.blocks(db).iter() {
+        // Step 1: Lower retain/release ops (may split block)
+        let lowered_blocks = lower_rc_in_block(db, block);
+        if lowered_blocks.len() != 1 || lowered_blocks[0] != *block {
             changed = true;
         }
-        all_new_blocks.extend(result);
+
+        // Step 2: Recursively process nested regions in each resulting block
+        for b in lowered_blocks {
+            let new_block = lower_nested_regions(db, &b, &mut changed);
+            all_new_blocks.push(new_block);
+        }
     }
 
     if !changed {
-        return *body;
+        return *region;
     }
 
-    Region::new(db, body.location(db), all_new_blocks.into_iter().collect())
+    Region::new(
+        db,
+        region.location(db),
+        all_new_blocks.into_iter().collect(),
+    )
+}
+
+/// Recursively lower RC ops in nested regions within a block's operations.
+fn lower_nested_regions<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    changed: &mut bool,
+) -> Block<'db> {
+    let mut block_changed = false;
+    let new_ops: IdVec<Operation<'db>> = block
+        .operations(db)
+        .iter()
+        .map(|op| {
+            let regions = op.regions(db);
+            if regions.is_empty() {
+                return *op;
+            }
+
+            let mut any_region_changed = false;
+            let new_regions: IdVec<Region<'db>> = regions
+                .iter()
+                .map(|r| {
+                    let new_r = lower_rc_in_region(db, r);
+                    if new_r != *r {
+                        any_region_changed = true;
+                    }
+                    new_r
+                })
+                .collect();
+
+            if any_region_changed {
+                block_changed = true;
+                op.modify(db).regions(new_regions).build()
+            } else {
+                *op
+            }
+        })
+        .collect();
+
+    if block_changed {
+        *changed = true;
+        Block::new(
+            db,
+            block.id(db),
+            block.location(db),
+            block.args(db).clone(),
+            new_ops,
+        )
+    } else {
+        *block
+    }
 }
 
 /// Info collected for each release op during Phase 1.
@@ -166,20 +233,29 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
     }
 
     // Phase 1: Collect segments separated by release points.
+    // Also maintain a value remap so that uses of retain results are rewritten
+    // to reference the identity op produced by the inline expansion.
     let mut segments: Vec<Segment<'db>> = Vec::new();
     let mut current_ops: Vec<Operation<'db>> = Vec::new();
     let mut current_id = block.id(db);
     let mut current_args = block.args(db).clone();
+    let mut value_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
     for op in ops.iter() {
         if let Ok(retain_op) = tribute_rt::Retain::from_operation(db, *op) {
             // Retain: inline refcount increment, no block split
-            let ptr = retain_op.ptr(db);
+            let ptr = remap_value(&value_remap, retain_op.ptr(db));
             let inline_ops = gen_retain_inline(db, location, ptr);
+
+            // The last inline op's result replaces the original retain result
+            let identity_result = inline_ops.last().unwrap().result(db, 0);
+            let original_result = op.result(db, 0);
+            value_remap.insert(original_result, identity_result);
+
             current_ops.extend(inline_ops);
         } else if let Ok(release_op) = tribute_rt::Release::from_operation(db, *op) {
             // Release: refcount decrement + conditional free + block split
-            let ptr = release_op.ptr(db);
+            let ptr = remap_value(&value_remap, release_op.ptr(db));
             let alloc_size = release_op.alloc_size(db);
 
             let continue_block_id = BlockId::fresh();
@@ -207,7 +283,8 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
             current_id = continue_block_id;
             current_args = IdVec::new();
         } else {
-            current_ops.push(*op);
+            // Remap operands for non-RC ops
+            current_ops.push(remap_op_operands(db, op, &value_remap));
         }
     }
 
@@ -292,6 +369,41 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
     result_blocks
 }
 
+/// Look up a value in the remap, returning the remapped value or the original.
+fn remap_value<'db>(remap: &HashMap<Value<'db>, Value<'db>>, value: Value<'db>) -> Value<'db> {
+    remap.get(&value).copied().unwrap_or(value)
+}
+
+/// Remap all operands of an operation using the value remap.
+/// Returns a new operation if any operand changed, or the original otherwise.
+fn remap_op_operands<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Operation<'db> {
+    if remap.is_empty() {
+        return *op;
+    }
+
+    let operands = op.operands(db);
+    let mut new_operands: IdVec<Value<'db>> = IdVec::new();
+    let mut changed = false;
+
+    for &operand in operands.iter() {
+        let mapped = remap_value(remap, operand);
+        new_operands.push(mapped);
+        if mapped != operand {
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return *op;
+    }
+
+    op.modify(db).operands(new_operands).build()
+}
+
 /// Generate inline retain ops: load RC, increment, store back, identity result.
 fn gen_retain_inline<'db>(
     db: &'db dyn salsa::Database,
@@ -304,8 +416,8 @@ fn gen_retain_inline<'db>(
 
     let mut ops = Vec::new();
 
-    // rc_addr = ptr + (-8)
-    let neg8 = clif::iconst(db, location, i64_ty, -8);
+    // rc_addr = ptr + (-RC_HEADER_SIZE)
+    let neg8 = clif::iconst(db, location, i64_ty, -RC_HEADER_SIZE);
     ops.push(neg8.as_operation());
     let rc_addr = clif::iadd(db, location, ptr, neg8.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
@@ -350,8 +462,8 @@ fn gen_release_decrement<'db>(
 
     let mut ops = Vec::new();
 
-    // rc_addr = ptr + (-8)
-    let neg8 = clif::iconst(db, location, i64_ty, -8);
+    // rc_addr = ptr + (-RC_HEADER_SIZE)
+    let neg8 = clif::iconst(db, location, i64_ty, -RC_HEADER_SIZE);
     ops.push(neg8.as_operation());
     let rc_addr = clif::iadd(db, location, ptr, neg8.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
@@ -692,6 +804,137 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Verify that retain result is properly remapped in subsequent uses.
+    /// Before the fix, this would produce `clif.return %?` (dangling reference).
+    #[salsa_test]
+    fn test_retain_result_used_by_subsequent_ops(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %retained = tribute_rt.retain %p : core.ptr
+                        clif.return %retained
+                }
+            }
+            "#,
+        );
+
+        // The return op must reference the identity result, not a dangling value
+        assert!(
+            !ir.contains("%?"),
+            "should not have dangling value refs: {ir}"
+        );
+        assert!(!ir.contains("tribute_rt."), "no tribute_rt ops: {ir}");
+
+        // The last value defined before clif.return should be used by return
+        // (the identity iadd result from gen_retain_inline)
+        assert!(
+            ir.contains("clif.return %"),
+            "return should reference a valid value: {ir}"
+        );
+    }
+
+    /// Verify retain remap works when the retained value feeds into release.
+    #[salsa_test]
+    fn test_retain_result_feeds_into_release(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %r = tribute_rt.retain %p : core.ptr
+                        tribute_rt.release %r {alloc_size = 12}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            !ir.contains("%?"),
+            "should not have dangling value refs: {ir}"
+        );
+        assert!(!ir.contains("tribute_rt."), "no tribute_rt ops: {ir}");
+        // Should have both retain (iadd for increment) and release (isub + brif)
+        assert!(
+            ir.contains("clif.isub"),
+            "should have release decrement: {ir}"
+        );
+        assert!(ir.contains("clif.brif"), "should have block split: {ir}");
+    }
+
+    /// Verify RC ops inside nested regions (e.g., scf.if) are lowered.
+    #[salsa_test]
+    fn test_nested_region_rc_ops_lowered(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr, core.i8)} {
+                    ^entry(%p: core.ptr, %cond: core.i8):
+                        %result = scf.if %cond : core.ptr {
+                            %r = tribute_rt.retain %p : core.ptr
+                            scf.yield %r
+                        } {
+                            scf.yield %p
+                        }
+                        clif.return %result
+                }
+            }
+            "#,
+        );
+
+        // tribute_rt.retain inside scf.if should be lowered
+        assert!(
+            !ir.contains("tribute_rt."),
+            "nested retain should be lowered: {ir}"
+        );
+        // Should contain the inline RC ops from retain lowering
+        assert!(ir.contains("clif.load"), "should have load for RC: {ir}");
+        assert!(ir.contains("clif.store"), "should have store for RC: {ir}");
+        // scf.if structure should be preserved
+        assert!(ir.contains("scf.if"), "scf.if should remain: {ir}");
+    }
+
+    /// Verify release inside nested regions correctly splits blocks.
+    #[salsa_test]
+    fn test_nested_region_release_splits_blocks(db: &salsa::DatabaseImpl) {
+        let ir = run_rc_lowering(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.i8)} {
+                    ^entry(%p: core.ptr, %cond: core.i8):
+                        scf.if %cond : core.nil {
+                            tribute_rt.release %p {alloc_size = 12}
+                            scf.yield
+                        } {
+                            scf.yield
+                        }
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            !ir.contains("tribute_rt."),
+            "nested release should be lowered: {ir}"
+        );
+        // release causes block split → brif + dealloc inside the nested region
+        assert!(
+            ir.contains("clif.brif"),
+            "should have brif from release: {ir}"
+        );
+        assert!(
+            ir.contains("__tribute_dealloc"),
+            "should have dealloc call: {ir}"
+        );
     }
 
     #[salsa_test]

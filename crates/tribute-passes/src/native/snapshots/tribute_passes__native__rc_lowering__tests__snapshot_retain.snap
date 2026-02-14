@@ -13,6 +13,6 @@ core.module @test {
     clif.store %4, %1 {offset = 0}
     %5 = clif.iconst {value = 0} : core.ptr
     %6 = clif.iadd %p, %5 : core.ptr
-    clif.return %?
+    clif.return %6
   }
 }
