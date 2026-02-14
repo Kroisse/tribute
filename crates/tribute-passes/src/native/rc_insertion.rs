@@ -1,0 +1,886 @@
+//! Reference counting insertion pass.
+//!
+//! Automatically inserts `tribute_rt.retain` and `tribute_rt.release` operations
+//! for pointer-typed (`core.ptr`) values in the native backend pipeline.
+//!
+//! ## Pipeline Position
+//!
+//! Runs after Phase 2.7 (`tribute_rt_to_clif` boxing lowering), where:
+//! - All allocations are `clif.call @__tribute_alloc`
+//! - Boxing ops are already lowered to clif
+//! - Pointer types are all `core.ptr`
+//! - `tribute_rt.retain`/`release` are preserved as legal ops
+//!
+//! ## RC Rules
+//!
+//! ### Retain (reference acquisition)
+//!
+//! | Situation | Action |
+//! |-----------|--------|
+//! | Function parameter (ptr) | `retain` at entry |
+//! | `clif.call @__tribute_alloc` result | No retain (starts with refcount=1) |
+//! | Other `clif.call` result (ptr) | No retain (ownership transfer) |
+//! | `clif.store` with ptr value | `retain` before store |
+//! | `clif.load` with ptr result | `retain` after load |
+//!
+//! ### Release (reference drop)
+//!
+//! | Situation | Action |
+//! |-----------|--------|
+//! | Last SSA use in block | `release` after last use |
+//! | `clif.return` operand | No release (ownership transfer to caller) |
+//! | Value dies in block (live-in but not live-out) | `release` at appropriate point |
+
+use std::collections::{HashMap, HashSet};
+
+use tribute_ir::dialect::tribute_rt;
+use trunk_ir::dialect::{clif, core};
+use trunk_ir::{
+    Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Type, Value, ValueDef,
+};
+
+/// Insert reference counting operations for all pointer-typed values.
+///
+/// This pass performs liveness analysis and inserts `tribute_rt.retain` and
+/// `tribute_rt.release` operations to manage heap-allocated objects.
+#[salsa::tracked]
+pub fn insert_rc<'db>(
+    db: &'db dyn salsa::Database,
+    module: core::Module<'db>,
+) -> core::Module<'db> {
+    let body = module.body(db);
+    let mut changed = false;
+
+    let new_blocks: IdVec<Block<'db>> = body
+        .blocks(db)
+        .iter()
+        .map(|top_op_block| {
+            // Each top-level operation in the module body is a clif.func
+            let new_ops: IdVec<Operation<'db>> = top_op_block
+                .operations(db)
+                .iter()
+                .map(|op| {
+                    if let Ok(func_op) = clif::Func::from_operation(db, *op) {
+                        let func_body = func_op.body(db);
+                        let new_body = insert_rc_in_function(db, &func_body);
+                        if new_body != func_body {
+                            changed = true;
+                            op.modify(db).regions(IdVec::from(vec![new_body])).build()
+                        } else {
+                            *op
+                        }
+                    } else {
+                        *op
+                    }
+                })
+                .collect();
+
+            if changed {
+                Block::new(
+                    db,
+                    top_op_block.id(db),
+                    top_op_block.location(db),
+                    top_op_block.args(db).clone(),
+                    new_ops,
+                )
+            } else {
+                *top_op_block
+            }
+        })
+        .collect();
+
+    if !changed {
+        return module;
+    }
+
+    let new_body = Region::new(db, body.location(db), new_blocks);
+    core::Module::create(db, module.location(db), module.name(db), new_body)
+}
+
+/// Check if a type is `core.ptr`.
+fn is_ptr_type(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
+    core::Ptr::from_type(db, ty).is_some()
+}
+
+/// Get the type of a Value.
+fn value_type<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+) -> Option<Type<'db>> {
+    match value.def(db) {
+        ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
+        ValueDef::BlockArg(block_id) => block_arg_types.get(&(block_id, value.index(db))).copied(),
+    }
+}
+
+/// Check if a value is a pointer type.
+fn is_ptr_value<'db>(
+    db: &'db dyn salsa::Database,
+    value: Value<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+) -> bool {
+    value_type(db, value, block_arg_types)
+        .map(|ty| is_ptr_type(db, ty))
+        .unwrap_or(false)
+}
+
+/// Check if an operation is `clif.return`.
+fn is_return_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
+    clif::Return::from_operation(db, *op).is_ok()
+}
+
+/// Check if an operation is `clif.load`.
+fn is_load_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
+    clif::Load::from_operation(db, *op).is_ok()
+}
+
+// =============================================================================
+// Liveness Analysis
+// =============================================================================
+
+/// Per-block liveness information for pointer values.
+struct LivenessInfo<'db> {
+    /// Values defined in this block.
+    def_set: HashMap<BlockId, HashSet<Value<'db>>>,
+    /// Values live at entry of this block.
+    live_in: HashMap<BlockId, HashSet<Value<'db>>>,
+    /// Values live at exit of this block.
+    live_out: HashMap<BlockId, HashSet<Value<'db>>>,
+}
+
+/// Collect block argument types for all blocks in the function body.
+fn collect_block_arg_types<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+) -> HashMap<(BlockId, usize), Type<'db>> {
+    let mut types = HashMap::new();
+    for block in body.blocks(db).iter() {
+        let block_id = block.id(db);
+        for (idx, arg) in block.args(db).iter().enumerate() {
+            types.insert((block_id, idx), arg.ty(db));
+        }
+    }
+    types
+}
+
+/// Collect the set of all pointer-typed values in the function.
+fn collect_ptr_values<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+) -> HashSet<Value<'db>> {
+    let mut ptr_values = HashSet::new();
+
+    for block in body.blocks(db).iter() {
+        let block_id = block.id(db);
+
+        // Block arguments
+        for (idx, arg) in block.args(db).iter().enumerate() {
+            if is_ptr_type(db, arg.ty(db)) {
+                let val = Value::new(db, ValueDef::BlockArg(block_id), idx);
+                ptr_values.insert(val);
+            }
+        }
+
+        // Operation results
+        for op in block.operations(db).iter() {
+            for (idx, ty) in op.results(db).iter().enumerate() {
+                if is_ptr_type(db, *ty) {
+                    let val = op.result(db, idx);
+                    ptr_values.insert(val);
+                }
+            }
+        }
+    }
+
+    // Also check operands (which might be from other blocks via block args)
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            for operand in op.operands(db).iter() {
+                if is_ptr_value(db, *operand, block_arg_types) {
+                    ptr_values.insert(*operand);
+                }
+            }
+            // Successor block arguments are passed as operands of the terminator,
+            // already captured above via op.operands(db)
+        }
+    }
+
+    ptr_values
+}
+
+/// Build the CFG successor map: block_id → set of successor block_ids.
+fn build_successor_map<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+) -> HashMap<BlockId, Vec<BlockId>> {
+    let mut successors: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+
+    for block in body.blocks(db).iter() {
+        let block_id = block.id(db);
+        let mut succs = Vec::new();
+
+        // The last operation in a block is typically the terminator
+        if let Some(last_op) = block.operations(db).iter().last() {
+            for succ_block in last_op.successors(db).iter() {
+                succs.push(succ_block.id(db));
+            }
+        }
+
+        successors.insert(block_id, succs);
+    }
+
+    successors
+}
+
+/// Compute use and def sets for each block (only for ptr values).
+fn compute_use_def_sets<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+    ptr_values: &HashSet<Value<'db>>,
+) -> (
+    HashMap<BlockId, HashSet<Value<'db>>>,
+    HashMap<BlockId, HashSet<Value<'db>>>,
+) {
+    let mut use_sets: HashMap<BlockId, HashSet<Value<'db>>> = HashMap::new();
+    let mut def_sets: HashMap<BlockId, HashSet<Value<'db>>> = HashMap::new();
+
+    for block in body.blocks(db).iter() {
+        let block_id = block.id(db);
+        let mut uses = HashSet::new();
+        let mut defs = HashSet::new();
+
+        // Block arguments are definitions
+        for (idx, arg) in block.args(db).iter().enumerate() {
+            if is_ptr_type(db, arg.ty(db)) {
+                let val = Value::new(db, ValueDef::BlockArg(block_id), idx);
+                defs.insert(val);
+            }
+        }
+
+        // Walk operations
+        for op in block.operations(db).iter() {
+            // Operands used before definition in this block → use set
+            for operand in op.operands(db).iter() {
+                if ptr_values.contains(operand) && !defs.contains(operand) {
+                    uses.insert(*operand);
+                }
+            }
+
+            // Results are definitions
+            for (idx, ty) in op.results(db).iter().enumerate() {
+                if is_ptr_type(db, *ty) {
+                    let val = op.result(db, idx);
+                    defs.insert(val);
+                }
+            }
+        }
+
+        use_sets.insert(block_id, uses);
+        def_sets.insert(block_id, defs);
+    }
+
+    (use_sets, def_sets)
+}
+
+/// Compute liveness information using backward dataflow analysis.
+///
+/// Iterates to fixpoint:
+/// - `live_out(B)` = union of `live_in(S)` for each successor S of B
+/// - `live_in(B)` = `use(B)` ∪ (`live_out(B)` - `def(B)`)
+fn compute_liveness<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+    ptr_values: &HashSet<Value<'db>>,
+) -> LivenessInfo<'db> {
+    let (use_sets, def_sets) = compute_use_def_sets(db, body, ptr_values);
+    let successor_map = build_successor_map(db, body);
+
+    let block_ids: Vec<BlockId> = body.blocks(db).iter().map(|b| b.id(db)).collect();
+
+    let mut live_in: HashMap<BlockId, HashSet<Value<'db>>> = HashMap::new();
+    let mut live_out: HashMap<BlockId, HashSet<Value<'db>>> = HashMap::new();
+
+    // Initialize
+    for &bid in &block_ids {
+        live_in.insert(bid, HashSet::new());
+        live_out.insert(bid, HashSet::new());
+    }
+
+    // Iterate to fixpoint
+    let mut changed = true;
+    while changed {
+        changed = false;
+
+        for &bid in block_ids.iter().rev() {
+            // live_out(B) = union of live_in(S) for successors S
+            let mut new_live_out = HashSet::new();
+            if let Some(succs) = successor_map.get(&bid) {
+                for succ_id in succs {
+                    if let Some(succ_live_in) = live_in.get(succ_id) {
+                        new_live_out.extend(succ_live_in.iter().copied());
+                    }
+                }
+            }
+
+            // live_in(B) = use(B) ∪ (live_out(B) - def(B))
+            let use_b = use_sets.get(&bid).cloned().unwrap_or_default();
+            let def_b = def_sets.get(&bid).cloned().unwrap_or_default();
+            let mut new_live_in = use_b;
+            for v in &new_live_out {
+                if !def_b.contains(v) {
+                    new_live_in.insert(*v);
+                }
+            }
+
+            if new_live_in != *live_in.get(&bid).unwrap() {
+                live_in.insert(bid, new_live_in);
+                changed = true;
+            }
+            if new_live_out != *live_out.get(&bid).unwrap() {
+                live_out.insert(bid, new_live_out);
+                changed = true;
+            }
+        }
+    }
+
+    LivenessInfo {
+        def_set: def_sets,
+        live_in,
+        live_out,
+    }
+}
+
+// =============================================================================
+// RC Insertion
+// =============================================================================
+
+/// Actions to insert at specific positions in a block.
+#[derive(Default)]
+struct InsertionPlan<'db> {
+    /// Operations to insert before a given operation index.
+    before: HashMap<usize, Vec<Operation<'db>>>,
+    /// Operations to insert after a given operation index.
+    after: HashMap<usize, Vec<Operation<'db>>>,
+    /// Operations to insert at the very beginning of the block (after block args).
+    at_start: Vec<Operation<'db>>,
+}
+
+/// Insert RC operations in a function body.
+fn insert_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) -> Region<'db> {
+    let block_arg_types = collect_block_arg_types(db, body);
+    let ptr_values = collect_ptr_values(db, body, &block_arg_types);
+
+    if ptr_values.is_empty() {
+        return *body;
+    }
+
+    let liveness = compute_liveness(db, body, &ptr_values);
+
+    let new_blocks: IdVec<Block<'db>> = body
+        .blocks(db)
+        .iter()
+        .enumerate()
+        .map(|(block_idx, block)| {
+            insert_rc_in_block(
+                db,
+                block,
+                block_idx == 0, // is_entry
+                &ptr_values,
+                &liveness,
+                &block_arg_types,
+            )
+        })
+        .collect();
+
+    Region::new(db, body.location(db), new_blocks)
+}
+
+/// Insert RC operations in a single block.
+fn insert_rc_in_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    is_entry: bool,
+    ptr_values: &HashSet<Value<'db>>,
+    liveness: &LivenessInfo<'db>,
+    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+) -> Block<'db> {
+    let block_id = block.id(db);
+    let ops = block.operations(db);
+    let location = block.location(db);
+    let ptr_ty = core::Ptr::new(db).as_type();
+
+    let live_in = liveness.live_in.get(&block_id).cloned().unwrap_or_default();
+    let live_out = liveness
+        .live_out
+        .get(&block_id)
+        .cloned()
+        .unwrap_or_default();
+
+    // Compute per-value last use index in this block
+    let mut last_use_in_block: HashMap<Value<'db>, usize> = HashMap::new();
+    for (op_idx, op) in ops.iter().enumerate() {
+        for operand in op.operands(db).iter() {
+            if ptr_values.contains(operand) {
+                last_use_in_block.insert(*operand, op_idx);
+            }
+        }
+    }
+
+    // Collect values that are returned (should NOT be released)
+    let mut returned_values: HashSet<Value<'db>> = HashSet::new();
+    if let Some(last_op) = ops.iter().last()
+        && is_return_op(db, last_op)
+    {
+        for operand in last_op.operands(db).iter() {
+            if ptr_values.contains(operand) {
+                returned_values.insert(*operand);
+            }
+        }
+    }
+
+    let mut plan = InsertionPlan::default();
+
+    // --- Retain insertions ---
+
+    // 1. Entry block: retain each ptr parameter
+    if is_entry {
+        for (idx, arg) in block.args(db).iter().enumerate() {
+            if is_ptr_type(db, arg.ty(db)) {
+                let arg_val = block.arg(db, idx);
+                let retain_op = tribute_rt::retain(db, location, arg_val, ptr_ty);
+                plan.at_start.push(retain_op.as_operation());
+            }
+        }
+    }
+
+    // 2. Retain before clif.store of ptr value, and retain after clif.load of ptr result
+    for (op_idx, op) in ops.iter().enumerate() {
+        // clif.store: if the stored value is a ptr, retain before store
+        if let Ok(store_op) = clif::Store::from_operation(db, *op) {
+            let stored_val = store_op.value(db);
+            if is_ptr_value(db, stored_val, block_arg_types) {
+                let retain_op = tribute_rt::retain(db, op.location(db), stored_val, ptr_ty);
+                plan.before
+                    .entry(op_idx)
+                    .or_default()
+                    .push(retain_op.as_operation());
+            }
+        }
+
+        // clif.load: if the result is a ptr, retain after load
+        if is_load_op(db, op)
+            && let Some(&result_ty) = op.results(db).first()
+            && is_ptr_type(db, result_ty)
+        {
+            let load_result = op.result(db, 0);
+            let retain_op = tribute_rt::retain(db, op.location(db), load_result, ptr_ty);
+            plan.after
+                .entry(op_idx)
+                .or_default()
+                .push(retain_op.as_operation());
+        }
+    }
+
+    // --- Release insertions ---
+    // For each ptr value that "dies" in this block:
+    // - If it's in live_in but not in live_out → it dies here
+    // - If it's defined in this block and not in live_out → it dies here
+
+    let defs_in_block = liveness.def_set.get(&block_id).cloned().unwrap_or_default();
+
+    // Collect all ptr values that die in this block
+    let mut dying_values: HashSet<Value<'db>> = HashSet::new();
+
+    // Values from live_in that are not in live_out
+    for v in &live_in {
+        if !live_out.contains(v) && !returned_values.contains(v) {
+            dying_values.insert(*v);
+        }
+    }
+
+    // Values defined in this block that are not in live_out
+    for v in &defs_in_block {
+        if !live_out.contains(v) && !returned_values.contains(v) {
+            // Skip alloc results — they start with refcount=1, so we DO need to release them
+            // unless they're returned. The retain at entry already handles params.
+            dying_values.insert(*v);
+        }
+    }
+
+    // Sort dying values for deterministic release emission order
+    let mut dying_sorted: Vec<Value<'db>> = dying_values.into_iter().collect();
+    dying_sorted.sort_by_key(|v| match v.def(db) {
+        ValueDef::BlockArg(_) => (0usize, v.index(db)),
+        ValueDef::OpResult(def_op) => {
+            let pos = ops
+                .iter()
+                .position(|op| *op == def_op)
+                .unwrap_or(usize::MAX);
+            (1 + pos, v.index(db))
+        }
+    });
+
+    // For each dying value, determine where to insert the release
+    for v in &dying_sorted {
+        if let Some(&last_use_idx) = last_use_in_block.get(v) {
+            // Release after last use
+            // But if last use is in a return, skip (already handled above)
+            let last_op = &ops[last_use_idx];
+            if is_return_op(db, last_op) {
+                continue;
+            }
+            let release_op = tribute_rt::release(db, last_op.location(db), *v);
+            plan.after
+                .entry(last_use_idx)
+                .or_default()
+                .push(release_op.as_operation());
+        } else {
+            // Value is not used in this block but is live-in → release at start
+            if live_in.contains(v) {
+                let release_op = tribute_rt::release(db, location, *v);
+                plan.at_start.push(release_op.as_operation());
+            }
+            // Value defined in this block but never used (dead allocation) → release after def
+            else if let ValueDef::OpResult(def_op) = v.def(db) {
+                // Find the op index
+                for (op_idx, op) in ops.iter().enumerate() {
+                    if *op == def_op {
+                        let release_op = tribute_rt::release(db, op.location(db), *v);
+                        plan.after
+                            .entry(op_idx)
+                            .or_default()
+                            .push(release_op.as_operation());
+                        break;
+                    }
+                }
+            }
+            // Unused block arg that is not live-out → release at block start
+            else if let ValueDef::BlockArg(_) = v.def(db) {
+                let release_op = tribute_rt::release(db, location, *v);
+                plan.at_start.push(release_op.as_operation());
+            }
+        }
+    }
+
+    // --- Reconstruct block ---
+    apply_insertion_plan(db, block, &plan)
+}
+
+/// Apply an insertion plan to a block, producing a new block with RC ops inserted.
+fn apply_insertion_plan<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    plan: &InsertionPlan<'db>,
+) -> Block<'db> {
+    let ops = block.operations(db);
+    let has_changes =
+        !plan.at_start.is_empty() || !plan.before.is_empty() || !plan.after.is_empty();
+
+    if !has_changes {
+        return *block;
+    }
+
+    let mut new_ops: Vec<Operation<'db>> = Vec::new();
+
+    // Insert at_start operations
+    new_ops.extend(plan.at_start.iter().copied());
+
+    // Walk existing operations and insert before/after
+    for (idx, op) in ops.iter().enumerate() {
+        // Insert before
+        if let Some(before_ops) = plan.before.get(&idx) {
+            new_ops.extend(before_ops.iter().copied());
+        }
+
+        // Original operation
+        new_ops.push(*op);
+
+        // Insert after
+        if let Some(after_ops) = plan.after.get(&idx) {
+            new_ops.extend(after_ops.iter().copied());
+        }
+    }
+
+    Block::new(
+        db,
+        block.id(db),
+        block.location(db),
+        block.args(db).clone(),
+        new_ops.into_iter().collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use salsa_test_macros::salsa_test;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_op;
+
+    #[salsa::input]
+    struct TextInput {
+        #[returns(ref)]
+        text: String,
+    }
+
+    #[salsa::tracked]
+    fn do_insert_rc(db: &dyn salsa::Database, input: TextInput) -> core::Module<'_> {
+        let module = parse_test_module(db, input.text(db));
+        insert_rc(db, module)
+    }
+
+    fn run_rc(db: &salsa::DatabaseImpl, ir: &str) -> String {
+        let input = TextInput::new(db, ir.to_string());
+        let result = do_insert_rc(db, input);
+        print_op(db, result.as_operation())
+    }
+
+    // === Tests ===
+
+    #[salsa_test]
+    fn test_ptr_param_retain_release(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        clif.return %p
+                }
+            }
+            "#,
+        );
+
+        // Parameter is returned → retain at entry, no release
+        assert!(
+            ir.contains("tribute_rt.retain"),
+            "should retain ptr param: {ir}"
+        );
+        // Since %p is returned, it should NOT be released
+        assert!(
+            !ir.contains("tribute_rt.release"),
+            "should not release returned ptr: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_alloc_return_no_release(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr)} {
+                    ^entry():
+                        %size = clif.iconst {value = 8} : core.i64
+                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        clif.return %ptr
+                }
+            }
+            "#,
+        );
+
+        // Alloc result returned → no retain or release needed
+        assert!(
+            !ir.contains("tribute_rt.release"),
+            "should not release returned alloc: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_ptr_param_used_not_returned(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.i32, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %val = clif.load %p {offset = 0} : core.i32
+                        clif.return %val
+                }
+            }
+            "#,
+        );
+
+        // ptr param is used (load) but not returned → retain at entry, release after last use
+        assert!(
+            ir.contains("tribute_rt.retain"),
+            "should retain ptr param: {ir}"
+        );
+        assert!(
+            ir.contains("tribute_rt.release"),
+            "should release ptr param after last use: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_store_ptr_retains(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr)} {
+                    ^entry(%obj: core.ptr, %field_val: core.ptr):
+                        clif.store %field_val, %obj {offset = 0}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // Should have retains for both params + extra retain before store
+        let retain_count = ir.matches("tribute_rt.retain").count();
+        // 2 param retains + 1 store retain = 3
+        assert!(
+            retain_count >= 3,
+            "should have at least 3 retains (2 params + 1 store), got {retain_count}: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_load_ptr_retains(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.ptr, core.ptr)} {
+                    ^entry(%obj: core.ptr):
+                        %field = clif.load %obj {offset = 8} : core.ptr
+                        clif.return %field
+                }
+            }
+            "#,
+        );
+
+        // Should retain param + retain after load
+        let retain_count = ir.matches("tribute_rt.retain").count();
+        assert!(
+            retain_count >= 2,
+            "should have at least 2 retains (param + load), got {retain_count}: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_no_ptr_noop(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.i32, core.i32)} {
+                    ^entry(%x: core.i32):
+                        clif.return %x
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            !ir.contains("tribute_rt.retain"),
+            "should not insert retain for non-ptr: {ir}"
+        );
+        assert!(
+            !ir.contains("tribute_rt.release"),
+            "should not insert release for non-ptr: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_unused_ptr_param_released(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // Unused ptr param → retain at entry + release at start (never used)
+        assert!(
+            ir.contains("tribute_rt.retain"),
+            "should retain ptr param at entry: {ir}"
+        );
+        assert!(
+            ir.contains("tribute_rt.release"),
+            "should release unused ptr param: {ir}"
+        );
+    }
+
+    // === Snapshot tests ===
+
+    #[salsa_test]
+    fn test_snapshot_simple_param(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @use_ptr {type = core.func(core.i32, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        %val = clif.load %p {offset = 0} : core.i32
+                        clif.return %val
+                }
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
+    }
+
+    #[salsa_test]
+    fn test_release_order_deterministic(db: &salsa::DatabaseImpl) {
+        // Multiple ptr params dying in the same block — release order must be stable
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr, core.ptr)} {
+                    ^entry(%a: core.ptr, %b: core.ptr, %c: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // Run twice to verify determinism
+        let ir2 = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr, core.ptr)} {
+                    ^entry(%a: core.ptr, %b: core.ptr, %c: core.ptr):
+                        clif.return
+                }
+            }
+            "#,
+        );
+        assert_eq!(ir, ir2, "release order should be deterministic across runs");
+
+        // 3 params → 3 retains + 3 releases
+        let retain_count = ir.matches("tribute_rt.retain").count();
+        let release_count = ir.matches("tribute_rt.release").count();
+        assert_eq!(retain_count, 3, "should retain all 3 ptr params: {ir}");
+        assert_eq!(release_count, 3, "should release all 3 ptr params: {ir}");
+    }
+
+    #[salsa_test]
+    fn test_snapshot_alloc_store_return(db: &salsa::DatabaseImpl) {
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @alloc_and_store {type = core.func(core.ptr, core.i32)} {
+                    ^entry(%val: core.i32):
+                        %size = clif.iconst {value = 4} : core.i64
+                        %ptr = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        clif.store %val, %ptr {offset = 0}
+                        clif.return %ptr
+                }
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
+    }
+}
