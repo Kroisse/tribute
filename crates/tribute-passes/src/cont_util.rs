@@ -161,14 +161,10 @@ pub fn remap_value<'db>(
     value_remap: &HashMap<Value<'db>, Value<'db>>,
 ) -> Value<'db> {
     let mut current = v;
-    let mut steps = 0u32;
+    let mut seen: HashSet<Value<'db>> = HashSet::new();
     while let Some(&remapped) = value_remap.get(&current) {
+        assert!(seen.insert(current), "cycle detected in value_remap");
         current = remapped;
-        steps += 1;
-        assert!(
-            steps < 1000,
-            "cycle detected in value_remap after {steps} steps"
-        );
     }
     current
 }
@@ -183,15 +179,13 @@ pub fn rebuild_op_with_remap<'db>(
     let remapped_operands: IdVec<Value<'db>> = operands
         .iter()
         .map(|v| remap_value(*v, value_remap))
-        .collect::<Vec<_>>()
-        .into();
+        .collect();
 
     let regions = op.regions(db);
     let remapped_regions: IdVec<Region<'db>> = regions
         .iter()
         .map(|r| rebuild_region_with_remap(db, r, value_remap))
-        .collect::<Vec<_>>()
-        .into();
+        .collect();
 
     if remapped_operands == *operands && remapped_regions == *regions {
         return *op;
@@ -216,7 +210,7 @@ pub fn rebuild_block_with_remap<'db>(
     block: &Block<'db>,
     value_remap: &HashMap<Value<'db>, Value<'db>>,
 ) -> Block<'db> {
-    let new_ops: Vec<Operation<'db>> = block
+    let new_ops: IdVec<Operation<'db>> = block
         .operations(db)
         .iter()
         .map(|op| rebuild_op_with_remap(db, op, value_remap))
@@ -226,7 +220,7 @@ pub fn rebuild_block_with_remap<'db>(
         block.id(db),
         block.location(db),
         block.args(db).clone(),
-        IdVec::from(new_ops),
+        new_ops,
     )
 }
 
@@ -241,12 +235,12 @@ pub fn rebuild_region_with_remap<'db>(
     region: &Region<'db>,
     value_remap: &HashMap<Value<'db>, Value<'db>>,
 ) -> Region<'db> {
-    let new_blocks: Vec<Block<'db>> = region
+    let new_blocks: IdVec<Block<'db>> = region
         .blocks(db)
         .iter()
         .map(|block| rebuild_block_with_remap(db, block, value_remap))
         .collect();
-    Region::new(db, region.location(db), IdVec::from(new_blocks))
+    Region::new(db, region.location(db), new_blocks)
 }
 
 #[cfg(test)]

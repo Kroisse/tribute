@@ -325,11 +325,12 @@ pub(super) fn generate_outlined_body<'db>(
     // Copy body operations with remapping
     let body_region = &spec.body_region;
     if let Some(body_block) = body_region.blocks(db).first() {
-        // Remap body block args too if they exist
-        for (i, _) in body_block.args(db).iter().enumerate() {
-            let orig = Value::new(db, ValueDef::BlockArg(body_block.id(db)), i);
-            value_remap.entry(orig).or_insert(env_value);
-        }
+        assert!(
+            body_block.args(db).is_empty(),
+            "cont.push_prompt body region must have no block arguments, \
+             but spec.body_region has {} args",
+            body_block.args(db).len(),
+        );
 
         let mut last_result: Option<Value<'db>> = None;
 
