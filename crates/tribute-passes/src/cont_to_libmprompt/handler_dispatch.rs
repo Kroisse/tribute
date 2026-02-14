@@ -40,7 +40,9 @@ use trunk_ir::{
     Value,
 };
 
-use crate::cont_util::{SuspendArm, collect_suspend_arms, get_done_region};
+use crate::cont_util::{
+    SuspendArm, collect_suspend_arms, get_done_region, rebuild_op_with_remap, remap_value,
+};
 
 // ============================================================================
 // Pattern: Lower cont.handler_dispatch
@@ -478,86 +480,6 @@ fn build_arm_region<'db>(
         IdVec::from(ops),
     );
     Region::new(db, location, IdVec::from(vec![block]))
-}
-
-// ============================================================================
-// Value remapping helpers (local, since cont_util ones aren't public functions)
-// ============================================================================
-
-fn remap_value<'db>(v: Value<'db>, value_remap: &HashMap<Value<'db>, Value<'db>>) -> Value<'db> {
-    let mut current = v;
-    let mut steps = 0u32;
-    while let Some(&remapped) = value_remap.get(&current) {
-        current = remapped;
-        steps += 1;
-        assert!(
-            steps < 1000,
-            "cycle detected in value_remap after {steps} steps"
-        );
-    }
-    current
-}
-
-fn rebuild_op_with_remap<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    value_remap: &HashMap<Value<'db>, Value<'db>>,
-) -> Operation<'db> {
-    let operands = op.operands(db);
-    let remapped_operands: IdVec<Value<'db>> = operands
-        .iter()
-        .map(|v| remap_value(*v, value_remap))
-        .collect::<Vec<_>>()
-        .into();
-
-    let regions = op.regions(db);
-    let remapped_regions: IdVec<Region<'db>> = regions
-        .iter()
-        .map(|r| rebuild_region_with_remap(db, r, value_remap))
-        .collect::<Vec<_>>()
-        .into();
-
-    if remapped_operands == *operands && remapped_regions == *regions {
-        return *op;
-    }
-
-    Operation::new(
-        db,
-        op.location(db),
-        op.dialect(db),
-        op.name(db),
-        remapped_operands,
-        op.results(db).clone(),
-        op.attributes(db).clone(),
-        remapped_regions,
-        op.successors(db).clone(),
-    )
-}
-
-fn rebuild_region_with_remap<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    value_remap: &HashMap<Value<'db>, Value<'db>>,
-) -> Region<'db> {
-    let new_blocks: Vec<Block<'db>> = region
-        .blocks(db)
-        .iter()
-        .map(|block| {
-            let new_ops: Vec<Operation<'db>> = block
-                .operations(db)
-                .iter()
-                .map(|op| rebuild_op_with_remap(db, op, value_remap))
-                .collect();
-            Block::new(
-                db,
-                block.id(db),
-                block.location(db),
-                block.args(db).clone(),
-                IdVec::from(new_ops),
-            )
-        })
-        .collect();
-    Region::new(db, region.location(db), IdVec::from(new_blocks))
 }
 
 /// Cast a value to a target type if different from current type.

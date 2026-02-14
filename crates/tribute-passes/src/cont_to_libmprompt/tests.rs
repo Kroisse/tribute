@@ -532,3 +532,172 @@ fn test_handler_dispatch_done_only(db: &salsa::DatabaseImpl) {
         panic!("{msg}");
     }
 }
+
+// ============================================================================
+// Handler dispatch: single suspend arm
+// ============================================================================
+
+#[salsa::tracked]
+fn run_handler_dispatch_single_suspend_arm_test(db: &dyn salsa::Database) -> Result<(), String> {
+    let module = parse_test_module(
+        db,
+        r#"core.module @test {
+  func.func @__tribute_resume(%k: core.ptr, %sv: core.ptr) -> core.ptr {
+    func.return %k
+  }
+  func.func @test_single_arm() -> core.i32 {
+    %0 = cont.push_prompt {tag = 1} : core.ptr {
+      %c = arith.const {value = 10} : core.i32
+      scf.yield %c
+    } {
+    }
+    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.i32} : core.i32 {
+      cont.done {
+        ^bb0(%v: core.i32):
+          scf.yield %v
+      }
+      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+        ^bb0(%k: core.ptr, %sv: core.ptr):
+          %r = func.call %k, %sv {callee = @__tribute_resume} : core.ptr
+          scf.yield %r
+      }
+    }
+    func.return %1
+  }
+}"#,
+    );
+
+    let result = lower_cont_to_libmprompt(db, module);
+    match result {
+        Ok(lowered) => {
+            if !find_call_in_module(db, &lowered, "__tribute_yield_active") {
+                return Err("Expected __tribute_yield_active call (dispatch loop)".into());
+            }
+            if !find_call_in_module(db, &lowered, "__tribute_get_yield_op_idx") {
+                return Err("Expected __tribute_get_yield_op_idx call (shift branch)".into());
+            }
+            if !find_call_in_module(db, &lowered, "__tribute_resume") {
+                return Err("Expected __tribute_resume call (suspend arm body)".into());
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!("Lowering failed: {e:?}")),
+    }
+}
+
+#[salsa_test]
+fn test_handler_dispatch_single_suspend_arm(db: &salsa::DatabaseImpl) {
+    let result = run_handler_dispatch_single_suspend_arm_test(db);
+    if let Err(msg) = result {
+        panic!("{msg}");
+    }
+}
+
+// ============================================================================
+// Handler dispatch: multiple suspend arms
+// ============================================================================
+
+#[salsa::tracked]
+fn run_handler_dispatch_multi_suspend_arms_test(db: &dyn salsa::Database) -> Result<(), String> {
+    let module = parse_test_module(
+        db,
+        r#"core.module @test {
+  func.func @__tribute_resume(%k: core.ptr, %sv: core.ptr) -> core.ptr {
+    func.return %k
+  }
+  func.func @test_multi_arms() -> core.i32 {
+    %0 = cont.push_prompt {tag = 1} : core.ptr {
+      %c = arith.const {value = 10} : core.i32
+      scf.yield %c
+    } {
+    }
+    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.i32} : core.i32 {
+      cont.done {
+        ^bb0(%v: core.i32):
+          scf.yield %v
+      }
+      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+        ^bb0(%k: core.ptr, %sv: core.ptr):
+          %r = func.call %k, %sv {callee = @__tribute_resume} : core.ptr
+          scf.yield %r
+      }
+      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+        ^bb0(%k2: core.ptr, %sv2: core.ptr):
+          %r2 = func.call %k2, %sv2 {callee = @__tribute_resume} : core.ptr
+          scf.yield %r2
+      }
+    }
+    func.return %1
+  }
+}"#,
+    );
+
+    let result = lower_cont_to_libmprompt(db, module);
+    match result {
+        Ok(lowered) => {
+            if !find_call_in_module(db, &lowered, "__tribute_get_yield_op_idx") {
+                return Err(
+                    "Expected __tribute_get_yield_op_idx call (dispatch needs op_idx)".into(),
+                );
+            }
+            // With multiple arms, nested if-else dispatch uses arith.cmp_eq
+            if !find_op_in_module(db, &lowered, "arith", "cmp_eq") {
+                return Err(
+                    "Expected arith.cmp_eq (nested if-else dispatch for op_idx comparison)".into(),
+                );
+            }
+            Ok(())
+        }
+        Err(e) => Err(format!("Lowering failed: {e:?}")),
+    }
+}
+
+#[salsa_test]
+fn test_handler_dispatch_multi_suspend_arms(db: &salsa::DatabaseImpl) {
+    let result = run_handler_dispatch_multi_suspend_arms_test(db);
+    if let Err(msg) = result {
+        panic!("{msg}");
+    }
+}
+
+// ============================================================================
+// Helper: find operation by dialect and name in module
+// ============================================================================
+
+fn find_op_in_module<'db>(
+    db: &'db dyn salsa::Database,
+    module: &core::Module<'db>,
+    dialect: &str,
+    name: &str,
+) -> bool {
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if find_op_recursive(db, op, dialect, name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn find_op_recursive<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    dialect: &str,
+    name: &str,
+) -> bool {
+    if op.dialect(db) == dialect && op.name(db) == name {
+        return true;
+    }
+    for region in op.regions(db).iter() {
+        for block in region.blocks(db).iter() {
+            for nested_op in block.operations(db).iter() {
+                if find_op_recursive(db, nested_op, dialect, name) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
