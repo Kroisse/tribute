@@ -34,12 +34,12 @@ pub fn generate_native_entrypoint<'db>(
     let mut main_return_ty = None;
 
     for op in entry_block.operations(db).iter() {
-        if let Ok(func_op) = func::Func::from_operation(db, *op) {
-            if func_op.sym_name(db) == Symbol::new("main") {
-                found_main = true;
-                if let Some(func_ty) = core::Func::from_type(db, func_op.r#type(db)) {
-                    main_return_ty = Some(func_ty.result(db));
-                }
+        if let Ok(func_op) = func::Func::from_operation(db, *op)
+            && func_op.sym_name(db) == Symbol::new("main")
+        {
+            found_main = true;
+            if let Some(func_ty) = core::Func::from_type(db, func_op.r#type(db)) {
+                main_return_ty = Some(func_ty.result(db));
             }
         }
     }
@@ -58,12 +58,12 @@ pub fn generate_native_entrypoint<'db>(
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
 
     for op in entry_block.operations(db).iter() {
-        if let Ok(func_op) = func::Func::from_operation(db, *op) {
-            if func_op.sym_name(db) == Symbol::new("main") {
-                let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
-                new_ops.push(renamed);
-                continue;
-            }
+        if let Ok(func_op) = func::Func::from_operation(db, *op)
+            && func_op.sym_name(db) == Symbol::new("main")
+        {
+            let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
+            new_ops.push(renamed);
+            continue;
         }
         new_ops.push(*op);
     }
@@ -276,11 +276,11 @@ mod tests {
 
         let body = result.body(db);
         for op in body.blocks(db)[0].operations(db).iter() {
-            if let Ok(f) = func::Func::from_operation(db, *op) {
-                if f.sym_name(db) == Symbol::new("main") {
-                    let func_ty = core::Func::from_type(db, f.r#type(db)).unwrap();
-                    assert_eq!(func_ty.result(db), i32_ty);
-                }
+            if let Ok(f) = func::Func::from_operation(db, *op)
+                && f.sym_name(db) == Symbol::new("main")
+            {
+                let func_ty = core::Func::from_type(db, f.r#type(db)).unwrap();
+                assert_eq!(func_ty.result(db), i32_ty);
             }
         }
     }
