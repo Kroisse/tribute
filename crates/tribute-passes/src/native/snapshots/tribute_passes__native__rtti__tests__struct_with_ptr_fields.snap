@@ -1,0 +1,19 @@
+---
+source: crates/tribute-passes/src/native/rtti.rs
+expression: ir
+---
+core.module @test {
+  %0 = clif.iconst {value = 42} : core.i32
+  %1 = clif.iconst {value = 0} : core.ptr
+  %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]], name = @Node}} : adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]], name = @Node}
+  clif.func {sym_name = @__tribute_release_32, type = core.func(core.nil, core.ptr)} {
+  ^bb1(%arg0: core.ptr):
+    %3 = clif.load %arg0 {offset = 8} : core.ptr
+    tribute_rt.release %3 {alloc_size = 0}
+    %4 = clif.iconst {value = 18446744073709551608} : core.i64
+    %5 = clif.iadd %arg0, %4 : core.ptr
+    %6 = clif.iconst {value = 24} : core.i64
+    %7 = clif.call %5, %6 {callee = @__tribute_dealloc} : core.nil
+    clif.return
+  }
+}
