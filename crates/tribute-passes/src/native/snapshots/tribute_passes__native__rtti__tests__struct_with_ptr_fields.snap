@@ -10,8 +10,8 @@ core.module @test {
   ^bb1(%arg0: core.ptr):
     %3 = clif.load %arg0 {offset = 8} : core.ptr
     tribute_rt.release %3 {alloc_size = 0}
-    %4 = clif.iconst {value = 18446744073709551608} : core.i64
-    %5 = clif.iadd %arg0, %4 : core.ptr
+    %4 = clif.iconst {value = 8} : core.i64
+    %5 = clif.isub %arg0, %4 : core.ptr
     %6 = clif.iconst {value = 24} : core.i64
     %7 = clif.call %5, %6 {callee = @__tribute_dealloc} : core.nil
     clif.return

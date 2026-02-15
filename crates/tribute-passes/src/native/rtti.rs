@@ -186,8 +186,8 @@ fn generate_release_functions<'db>(
 ///   tribute_rt.release %field {alloc_size = 0}
 ///
 ///   // Dealloc self:
-///   %neg8 = clif.iconst {value = -8} : core.i64
-///   %raw_ptr = clif.iadd %payload_ptr, %neg8 : core.ptr
+///   %hdr_sz = clif.iconst {value = 8} : core.i64
+///   %raw_ptr = clif.isub %payload_ptr, %hdr_sz : core.ptr
 ///   %size = clif.iconst {value = <total_alloc_size>} : core.i64
 ///   clif.call %raw_ptr, %size {callee = @__tribute_dealloc} : core.nil
 ///   clif.return
@@ -257,10 +257,10 @@ fn generate_release_function_for_struct<'db>(
         ops.push(release_op.as_operation());
     }
 
-    // Dealloc self: raw_ptr = payload_ptr - 8
-    let neg8 = clif::iconst(db, location, i64_ty, -RC_HEADER_SIZE);
-    ops.push(neg8.as_operation());
-    let raw_ptr = clif::iadd(db, location, payload_ptr, neg8.result(db), ptr_ty);
+    // Dealloc self: raw_ptr = payload_ptr - RC_HEADER_SIZE
+    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    ops.push(hdr_sz.as_operation());
+    let raw_ptr = clif::isub(db, location, payload_ptr, hdr_sz.result(db), ptr_ty);
     ops.push(raw_ptr.as_operation());
 
     // Total allocation size = payload + header

@@ -8,8 +8,8 @@ core.module @test {
   %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}
   clif.func {sym_name = @__tribute_release_32, type = core.func(core.nil, core.ptr)} {
   ^bb1(%arg0: core.ptr):
-    %3 = clif.iconst {value = 18446744073709551608} : core.i64
-    %4 = clif.iadd %arg0, %3 : core.ptr
+    %3 = clif.iconst {value = 8} : core.i64
+    %4 = clif.isub %arg0, %3 : core.ptr
     %5 = clif.iconst {value = 16} : core.i64
     %6 = clif.call %4, %5 {callee = @__tribute_dealloc} : core.nil
     clif.return

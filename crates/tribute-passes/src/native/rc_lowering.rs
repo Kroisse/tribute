@@ -9,8 +9,8 @@
 //! ## Retain Lowering (inline, no block split)
 //!
 //! ```text
-//! %neg8     = clif.iconst(-8) : core.i64
-//! %rc_addr  = clif.iadd(ptr, %neg8) : core.ptr
+//! %hdr_sz   = clif.iconst(8) : core.i64
+//! %rc_addr  = clif.isub(ptr, %hdr_sz) : core.ptr
 //! %rc       = clif.load(%rc_addr, offset=0) : core.i32
 //! %one      = clif.iconst(1) : core.i32
 //! %new_rc   = clif.iadd(%rc, %one) : core.i32
@@ -23,8 +23,8 @@
 //!
 //! ```text
 //! // --- current block tail ---
-//! %neg8     = clif.iconst(-8) : core.i64
-//! %rc_addr  = clif.iadd(ptr, %neg8) : core.ptr
+//! %hdr_sz   = clif.iconst(8) : core.i64
+//! %rc_addr  = clif.isub(ptr, %hdr_sz) : core.ptr
 //! %rc       = clif.load(%rc_addr, offset=0) : core.i32
 //! %one      = clif.iconst(1) : core.i32
 //! %new_rc   = clif.isub(%rc, %one) : core.i32
@@ -35,7 +35,7 @@
 //!
 //! ^free_block:
 //!   %size = clif.iconst(<alloc_size>) : core.i64
-//!   clif.call(%rc_addr, %size, callee=@__tribute_deep_release)
+//!   clif.call(ptr, %size, callee=@__tribute_deep_release)
 //!   clif.jump(^continue_block)
 //!
 //! ^continue_block:
@@ -416,10 +416,10 @@ fn gen_retain_inline<'db>(
 
     let mut ops = Vec::new();
 
-    // rc_addr = ptr + (-RC_HEADER_SIZE)
-    let neg8 = clif::iconst(db, location, i64_ty, -RC_HEADER_SIZE);
-    ops.push(neg8.as_operation());
-    let rc_addr = clif::iadd(db, location, ptr, neg8.result(db), ptr_ty);
+    // rc_addr = ptr - RC_HEADER_SIZE
+    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    ops.push(hdr_sz.as_operation());
+    let rc_addr = clif::isub(db, location, ptr, hdr_sz.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
 
     // rc = load(rc_addr, offset=0)
@@ -462,10 +462,10 @@ fn gen_release_decrement<'db>(
 
     let mut ops = Vec::new();
 
-    // rc_addr = ptr + (-RC_HEADER_SIZE)
-    let neg8 = clif::iconst(db, location, i64_ty, -RC_HEADER_SIZE);
-    ops.push(neg8.as_operation());
-    let rc_addr = clif::iadd(db, location, ptr, neg8.result(db), ptr_ty);
+    // rc_addr = ptr - RC_HEADER_SIZE
+    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    ops.push(hdr_sz.as_operation());
+    let rc_addr = clif::isub(db, location, ptr, hdr_sz.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
     let rc_addr_val = rc_addr.result(db);
 
