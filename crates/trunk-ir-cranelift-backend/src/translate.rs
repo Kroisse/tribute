@@ -77,8 +77,20 @@ fn emit_module_impl<'db>(
                 let sig = translate_signature(db, func_ty, call_conv)?;
 
                 let name_str = name_sym.to_string();
+
+                // Determine linkage based on function attributes:
+                // - "main" is exported (entry point)
+                // - Functions with an "abi" attribute (e.g., extern "C") are imports
+                // - Everything else is local
+                let has_abi = func_op
+                    .as_operation()
+                    .attributes(db)
+                    .get(&Symbol::new("abi"))
+                    .is_some();
                 let linkage = if name_str == "main" {
                     Linkage::Export
+                } else if has_abi {
+                    Linkage::Import
                 } else {
                     Linkage::Local
                 };
@@ -97,12 +109,22 @@ fn emit_module_impl<'db>(
     // 3c. Collect release functions and declare RTTI infrastructure
     let rtti_info = collect_and_declare_rtti(&mut obj_module, &mut func_ids, call_conv)?;
 
-    // 4. Second pass — define functions
+    // 4. Second pass — define functions (skip extern/imported functions)
     let mut fb_ctx = FunctionBuilderContext::new();
 
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
             if let Ok(func_op) = clif::Func::from_operation(db, *op) {
+                // Skip extern functions (abi attribute = imported, no body to compile)
+                let has_abi = func_op
+                    .as_operation()
+                    .attributes(db)
+                    .get(&Symbol::new("abi"))
+                    .is_some();
+                if has_abi {
+                    continue;
+                }
+
                 let name_sym = func_op.sym_name(db);
                 let func_type_attr = func_op.r#type(db);
                 let func_ty = core::Func::from_type(db, func_type_attr).ok_or_else(|| {

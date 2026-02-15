@@ -67,6 +67,7 @@ use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
 use tribute_passes::generic_type_converter;
+use tribute_passes::lower_cont_to_libmprompt;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
@@ -388,6 +389,24 @@ pub fn stage_cont_to_trampoline<'db>(
     lower_cont_to_trampoline(db, module)
 }
 
+/// Continuation to libmprompt Lowering (native backend).
+///
+/// This pass transforms continuation operations to libmprompt FFI calls:
+/// - `cont.push_prompt` → body outlining + `__tribute_prompt` call
+/// - `cont.handler_dispatch` → `scf.loop` with yield state polling
+/// - `cont.shift` → `__tribute_yield`
+/// - `cont.resume` → `__tribute_resume`
+/// - `cont.drop` → `__tribute_resume_drop`
+///
+/// Returns an error if any `cont.*` operations remain after conversion.
+#[salsa::tracked]
+pub fn stage_cont_to_libmprompt<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Result<Module<'db>, ConversionError> {
+    lower_cont_to_libmprompt(db, module)
+}
+
 /// Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
@@ -637,8 +656,7 @@ pub fn run_wasm_pipeline<'db>(
 
 /// Run the native pipeline: shared passes + cont lowering + DCE + resolve_casts.
 ///
-/// Currently uses `cont_to_trampoline` (same as WASM). This will be replaced
-/// by `cont_to_libmprompt` for native delimited continuations.
+/// Uses `cont_to_libmprompt` for native delimited continuations via libmprompt FFI.
 #[salsa::tracked]
 pub fn run_native_pipeline<'db>(
     db: &'db dyn salsa::Database,
@@ -646,8 +664,7 @@ pub fn run_native_pipeline<'db>(
 ) -> Result<Module<'db>, ConversionError> {
     let module = run_shared_pipeline(db, source);
 
-    // TODO(#352): replace with cont_to_libmprompt
-    let module = stage_cont_to_trampoline(db, module)?;
+    let module = stage_cont_to_libmprompt(db, module)?;
 
     let module = stage_dce(db, module);
     Ok(stage_resolve_casts(db, module))
@@ -1002,7 +1019,8 @@ impl std::error::Error for LinkError {
 
 /// Link native object bytes into an executable.
 ///
-/// Writes object bytes to a temp file and invokes the system linker (`cc`).
+/// Writes object bytes to a temp file and invokes the system linker (`cc`),
+/// linking against the tribute runtime library (which includes libmprompt).
 pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), LinkError> {
     let obj_file = tempfile::Builder::new()
         .suffix(".o")
@@ -1010,12 +1028,23 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
         .map_err(LinkError::TempFile)?;
     std::fs::write(obj_file.path(), object_bytes).map_err(LinkError::TempFile)?;
 
-    let status = std::process::Command::new("cc")
-        .arg(obj_file.path())
-        .arg("-o")
-        .arg(output)
-        .status()
-        .map_err(LinkError::LinkerNotFound)?;
+    let mut cmd = std::process::Command::new("cc");
+    cmd.arg(obj_file.path());
+
+    // Link tribute-runtime (staticlib containing both Rust runtime and libmprompt).
+    // The library directories are set at build time by build.rs via the `links` metadata.
+    if let Some(static_lib_dir) = option_env!("TRIBUTE_RUNTIME_STATIC_LIB_DIR") {
+        cmd.arg("-L").arg(static_lib_dir);
+        cmd.arg("-ltribute_runtime");
+    }
+    if let Some(lib_dir) = option_env!("TRIBUTE_RUNTIME_LIB_DIR") {
+        cmd.arg("-L").arg(lib_dir);
+        cmd.arg("-lmprompt");
+    }
+
+    cmd.arg("-o").arg(output);
+
+    let status = cmd.status().map_err(LinkError::LinkerNotFound)?;
 
     if !status.success() {
         return Err(LinkError::LinkerFailed(status.code().unwrap_or(-1)));

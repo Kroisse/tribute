@@ -9,6 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 ariadne = "0.6"
+cc = "1"
 clap = { version = "4.5", features = ["derive"] }
 cranelift-codegen = "0.128.3"
 cranelift-frontend = "0.128.3"
@@ -45,6 +46,7 @@ tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
 trunk-ir = { path = "crates/trunk-ir" }
+tribute-runtime = { path = "crates/tribute-runtime" }
 trunk-ir-cranelift-backend = { path = "crates/trunk-ir-cranelift-backend" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
@@ -77,6 +79,7 @@ tree-sitter-tribute.workspace = true
 tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
+tribute-runtime.workspace = true
 trunk-ir.workspace = true
 tempfile.workspace = true
 trunk-ir-cranelift-backend.workspace = true

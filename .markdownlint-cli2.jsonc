@@ -12,6 +12,7 @@
   },
   "ignores": [
     "node_modules/",
-    "target/"
+    "target/",
+    "crates/tribute-runtime/libmprompt/"
   ]
 }
