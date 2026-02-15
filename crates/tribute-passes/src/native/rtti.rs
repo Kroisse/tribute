@@ -168,11 +168,9 @@ fn generate_release_functions<'db>(
     entries.sort_by_key(|(_, idx)| *idx);
 
     for (struct_ty, rtti_idx) in entries {
-        if let Some(func_op) =
-            generate_release_function_for_struct(db, *struct_ty, *rtti_idx, type_converter)
-        {
-            funcs.push(func_op);
-        }
+        let func_op =
+            generate_release_function_for_struct(db, *struct_ty, *rtti_idx, type_converter);
+        funcs.push(func_op);
     }
 
     funcs
@@ -200,9 +198,21 @@ fn generate_release_function_for_struct<'db>(
     struct_ty: Type<'db>,
     rtti_idx: u32,
     type_converter: &TypeConverter,
-) -> Option<Operation<'db>> {
-    let fields = adt::get_struct_fields(db, struct_ty)?;
-    let layout = compute_struct_layout(db, struct_ty, type_converter)?;
+) -> Operation<'db> {
+    let fields = adt::get_struct_fields(db, struct_ty).unwrap_or_else(|| {
+        unreachable!(
+            "struct type registered in RttiMap must have fields: {}.{}",
+            struct_ty.dialect(db),
+            struct_ty.name(db),
+        )
+    });
+    let layout = compute_struct_layout(db, struct_ty, type_converter).unwrap_or_else(|| {
+        unreachable!(
+            "struct type registered in RttiMap must have a valid layout: {}.{}",
+            struct_ty.dialect(db),
+            struct_ty.name(db),
+        )
+    });
 
     let ptr_ty = core::Ptr::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
@@ -291,7 +301,7 @@ fn generate_release_function_for_struct<'db>(
         body,
     );
 
-    Some(func_op.as_operation())
+    func_op.as_operation()
 }
 
 /// Append function operations to a module's body.
