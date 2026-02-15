@@ -35,7 +35,7 @@
 //!
 //! ^free_block:
 //!   %size = clif.iconst(<alloc_size>) : core.i64
-//!   clif.call(%rc_addr, %size, callee=@__tribute_dealloc)
+//!   clif.call(%rc_addr, %size, callee=@__tribute_deep_release)
 //!   clif.jump(^continue_block)
 //!
 //! ^continue_block:
@@ -48,8 +48,8 @@ use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
 
-/// Name of the runtime deallocation function.
-const DEALLOC_FN: &str = "__tribute_dealloc";
+/// Name of the deep release dispatch function.
+const DEEP_RELEASE_FN: &str = "__tribute_deep_release";
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
@@ -193,8 +193,7 @@ fn lower_nested_regions<'db>(
 /// Info collected for each release op during Phase 1.
 struct ReleaseInfo<'db> {
     is_zero_val: Value<'db>,
-    rc_addr_val: Value<'db>,
-    alloc_size: i64,
+    payload_ptr_val: Value<'db>,
     free_block_id: BlockId,
 }
 
@@ -256,13 +255,12 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         } else if let Ok(release_op) = tribute_rt::Release::from_operation(db, *op) {
             // Release: refcount decrement + conditional free + block split
             let ptr = remap_value(&value_remap, release_op.ptr(db));
-            let alloc_size = release_op.alloc_size(db);
 
             let continue_block_id = BlockId::fresh();
             let free_block_id = BlockId::fresh();
 
             // Generate decrement ops (brif will be appended in Phase 2)
-            let (decrement_ops, is_zero_val, rc_addr_val) =
+            let (decrement_ops, is_zero_val, _rc_addr_val) =
                 gen_release_decrement(db, location, ptr);
             current_ops.extend(decrement_ops);
 
@@ -273,8 +271,7 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
                 block_args: current_args,
                 release: Some(ReleaseInfo {
                     is_zero_val,
-                    rc_addr_val,
-                    alloc_size,
+                    payload_ptr_val: ptr,
                     free_block_id,
                 }),
             });
@@ -318,14 +315,8 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
     for segment in segments.into_iter().rev() {
         let release = segment.release.expect("non-last segment must have release");
 
-        // Build free block: dealloc + jump to continue_block
-        let free_ops = gen_dealloc_call(
-            db,
-            location,
-            release.rc_addr_val,
-            release.alloc_size,
-            continue_block,
-        );
+        // Build free block: deep_release + jump to continue_block
+        let free_ops = gen_deep_release_call(db, location, release.payload_ptr_val, continue_block);
         let free_block = Block::new(
             db,
             release.free_block_id,
@@ -499,32 +490,26 @@ fn gen_release_decrement<'db>(
     (ops, is_zero.result(db), rc_addr_val)
 }
 
-/// Generate dealloc call ops for the free block.
+/// Generate deep release call ops for the free block.
 ///
-/// Returns ops: `clif.iconst(alloc_size) + clif.call @__tribute_dealloc + clif.jump(continue)`.
-fn gen_dealloc_call<'db>(
+/// Returns ops: `clif.call @__tribute_deep_release(payload_ptr) + clif.jump(continue)`.
+fn gen_deep_release_call<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
-    rc_addr: Value<'db>,
-    alloc_size: i64,
+    payload_ptr: Value<'db>,
     continue_block: Block<'db>,
 ) -> Vec<Operation<'db>> {
-    let i64_ty = core::I64::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
 
     let mut ops = Vec::new();
 
-    // dealloc_size = iconst(alloc_size)
-    let size = clif::iconst(db, location, i64_ty, alloc_size);
-    ops.push(size.as_operation());
-
-    // call @__tribute_dealloc(rc_addr, size)
+    // call @__tribute_deep_release(payload_ptr)
     let call = clif::call(
         db,
         location,
-        [rc_addr, size.result(db)],
+        [payload_ptr],
         nil_ty,
-        Symbol::new(DEALLOC_FN),
+        Symbol::new(DEEP_RELEASE_FN),
     );
     ops.push(call.as_operation());
 
@@ -611,7 +596,7 @@ mod tests {
         assert!(ir.contains("clif.brif"), "should have brif: {ir}");
         assert!(ir.contains("clif.jump"), "should have jump: {ir}");
         assert!(
-            ir.contains("__tribute_dealloc"),
+            ir.contains("__tribute_deep_release"),
             "should have dealloc call: {ir}"
         );
         assert!(ir.contains("clif.isub"), "should have isub for RC: {ir}");
@@ -932,7 +917,7 @@ mod tests {
             "should have brif from release: {ir}"
         );
         assert!(
-            ir.contains("__tribute_dealloc"),
+            ir.contains("__tribute_deep_release"),
             "should have dealloc call: {ir}"
         );
     }
@@ -994,7 +979,7 @@ mod tests {
         // f2 should have release block split
         assert!(ir.contains("clif.brif"), "f2 should have brif: {ir}");
         assert!(
-            ir.contains("__tribute_dealloc"),
+            ir.contains("__tribute_deep_release"),
             "f2 should have dealloc: {ir}"
         );
     }
@@ -1021,7 +1006,7 @@ mod tests {
         );
         // Should still emit dealloc call with size 0
         assert!(
-            ir.contains("__tribute_dealloc"),
+            ir.contains("__tribute_deep_release"),
             "should still call dealloc: {ir}"
         );
         assert!(ir.contains("clif.brif"), "should have brif: {ir}");
