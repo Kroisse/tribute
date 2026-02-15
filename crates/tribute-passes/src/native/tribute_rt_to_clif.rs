@@ -49,6 +49,7 @@ fn box_value<'db>(
     location: trunk_ir::Location<'db>,
     value: Value<'db>,
     payload_size: i64,
+    rtti_idx: u32,
 ) -> Vec<Operation<'db>> {
     let ptr_ty = core::Ptr::new(db).as_type();
     let i64_ty = core::I64::new(db).as_type();
@@ -73,10 +74,10 @@ fn box_value<'db>(
     let store_rc = clif::store(db, location, rc_one.result(db), raw_ptr, 0);
     ops.push(store_rc.as_operation());
 
-    // 4. Store rtti_idx = 0 at raw_ptr + 4
-    let rtti_zero = clif::iconst(db, location, i32_ty, 0);
-    ops.push(rtti_zero.as_operation());
-    let store_rtti = clif::store(db, location, rtti_zero.result(db), raw_ptr, 4);
+    // 4. Store rtti_idx at raw_ptr + 4
+    let rtti_val = clif::iconst(db, location, i32_ty, rtti_idx as i64);
+    ops.push(rtti_val.as_operation());
+    let store_rtti = clif::store(db, location, rtti_val.result(db), raw_ptr, 4);
     ops.push(store_rtti.as_operation());
 
     // 5. Compute payload pointer = raw_ptr + 8
@@ -146,7 +147,13 @@ impl<'db> RewritePattern<'db> for BoxIntPattern {
         let Ok(box_op) = tribute_rt::BoxInt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
-        let ops = box_value(db, op.location(db), box_op.value(db), 4);
+        let ops = box_value(
+            db,
+            op.location(db),
+            box_op.value(db),
+            4,
+            super::rtti::RTTI_INT,
+        );
         RewriteResult::Expand(ops)
     }
 }
@@ -164,7 +171,13 @@ impl<'db> RewritePattern<'db> for BoxNatPattern {
         let Ok(box_op) = tribute_rt::BoxNat::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
-        let ops = box_value(db, op.location(db), box_op.value(db), 4);
+        let ops = box_value(
+            db,
+            op.location(db),
+            box_op.value(db),
+            4,
+            super::rtti::RTTI_NAT,
+        );
         RewriteResult::Expand(ops)
     }
 }
@@ -182,7 +195,13 @@ impl<'db> RewritePattern<'db> for BoxBoolPattern {
         let Ok(box_op) = tribute_rt::BoxBool::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
-        let ops = box_value(db, op.location(db), box_op.value(db), 4);
+        let ops = box_value(
+            db,
+            op.location(db),
+            box_op.value(db),
+            4,
+            super::rtti::RTTI_BOOL,
+        );
         RewriteResult::Expand(ops)
     }
 }
@@ -200,7 +219,13 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
         let Ok(box_op) = tribute_rt::BoxFloat::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
-        let ops = box_value(db, op.location(db), box_op.value(db), 8);
+        let ops = box_value(
+            db,
+            op.location(db),
+            box_op.value(db),
+            8,
+            super::rtti::RTTI_FLOAT,
+        );
         RewriteResult::Expand(ops)
     }
 }

@@ -14,6 +14,8 @@
 //!
 //! - Only struct operations are lowered (variant/array/ref ops are left unchanged)
 
+use std::collections::HashMap;
+
 use tracing::warn;
 
 use crate::adt_layout::compute_struct_layout;
@@ -23,7 +25,7 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
     TypeConverter,
 };
-use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
+use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Type};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -38,21 +40,31 @@ const RC_HEADER_SIZE: i64 = 8;
 /// Other ADT operations (variant, array, ref) pass through unchanged.
 ///
 /// The `type_converter` parameter is used to determine field sizes for
-/// layout computation.
+/// layout computation. The optional `rtti_map` maps struct types to their
+/// RTTI indices for storing in RC headers.
 pub fn lower<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     type_converter: TypeConverter,
 ) -> Result<Module<'db>, ConversionError> {
-    // Partial lowering: mark adt as illegal so patterns are applied, but use
-    // apply_partial (no verification) since only struct ops are handled here.
-    // Remaining adt ops (variant, array, ref) will be handled by future passes.
+    lower_with_rtti(db, module, type_converter, &HashMap::new())
+}
+
+/// Lower ADT struct operations with RTTI index mapping.
+pub fn lower_with_rtti<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    type_converter: TypeConverter,
+    rtti_map: &HashMap<Type<'db>, u32>,
+) -> Result<Module<'db>, ConversionError> {
     let target = ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("adt");
 
     Ok(PatternApplicator::new(type_converter)
-        .add_pattern(StructNewPattern)
+        .add_pattern(StructNewPattern {
+            rtti_map: rtti_map.clone(),
+        })
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
         .apply_partial(db, module, target)
@@ -67,8 +79,8 @@ pub fn lower<'db>(
 /// %raw_ptr   = clif.call @__tribute_alloc(%size)
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
-/// %rtti_zero = clif.iconst(0)
-/// clif.store(%rtti_zero, %raw_ptr, offset=4)     // rtti_idx
+/// %rtti_idx  = clif.iconst(<rtti_idx>)
+/// clif.store(%rtti_idx, %raw_ptr, offset=4)      // rtti_idx
 /// %hdr_size  = clif.iconst(8)
 /// %payload   = clif.iadd(%raw_ptr, %hdr_size)    // payload_ptr
 /// clif.store(%field0, %payload, offset=0)
@@ -76,9 +88,11 @@ pub fn lower<'db>(
 /// ...
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
-struct StructNewPattern;
+struct StructNewPattern<'db> {
+    rtti_map: HashMap<Type<'db>, u32>,
+}
 
-impl<'db> RewritePattern<'db> for StructNewPattern {
+impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
@@ -125,10 +139,11 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
         let store_rc = clif::store(db, location, rc_one.result(db), raw_ptr, 0);
         ops.push(store_rc.as_operation());
 
-        // 4. Store rtti_idx = 0 at raw_ptr + 4
-        let rtti_zero = clif::iconst(db, location, i32_ty, 0);
-        ops.push(rtti_zero.as_operation());
-        let store_rtti = clif::store(db, location, rtti_zero.result(db), raw_ptr, 4);
+        // 4. Store rtti_idx at raw_ptr + 4
+        let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or(0) as i64;
+        let rtti_val = clif::iconst(db, location, i32_ty, rtti_idx);
+        ops.push(rtti_val.as_operation());
+        let store_rtti = clif::store(db, location, rtti_val.result(db), raw_ptr, 4);
         ops.push(store_rtti.as_operation());
 
         // 5. Compute payload pointer = raw_ptr + 8
