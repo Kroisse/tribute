@@ -194,6 +194,7 @@ fn lower_nested_regions<'db>(
 struct ReleaseInfo<'db> {
     is_zero_val: Value<'db>,
     payload_ptr_val: Value<'db>,
+    alloc_size: i64,
     free_block_id: BlockId,
 }
 
@@ -255,6 +256,7 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         } else if let Ok(release_op) = tribute_rt::Release::from_operation(db, *op) {
             // Release: refcount decrement + conditional free + block split
             let ptr = remap_value(&value_remap, release_op.ptr(db));
+            let alloc_size = release_op.alloc_size(db);
 
             let continue_block_id = BlockId::fresh();
             let free_block_id = BlockId::fresh();
@@ -272,6 +274,7 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
                 release: Some(ReleaseInfo {
                     is_zero_val,
                     payload_ptr_val: ptr,
+                    alloc_size,
                     free_block_id,
                 }),
             });
@@ -316,7 +319,13 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         let release = segment.release.expect("non-last segment must have release");
 
         // Build free block: deep_release + jump to continue_block
-        let free_ops = gen_deep_release_call(db, location, release.payload_ptr_val, continue_block);
+        let free_ops = gen_deep_release_call(
+            db,
+            location,
+            release.payload_ptr_val,
+            release.alloc_size,
+            continue_block,
+        );
         let free_block = Block::new(
             db,
             release.free_block_id,
@@ -492,22 +501,28 @@ fn gen_release_decrement<'db>(
 
 /// Generate deep release call ops for the free block.
 ///
-/// Returns ops: `clif.call @__tribute_deep_release(payload_ptr) + clif.jump(continue)`.
+/// Returns ops: `clif.iconst(alloc_size) + clif.call @__tribute_deep_release(payload_ptr, size) + clif.jump(continue)`.
 fn gen_deep_release_call<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
     payload_ptr: Value<'db>,
+    alloc_size: i64,
     continue_block: Block<'db>,
 ) -> Vec<Operation<'db>> {
+    let i64_ty = core::I64::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
 
     let mut ops = Vec::new();
 
-    // call @__tribute_deep_release(payload_ptr)
+    // size = iconst(alloc_size)
+    let size = clif::iconst(db, location, i64_ty, alloc_size);
+    ops.push(size.as_operation());
+
+    // call @__tribute_deep_release(payload_ptr, size)
     let call = clif::call(
         db,
         location,
-        [payload_ptr],
+        [payload_ptr, size.result(db)],
         nil_ty,
         Symbol::new(DEEP_RELEASE_FN),
     );

@@ -291,9 +291,12 @@ fn collect_and_declare_rtti(
         }
     }
 
-    // Declare __tribute_deep_release(ptr) -> void
+    // Declare __tribute_deep_release(ptr, size) -> void
     let mut deep_release_sig = cl_ir::Signature::new(call_conv);
     deep_release_sig.params.push(cl_ir::AbiParam::new(ptr_ty));
+    deep_release_sig
+        .params
+        .push(cl_ir::AbiParam::new(cl_types::I64));
     // no return value
 
     let deep_release_sym = Symbol::new("__tribute_deep_release");
@@ -347,9 +350,12 @@ fn define_rtti_infrastructure(
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
     }
 
-    // Define __tribute_deep_release
+    // Define __tribute_deep_release(ptr, size)
     let mut deep_release_sig = cl_ir::Signature::new(call_conv);
     deep_release_sig.params.push(cl_ir::AbiParam::new(ptr_ty));
+    deep_release_sig
+        .params
+        .push(cl_ir::AbiParam::new(cl_types::I64));
 
     let mut cl_func = cl_ir::Function::with_name_signature(
         UserFuncName::user(0, rtti_info.deep_release_func_id.as_u32()),
@@ -401,7 +407,7 @@ fn define_rtti_infrastructure(
 
 /// Build `__tribute_deep_release` body when there are no release functions.
 ///
-/// Simply computes raw_ptr and calls `__tribute_dealloc(raw_ptr, 0)`.
+/// Simply computes raw_ptr and calls `__tribute_dealloc(raw_ptr, alloc_size)`.
 fn build_shallow_only_deep_release(
     builder: &mut FunctionBuilder,
     ptr_ty: cl_types::Type,
@@ -412,14 +418,14 @@ fn build_shallow_only_deep_release(
     builder.switch_to_block(entry);
 
     let payload_ptr = builder.block_params(entry)[0];
+    let alloc_size = builder.block_params(entry)[1];
 
     // raw_ptr = payload_ptr - 8
     let neg8 = builder.ins().iconst(ptr_ty, -8);
     let raw_ptr = builder.ins().iadd(payload_ptr, neg8);
 
-    // __tribute_dealloc(raw_ptr, 0)
-    let zero_size = builder.ins().iconst(cl_types::I64, 0);
-    builder.ins().call(dealloc_fref, &[raw_ptr, zero_size]);
+    // __tribute_dealloc(raw_ptr, alloc_size)
+    builder.ins().call(dealloc_fref, &[raw_ptr, alloc_size]);
 
     builder.ins().return_(&[]);
 }
@@ -427,16 +433,16 @@ fn build_shallow_only_deep_release(
 /// Build `__tribute_deep_release` body with RTTI table dispatch.
 ///
 /// ```text
-/// entry(payload_ptr):
+/// entry(payload_ptr, alloc_size):
 ///   raw_ptr = payload_ptr - 8
 ///   rtti_idx = load i32 from raw_ptr+4
-///   entry_offset = rtti_idx * 8
+///   entry_offset = rtti_idx * ptr_size
 ///   release_fn = load ptr from rtti_table[entry_offset]
 ///   if release_fn == null: goto shallow
 ///   else: goto deep
 ///
 /// shallow:
-///   __tribute_dealloc(raw_ptr, 0)
+///   __tribute_dealloc(raw_ptr, alloc_size)
 ///   return
 ///
 /// deep:
@@ -458,6 +464,7 @@ fn build_dispatching_deep_release(
     builder.switch_to_block(entry);
 
     let payload_ptr = builder.block_params(entry)[0];
+    let alloc_size = builder.block_params(entry)[1];
 
     // raw_ptr = payload_ptr - 8
     let neg8 = builder.ins().iconst(ptr_ty, -8);
@@ -493,10 +500,9 @@ fn build_dispatching_deep_release(
         .ins()
         .brif(is_null, shallow_block, &[], deep_block, &[]);
 
-    // shallow_block: __tribute_dealloc(raw_ptr, 0); return
+    // shallow_block: __tribute_dealloc(raw_ptr, alloc_size); return
     builder.switch_to_block(shallow_block);
-    let zero_size = builder.ins().iconst(cl_types::I64, 0);
-    builder.ins().call(dealloc_fref, &[raw_ptr, zero_size]);
+    builder.ins().call(dealloc_fref, &[raw_ptr, alloc_size]);
     builder.ins().return_(&[]);
 
     // deep_block: call_indirect release_fn(payload_ptr); return
