@@ -1460,6 +1460,7 @@ dependencies = [
  "tribute-front",
  "tribute-ir",
  "tribute-passes",
+ "tribute-runtime",
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
@@ -1517,6 +1518,13 @@ dependencies = [
  "tribute-ir",
  "trunk-ir",
  "trunk-ir-wasm-backend",
+]
+
+[[package]]
+name = "tribute-runtime"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]
