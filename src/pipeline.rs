@@ -66,6 +66,7 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
+use tribute_passes::generate_native_entrypoint;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_libmprompt;
 use tribute_passes::lower_cont_to_trampoline;
@@ -726,6 +727,9 @@ fn compile_module_to_native<'db>(
 ) -> NativeCompilationResult<Vec<u8>> {
     use tribute_passes::native_type_converter;
     use trunk_ir::transforms::lower_scf_to_cf;
+
+    // Phase -1 - Generate native entrypoint (wrap user's main)
+    let module = generate_native_entrypoint(db, module);
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     let module = lower_scf_to_cf(db, module);
