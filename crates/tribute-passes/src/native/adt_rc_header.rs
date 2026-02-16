@@ -96,7 +96,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
+        let u64_ty = core::U64::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
         let fields = adaptor.operands();
 
@@ -104,7 +104,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
 
         // 1. Compute allocation size (payload + RC header)
         let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-        let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
+        let size_op = clif::iconst(db, location, u64_ty, alloc_size as i64);
         let size_val = size_op.result(db);
         ops.push(size_op.as_operation());
 
@@ -127,7 +127,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         ops.push(store_rtti.as_operation());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+        let hdr_size = clif::iconst(db, location, u64_ty, RC_HEADER_SIZE as i64);
         ops.push(hdr_size.as_operation());
         let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
         let payload_val = payload_ptr.result(db);
@@ -143,7 +143,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         }
 
         // 7. Identity pass-through so the last op produces the payload ptr result.
-        let zero_op = clif::iconst(db, location, i64_ty, 0);
+        let zero_op = clif::iconst(db, location, u64_ty, 0);
         let zero_val = zero_op.result(db);
         ops.push(zero_op.as_operation());
 

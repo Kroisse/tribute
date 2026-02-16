@@ -411,13 +411,13 @@ fn gen_retain_inline<'db>(
     ptr: Value<'db>,
 ) -> Vec<Operation<'db>> {
     let ptr_ty = core::Ptr::new(db).as_type();
-    let i64_ty = core::I64::new(db).as_type();
+    let u64_ty = core::U64::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
 
     let mut ops = Vec::new();
 
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::iconst(db, location, u64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_sz.as_operation());
     let rc_addr = clif::isub(db, location, ptr, hdr_sz.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
@@ -456,14 +456,14 @@ fn gen_release_decrement<'db>(
     ptr: Value<'db>,
 ) -> (Vec<Operation<'db>>, Value<'db>, Value<'db>) {
     let ptr_ty = core::Ptr::new(db).as_type();
-    let i64_ty = core::I64::new(db).as_type();
+    let u64_ty = core::U64::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
     let i8_ty = core::I8::new(db).as_type();
 
     let mut ops = Vec::new();
 
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::iconst(db, location, u64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_sz.as_operation());
     let rc_addr = clif::isub(db, location, ptr, hdr_sz.result(db), ptr_ty);
     ops.push(rc_addr.as_operation());
@@ -509,13 +509,13 @@ fn gen_deep_release_call<'db>(
     alloc_size: u64,
     continue_block: Block<'db>,
 ) -> Vec<Operation<'db>> {
-    let i64_ty = core::I64::new(db).as_type();
+    let u64_ty = core::U64::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
 
     let mut ops = Vec::new();
 
     // size = iconst(alloc_size)
-    let size = clif::iconst(db, location, i64_ty, alloc_size as i64);
+    let size = clif::iconst(db, location, u64_ty, alloc_size as i64);
     ops.push(size.as_operation());
 
     // call @__tribute_deep_release(payload_ptr, size)
