@@ -50,7 +50,7 @@ fn effectful_with_lambda() ->{State(Int)} Int {
     f(n)
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let source = source_from_str("effect_collision.trb", code);
@@ -83,7 +83,7 @@ fn effectful_with_multiple_lambdas() ->{State(Int)} Int {
     f2(f1(n))
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let source = source_from_str("multiple_lambdas.trb", code);
@@ -133,7 +133,7 @@ fn effectful_using_pure(init: Int) ->{State(Int)} Int {
     apply_pure(pure_fn, init)
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let source = source_from_str("pure_in_effectful.trb", code);
@@ -183,7 +183,7 @@ fn should_fail() ->{State(Int)} Int {
     apply_pure(effectful_fn, 0)
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let source = source_from_str("effectful_rejected.trb", code);
@@ -216,7 +216,7 @@ fn nested_lambdas() ->{State(Int)} Int {
     outer(n)
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let source = source_from_str("nested_lambdas.trb", code);
@@ -252,7 +252,7 @@ fn test_lambda() -> Int {
     apply(double, -21)
 }
 
-fn main() -> Int { test_lambda() }
+fn main() { }
 "#;
 
     let source = source_from_str("pure_lambda_basic.trb", code);
@@ -284,7 +284,7 @@ fn test_compose() -> Int {
     compose(add_one, double, -10)
 }
 
-fn main() -> Int { test_compose() }
+fn main() { }
 "#;
 
     let source = source_from_str("multiple_pure_lambdas.trb", code);
@@ -314,7 +314,7 @@ fn test_nested() -> Int {
     outer(-20)
 }
 
-fn main() -> Int { test_nested() }
+fn main() { }
 "#;
 
     let source = source_from_str("nested_pure_lambdas.trb", code);

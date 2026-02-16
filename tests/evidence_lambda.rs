@@ -108,9 +108,11 @@ fn test_pure_lambda_not_effectful() {
     let code = r#"
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
 
-fn main() -> Int {
+fn run() -> Int {
     apply(fn(n) { n + 1 }, 41)
 }
+
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -147,9 +149,11 @@ fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     }
 }
 
-fn main() -> Int {
+fn run() -> Int {
     run_with_state(fn() { State::get() })
 }
+
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -206,9 +210,11 @@ fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     }
 }
 
-fn main() -> Int {
+fn run() -> Int {
     run_with_state(fn() { counter() })
 }
+
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -270,7 +276,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int { 0 }
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -317,13 +323,15 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn run() -> Int {
     run_state(fn() {
         counter()
         counter()
         counter()
     }, 0)
 }
+
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -343,7 +351,7 @@ fn main() -> Int {
             .unwrap_or(false);
         assert!(counter_effectful, "counter() should be effectful");
 
-        // The main lambda `fn() { counter(); counter(); counter() }` should be effectful
+        // The run lambda `fn() { counter(); counter(); counter() }` should be effectful
         let lambda_functions: Vec<_> = functions
             .iter()
             .filter(|(name, _)| name.contains("lambda"))
@@ -354,19 +362,19 @@ fn main() -> Int {
             eprintln!("  {} -> effectful: {}", name, is_effectful);
         }
 
-        // At least the main lambda should be effectful
-        let main_lambda_effectful = lambda_functions.iter().any(|(name, is_effectful)| {
-            // The lambda in main that calls counter() should be effectful
-            *is_effectful && name.contains("main")
+        // At least the run lambda should be effectful
+        let run_lambda_effectful = lambda_functions.iter().any(|(name, is_effectful)| {
+            // The lambda in run that calls counter() should be effectful
+            *is_effectful && name.contains("run")
         });
 
-        // If no lambda contains "main", check if any lambda is effectful
+        // If no lambda contains "run", check if any lambda is effectful
         let any_effectful_lambda = lambda_functions
             .iter()
             .any(|(_, is_effectful)| *is_effectful);
 
         assert!(
-            main_lambda_effectful || any_effectful_lambda,
+            run_lambda_effectful || any_effectful_lambda,
             "The lambda calling counter() should be effectful. Lambda functions: {:?}",
             lambda_functions
         );
@@ -395,9 +403,11 @@ fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     }
 }
 
-fn main() -> Int {
+fn run() -> Int {
     run_with_state(fn() { State::get() })
 }
+
+fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
