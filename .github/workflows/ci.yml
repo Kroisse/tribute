@@ -88,8 +88,10 @@ jobs:
         with:
           tool: cargo-llvm-cov,nextest,wasmtime
 
-      - name: Build workspace
-        run: cargo build --workspace
+      - name: Build workspace with coverage instrumentation
+        run: |
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo build --workspace
 
       - name: Generate coverage report
         run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
