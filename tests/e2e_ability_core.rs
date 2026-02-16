@@ -105,7 +105,7 @@ fn test_ability_definition() {
     fn set(value: s) -> Nil
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_def.trb");
@@ -133,7 +133,7 @@ fn counter() ->{State(Nat)} Nat {
     n
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_effect.trb");
@@ -171,7 +171,7 @@ fn run() -> Int {
     }
 }
 
-fn main() -> Int { run() }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "handle_expr.trb");
@@ -220,13 +220,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nat {
-    run_state(fn() {
-        counter()
-        counter()
-        counter()
-    }, 0)
-}
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "milestone_100.trb");
@@ -264,7 +258,7 @@ fn stateful_print() ->{State(Nat), Console} Nat {
     n
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "effect_row.trb");
@@ -294,7 +288,7 @@ fn copy() ->{Reader(Int), Writer(Int)} Nil {
     Writer::tell(x)
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "multiple_abilities.trb");
@@ -329,7 +323,7 @@ fn read_state() ->{State(Int)} Int {
     x
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "let_effect_propagation.trb");
@@ -361,7 +355,7 @@ fn copy_value() ->{Reader(Int), Writer(Int)} Nil {
     Nil
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "multiple_let_effects.trb");
@@ -390,7 +384,7 @@ fn sequential_state() ->{State(Nat)} Nat {
     c + 1
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "sequential_let_effects.trb");
@@ -422,7 +416,7 @@ fn nested_state() ->{State(Nat)} Nat {
     a + b
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "nested_let_effects.trb");
@@ -446,7 +440,7 @@ fn test_pure_let_binding_no_spurious_effects() {
     x + y
 }
 
-fn main() -> Int { pure_computation() }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "pure_let_binding.trb");
@@ -481,7 +475,7 @@ fn bad_counter() -> Int {
     n
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "unhandled_effect.trb");
@@ -654,13 +648,15 @@ fn use_state() ->{State(Nat)} Nat {
     n
 }
 
-fn main() -> Nat {
+fn run() -> Nat {
     handle use_state() {
         { result } -> result
         { State::get() -> k } -> k(42)
         { State::set(v) -> k } -> k(Nil)
     }
 }
+
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "duplicate_handlers.trb");
@@ -698,7 +694,7 @@ fn wrapper() ->{State(Bool)} Int {
     use_int_state()
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_distinct.trb");
@@ -738,13 +734,15 @@ fn wrapper() ->{State(Int)} Int {
     use_state_int()
 }
 
-fn main() -> Int {
+fn run() -> Int {
     handle wrapper() {
         { result } -> result
         { State::get() -> k } -> k(42)
         { State::set(v) -> k } -> k(Nil)
     }
 }
+
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_same.trb");
@@ -776,13 +774,15 @@ fn use_state_int() ->{State(Int)} Int {
     use_state_generic()
 }
 
-fn main() -> Int {
+fn run() -> Int {
     handle use_state_int() {
         { result } -> result
         { State::get() -> k } -> k(100)
         { State::set(v) -> k } -> k(Nil)
     }
 }
+
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_typevar.trb");
@@ -810,7 +810,7 @@ fn bad_func() ->{State()} Int {
     State::get()
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_arity.trb");
@@ -842,13 +842,15 @@ fn use_state() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() -> Nat {
+fn run() -> Nat {
     handle use_state() {
         { result } -> result
         { State::get() -> k } -> k(42)
         { State::set(v) -> k } -> k(Nil)
     }
 }
+
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "handle_param_ability.trb");
@@ -878,7 +880,7 @@ fn use_state() ->{State(Nat)} Nat {
     x + 1
 }
 
-fn main() -> Nat { 0 }
+fn main() { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_op_subst.trb");

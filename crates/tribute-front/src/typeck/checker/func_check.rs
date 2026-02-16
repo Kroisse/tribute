@@ -108,6 +108,27 @@ impl<'db> TypeChecker<'db> {
 
         // Apply substitution and generalization to the function type
         let substituted_ty = type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
+
+        // Validate that `main` returns Nil
+        // Validate that `main` returns Nil
+        if func.name.with_str(|s| s == "main")
+            && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
+            && !matches!(result.kind(self.db()), TypeKind::Nil)
+        {
+            let type_name = result
+                .kind(self.db())
+                .primitive_name()
+                .map(|s| s.to_owned())
+                .unwrap_or_else(|| format!("{:?}", result.kind(self.db())));
+            Diagnostic {
+                message: format!("function 'main' must return Nil, but returns {}", type_name),
+                span: self.get_span(func.id),
+                severity: DiagnosticSeverity::Error,
+                phase: CompilationPhase::TypeChecking,
+            }
+            .accumulate(self.db());
+        }
+
         let generalized =
             type_subst.apply_generalization(self.db(), substituted_ty, row_subst, &var_to_index);
 

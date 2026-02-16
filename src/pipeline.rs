@@ -1336,6 +1336,59 @@ mod tests {
     }
 
     // =========================================================================
+    // main function return type validation
+    // =========================================================================
+
+    #[salsa_test]
+    fn test_main_returns_nil_ok(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn main() { }");
+
+        let result = compile_with_diagnostics(db, source);
+        let has_main_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("must return Nil"));
+        assert!(
+            !has_main_error,
+            "main() returning Nil should not produce an error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_main_returns_int_error(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+
+        let result = compile_with_diagnostics(db, source);
+        let has_main_error = result.diagnostics.iter().any(|d| {
+            d.message.contains("must return Nil")
+                && d.severity == DiagnosticSeverity::Error
+                && d.phase == CompilationPhase::TypeChecking
+        });
+        assert!(
+            has_main_error,
+            "main() returning Int should produce 'must return Nil' error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
+    fn test_non_main_returns_int_ok(db: &salsa::DatabaseImpl) {
+        let source = source_from_str("test.trb", "fn foo() -> Int { 42 }");
+
+        let result = compile_with_diagnostics(db, source);
+        let has_main_error = result
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("must return Nil"));
+        assert!(
+            !has_main_error,
+            "non-main function returning Int should not produce main-specific error, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    // =========================================================================
     // LinkError & link_native_binary Tests
     // =========================================================================
 

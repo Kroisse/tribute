@@ -328,10 +328,11 @@ fn test_generic_indirect_call() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
+fn main() { }
 "#,
     );
 
@@ -379,9 +380,10 @@ fn double(n: Int) -> Int {
     n + n
 }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     apply(double, +21)
 }
+fn main() { }
 "#,
     );
 
@@ -424,9 +426,10 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
 fn inc(n: Int) -> Int { n + +1 }
 fn double(n: Int) -> Int { n + n }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     compose(inc, double, +10)
 }
+fn main() { }
 "#,
     );
 
@@ -471,9 +474,10 @@ fn to_float(n: Int) -> Float {
     3.14
 }
 
-fn main() ->{} Float {
+fn compute() ->{} Float {
     apply_generic(to_float, +42)
 }
+fn main() { }
 "#,
     );
 
@@ -547,10 +551,11 @@ fn test_lambda_identity() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
+fn main() { }
 "#,
     );
 
@@ -612,9 +617,7 @@ fn test_capture() ->{} Int {
     f(32)
 }
 
-fn main() ->{} Int {
-    test_capture()
-}
+fn main() { }
 "#,
     );
 
@@ -678,10 +681,11 @@ fn test_indirect_call_ir_generation() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let f = fn(x) { x }
     f(42)
 }
+fn main() { }
 "#,
     );
 
@@ -724,9 +728,10 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
 }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     apply(fn(n) { n + +1 }, +41)
 }
+fn main() { }
 "#,
     );
 
@@ -798,9 +803,10 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
     f(x)
 }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     apply(fn(n) { n + +1 }, +41)
 }
+fn main() { }
 "#,
     );
 
@@ -1044,9 +1050,8 @@ fn test_binop_matching_types_succeed() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
-    +1 + +2
-}
+fn compute() ->{} Int { +1 + +2 }
+fn main() { }
 "#,
     );
 
@@ -1079,9 +1084,8 @@ fn test_binop_nat_plus_nat_succeeds() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Nat {
-    1 + 2
-}
+fn compute() ->{} Nat { 1 + 2 }
+fn main() { }
 "#,
     );
 
@@ -1114,9 +1118,8 @@ fn test_binop_float_plus_float_succeeds() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Float {
-    1.5 + 2.5
-}
+fn compute() ->{} Float { 1.5 + 2.5 }
+fn main() { }
 "#,
     );
 
@@ -1152,9 +1155,8 @@ fn test_binop_bool_and_bool_succeeds() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Bool {
-    True && False
-}
+fn compute() ->{} Bool { True && False }
+fn main() { }
 "#,
     );
 
