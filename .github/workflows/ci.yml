@@ -63,6 +63,9 @@ jobs:
         with:
           tool: nextest,wasmtime
 
+      - name: Build workspace
+        run: cargo build --workspace
+
       - name: Run tests
         run: cargo nextest run --workspace
 
@@ -86,7 +89,11 @@ jobs:
           tool: cargo-llvm-cov,nextest,wasmtime
 
       - name: Generate coverage report
-        run: cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
+        run: |
+          source <(cargo llvm-cov show-env --sh)
+          cargo build --workspace
+          cargo nextest run --workspace
+          cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

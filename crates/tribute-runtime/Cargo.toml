@@ -1,0 +1,11 @@
+[package]
+name = "tribute-runtime"
+version.workspace = true
+edition.workspace = true
+links = "tribute_runtime"
+
+[lib]
+crate-type = ["staticlib", "lib"]
+
+[build-dependencies]
+cc.workspace = true
