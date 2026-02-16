@@ -119,7 +119,7 @@ dialect! {
         /// Lowered to inline refcount decrement + conditional free.
         /// `alloc_size` is the total allocation size (payload + 8-byte header),
         /// or 0 if unknown. Used by rc_lowering for dealloc calls.
-        #[attr(alloc_size: i64)]
+        #[attr(alloc_size: u64)]
         fn release(ptr);
     }
 }
@@ -132,7 +132,7 @@ dialect! {
 /// functions receive `payload_size + RC_HEADER_SIZE` and return a raw pointer.
 /// Callers store the header at the raw pointer and use `raw_ptr + RC_HEADER_SIZE`
 /// as the payload pointer.
-pub const RC_HEADER_SIZE: i64 = 8;
+pub const RC_HEADER_SIZE: u64 = 8;
 
 // === Pure operation registrations ===
 // Boxing operations are pure (no side effects)
