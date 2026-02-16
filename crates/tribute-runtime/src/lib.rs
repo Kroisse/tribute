@@ -76,7 +76,9 @@ pub unsafe extern "C" fn __tribute_alloc(size: i64) -> *mut u8 {
     if size <= 0 {
         return std::ptr::null_mut();
     }
-    let layout = std::alloc::Layout::from_size_align(size as usize, 8).unwrap();
+    let Ok(layout) = std::alloc::Layout::from_size_align(size as usize, 8) else {
+        return std::ptr::null_mut();
+    };
     unsafe { std::alloc::alloc(layout) }
 }
 
@@ -85,7 +87,9 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: i64) {
     if ptr.is_null() || size <= 0 {
         return;
     }
-    let layout = std::alloc::Layout::from_size_align(size as usize, 8).unwrap();
+    let Ok(layout) = std::alloc::Layout::from_size_align(size as usize, 8) else {
+        return;
+    };
     unsafe { std::alloc::dealloc(ptr, layout) };
 }
 
@@ -105,8 +109,12 @@ struct PromptContext {
 
 /// The `mp_prompt` callback: registers the prompt pointer, calls the user's
 /// body function, then unregisters.
+///
+/// `arg` is a `Box<PromptContext>` passed as a raw pointer. This function
+/// takes ownership and drops it when done, ensuring the context remains
+/// valid across yield/resume boundaries.
 unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u8 {
-    let ctx = unsafe { &*(arg as *const PromptContext) };
+    let ctx = unsafe { Box::from_raw(arg as *mut PromptContext) };
 
     // Register the prompt pointer for this tag (stack for nested prompts)
     PROMPT_REGISTRY.with(|reg| {
@@ -127,6 +135,7 @@ unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u
         }
     });
 
+    // ctx is dropped here (Box ownership)
     result
 }
 
@@ -139,8 +148,8 @@ pub unsafe extern "C" fn __tribute_prompt(
     body_fn: unsafe extern "C" fn(*mut u8) -> *mut u8,
     env: *mut u8,
 ) -> *mut u8 {
-    let mut ctx = PromptContext { tag, body_fn, env };
-    unsafe { mp_prompt(prompt_start, &mut ctx as *mut PromptContext as *mut u8) }
+    let ctx = Box::new(PromptContext { tag, body_fn, env });
+    unsafe { mp_prompt(prompt_start, Box::into_raw(ctx) as *mut u8) }
 }
 
 /// The `mp_yield` callback: captures the resume pointer into TLS
@@ -288,6 +297,33 @@ mod tests {
     }
 
     #[test]
+    fn test_alloc_oversized_returns_null() {
+        // Layout::from_size_align fails for sizes > isize::MAX - 7 (with align=8).
+        // Should return null instead of panicking across FFI boundary.
+        unsafe {
+            let ptr = __tribute_alloc(i64::MAX);
+            assert!(ptr.is_null());
+        }
+    }
+
+    #[test]
+    fn test_alloc_negative_returns_null() {
+        unsafe {
+            let ptr = __tribute_alloc(-1);
+            assert!(ptr.is_null());
+        }
+    }
+
+    #[test]
+    fn test_dealloc_invalid_is_noop() {
+        // Should not panic on null pointer or invalid size
+        unsafe {
+            __tribute_dealloc(std::ptr::null_mut(), 64);
+            __tribute_dealloc(std::ptr::null_mut(), -1);
+        }
+    }
+
+    #[test]
     fn test_prompt_simple() {
         // Test a simple prompt that doesn't yield: body returns immediately.
         unsafe extern "C" fn body(_env: *mut u8) -> *mut u8 {
@@ -298,5 +334,61 @@ mod tests {
             let result = __tribute_prompt(1, body, std::ptr::null_mut());
             assert_eq!(result as usize, 42);
         }
+    }
+
+    #[test]
+    fn test_prompt_with_yield() {
+        // Test that PromptContext survives across yield/resume (heap-allocated).
+        // Body yields a value, handler resumes with a different value.
+        unsafe extern "C" fn body(_env: *mut u8) -> *mut u8 {
+            // Yield to the prompt with tag=10, op_idx=0, shift_value=100
+            let resumed_val = unsafe { __tribute_yield(10, 0, 100usize as *mut u8) };
+            // Return the value we were resumed with
+            resumed_val
+        }
+
+        unsafe {
+            let result = __tribute_prompt(10, body, std::ptr::null_mut());
+            // After yield, mp_prompt returns the yield handler's return value (shift_value=100)
+            assert_eq!(result as usize, 100);
+
+            // Verify yield state was set
+            assert_eq!(__tribute_yield_active(), 1);
+            assert_eq!(__tribute_get_yield_op_idx(), 0);
+
+            // Resume the continuation with value 999
+            let k = __tribute_get_yield_continuation();
+            assert!(!k.is_null());
+            let final_result = __tribute_resume(k, 999usize as *mut u8);
+            // body returns the resumed value (999)
+            assert_eq!(final_result as usize, 999);
+
+            __tribute_reset_yield_state();
+        }
+    }
+
+    #[test]
+    fn test_prompt_nested_same_tag() {
+        // Test that nested prompts with the same tag work correctly (stack-based registry).
+        unsafe extern "C" fn inner_body(_env: *mut u8) -> *mut u8 {
+            77usize as *mut u8
+        }
+
+        unsafe extern "C" fn outer_body(_env: *mut u8) -> *mut u8 {
+            // Nest another prompt with the same tag
+            let inner_result = unsafe { __tribute_prompt(5, inner_body, std::ptr::null_mut()) };
+            // Return inner result + 10
+            (inner_result as usize + 10) as *mut u8
+        }
+
+        unsafe {
+            let result = __tribute_prompt(5, outer_body, std::ptr::null_mut());
+            assert_eq!(result as usize, 87); // 77 + 10
+        }
+
+        // Verify registry is clean after both prompts complete
+        PROMPT_REGISTRY.with(|reg| {
+            assert!(reg.borrow().is_empty());
+        });
     }
 }
