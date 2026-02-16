@@ -12,5 +12,6 @@
 
 pub mod rc_insertion;
 pub mod rc_lowering;
+pub mod rtti;
 pub mod tribute_rt_to_clif;
 pub mod type_converter;

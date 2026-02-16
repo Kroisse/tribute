@@ -721,9 +721,14 @@ fn compile_module_to_native<'db>(
     let module = cf_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
-    // Phase 2 - Lower ADT struct operations to clif dialect
-    let module = adt_to_clif::lower(db, module, native_type_converter())
-        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+    // Phase 1.9 - RTTI pass: assign rtti_idx per struct type, generate release functions
+    let (module, rtti_map) =
+        tribute_passes::native::rtti::generate_rtti(db, module, &native_type_converter());
+
+    // Phase 2 - Lower ADT struct operations to clif dialect (with RTTI map)
+    let module =
+        adt_to_clif::lower_with_rtti(db, module, native_type_converter(), &rtti_map.type_to_idx)
+            .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
 
     // Phase 2.5 - Lower arith dialect to clif dialect
     let module = arith_to_clif::lower(db, module, native_type_converter())

@@ -5,6 +5,9 @@
 
 #![recursion_limit = "512"]
 
+// === ADT layout computation ===
+pub mod adt_layout;
+
 // === Dialect modules ===
 pub mod dialect;
 
