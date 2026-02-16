@@ -342,9 +342,9 @@ mod tests {
         // Body yields a value, handler resumes with a different value.
         unsafe extern "C" fn body(_env: *mut u8) -> *mut u8 {
             // Yield to the prompt with tag=10, op_idx=0, shift_value=100
-            let resumed_val = unsafe { __tribute_yield(10, 0, 100usize as *mut u8) };
+
             // Return the value we were resumed with
-            resumed_val
+            unsafe { __tribute_yield(10, 0, 100usize as *mut u8) }
         }
 
         unsafe {
