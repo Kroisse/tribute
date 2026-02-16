@@ -1048,7 +1048,7 @@ mod tests {
 
     #[salsa_test]
     fn test_full_pipeline(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+        let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
         let module = test_compile(db, source);
         assert_eq!(module.name(db), "test");
@@ -1283,7 +1283,7 @@ mod tests {
     #[salsa_test]
     fn test_ast_pipeline_simple_function(db: &salsa::DatabaseImpl) {
         // Test that AST pipeline can parse and lower a simple function
-        let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+        let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
         let module = parse_and_lower_ast(db, source);
         assert_eq!(module.name(db), "test");

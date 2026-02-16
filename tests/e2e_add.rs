@@ -45,7 +45,8 @@ fn test_generic_int_identity() {
     let source_code = Rope::from_str(
         r#"
 fn identity(x: a) ->{} a { x }
-fn main() ->{} Int { identity(42) }
+fn compute() ->{} Int { identity(42) }
+fn main() { }
 "#,
     );
 
@@ -71,10 +72,11 @@ fn test_struct_construction() {
         r#"
 struct Point { x: Int, y: Int }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let p = Point { x: 10, y: 20 }
     42
 }
+fn main() { }
 "#,
     );
 
@@ -101,10 +103,11 @@ fn test_struct_accessor() {
         r#"
 struct Point { x: Int, y: Int }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let p = Point { x: 10, y: 20 }
     p.x()
 }
+fn main() { }
 "#,
     );
 
@@ -141,7 +144,8 @@ fn test_generic_float_identity() {
     let source_code = Rope::from_str(
         r#"
 fn identity(x: a) ->{} a { x }
-fn main() ->{} Float { identity(3.125) }
+fn compute() ->{} Float { identity(3.125) }
+fn main() { }
 "#,
     );
 
@@ -170,11 +174,12 @@ struct Point { x: Int, y: Int }
 
 fn identity(x: a) ->{} a { x }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
     p2.x()
 }
+fn main() { }
 "#,
     );
 
@@ -209,11 +214,12 @@ fn test_generic_multiple_types() {
         r#"
 fn identity(x: a) ->{} a { x }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let i = identity(42)
     let f = identity(3.14)
     i
 }
+fn main() { }
 "#,
     );
 
@@ -249,9 +255,10 @@ fn test_generic_two_params() {
         r#"
 fn first(x: a, y: b) ->{} a { x }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     first(10, 3.14)
 }
+fn main() { }
 "#,
     );
 
@@ -287,9 +294,10 @@ fn test_generic_nested_calls() {
         r#"
 fn identity(x: a) ->{} a { x }
 
-fn main() ->{} Int {
+fn compute() ->{} Int {
     identity(identity(identity(42)))
 }
+fn main() { }
 "#,
     );
 
@@ -905,10 +913,11 @@ fn test_closure_execution_simple() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
+fn compute() ->{} Int {
     let f = fn(x) { x + 1 }
     f(41)
 }
+fn main() { }
 "#,
     );
 
@@ -950,9 +959,10 @@ fn test_binop_type_mismatch_int_nat() {
     // +1 is Int (explicit sign), 2 is Nat (no sign)
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Int {
+fn compute() ->{} Int {
     +1 + 2
 }
+fn main() { }
 "#,
     );
 
@@ -982,9 +992,10 @@ fn test_binop_comparison_type_mismatch() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Bool {
+fn compute() ->{} Bool {
     +1 < 2.0
 }
+fn main() { }
 "#,
     );
 
@@ -1018,9 +1029,10 @@ fn test_binop_boolean_requires_bool() {
 
     let source_code = Rope::from_str(
         r#"
-fn main() ->{} Bool {
+fn compute() ->{} Bool {
     +1 && +2
 }
+fn main() { }
 "#,
     );
 
