@@ -1,5 +1,5 @@
 ---
-source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
+source: crates/tribute-passes/src/native/adt_rc_header.rs
 expression: do_lower_struct_new(db)
 ---
 core.module @test {
