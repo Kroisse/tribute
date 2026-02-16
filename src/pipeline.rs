@@ -1045,6 +1045,9 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
         cmd.arg("-L").arg(lib_dir);
         cmd.arg("-lmprompt");
     }
+    if !cfg!(windows) {
+        cmd.arg("-lpthread");
+    }
 
     cmd.arg("-o").arg(output);
 

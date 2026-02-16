@@ -6,6 +6,8 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     let mut build = cc::Build::new();
+    println!("cargo:rerun-if-changed=libmprompt/src");
+    println!("cargo:rerun-if-changed=libmprompt/include");
     build
         .file("libmprompt/src/mprompt/main.c")
         .include("libmprompt/include")

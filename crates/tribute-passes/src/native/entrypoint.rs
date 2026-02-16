@@ -25,6 +25,12 @@ pub fn generate_native_entrypoint<'db>(
     let body = module.body(db);
     let blocks = body.blocks(db);
 
+    assert!(
+        blocks.len() == 1,
+        "Module body must be single-block, got {} blocks",
+        blocks.len()
+    );
+
     let Some(entry_block) = blocks.first() else {
         return module;
     };
@@ -54,18 +60,24 @@ pub fn generate_native_entrypoint<'db>(
     let tribute_main_sym = Symbol::new("_tribute_main");
     let tribute_main_return_ty = main_return_ty.unwrap_or_else(|| core::Nil::new(db).as_type());
 
-    // Rebuild module: rename main -> _tribute_main, then append new entrypoint
+    let main_sym = Symbol::new("main");
+
+    // Rebuild module: rename main -> _tribute_main, rewrite call sites, then append new entrypoint
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
 
     for op in entry_block.operations(db).iter() {
         if let Ok(func_op) = func::Func::from_operation(db, *op)
-            && func_op.sym_name(db) == Symbol::new("main")
+            && func_op.sym_name(db) == main_sym
         {
             let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
-            new_ops.push(renamed);
+            // Also rewrite any call @main inside this function's body to @_tribute_main
+            let rewritten = rewrite_symbol_refs(db, &renamed, main_sym, tribute_main_sym);
+            new_ops.push(rewritten);
             continue;
         }
-        new_ops.push(*op);
+        // Rewrite call @main in other functions too
+        let rewritten = rewrite_symbol_refs(db, op, main_sym, tribute_main_sym);
+        new_ops.push(rewritten);
     }
 
     // Append the C ABI entrypoint
@@ -110,6 +122,99 @@ fn rebuild_func_with_name<'db>(
     }
 
     builder.build()
+}
+
+/// Recursively rewrite symbol references in an operation's attributes and regions.
+///
+/// Rewrites `func.call`, `func.tail_call` callee attributes and `func.constant` func_ref
+/// attributes from `old_sym` to `new_sym`.
+fn rewrite_symbol_refs<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    old_sym: Symbol,
+    new_sym: Symbol,
+) -> Operation<'db> {
+    let mut attrs_changed = false;
+    let mut new_attrs = op.attributes(db).clone();
+
+    // Rewrite callee attribute on func.call / func.tail_call
+    let callee_key = Symbol::new("callee");
+    if let Some(Attribute::Symbol(sym)) = new_attrs.get(&callee_key)
+        && *sym == old_sym
+    {
+        new_attrs.insert(callee_key, Attribute::Symbol(new_sym));
+        attrs_changed = true;
+    }
+
+    // Rewrite func_ref attribute on func.constant
+    let func_ref_key = Symbol::new("func_ref");
+    if let Some(Attribute::Symbol(sym)) = new_attrs.get(&func_ref_key)
+        && *sym == old_sym
+    {
+        new_attrs.insert(func_ref_key, Attribute::Symbol(new_sym));
+        attrs_changed = true;
+    }
+
+    // Recurse into regions
+    let regions = op.regions(db);
+    let new_regions: IdVec<Region<'db>> = regions
+        .iter()
+        .map(|r| rewrite_symbol_refs_in_region(db, r, old_sym, new_sym))
+        .collect();
+    let regions_changed = new_regions != *regions;
+
+    if !attrs_changed && !regions_changed {
+        return *op;
+    }
+
+    Operation::new(
+        db,
+        op.location(db),
+        op.dialect(db),
+        op.name(db),
+        op.operands(db).clone(),
+        op.results(db).clone(),
+        new_attrs,
+        if regions_changed {
+            new_regions
+        } else {
+            regions.clone()
+        },
+        op.successors(db).clone(),
+    )
+}
+
+fn rewrite_symbol_refs_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    old_sym: Symbol,
+    new_sym: Symbol,
+) -> Region<'db> {
+    let blocks = region.blocks(db);
+    let new_blocks: IdVec<Block<'db>> = blocks
+        .iter()
+        .map(|block| {
+            let new_ops: IdVec<Operation<'db>> = block
+                .operations(db)
+                .iter()
+                .map(|op| rewrite_symbol_refs(db, op, old_sym, new_sym))
+                .collect();
+            if new_ops == *block.operations(db) {
+                return *block;
+            }
+            Block::new(
+                db,
+                block.id(db),
+                block.location(db),
+                block.args(db).clone(),
+                new_ops,
+            )
+        })
+        .collect();
+    if new_blocks == *blocks {
+        return *region;
+    }
+    Region::new(db, region.location(db), new_blocks)
 }
 
 /// Build the C ABI entrypoint function:

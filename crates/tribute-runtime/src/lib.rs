@@ -63,7 +63,7 @@ thread_local! {
 // =============================================================================
 
 thread_local! {
-    static PROMPT_REGISTRY: std::cell::RefCell<HashMap<i32, *mut MpPrompt>> =
+    static PROMPT_REGISTRY: std::cell::RefCell<HashMap<i32, Vec<*mut MpPrompt>>> =
         std::cell::RefCell::new(HashMap::new());
 }
 
@@ -108,17 +108,23 @@ struct PromptContext {
 unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u8 {
     let ctx = unsafe { &*(arg as *const PromptContext) };
 
-    // Register the prompt pointer for this tag
+    // Register the prompt pointer for this tag (stack for nested prompts)
     PROMPT_REGISTRY.with(|reg| {
-        reg.borrow_mut().insert(ctx.tag, prompt);
+        reg.borrow_mut().entry(ctx.tag).or_default().push(prompt);
     });
 
     // Call the user's body function
     let result = unsafe { (ctx.body_fn)(ctx.env) };
 
-    // Unregister (prompt is no longer active)
+    // Unregister (pop from stack; remove key when empty)
     PROMPT_REGISTRY.with(|reg| {
-        reg.borrow_mut().remove(&ctx.tag);
+        let mut reg = reg.borrow_mut();
+        if let Some(stack) = reg.get_mut(&ctx.tag) {
+            stack.pop();
+            if stack.is_empty() {
+                reg.remove(&ctx.tag);
+            }
+        }
     });
 
     result
@@ -158,10 +164,11 @@ pub unsafe extern "C" fn __tribute_yield(tag: i32, op_idx: i32, shift_value: *mu
     YIELD_OP_IDX.set(op_idx);
     YIELD_SHIFT_VALUE.set(shift_value);
 
-    // Look up the prompt pointer for this tag
+    // Look up the innermost prompt pointer for this tag
     let prompt = PROMPT_REGISTRY.with(|reg| {
-        *reg.borrow()
+        reg.borrow()
             .get(&tag)
+            .and_then(|stack| stack.last().copied())
             .expect("ICE: __tribute_yield called with unregistered tag")
     });
 
