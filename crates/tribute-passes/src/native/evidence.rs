@@ -612,16 +612,16 @@ mod tests {
         // Find the user function
         let mut found_empty_call = false;
         for op in entry.operations(db).iter() {
-            if let Ok(f) = func::Func::from_operation(db, *op) {
-                if f.sym_name(db) == Symbol::new("test_fn") {
-                    let func_body = f.body(db);
-                    let func_entry = func_body.blocks(db).first().unwrap();
-                    for inner_op in func_entry.operations(db).iter() {
-                        if let Ok(call) = func::Call::from_operation(db, *inner_op) {
-                            if call.callee(db) == "__tribute_evidence_empty" {
-                                found_empty_call = true;
-                            }
-                        }
+            if let Ok(f) = func::Func::from_operation(db, *op)
+                && f.sym_name(db) == Symbol::new("test_fn")
+            {
+                let func_body = f.body(db);
+                let func_entry = func_body.blocks(db).first().unwrap();
+                for inner_op in func_entry.operations(db).iter() {
+                    if let Ok(call) = func::Call::from_operation(db, *inner_op)
+                        && call.callee(db) == "__tribute_evidence_empty"
+                    {
+                        found_empty_call = true;
                     }
                 }
             }
@@ -716,36 +716,36 @@ mod tests {
         let entry = body.blocks(db).first().unwrap();
 
         for op in entry.operations(db).iter() {
-            if let Ok(f) = func::Func::from_operation(db, *op) {
-                if f.sym_name(db) == Symbol::new("test_fn") {
-                    let func_body = f.body(db);
-                    let func_entry = func_body.blocks(db).first().unwrap();
+            if let Ok(f) = func::Func::from_operation(db, *op)
+                && f.sym_name(db) == Symbol::new("test_fn")
+            {
+                let func_body = f.body(db);
+                let func_entry = func_body.blocks(db).first().unwrap();
 
-                    // Should NOT have adt.struct_new
-                    let has_struct_new = func_entry
-                        .operations(db)
-                        .iter()
-                        .any(|inner_op| adt::StructNew::from_operation(db, *inner_op).is_ok());
-                    assert!(
-                        !has_struct_new,
-                        "adt.struct_new for Marker should be removed"
-                    );
+                // Should NOT have adt.struct_new
+                let has_struct_new = func_entry
+                    .operations(db)
+                    .iter()
+                    .any(|inner_op| adt::StructNew::from_operation(db, *inner_op).is_ok());
+                assert!(
+                    !has_struct_new,
+                    "adt.struct_new for Marker should be removed"
+                );
 
-                    // The extend call should now have 4 operands
-                    for inner_op in func_entry.operations(db).iter() {
-                        if let Ok(call) = func::Call::from_operation(db, *inner_op) {
-                            if call.callee(db) == "__tribute_evidence_extend" {
-                                assert_eq!(
-                                    inner_op.operands(db).len(),
-                                    4,
-                                    "extend call should have 4 operands: ev, ability_id, prompt_tag, op_table_index"
-                                );
-                                return;
-                            }
-                        }
+                // The extend call should now have 4 operands
+                for inner_op in func_entry.operations(db).iter() {
+                    if let Ok(call) = func::Call::from_operation(db, *inner_op)
+                        && call.callee(db) == "__tribute_evidence_extend"
+                    {
+                        assert_eq!(
+                            inner_op.operands(db).len(),
+                            4,
+                            "extend call should have 4 operands: ev, ability_id, prompt_tag, op_table_index"
+                        );
+                        return;
                     }
-                    panic!("should find __tribute_evidence_extend call");
                 }
+                panic!("should find __tribute_evidence_extend call");
             }
         }
         panic!("should find test_fn function");
