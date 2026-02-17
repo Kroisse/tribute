@@ -216,49 +216,6 @@ pub type I32<'db> = I<'db, 32>;
 /// 64-bit integer type.
 pub type I64<'db> = I<'db, 64>;
 
-// === Unsigned integer type wrapper ===
-
-/// Unsigned 64-bit integer type wrapper (`core.u64`).
-///
-/// Used for inherently non-negative values like allocation sizes.
-/// Maps to the same machine representation as `core.i64` (Cranelift `I64`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub struct U64<'db>(Type<'db>);
-
-impl<'db> U64<'db> {
-    /// Create a new unsigned 64-bit integer type.
-    pub fn new(db: &'db dyn salsa::Database) -> Self {
-        Self(Type::new(
-            db,
-            DIALECT_NAME(),
-            Symbol::new("u64"),
-            IdVec::new(),
-            BTreeMap::new(),
-        ))
-    }
-}
-
-impl<'db> Deref for U64<'db> {
-    type Target = Type<'db>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<'db> DialectType<'db> for U64<'db> {
-    fn as_type(&self) -> Type<'db> {
-        self.0
-    }
-
-    fn from_type(db: &'db dyn salsa::Database, ty: Type<'db>) -> Option<Self> {
-        if ty.dialect(db) == DIALECT_NAME() && ty.name(db) == Symbol::new("u64") {
-            Some(Self(ty))
-        } else {
-            None
-        }
-    }
-}
-
 /// Create an integer type (`core.i{bits}`) with the given bit width.
 fn i(db: &dyn salsa::Database, bits: u16) -> Type<'_> {
     Type::new(
@@ -620,9 +577,6 @@ inventory::submit! {
         })
     })
 }
-
-// Unsigned integer type: u64 -> "U64"
-inventory::submit! { Printable::implement("core", "u64", |_, _, f| f.write_str("U64")) }
 
 // Floating-point types: f64 -> "Float", f{N} -> "F{N}"
 inventory::submit! {

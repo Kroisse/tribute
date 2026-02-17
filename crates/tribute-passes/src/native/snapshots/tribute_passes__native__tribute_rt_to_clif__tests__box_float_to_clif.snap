@@ -4,13 +4,13 @@ expression: ir
 ---
 core.module @test {
   %0 = clif.f64const {value = 2.5} : core.f64
-  %1 = clif.iconst {value = 16} : core.u64
+  %1 = clif.iconst {value = 16} : core.i64
   %2 = clif.call %1 {callee = @__tribute_alloc} : core.ptr
   %3 = clif.iconst {value = 1} : core.i32
   clif.store %3, %2 {offset = 0}
   %4 = clif.iconst {value = 4} : core.i32
   clif.store %4, %2 {offset = 4}
-  %5 = clif.iconst {value = 8} : core.u64
+  %5 = clif.iconst {value = 8} : core.i64
   %6 = clif.iadd %2, %5 : core.ptr
   clif.store %0, %6 {offset = 0}
   %7 = clif.iconst {value = 0} : core.ptr

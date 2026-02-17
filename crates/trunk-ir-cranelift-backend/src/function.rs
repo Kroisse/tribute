@@ -31,9 +31,6 @@ pub(crate) fn translate_type(
     if core::I64::from_type(db, ty).is_some() {
         return Ok(cl_types::I64);
     }
-    if core::U64::from_type(db, ty).is_some() {
-        return Ok(cl_types::I64);
-    }
     if core::F32::from_type(db, ty).is_some() {
         return Ok(cl_types::F32);
     }
