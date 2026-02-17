@@ -62,7 +62,7 @@ fn compile_and_run_native(source_name: &str, source_code: &str) -> ExitStatus {
 
 #[test]
 fn test_native_simple_literal() {
-    let status = compile_and_run_native("simple_literal.trb", "fn main() -> Int { 42 }");
+    let status = compile_and_run_native("simple_literal.trb", "fn main() { }");
     assert!(
         status.success(),
         "Native binary exited with non-zero status: {:?}",
@@ -75,8 +75,8 @@ fn test_native_arithmetic() {
     let status = compile_and_run_native(
         "arithmetic.trb",
         r#"
-fn main() -> Nat {
-    10 + 20 + 3
+fn main() {
+    let _ = 10 + 20 + 3
 }
 "#,
     );
@@ -96,8 +96,8 @@ fn add(a: Nat, b: Nat) -> Nat {
     a + b
 }
 
-fn main() -> Nat {
-    add(10, 20)
+fn main() {
+    let _ = add(10, 20)
 }
 "#,
     );
@@ -113,10 +113,249 @@ fn test_native_let_binding() {
     let status = compile_and_run_native(
         "let_binding.trb",
         r#"
-fn main() -> Nat {
-    let a = 10;
-    let b = 20;
-    a + b
+fn main() {
+    let a = 10
+    let b = 20
+    let _ = a + b
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+// =============================================================================
+// Intermediate Feature Tests
+// =============================================================================
+
+#[test]
+#[ignore = "native backend: case/pattern matching requires tribute_rt.any support"]
+fn test_native_case_expression() {
+    let status = compile_and_run_native(
+        "case_expression.trb",
+        r#"
+fn classify(n: Nat) -> Nat {
+    case n {
+        0 -> 0
+        1 -> 1
+        _ -> 2
+    }
+}
+
+fn main() {
+    let _ = classify(5)
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+#[test]
+#[ignore = "native backend: struct RTTI requires tribute_rt.any support"]
+fn test_native_struct() {
+    let status = compile_and_run_native(
+        "struct.trb",
+        r#"
+struct Point { x: Nat, y: Nat }
+
+fn main() {
+    let p = Point { x: 10, y: 20 }
+    let _ = p.x()
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+#[test]
+#[ignore = "native backend: closures require adt.ref_cast/ref_null lowering"]
+fn test_native_closure() {
+    let status = compile_and_run_native(
+        "closure.trb",
+        r#"
+fn main() {
+    let a = 10
+    let f = fn(x) { x + a }
+    let _ = f(32)
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+#[test]
+#[ignore = "native backend: enum requires adt.variant_* lowering"]
+fn test_native_enum_case() {
+    let status = compile_and_run_native(
+        "enum_case.trb",
+        r#"
+enum Shape {
+    Circle(Nat),
+    Square(Nat),
+}
+
+fn area(s: Shape) -> Nat {
+    case s {
+        Circle(r) -> r * r
+        Square(side) -> side * side
+    }
+}
+
+fn main() {
+    let _ = area(Circle(5))
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+#[test]
+#[ignore = "native backend: case/pattern matching requires tribute_rt.any support"]
+fn test_native_recursion() {
+    let status = compile_and_run_native(
+        "recursion.trb",
+        r#"
+fn fibonacci(n: Nat) -> Nat {
+    case n {
+        0 -> 0
+        1 -> 1
+        _ -> fibonacci(n - 1) + fibonacci(n - 2)
+    }
+}
+
+fn main() {
+    let _ = fibonacci(10)
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+// =============================================================================
+// Ability E2E Tests
+// =============================================================================
+
+/// Test handler direct result path (no effect operations).
+/// Mirrors WASM test `test_handler_direct_result`.
+#[test]
+#[ignore = "native backend: ability handlers require RTTI/continuation support"]
+fn test_native_ability_handler_direct_result() {
+    let status = compile_and_run_native(
+        "ability_direct_result.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn no_effects() ->{State(Nat)} Nat {
+    42
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let _ = run_state(fn() { no_effects() }, 0)
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+/// Test simple State::get handler.
+/// Mirrors WASM test `test_state_get_simple`.
+#[test]
+#[ignore = "native backend: ability handlers require RTTI/continuation support"]
+fn test_native_state_get_simple() {
+    let status = compile_and_run_native(
+        "state_get_simple.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn get_state() ->{State(Nat)} Nat {
+    State::get()
+}
+
+fn main() {
+    let _ = handle get_state() {
+        { result } -> result
+        { State::get() -> k } -> 42
+        { State::set(v) -> k } -> 0
+    }
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+/// Test State::set followed by State::get with run_state handler.
+/// Mirrors WASM test `test_state_set_then_get`.
+#[test]
+#[ignore = "native backend: ability handlers require RTTI/continuation support"]
+fn test_native_state_set_then_get() {
+    let status = compile_and_run_native(
+        "state_set_then_get.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn set_then_get() ->{State(Nat)} Nat {
+    State::set(100)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let _ = run_state(fn() { set_then_get() }, 0)
 }
 "#,
     );

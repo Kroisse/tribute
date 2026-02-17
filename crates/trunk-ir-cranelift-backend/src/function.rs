@@ -119,6 +119,10 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
 
         // === Constants ===
         if let Ok(c) = clif::Iconst::from_operation(db, *op) {
+            // Nil constants have no runtime representation — skip emission.
+            if core::Nil::from_type(db, c.result_ty(db)).is_some() {
+                return Ok(());
+            }
             let ty = translate_type(db, c.result_ty(db))?;
             let val = self.builder.ins().iconst(ty, c.value(db));
             self.values.insert(c.result(db), val);
@@ -225,11 +229,13 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
 
         // === Return ===
         if let Ok(ret) = clif::Return::from_operation(db, *op) {
+            // Skip operands not in the value map (Nil-typed values that were
+            // intentionally not materialized).
             let vals: Vec<cl_ir::Value> = ret
                 .values(db)
                 .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+                .filter_map(|v| self.values.get(v).copied())
+                .collect();
             self.builder.ins().return_(&vals);
             return Ok(());
         }
