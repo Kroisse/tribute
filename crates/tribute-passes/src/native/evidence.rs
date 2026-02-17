@@ -360,22 +360,26 @@ fn rewrite_evidence_ops_in_block<'db>(
                 let ev_val = operands[0];
                 let marker_val = operands[1];
 
-                if let Some(fields) = marker_struct_operands.get(&marker_val) {
-                    // fields = [ability_id, prompt_tag, op_table_index]
-                    let ptr_ty = core::Ptr::new(db).as_type();
-                    let mut args = vec![ev_val];
-                    args.extend_from_slice(fields);
-                    let new_call = func::call(
-                        db,
-                        op.location(db),
-                        args,
-                        ptr_ty,
-                        Symbol::new("__tribute_evidence_extend"),
-                    );
-                    new_ops.push(new_call.as_operation());
-                    changed = true;
-                    continue;
-                }
+                let fields = marker_struct_operands.get(&marker_val).unwrap_or_else(|| {
+                    unreachable!(
+                        "ICE: __tribute_evidence_extend marker operand has no matching \
+                         adt.struct_new in the same block (IR invariant violated)"
+                    )
+                });
+                // fields = [ability_id, prompt_tag, op_table_index]
+                let ptr_ty = core::Ptr::new(db).as_type();
+                let mut args = vec![ev_val];
+                args.extend_from_slice(fields);
+                let new_call = func::call(
+                    db,
+                    op.location(db),
+                    args,
+                    ptr_ty,
+                    Symbol::new("__tribute_evidence_extend"),
+                );
+                new_ops.push(new_call.as_operation());
+                changed = true;
+                continue;
             }
         }
 
