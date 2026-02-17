@@ -5,7 +5,7 @@ expression: ir
 core.module @test {
   clif.func {sym_name = @retain_only, type = core.func(core.ptr, core.ptr)} {
   ^bb1(%p: core.ptr):
-    %0 = clif.iconst {value = 8} : core.u64
+    %0 = clif.iconst {value = 8} : core.i64
     %1 = clif.isub %p, %0 : core.ptr
     %2 = clif.load %1 {offset = 0} : core.i32
     %3 = clif.iconst {value = 1} : core.i32
