@@ -72,8 +72,8 @@ thread_local! {
 // =============================================================================
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_alloc(size: i64) -> *mut u8 {
-    if size <= 0 {
+pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
+    if size == 0 {
         return std::ptr::null_mut();
     }
     let Ok(layout) = std::alloc::Layout::from_size_align(size as usize, 8) else {
@@ -83,8 +83,8 @@ pub unsafe extern "C" fn __tribute_alloc(size: i64) -> *mut u8 {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: i64) {
-    if ptr.is_null() || size <= 0 {
+pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
+    if ptr.is_null() || size == 0 {
         return;
     }
     let Ok(layout) = std::alloc::Layout::from_size_align(size as usize, 8) else {
@@ -301,15 +301,7 @@ mod tests {
         // Layout::from_size_align fails for sizes > isize::MAX - 7 (with align=8).
         // Should return null instead of panicking across FFI boundary.
         unsafe {
-            let ptr = __tribute_alloc(i64::MAX);
-            assert!(ptr.is_null());
-        }
-    }
-
-    #[test]
-    fn test_alloc_negative_returns_null() {
-        unsafe {
-            let ptr = __tribute_alloc(-1);
+            let ptr = __tribute_alloc(u64::MAX);
             assert!(ptr.is_null());
         }
     }
@@ -319,7 +311,7 @@ mod tests {
         // Should not panic on null pointer or invalid size
         unsafe {
             __tribute_dealloc(std::ptr::null_mut(), 64);
-            __tribute_dealloc(std::ptr::null_mut(), -1);
+            __tribute_dealloc(std::ptr::null_mut(), 0);
         }
     }
 

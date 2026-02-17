@@ -44,7 +44,7 @@ fn box_primitive<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
     value: trunk_ir::Value<'db>,
-    payload_size: i64,
+    payload_size: u64,
 ) -> Vec<trunk_ir::Operation<'db>> {
     let ptr_ty = core::Ptr::new(db).as_type();
     let i64_ty = core::I64::new(db).as_type();
@@ -54,7 +54,7 @@ fn box_primitive<'db>(
 
     // 1. Allocation size (payload + RC header)
     let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = clif::iconst(db, location, i64_ty, alloc_size);
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
     let size_val = size_op.result(db);
     ops.push(size_op.as_operation());
 
@@ -76,7 +76,7 @@ fn box_primitive<'db>(
     ops.push(store_rtti.as_operation());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_size.as_operation());
     let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
     ops.push(payload_ptr.as_operation());

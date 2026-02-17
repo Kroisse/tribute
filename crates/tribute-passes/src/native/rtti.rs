@@ -258,14 +258,14 @@ fn generate_release_function_for_struct<'db>(
     }
 
     // Dealloc self: raw_ptr = payload_ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
     ops.push(hdr_sz.as_operation());
     let raw_ptr = clif::isub(db, location, payload_ptr, hdr_sz.result(db), ptr_ty);
     ops.push(raw_ptr.as_operation());
 
     // Total allocation size = payload + header
-    let alloc_size = layout.total_size as i64 + RC_HEADER_SIZE;
-    let size_op = clif::iconst(db, location, i64_ty, alloc_size);
+    let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
     ops.push(size_op.as_operation());
 
     // Call __tribute_dealloc(raw_ptr, size)

@@ -408,7 +408,7 @@ fn insert_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) 
 ///
 /// If the value was produced by `clif.call @__tribute_alloc(%size)` and `%size`
 /// is a `clif.iconst`, returns the constant value. Otherwise returns 0 (unknown).
-fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> i64 {
+fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> u64 {
     let ValueDef::OpResult(def_op) = value.def(db) else {
         return 0; // block arg — unknown
     };
@@ -439,7 +439,7 @@ fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> i64 {
     };
 
     if let Ok(iconst_op) = clif::Iconst::from_operation(db, size_op) {
-        return iconst_op.value(db);
+        return iconst_op.value(db) as u64;
     }
 
     0

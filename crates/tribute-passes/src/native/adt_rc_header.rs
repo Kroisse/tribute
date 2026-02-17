@@ -103,8 +103,8 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         let mut ops: Vec<Operation<'db>> = Vec::new();
 
         // 1. Compute allocation size (payload + RC header)
-        let alloc_size = layout.total_size as i64 + RC_HEADER_SIZE;
-        let size_op = clif::iconst(db, location, i64_ty, alloc_size);
+        let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
+        let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
         let size_val = size_op.result(db);
         ops.push(size_op.as_operation());
 
@@ -127,7 +127,7 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         ops.push(store_rtti.as_operation());
 
         // 5. Compute payload pointer = raw_ptr + 8
-        let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE);
+        let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
         ops.push(hdr_size.as_operation());
         let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
         let payload_val = payload_ptr.result(db);
