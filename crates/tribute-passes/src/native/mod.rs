@@ -14,6 +14,7 @@
 
 pub mod adt_rc_header;
 pub mod entrypoint;
+pub mod evidence;
 pub mod rc_insertion;
 pub mod rc_lowering;
 pub mod rtti;

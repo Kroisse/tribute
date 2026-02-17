@@ -70,6 +70,7 @@ use tribute_passes::generate_native_entrypoint;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_libmprompt;
 use tribute_passes::lower_cont_to_trampoline;
+use tribute_passes::lower_evidence_to_native;
 use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
@@ -408,6 +409,18 @@ pub fn stage_cont_to_libmprompt<'db>(
     lower_cont_to_libmprompt(db, module)
 }
 
+/// Evidence to Native Lowering.
+///
+/// Replaces evidence runtime function stubs with extern declarations for
+/// the native runtime, rewrites empty evidence creation and extend call sites.
+#[salsa::tracked]
+pub fn stage_evidence_to_native<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+) -> Module<'db> {
+    lower_evidence_to_native(db, module)
+}
+
 /// Dead Code Elimination (DCE).
 ///
 /// This pass removes unreachable function definitions from the module.
@@ -666,6 +679,7 @@ pub fn run_native_pipeline<'db>(
     let module = run_shared_pipeline(db, source);
 
     let module = stage_cont_to_libmprompt(db, module)?;
+    let module = stage_evidence_to_native(db, module);
 
     let module = stage_dce(db, module);
     Ok(stage_resolve_casts(db, module))

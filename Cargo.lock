@@ -1525,6 +1525,7 @@ name = "tribute-runtime"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "smallvec",
 ]
 
 [[package]]
