@@ -58,8 +58,11 @@ fn box_value<'db>(
     let mut ops = Vec::new();
 
     // 1. Allocation size (payload + RC header)
-    let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
+    let alloc_size = payload_size
+        .checked_add(RC_HEADER_SIZE)
+        .expect("allocation size overflow: payload_size + RC_HEADER_SIZE exceeds u64::MAX");
+    let alloc_size_i64 = i64::try_from(alloc_size).expect("allocation size does not fit in i64");
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size_i64);
     let size_val = size_op.result(db);
     ops.push(size_op.as_operation());
 

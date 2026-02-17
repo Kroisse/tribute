@@ -10,7 +10,9 @@ use cranelift_codegen::ir::{self as cl_ir, InstBuilder};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::dialect::{clif, core};
-use trunk_ir::{Block as IrBlock, DialectOp, DialectType, Operation, Symbol, Type, Value};
+use trunk_ir::{
+    Block as IrBlock, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef,
+};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -119,6 +121,10 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
 
         // === Constants ===
         if let Ok(c) = clif::Iconst::from_operation(db, *op) {
+            // Nil constants have no runtime representation — skip emission.
+            if core::Nil::from_type(db, c.result_ty(db)).is_some() {
+                return Ok(());
+            }
             let ty = translate_type(db, c.result_ty(db))?;
             let val = self.builder.ins().iconst(ty, c.value(db));
             self.values.insert(c.result(db), val);
@@ -225,11 +231,30 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
 
         // === Return ===
         if let Ok(ret) = clif::Return::from_operation(db, *op) {
-            let vals: Vec<cl_ir::Value> = ret
-                .values(db)
-                .iter()
-                .map(|v| self.lookup(*v))
-                .collect::<CompilationResult<_>>()?;
+            let mut vals = Vec::new();
+            for v in ret.values(db).iter() {
+                if let Some(&cl_val) = self.values.get(v) {
+                    vals.push(cl_val);
+                } else {
+                    // Only Nil-typed values may be absent from the value map
+                    // (they are intentionally not materialized). Any other
+                    // missing mapping is a codegen bug.
+                    let is_nil = match v.def(db) {
+                        ValueDef::OpResult(def_op) => {
+                            let ty = def_op.results(db)[v.index(db)];
+                            core::Nil::from_type(db, ty).is_some()
+                        }
+                        ValueDef::BlockArg(_) => false,
+                    };
+                    if !is_nil {
+                        return Err(CompilationError::codegen(format_args!(
+                            "return operand {:?} has no Cranelift value mapping \
+                             and is not Nil-typed",
+                            v,
+                        )));
+                    }
+                }
+            }
             self.builder.ins().return_(&vals);
             return Ok(());
         }
