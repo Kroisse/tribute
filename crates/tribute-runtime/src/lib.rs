@@ -4,8 +4,9 @@
 //! - Heap allocation (`__tribute_alloc`, `__tribute_dealloc`)
 //! - Delimited continuations via libmprompt (`__tribute_prompt`, `__tribute_yield`, etc.)
 //! - TLS-based yield state for handler dispatch
+//! - Evidence-based ability dispatch (`__tribute_evidence_*`)
 
-#![allow(clippy::missing_safety_doc)]
+#![allow(private_interfaces)]
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -71,6 +72,10 @@ thread_local! {
 // Allocator
 // =============================================================================
 
+/// # Safety
+///
+/// Caller must eventually free the returned pointer via `__tribute_dealloc`
+/// with the same `size`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     if size == 0 {
@@ -82,6 +87,10 @@ pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     unsafe { std::alloc::alloc(layout) }
 }
 
+/// # Safety
+///
+/// `ptr` must have been allocated by `__tribute_alloc` with the same `size`,
+/// or be null (in which case this is a no-op).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
     if ptr.is_null() || size == 0 {
@@ -142,6 +151,11 @@ unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u
 /// Establish a prompt with the given tag and run `body_fn(env)` under it.
 ///
 /// Signature: `(tag: i32, body_fn: ptr, env: ptr) -> ptr`
+///
+/// # Safety
+///
+/// `body_fn` must be a valid function pointer. `env` must be valid for the
+/// duration of `body_fn` execution (or null if unused).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_prompt(
     tag: i32,
@@ -167,6 +181,11 @@ unsafe extern "C" fn yield_handler(resume: *mut MpResume, arg: *mut u8) -> *mut 
 /// can read them. The yield handler callback captures the resume object.
 ///
 /// Signature: `(tag: i32, op_idx: i32, shift_value: ptr) -> ptr`
+///
+/// # Safety
+///
+/// `tag` must refer to a currently registered prompt. `shift_value` is
+/// passed through opaquely and must remain valid until the handler processes it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_yield(tag: i32, op_idx: i32, shift_value: *mut u8) -> *mut u8 {
     // Store yield metadata in TLS before yielding
@@ -189,6 +208,11 @@ pub unsafe extern "C" fn __tribute_yield(tag: i32, op_idx: i32, shift_value: *mu
 /// Resume a captured continuation with a value.
 ///
 /// Signature: `(continuation: ptr, value: ptr) -> ptr`
+///
+/// # Safety
+///
+/// `k` must be a valid resume object obtained from `__tribute_get_yield_continuation`.
+/// Each resume object can only be resumed once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_resume(k: *mut u8, val: *mut u8) -> *mut u8 {
     unsafe { mp_resume(k as *mut MpResume, val) }
@@ -197,6 +221,10 @@ pub unsafe extern "C" fn __tribute_resume(k: *mut u8, val: *mut u8) -> *mut u8 {
 /// Drop a captured continuation without resuming it.
 ///
 /// Signature: `(continuation: ptr) -> ()`
+///
+/// # Safety
+///
+/// `k` must be a valid resume object that has not yet been resumed or dropped.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_resume_drop(k: *mut u8) {
     unsafe { mp_resume_drop(k as *mut MpResume) }
@@ -252,6 +280,116 @@ pub extern "C" fn __tribute_reset_yield_state() {
     YIELD_RESUME.set(std::ptr::null_mut());
     YIELD_OP_IDX.set(0);
     YIELD_SHIFT_VALUE.set(std::ptr::null_mut());
+}
+
+// =============================================================================
+// Evidence-based ability dispatch
+// =============================================================================
+
+use smallvec::SmallVec;
+
+/// Marker for a single ability handler in the evidence.
+///
+/// `#[repr(C)]` so Cranelift can access individual fields by offset.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Marker {
+    pub ability_id: i32,
+    pub prompt_tag: i32,
+    pub op_table_index: i32,
+}
+
+/// Opaque evidence structure — a sorted array of `Marker`s keyed by `ability_id`.
+///
+/// IR-level code only sees `core.ptr`; this struct is never exposed across FFI
+/// except through the three `__tribute_evidence_*` functions.
+#[derive(Debug, Clone)]
+struct Evidence {
+    markers: SmallVec<[Marker; 4]>,
+}
+
+impl Evidence {
+    fn new() -> Self {
+        Self {
+            markers: SmallVec::new(),
+        }
+    }
+
+    fn lookup(&self, ability_id: i32) -> &Marker {
+        let result = self
+            .markers
+            .binary_search_by_key(&ability_id, |m| m.ability_id);
+        debug_assert!(
+            result.is_ok(),
+            "ICE: __tribute_evidence_lookup: ability_id {} not found (compiler bug)",
+            ability_id
+        );
+        match result {
+            Ok(idx) => &self.markers[idx],
+            // SAFETY: The compiler guarantees that every ability_id passed here
+            // has been previously inserted via __tribute_evidence_extend.
+            // Reaching this branch means a compiler bug.
+            Err(_) => unsafe { std::hint::unreachable_unchecked() },
+        }
+    }
+
+    fn extend(&self, marker: Marker) -> Self {
+        let mut new = self.clone();
+        let pos = new
+            .markers
+            .binary_search_by_key(&marker.ability_id, |m| m.ability_id)
+            .unwrap_or_else(|pos| pos);
+        new.markers.insert(pos, marker);
+        new
+    }
+}
+
+/// Create an empty evidence.
+///
+/// Signature: `() -> ptr`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_evidence_empty() -> *mut Evidence {
+    Box::into_raw(Box::new(Evidence::new()))
+}
+
+/// Look up a marker by ability ID. Aborts if not found (compiler bug).
+///
+/// Returns the `Marker` by value (`#[repr(C)]` struct, 3×i32).
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> Marker`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
+/// `__tribute_evidence_extend`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> Marker {
+    let ev = unsafe { &*ev };
+    *ev.lookup(ability_id)
+}
+
+/// Extend evidence with a new marker (persistent — returns a new evidence).
+///
+/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
+/// a previous `__tribute_evidence_extend` call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_extend(
+    ev: *const Evidence,
+    ability_id: i32,
+    prompt_tag: i32,
+    op_table_index: i32,
+) -> *mut Evidence {
+    let ev = unsafe { &*ev };
+    let marker = Marker {
+        ability_id,
+        prompt_tag,
+        op_table_index,
+    };
+    Box::into_raw(Box::new(ev.extend(marker)))
 }
 
 // =============================================================================
@@ -382,5 +520,77 @@ mod tests {
         PROMPT_REGISTRY.with(|reg| {
             assert!(reg.borrow().is_empty());
         });
+    }
+
+    // =========================================================================
+    // Evidence tests
+    // =========================================================================
+
+    #[test]
+    fn test_evidence_empty() {
+        let ev = __tribute_evidence_empty();
+        assert!(!ev.is_null());
+        let ev_ref = unsafe { &*ev };
+        assert!(ev_ref.markers.is_empty());
+        // Clean up
+        let _ = unsafe { Box::from_raw(ev) };
+    }
+
+    #[test]
+    fn test_evidence_extend_single() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            let ev2 = __tribute_evidence_extend(ev, 10, 1, 0);
+
+            let ev2_ref = &*ev2;
+            assert_eq!(ev2_ref.markers.len(), 1);
+            assert_eq!(ev2_ref.markers[0].ability_id, 10);
+            assert_eq!(ev2_ref.markers[0].prompt_tag, 1);
+            assert_eq!(ev2_ref.markers[0].op_table_index, 0);
+
+            // Original evidence is unchanged (persistent)
+            let ev_ref = &*ev;
+            assert!(ev_ref.markers.is_empty());
+
+            let _ = Box::from_raw(ev);
+            let _ = Box::from_raw(ev2);
+        }
+    }
+
+    #[test]
+    fn test_evidence_extend_sorted() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            // Insert in reverse order: 30, 10, 20
+            let ev = __tribute_evidence_extend(ev, 30, 3, 0);
+            let ev = __tribute_evidence_extend(ev, 10, 1, 0);
+            let ev = __tribute_evidence_extend(ev, 20, 2, 0);
+
+            let ev_ref = &*ev;
+            assert_eq!(ev_ref.markers.len(), 3);
+            // Should be sorted by ability_id
+            assert_eq!(ev_ref.markers[0].ability_id, 10);
+            assert_eq!(ev_ref.markers[1].ability_id, 20);
+            assert_eq!(ev_ref.markers[2].ability_id, 30);
+
+            // Note: we leak intermediate evidences in this test; acceptable for testing
+            let _ = Box::from_raw(ev);
+        }
+    }
+
+    #[test]
+    fn test_evidence_lookup_found() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            let ev = __tribute_evidence_extend(ev, 10, 1, 0);
+            let ev = __tribute_evidence_extend(ev, 20, 2, 5);
+
+            let marker = __tribute_evidence_lookup(ev, 20);
+            assert_eq!(marker.ability_id, 20);
+            assert_eq!(marker.prompt_tag, 2);
+            assert_eq!(marker.op_table_index, 5);
+
+            let _ = Box::from_raw(ev);
+        }
     }
 }
