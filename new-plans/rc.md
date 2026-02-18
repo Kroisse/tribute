@@ -325,7 +325,7 @@ captured stack, resuming the continuation accesses freed memory.
    TLS via `__tribute_yield_set_rc_roots`.
 
 2. **`TributeContinuation` wrapper (runtime):** Opaque wrapper around the raw
-   `mp_resume` pointer that carries an array of `RcObject` roots captured at
+   `mp_resume` pointer that carries an array of `RcRoot` captured at
    yield time. Created by `__tribute_cont_wrap_from_tls`.
 
 3. **`cont_rc` rewrite pass (Phase 2.85):** Rewrites handler dispatch code:
@@ -350,10 +350,11 @@ Drop path:     __tribute_resume_drop_safe(wrapped_k)
                runtime: mp_resume_drop → discard captured stack
 ```
 
-**Known limitation:** On the drop path, the body's normal `release` calls
-do not execute (the captured stack is discarded). This can cause leaks for
-objects that would have been released by those calls. Phase 4b will address
-this by generating cleanup functions for captured stack frames.
+**Drop path cleanup (Phase 4b):** On the drop path, the body's normal
+`release` calls do not execute (the captured stack is discarded). Phase 4b
+mitigates this via double `release_deep` per RC root in
+`__tribute_resume_drop_safe`: the first cancels the extra retain, the
+second replaces the body's missing normal release.
 
 ### Phase 4b: Continuation Cleanup on Drop Path (Implemented)
 

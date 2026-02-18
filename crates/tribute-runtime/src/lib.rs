@@ -356,7 +356,7 @@ thread_local! {
     static YIELD_RC_ROOTS: Cell<(*mut u8, usize)> = const { Cell::new((std::ptr::null_mut(), 0)) };
 }
 
-/// Store RC root pointers in TLS before yielding.
+/// Store RC root entries in TLS before yielding.
 ///
 /// The compiler calls this just before `__tribute_yield` to pass
 /// the set of live RC pointers that need protection across the yield.
@@ -365,8 +365,11 @@ thread_local! {
 ///
 /// # Safety
 ///
-/// `roots` must point to a contiguous array of `count` pointers, each of
-/// which is a valid RC-managed payload pointer.
+/// `roots` must point to a contiguous array of `count` entries, each 16
+/// bytes laid out as `(ptr: *mut u8, alloc_size: u64)` in native byte
+/// order. The buffer must have been allocated via `__tribute_alloc` with
+/// size `count * 16`. Ownership of the buffer is transferred to the
+/// runtime: `__tribute_cont_wrap_from_tls` will free it after copying.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_yield_set_rc_roots(roots: *mut u8, count: i32) {
     YIELD_RC_ROOTS.set((roots, count as usize));
