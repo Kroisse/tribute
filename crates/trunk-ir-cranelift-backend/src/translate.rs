@@ -323,7 +323,7 @@ fn collect_and_declare_rtti(
 
     let deep_release_sym = Symbol::new("__tribute_deep_release");
     let deep_release_func_id = obj_module
-        .declare_function("__tribute_deep_release", Linkage::Local, &deep_release_sig)
+        .declare_function("__tribute_deep_release", Linkage::Export, &deep_release_sig)
         .map_err(|e| CompilationError::codegen(format!("{e}")))?;
     func_ids.insert(deep_release_sym, deep_release_func_id);
 
