@@ -20,6 +20,10 @@ pub(super) const FFI_NAMES: &[&str] = &[
     "__tribute_get_yield_continuation",
     "__tribute_get_yield_shift_value",
     "__tribute_reset_yield_state",
+    "__tribute_yield_set_rc_roots",
+    "__tribute_cont_wrap_from_tls",
+    "__tribute_resume_safe",
+    "__tribute_resume_drop_safe",
 ];
 
 /// Ensure all libmprompt FFI function declarations are present in the module.
@@ -103,6 +107,20 @@ pub(super) fn ensure_libmprompt_ffi<'db>(
 
     // __tribute_reset_yield_state() -> ()
     declare("__tribute_reset_yield_state", &[], nil_ty);
+
+    // --- RC-safe continuation wrapping ---
+
+    // __tribute_yield_set_rc_roots(roots: ptr, count: i32) -> ()
+    declare("__tribute_yield_set_rc_roots", &[ptr_ty, i32_ty], nil_ty);
+
+    // __tribute_cont_wrap_from_tls(resume: ptr) -> ptr
+    declare("__tribute_cont_wrap_from_tls", &[ptr_ty], ptr_ty);
+
+    // __tribute_resume_safe(wrapped: ptr, val: ptr) -> ptr
+    declare("__tribute_resume_safe", &[ptr_ty, ptr_ty], ptr_ty);
+
+    // __tribute_resume_drop_safe(wrapped: ptr) -> ()
+    declare("__tribute_resume_drop_safe", &[ptr_ty], nil_ty);
 
     // Check if anything was added
     if new_ops.len() == entry_block.operations(db).len() {
