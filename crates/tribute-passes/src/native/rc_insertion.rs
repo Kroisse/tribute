@@ -607,27 +607,38 @@ fn insert_rc_in_block<'db>(
         // represent this as: alloc array, store each root, call set_rc_roots.
 
         let roots_count = live_across_yield.len();
-        let array_size = (roots_count * 8) as i64; // ptr is 8 bytes on 64-bit
+        // Each entry is 16 bytes: (ptr: 8 bytes, alloc_size: 8 bytes)
+        let array_size = (roots_count * 16) as i64;
 
-        // Allocate temporary array on heap (will be read and freed by runtime)
-        let alloc_size = clif::iconst(db, loc, i64_ty, array_size);
-        before_ops.push(alloc_size.as_operation());
+        // Allocate temporary array on heap.
+        // Ownership transfers to __tribute_cont_wrap_from_tls (which frees it
+        // after copying). On the resume path, the buffer is already freed by
+        // the runtime, so no post-yield dealloc is needed.
+        let alloc_size_const = clif::iconst(db, loc, i64_ty, array_size);
+        before_ops.push(alloc_size_const.as_operation());
 
         let alloc_call = clif::call(
             db,
             loc,
-            vec![alloc_size.result(db)],
+            vec![alloc_size_const.result(db)],
             ptr_ty,
             Symbol::new("__tribute_alloc"),
         );
         before_ops.push(alloc_call.as_operation());
         let roots_ptr = alloc_call.result(db);
 
-        // Store each root pointer into the array
+        // Store each (ptr, alloc_size) pair into the array
         for (i, v) in live_across_yield.iter().enumerate() {
-            let offset = (i * 8) as i32;
-            let store = clif::store(db, loc, *v, roots_ptr, offset);
-            before_ops.push(store.as_operation());
+            let offset = (i * 16) as i32;
+            // Store the pointer
+            let store_ptr = clif::store(db, loc, *v, roots_ptr, offset);
+            before_ops.push(store_ptr.as_operation());
+            // Store the alloc_size (compile-time inferred)
+            let obj_alloc_size = infer_alloc_size(db, *v);
+            let size_const = clif::iconst(db, loc, i64_ty, obj_alloc_size as i64);
+            before_ops.push(size_const.as_operation());
+            let store_size = clif::store(db, loc, size_const.result(db), roots_ptr, offset + 8);
+            before_ops.push(store_size.as_operation());
         }
 
         // Call __tribute_yield_set_rc_roots(roots_ptr, count)
@@ -643,24 +654,15 @@ fn insert_rc_in_block<'db>(
         );
         before_ops.push(set_roots_call.as_operation());
 
-        // After yield (resume path): release each live ptr to cancel the extra retain
+        // After yield (resume path): release each live ptr to cancel the extra retain.
+        // No dealloc of the roots buffer here — on the resume path, the handler
+        // already called __tribute_cont_wrap_from_tls which freed the buffer.
+        // If the body resumes normally, the buffer was already consumed.
         let after_ops = plan.after.entry(op_idx).or_default();
 
-        // Dealloc the temporary roots array
-        let dealloc_size = clif::iconst(db, loc, i64_ty, array_size);
-        after_ops.push(dealloc_size.as_operation());
-        let dealloc_call = clif::call(
-            db,
-            loc,
-            vec![roots_ptr, dealloc_size.result(db)],
-            nil_ty,
-            Symbol::new("__tribute_dealloc"),
-        );
-        after_ops.push(dealloc_call.as_operation());
-
         for v in &live_across_yield {
-            let alloc_size = infer_alloc_size(db, *v);
-            let release_op = tribute_rt::release(db, loc, *v, alloc_size);
+            let obj_alloc_size = infer_alloc_size(db, *v);
+            let release_op = tribute_rt::release(db, loc, *v, obj_alloc_size);
             after_ops.push(release_op.as_operation());
         }
     }
@@ -1180,11 +1182,11 @@ mod tests {
             "should set RC roots before yield: {ir}"
         );
 
-        // Should have __tribute_alloc for roots array
-        // Note: the original __tribute_alloc for the roots array will appear
+        // Post-yield dealloc is removed — buffer ownership transfers to
+        // __tribute_cont_wrap_from_tls which frees it after copying.
         assert!(
-            ir.contains("__tribute_dealloc"),
-            "should dealloc roots array after yield: {ir}"
+            !ir.contains("__tribute_dealloc"),
+            "should NOT dealloc roots array after yield (ownership transferred): {ir}"
         );
     }
 
