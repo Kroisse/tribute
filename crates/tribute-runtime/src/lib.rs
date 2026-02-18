@@ -301,6 +301,7 @@ struct RcObject(NonNull<u8>);
 
 impl RcObject {
     /// Increment the reference count.
+    #[cfg(test)]
     unsafe fn retain(&self) {
         let rc_addr = unsafe { self.0.as_ptr().sub(RC_HEADER_SIZE) } as *mut u32;
         let rc = unsafe { rc_addr.read() };
@@ -417,10 +418,9 @@ pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_resume_safe(wrapped: *mut u8, val: *mut u8) -> *mut u8 {
     let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
-    let result = unsafe { mp_resume(cont.resume, val) };
-    // cont is dropped here — wrapper freed, rc_roots Vec freed
+    // cont is dropped after this call — wrapper freed, rc_roots Vec freed
     // RC roots are NOT released; the compiler handles that on the resume path
-    result
+    unsafe { mp_resume(cont.resume, val) }
 }
 
 /// Drop a wrapped continuation without resuming it.
@@ -775,7 +775,10 @@ mod tests {
     #[test]
     fn test_yield_set_rc_roots_stores_and_clears() {
         // Set roots
-        let mut roots: [*mut u8; 2] = [1usize as *mut u8, 2usize as *mut u8];
+        let mut roots: [*mut u8; 2] = [
+            std::ptr::dangling_mut::<u8>(),
+            std::ptr::without_provenance_mut(2),
+        ];
         unsafe {
             __tribute_yield_set_rc_roots(roots.as_mut_ptr() as *mut u8, 2);
         }
