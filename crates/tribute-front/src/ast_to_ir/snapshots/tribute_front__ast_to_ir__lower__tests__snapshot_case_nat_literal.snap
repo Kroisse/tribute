@@ -1,0 +1,19 @@
+---
+source: crates/tribute-front/src/ast_to_ir/lower.rs
+assertion_line: 4661
+expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
+---
+core.module @test {
+  func.func @classify(%n: core.i32) -> core.nil {
+    %0 = arith.const {value = 0} : core.i32
+    %1 = arith.cmp_eq %n, %0 : core.i1
+    %2 = scf.if %1 : core.i32 {
+      %3 = arith.const {value = 10} : core.i32
+      scf.yield %3
+    } {
+      %4 = arith.const {value = 20} : core.i32
+      scf.yield %4
+    }
+    func.return %2
+  }
+}

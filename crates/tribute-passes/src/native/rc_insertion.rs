@@ -1133,6 +1133,25 @@ mod tests {
         insta::assert_snapshot!(ir);
     }
 
+    #[salsa_test]
+    fn test_snapshot_release_before_jump(db: &salsa::DatabaseImpl) {
+        // ptr value passed as clif.jump operand — release must be inserted BEFORE the jump
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @branch_with_ptr {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        clif.jump %p
+                    ^target(%q: core.ptr):
+                        clif.return %q
+                }
+            }
+            "#,
+        );
+        insta::assert_snapshot!(ir);
+    }
+
     // === Yield point tests ===
 
     #[salsa_test]

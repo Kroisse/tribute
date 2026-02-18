@@ -4586,6 +4586,78 @@ mod tests {
         assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
     }
 
+    /// Tracked helper: build case on Nat with literal patterns.
+    ///
+    /// ```tribute
+    /// fn classify(n: Nat) -> Nat {
+    ///   case n {
+    ///     0 => 10,
+    ///     _ => 20,
+    ///   }
+    /// }
+    /// ```
+    #[salsa::tracked]
+    fn test_lower_case_nat_literal_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let nat_ty = AstType::new(db, TypeKind::Nat);
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), nat_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Literal pattern: 0
+        let pat_zero = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Literal(LiteralPattern::Nat(0)),
+        );
+
+        let arms = vec![
+            arm(pat_zero, nat_lit_expr(10)),
+            arm(wildcard_pattern(), nat_lit_expr(20)),
+        ];
+
+        // Use a specific NodeId for the case expression so we can register its type
+        let case_node_id = NodeId::from_raw(200);
+        let case = Expr::new(case_node_id, ExprKind::Case { scrutinee, arms });
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("classify"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        let node_types: HashMap<NodeId, AstType<'db>> =
+            vec![(case_node_id, nat_ty)].into_iter().collect();
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            node_types,
+        )
+    }
+
+    #[salsa_test]
+    fn test_snapshot_case_nat_literal(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_case_nat_literal_helper(db, path);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
+    }
+
     #[salsa_test]
     fn test_snapshot_enum_decl(db: &salsa::DatabaseImpl) {
         use crate::ast::{EnumDecl, VariantDecl};
