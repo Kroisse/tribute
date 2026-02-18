@@ -137,11 +137,14 @@ fn is_return_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
     clif::Return::from_operation(db, *op).is_ok()
 }
 
-/// Check if an operation is a block terminator (jump, brif, or return).
+/// Check if an operation is a block terminator.
 fn is_terminator_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
     clif::Return::from_operation(db, *op).is_ok()
         || clif::Jump::from_operation(db, *op).is_ok()
         || clif::Brif::from_operation(db, *op).is_ok()
+        || clif::Trap::from_operation(db, *op).is_ok()
+        || clif::ReturnCall::from_operation(db, *op).is_ok()
+        || clif::BrTable::from_operation(db, *op).is_ok()
 }
 
 /// Check if an operation is `clif.load`.

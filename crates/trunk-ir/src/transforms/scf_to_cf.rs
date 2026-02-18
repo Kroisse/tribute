@@ -397,9 +397,7 @@ fn lower_region_to_br<'db>(
                 let new_op = transform_op_regions(db, op);
                 // If the operation changed, map old result values to new ones
                 if new_op != *op {
-                    let old_results = op.results(db);
-                    for (i, &old_ty) in old_results.iter().enumerate() {
-                        let _ = old_ty;
+                    for i in 0..op.results(db).len() {
                         let old_val = op.result(db, i);
                         let new_val = new_op.result(db, i);
                         if old_val != new_val {
