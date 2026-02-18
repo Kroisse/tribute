@@ -308,21 +308,62 @@ tribute_rt.release(ptr) ->
         call %release_fn(ptr)
 ```
 
-### Phase 4: Continuations (Deferred)
+### Phase 4a: Continuation RC Protection (Implemented)
 
-**Goal:** Integrate RC with libmprompt-based continuations.
+**Goal:** Prevent use-after-free when handlers release RC pointers that
+live across `mp_yield` boundaries.
 
-**Challenges:**
+**Problem:** When `mp_yield` captures a continuation, the stack segment is
+copied to the heap. If the handler releases a pointer that was live on the
+captured stack, resuming the continuation accesses freed memory.
 
-- Continuations capture stack frames with RC pointers
-- Stack frames are heap-allocated by libmprompt
-- Need to track and release captured pointers when continuation is dropped
+**Solution — three components:**
 
-**Approach:**
+1. **`insert_rc` extension (Phase 2.8):** At each `__tribute_yield` call site,
+   inserts extra `retain` for all live RC pointers before yield, and matching
+   `release` after yield returns (resume path). Also stores the RC roots in
+   TLS via `__tribute_yield_set_rc_roots`.
 
-- Mark continuation stack frames as RC objects
-- Generate release functions for continuation frames
-- Ensure proper RC semantics across `yield`/`resume` boundaries
+2. **`TributeContinuation` wrapper (runtime):** Opaque wrapper around the raw
+   `mp_resume` pointer that carries an array of `RcObject` roots captured at
+   yield time. Created by `__tribute_cont_wrap_from_tls`.
+
+3. **`cont_rc` rewrite pass (Phase 2.85):** Rewrites handler dispatch code:
+   - `__tribute_get_yield_continuation()` result → wrapped via
+     `__tribute_cont_wrap_from_tls`
+   - `__tribute_resume` → `__tribute_resume_safe`
+   - `__tribute_resume_drop` → `__tribute_resume_drop_safe`
+
+**RC flow:**
+
+```text
+Before yield:  retain(ptr)     → refcount + 1 (capture protection)
+               store ptr in TLS RC roots
+               __tribute_yield(...)
+
+Resume path:   yield returns
+               release(ptr)    → refcount - 1 (cancel extra retain)
+               body continues with normal release path
+
+Drop path:     __tribute_resume_drop_safe(wrapped_k)
+               runtime: release each rc_root → refcount - 1
+               runtime: mp_resume_drop → discard captured stack
+```
+
+**Known limitation:** On the drop path, the body's normal `release` calls
+do not execute (the captured stack is discarded). This can cause leaks for
+objects that would have been released by those calls. Phase 4b will address
+this by generating cleanup functions for captured stack frames.
+
+### Phase 4b: Continuation Cleanup Functions (Deferred)
+
+**Goal:** Generate per-yield-site cleanup functions that release all RC
+objects that the body would have released between yield and function exit.
+
+**Approach:** At each yield site, statically determine which RC pointers
+would be released on the normal execution path. Generate a cleanup function
+that performs those releases, and attach it to the `TributeContinuation`
+wrapper for invocation during `resume_drop`.
 
 ---
 
@@ -418,6 +459,6 @@ field_offsets[2] = 8   // c at byte 8
 
 - **Cycle detection:** Weak references? Tracing GC fallback?
 - **Thread-safety:** Atomic refcount for multi-threaded code?
-- **Continuation integration:** libmprompt stack frame RC tracking
+- **Continuation cleanup:** Phase 4b cleanup functions for drop-path leaks
 - **FFI boundaries:** How to handle RC objects at C FFI boundaries?
 - **Optimization:** Compile-time escape analysis to elide RC?
