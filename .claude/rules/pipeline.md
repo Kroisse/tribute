@@ -44,10 +44,10 @@ The pipeline is divided into three main phases:
 | Stage | Function | Description |
 | ----- | -------- | ----------- |
 | cont_to_libmprompt | `lower_cont_to_libmprompt(db, module)` | Lower `cont.*` via libmprompt FFI calls |
+| lower_to_clif | `func_to_clif`, `arith_to_clif`, etc. | Lower `func.*`/`arith.*`/`scf.*`/`adt.*` to `clif.*` |
 | insert_rc | `insert_rc(db, module)` | Insert `tribute_rt.retain`/`release` for RC (Phase 2.8) |
 | cont_rc | `rewrite_cont_rc(db, module)` | Rewrite continuation ops to RC-safe wrappers (Phase 2.85) |
 | lower_rc | `lower_rc(db, module)` | Lower `tribute_rt.*` to inline `clif.*` ops (Phase 3.5) |
-| lower_to_clif | `lower_to_clif(db, module)` | Lower `func.*`/`arith.*`/`scf.*`/`adt.*` to `clif.*` |
 | compile_to_native | `emit_module_to_native(db, module)` | Emit `clif.*` to native object file via Cranelift |
 
 ## Entry Point

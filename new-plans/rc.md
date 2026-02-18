@@ -357,13 +357,25 @@ this by generating cleanup functions for captured stack frames.
 
 ### Phase 4b: Continuation Cleanup Functions (Deferred)
 
-**Goal:** Generate per-yield-site cleanup functions that release all RC
-objects that the body would have released between yield and function exit.
+**Goal:** Eliminate resource leaks on the drop path when a captured
+continuation is discarded without being resumed.
+
+**Problem:** When `mp_resume_drop` discards a captured continuation, the
+captured stack segment is freed but the body function's remaining code
+never executes. This means any `release`/`dealloc` calls that would have
+run between the yield point and function exit are skipped, leaking the
+objects they would have freed.
 
 **Approach:** At each yield site, statically determine which RC pointers
 would be released on the normal execution path. Generate a cleanup function
 that performs those releases, and attach it to the `TributeContinuation`
 wrapper for invocation during `resume_drop`.
+
+**Additional fix:** The temporary roots buffer (heap-allocated by `insert_rc`
+via `__tribute_alloc`) is freed on the resume path by post-yield
+`__tribute_dealloc`, but leaked on the drop path for the same reason.
+Move buffer ownership into `__tribute_cont_wrap_from_tls` (free after
+copying) and remove the post-yield dealloc to avoid double-free.
 
 ---
 
