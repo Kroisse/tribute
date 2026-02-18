@@ -288,47 +288,48 @@ pub extern "C" fn __tribute_reset_yield_state() {
 // RC-safe continuation wrapping
 // =============================================================================
 
+// In production builds, __tribute_deep_release is provided by the compiler
+// (generated in trunk-ir-cranelift-backend with RTTI dispatch). In tests,
+// we use a stub that performs shallow dealloc.
+#[cfg(not(test))]
+unsafe extern "C" {
+    fn __tribute_deep_release(ptr: *mut u8, alloc_size: u64);
+}
+
+/// Test stub for `__tribute_deep_release`: performs shallow dealloc only.
+#[cfg(test)]
+unsafe extern "C" fn __tribute_deep_release(ptr: *mut u8, alloc_size: u64) {
+    if !ptr.is_null() {
+        let raw = unsafe { ptr.sub(RC_HEADER_SIZE) };
+        unsafe { __tribute_dealloc(raw, alloc_size) };
+    }
+}
+
 /// Size of the RC header prepended to every heap-allocated object.
 /// Layout: `[refcount: u32][-4: rtti_idx: u32][0: payload...]`
 const RC_HEADER_SIZE: usize = 8;
 
-/// Opaque handle to an RC-managed heap object.
+/// An RC root captured at yield time: payload pointer + allocation size.
 ///
-/// `self.0` points at the payload (offset 0); the refcount lives at
-/// `self.0 - RC_HEADER_SIZE`.
+/// `ptr` points at the payload (offset 0); the refcount lives at `ptr - 8`.
+/// `alloc_size` is the total allocation size (header + payload), used for
+/// deep release when refcount reaches 0.
 #[derive(Clone, Copy)]
-struct RcObject(NonNull<u8>);
+struct RcRoot {
+    ptr: NonNull<u8>,
+    alloc_size: u64,
+}
 
-impl RcObject {
-    /// Increment the reference count.
-    #[cfg(test)]
-    unsafe fn retain(&self) {
-        let rc_addr = unsafe { self.0.as_ptr().sub(RC_HEADER_SIZE) } as *mut u32;
-        let rc = unsafe { rc_addr.read() };
-        unsafe { rc_addr.write(rc + 1) };
-    }
-
-    /// Decrement the reference count. If it reaches zero, perform shallow dealloc.
-    ///
-    /// Phase 4a limitation: only does shallow free (no recursive release of
-    /// pointer fields). Deep release will be added in Phase 4b.
-    unsafe fn release(&self) {
-        let rc_addr = unsafe { self.0.as_ptr().sub(RC_HEADER_SIZE) } as *mut u32;
+impl RcRoot {
+    /// Decrement refcount; if it reaches 0, call `__tribute_deep_release`
+    /// which handles RTTI-dispatched recursive field release and deallocation.
+    unsafe fn release_deep(&self) {
+        let rc_addr = unsafe { self.ptr.as_ptr().sub(RC_HEADER_SIZE) } as *mut u32;
         let rc = unsafe { rc_addr.read() };
         let new_rc = rc - 1;
         unsafe { rc_addr.write(new_rc) };
         if new_rc == 0 {
-            // Shallow dealloc — pointer fields are NOT recursively released.
-            // This is acceptable for Phase 4a because:
-            // 1. On the drop path, the body's normal releases didn't run,
-            //    so field references will leak regardless (Phase 4b fix).
-            // 2. We still free the object itself to avoid the worst leaks.
-            let raw = unsafe { self.0.as_ptr().sub(RC_HEADER_SIZE) };
-            // Size 0 means we don't know the allocation size; __tribute_dealloc
-            // treats (ptr, 0) as a no-op, so we skip dealloc for unknown sizes.
-            // In practice, the refcount rarely reaches 0 here (the extra retain
-            // is canceled, but other references typically keep the object alive).
-            let _ = raw;
+            unsafe { __tribute_deep_release(self.ptr.as_ptr(), self.alloc_size) };
         }
     }
 }
@@ -338,7 +339,7 @@ impl RcObject {
 /// Opaque to compiled code — only accessed through `__tribute_*_safe` FFI.
 struct TributeContinuation {
     resume: *mut MpResume,
-    rc_roots: Box<[RcObject]>,
+    rc_roots: Box<[RcRoot]>,
 }
 
 thread_local! {
@@ -371,6 +372,11 @@ pub unsafe extern "C" fn __tribute_yield_set_rc_roots(roots: *mut u8, count: i32
 /// packages them together with the resume pointer. The TLS slot is cleared
 /// after consumption.
 ///
+/// The roots buffer uses a `(ptr, alloc_size)` pair layout (16 bytes per entry).
+/// After copying, the original buffer is freed via `__tribute_dealloc` to
+/// prevent leaking (the post-yield dealloc in the body never runs on the
+/// drop path).
+///
 /// **Note:** Retains are NOT done here — the compiler inserts `tribute_rt.retain`
 /// before the yield.
 ///
@@ -385,14 +391,27 @@ pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u
     YIELD_RC_ROOTS.set((std::ptr::null_mut(), 0));
 
     let rc_roots = if roots_ptr.is_null() || count == 0 {
-        Box::new([]) as Box<[RcObject]>
+        Box::new([]) as Box<[RcRoot]>
     } else {
-        let ptrs = unsafe { std::slice::from_raw_parts(roots_ptr as *const *mut u8, count) };
-        let objects: Vec<RcObject> = ptrs
-            .iter()
-            .filter_map(|&p| NonNull::new(p).map(RcObject))
-            .collect();
-        objects.into_boxed_slice()
+        // Parse (ptr, alloc_size) pairs: each entry is 16 bytes
+        let mut roots = Vec::with_capacity(count);
+        for i in 0..count {
+            let entry_base = unsafe { roots_ptr.add(i * 16) };
+            let ptr_val = unsafe { (entry_base as *const *mut u8).read() };
+            let alloc_size = unsafe { (entry_base.add(8) as *const u64).read() };
+            if let Some(nn) = NonNull::new(ptr_val) {
+                roots.push(RcRoot {
+                    ptr: nn,
+                    alloc_size,
+                });
+            }
+        }
+
+        // Free the original roots buffer (ownership transferred here)
+        let buf_size = (count * 16) as u64;
+        unsafe { __tribute_dealloc(roots_ptr, buf_size) };
+
+        roots.into_boxed_slice()
     };
 
     let cont = Box::new(TributeContinuation {
@@ -425,9 +444,13 @@ pub unsafe extern "C" fn __tribute_resume_safe(wrapped: *mut u8, val: *mut u8) -
 
 /// Drop a wrapped continuation without resuming it.
 ///
-/// Releases each RC root (to cancel the extra retain the compiler inserted
-/// before yielding), then calls `mp_resume_drop` to discard the captured
-/// stack, and frees the wrapper.
+/// For each RC root, performs **two** deep releases:
+/// 1. Cancel the extra retain inserted by the compiler before yield
+/// 2. Replace the body's normal release that will never execute
+///    (since `mp_resume_drop` discards the captured stack)
+///
+/// Then calls `mp_resume_drop` to discard the captured stack, and frees
+/// the wrapper.
 ///
 /// Signature: `(wrapped: ptr) -> ()`
 ///
@@ -439,9 +462,13 @@ pub unsafe extern "C" fn __tribute_resume_safe(wrapped: *mut u8, val: *mut u8) -
 pub unsafe extern "C" fn __tribute_resume_drop_safe(wrapped: *mut u8) {
     let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
 
-    // Release each RC root — cancels the extra retain inserted before yield
+    // Two releases per root:
+    // 1st: cancel the extra retain inserted before yield (refcount N+1 → N)
+    // 2nd: replace the body's normal release that won't run (refcount N → N-1)
+    // The 2nd release may reach refcount 0 → deep release via RTTI dispatch
     for root in cont.rc_roots.iter() {
-        unsafe { root.release() };
+        unsafe { root.release_deep() }; // cancel extra retain
+        unsafe { root.release_deep() }; // replace body's missing release
     }
 
     // Drop the captured continuation (without executing its body)
@@ -823,8 +850,8 @@ mod tests {
     #[test]
     fn test_cont_wrap_from_tls_with_roots() {
         // Allocate a fake RC object (header + payload)
-        let alloc_size = RC_HEADER_SIZE + 8;
-        let raw = unsafe { __tribute_alloc(alloc_size as u64) };
+        let alloc_size = (RC_HEADER_SIZE + 8) as u64;
+        let raw = unsafe { __tribute_alloc(alloc_size) };
         assert!(!raw.is_null());
 
         // Initialize refcount to 2 (one for "normal" use + one extra retain)
@@ -834,13 +861,19 @@ mod tests {
         }
         let payload = unsafe { raw.add(RC_HEADER_SIZE) };
 
-        // Set roots in TLS
-        let mut roots = [payload];
+        // Set roots in TLS using (ptr, alloc_size) pair layout (16 bytes/entry)
+        // Allocate a roots buffer via __tribute_alloc (will be freed by cont_wrap)
+        let roots_buf = unsafe { __tribute_alloc(16) }; // 1 entry × 16 bytes
+        assert!(!roots_buf.is_null());
         unsafe {
-            __tribute_yield_set_rc_roots(roots.as_mut_ptr() as *mut u8, 1);
+            (roots_buf as *mut *mut u8).write(payload); // ptr
+            (roots_buf.add(8) as *mut u64).write(alloc_size); // alloc_size
+        }
+        unsafe {
+            __tribute_yield_set_rc_roots(roots_buf, 1);
         }
 
-        // Wrap
+        // Wrap — this also frees the roots_buf
         let fake_resume = 0xCAFE_usize as *mut u8;
         let wrapped = unsafe { __tribute_cont_wrap_from_tls(fake_resume) };
         assert!(!wrapped.is_null());
@@ -848,38 +881,43 @@ mod tests {
         // Verify wrapper
         let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
         assert_eq!(cont.rc_roots.len(), 1);
-        assert_eq!(cont.rc_roots[0].0.as_ptr(), payload);
+        assert_eq!(cont.rc_roots[0].ptr.as_ptr(), payload);
+        assert_eq!(cont.rc_roots[0].alloc_size, alloc_size);
 
         // Clean up — dealloc the fake object
-        unsafe { __tribute_dealloc(raw, alloc_size as u64) };
+        unsafe { __tribute_dealloc(raw, alloc_size) };
     }
 
     #[test]
-    fn test_rc_object_retain_release() {
+    fn test_rc_root_release_deep_decrements() {
         // Allocate a fake RC object
-        let alloc_size = RC_HEADER_SIZE + 8;
-        let raw = unsafe { __tribute_alloc(alloc_size as u64) };
+        let alloc_size = (RC_HEADER_SIZE + 8) as u64;
+        let raw = unsafe { __tribute_alloc(alloc_size) };
         assert!(!raw.is_null());
 
-        // Initialize refcount to 1
+        // Initialize refcount to 3
         unsafe {
-            (raw as *mut u32).write(1); // refcount = 1
+            (raw as *mut u32).write(3); // refcount = 3
             (raw.add(4) as *mut u32).write(0); // rtti_idx = 0
         }
         let payload = unsafe { raw.add(RC_HEADER_SIZE) };
-        let obj = RcObject(NonNull::new(payload).unwrap());
+        let root = RcRoot {
+            ptr: NonNull::new(payload).unwrap(),
+            alloc_size,
+        };
 
-        // Retain → refcount should be 2
-        unsafe { obj.retain() };
+        // release_deep → refcount should be 2
+        unsafe { root.release_deep() };
         let rc = unsafe { (raw as *mut u32).read() };
         assert_eq!(rc, 2);
 
-        // Release → refcount should be 1
-        unsafe { obj.release() };
+        // release_deep → refcount should be 1
+        unsafe { root.release_deep() };
         let rc = unsafe { (raw as *mut u32).read() };
         assert_eq!(rc, 1);
 
-        // Clean up
-        unsafe { __tribute_dealloc(raw, alloc_size as u64) };
+        // Clean up (don't release to 0 here since __tribute_deep_release
+        // is a compiler-generated symbol not available in unit tests)
+        unsafe { __tribute_dealloc(raw, alloc_size) };
     }
 }

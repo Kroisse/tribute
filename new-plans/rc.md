@@ -355,27 +355,48 @@ do not execute (the captured stack is discarded). This can cause leaks for
 objects that would have been released by those calls. Phase 4b will address
 this by generating cleanup functions for captured stack frames.
 
-### Phase 4b: Continuation Cleanup Functions (Deferred)
+### Phase 4b: Continuation Cleanup on Drop Path (Implemented)
 
 **Goal:** Eliminate resource leaks on the drop path when a captured
 continuation is discarded without being resumed.
 
-**Problem:** When `mp_resume_drop` discards a captured continuation, the
-captured stack segment is freed but the body function's remaining code
-never executes. This means any `release`/`dealloc` calls that would have
-run between the yield point and function exit are skipped, leaking the
-objects they would have freed.
+**Two problems solved:**
 
-**Approach:** At each yield site, statically determine which RC pointers
-would be released on the normal execution path. Generate a cleanup function
-that performs those releases, and attach it to the `TributeContinuation`
-wrapper for invocation during `resume_drop`.
+1. **Roots buffer leak:** The temporary roots array (heap-allocated by
+   `insert_rc` via `__tribute_alloc`) was freed only on the resume path
+   by post-yield `__tribute_dealloc`, but leaked on the drop path.
+   **Fix:** `__tribute_cont_wrap_from_tls` now frees the original buffer
+   after copying its contents. The post-yield dealloc was removed to
+   prevent double-free.
 
-**Additional fix:** The temporary roots buffer (heap-allocated by `insert_rc`
-via `__tribute_alloc`) is freed on the resume path by post-yield
-`__tribute_dealloc`, but leaked on the drop path for the same reason.
-Move buffer ownership into `__tribute_cont_wrap_from_tls` (free after
-copying) and remove the post-yield dealloc to avoid double-free.
+2. **Lost normal releases:** When `mp_resume_drop` discards a captured
+   continuation, the body's remaining `release` calls never execute,
+   leaking objects. **Fix:** `__tribute_resume_drop_safe` now performs
+   **two** deep releases per RC root:
+   - 1st: cancel the extra retain (refcount N+1 → N)
+   - 2nd: replace the body's missing normal release (refcount N → N-1)
+
+**Implementation details:**
+
+- **Roots array layout changed** from `[ptr, ...]` (8 bytes/entry) to
+  `[(ptr, alloc_size), ...]` (16 bytes/entry). The `alloc_size` is
+  determined at compile time by `infer_alloc_size()`.
+
+- **`RcRoot` struct** replaces `RcObject` in the runtime:
+  `RcRoot { ptr: NonNull<u8>, alloc_size: u64 }`
+
+- **`__tribute_deep_release`** is now exported (`Linkage::Export`) from
+  compiled code, allowing the runtime to call it for RTTI-dispatched
+  recursive field release when refcount reaches 0.
+
+- **`release_deep()`**: decrements refcount; if 0, calls
+  `__tribute_deep_release(ptr, alloc_size)` for full cleanup.
+
+**Known limitation:** When `infer_alloc_size()` returns 0 (e.g., for block
+arguments with unknown provenance), the deep release's shallow path calls
+`__tribute_dealloc(raw, 0)` which is a no-op — the object leaks. This is
+the same constraint as normal release paths. Adding size info to the RTTI
+table would fix this (separate future work).
 
 ---
 
@@ -471,6 +492,6 @@ field_offsets[2] = 8   // c at byte 8
 
 - **Cycle detection:** Weak references? Tracing GC fallback?
 - **Thread-safety:** Atomic refcount for multi-threaded code?
-- **Continuation cleanup:** Phase 4b cleanup functions for drop-path leaks
+- **Continuation cleanup:** ~~Phase 4b cleanup functions for drop-path leaks~~ (implemented)
 - **FFI boundaries:** How to handle RC objects at C FFI boundaries?
 - **Optimization:** Compile-time escape analysis to elide RC?
