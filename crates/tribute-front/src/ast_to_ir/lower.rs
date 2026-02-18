@@ -1767,9 +1767,10 @@ fn emit_literal_check<'db>(
     let bool_ty = builder.ctx.bool_type();
     match lit {
         LiteralPattern::Nat(n) => {
+            let value = i32::try_from(*n).expect("literal pattern Nat value exceeds i32 range");
             let const_val = builder
                 .block
-                .op(arith::Const::i32(builder.db(), location, *n as i32))
+                .op(arith::Const::i32(builder.db(), location, value))
                 .result(builder.db());
             Some(
                 builder
@@ -1785,9 +1786,10 @@ fn emit_literal_check<'db>(
             )
         }
         LiteralPattern::Int(n) => {
+            let value = i32::try_from(*n).expect("literal pattern Int value exceeds i32 range");
             let const_val = builder
                 .block
-                .op(arith::Const::i32(builder.db(), location, *n as i32))
+                .op(arith::Const::i32(builder.db(), location, value))
                 .result(builder.db());
             Some(
                 builder
@@ -4656,6 +4658,71 @@ mod tests {
         let path = PathId::new(db, "test.trb".to_owned());
         let ir_module = test_lower_case_nat_literal_helper(db, path);
         assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
+    }
+
+    // === Nat literal range check regression test ===
+
+    /// Tracked helper: attempt to lower a case with Nat literal exceeding i32 range.
+    /// This should panic with a descriptive message.
+    #[salsa::tracked]
+    fn test_lower_case_nat_literal_overflow_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let nat_ty = AstType::new(db, TypeKind::Nat);
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), nat_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Literal pattern with u64::MAX — exceeds i32 range
+        let pat_overflow = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Literal(LiteralPattern::Nat(u64::MAX)),
+        );
+
+        let arms = vec![
+            arm(pat_overflow, nat_lit_expr(10)),
+            arm(wildcard_pattern(), nat_lit_expr(20)),
+        ];
+
+        let case_node_id = NodeId::from_raw(200);
+        let case = Expr::new(case_node_id, ExprKind::Case { scrutinee, arms });
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("classify"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        let node_types: HashMap<NodeId, AstType<'db>> =
+            vec![(case_node_id, nat_ty)].into_iter().collect();
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            node_types,
+        )
+    }
+
+    #[salsa_test]
+    #[should_panic(expected = "literal pattern Nat value exceeds i32 range")]
+    fn test_nat_literal_exceeding_i32(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        test_lower_case_nat_literal_overflow_helper(db, path);
     }
 
     #[salsa_test]
