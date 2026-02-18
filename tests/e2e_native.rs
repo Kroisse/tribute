@@ -132,7 +132,6 @@ fn main() {
 // =============================================================================
 
 #[test]
-#[ignore = "native backend: case/pattern matching requires tribute_rt.any support"]
 fn test_native_case_expression() {
     let status = compile_and_run_native(
         "case_expression.trb",
@@ -229,7 +228,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: case/pattern matching requires tribute_rt.any support"]
 fn test_native_recursion() {
     let status = compile_and_run_native(
         "recursion.trb",

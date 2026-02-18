@@ -137,6 +137,13 @@ fn is_return_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
     clif::Return::from_operation(db, *op).is_ok()
 }
 
+/// Check if an operation is a block terminator (jump, brif, or return).
+fn is_terminator_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
+    clif::Return::from_operation(db, *op).is_ok()
+        || clif::Jump::from_operation(db, *op).is_ok()
+        || clif::Brif::from_operation(db, *op).is_ok()
+}
+
 /// Check if an operation is `clif.load`.
 fn is_load_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
     clif::Load::from_operation(db, *op).is_ok()
@@ -713,10 +720,19 @@ fn insert_rc_in_block<'db>(
             }
             let alloc_size = infer_alloc_size(db, *v);
             let release_op = tribute_rt::release(db, last_op.location(db), *v, alloc_size);
-            plan.after
-                .entry(last_use_idx)
-                .or_default()
-                .push(release_op.as_operation());
+            // If the last use is a terminator (jump/brif), insert release BEFORE it
+            // to avoid adding instructions after a block-ending operation.
+            if is_terminator_op(db, last_op) {
+                plan.before
+                    .entry(last_use_idx)
+                    .or_default()
+                    .push(release_op.as_operation());
+            } else {
+                plan.after
+                    .entry(last_use_idx)
+                    .or_default()
+                    .push(release_op.as_operation());
+            }
         } else {
             // Value is not used in this block but is live-in → release at start
             if live_in.contains(v) {

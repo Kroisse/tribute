@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::dialect::core::{self, Module};
 use crate::ops::DialectOp;
-use crate::{Block, BlockId, IdVec, Operation, Region, Type, Value};
+use crate::{Block, BlockArg, BlockId, IdVec, Operation, Region, Type, Value};
 
 use super::context::RewriteContext;
 use super::conversion_target::{ConversionError, ConversionTarget};
@@ -308,13 +308,23 @@ impl<'db> PatternApplicator<'db> {
             .flat_map(|op| self.rewrite_operation(db, op, ctx, target))
             .collect();
 
-        Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            new_ops,
-        )
+        // Convert block argument types using the type converter
+        let args = block.args(db);
+        let new_args: IdVec<BlockArg<'db>> = args
+            .iter()
+            .map(|arg| {
+                let ty = arg.ty(db);
+                match self.type_converter.convert_type(db, ty) {
+                    Some(new_ty) => {
+                        ctx.record_change();
+                        BlockArg::new(db, new_ty, arg.attrs(db).clone())
+                    }
+                    None => *arg,
+                }
+            })
+            .collect();
+
+        Block::new(db, block.id(db), block.location(db), new_args, new_ops)
     }
 
     /// Check if an operation is legal according to the conversion target.

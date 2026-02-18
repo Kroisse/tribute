@@ -370,12 +370,19 @@ fn lower_region_to_br<'db>(
     for block in region.blocks(db).iter() {
         let ops = block.operations(db);
         let mut new_ops = IdVec::new();
+        // Track result value remappings when transform_op_regions creates
+        // new operations (e.g., scf.if with transformed nested regions).
+        let mut result_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         for op in ops.iter() {
             if scf::Yield::matches(db, *op) {
                 // Replace scf.yield with cf.br to merge block
                 let yield_op = scf::Yield::from_operation(db, *op).unwrap();
-                let values: Vec<Value<'db>> = yield_op.values(db).to_vec();
+                let values: Vec<Value<'db>> = yield_op
+                    .values(db)
+                    .iter()
+                    .map(|v| result_remap.get(v).copied().unwrap_or(*v))
+                    .collect();
                 let expected = merge_block.args(db).len();
                 assert_eq!(
                     values.len(),
@@ -387,7 +394,20 @@ fn lower_region_to_br<'db>(
                 let br_op = cf::br(db, location, values, merge_block);
                 new_ops.push(br_op.as_operation());
             } else {
-                new_ops.push(transform_op_regions(db, op));
+                let new_op = transform_op_regions(db, op);
+                // If the operation changed, map old result values to new ones
+                if new_op != *op {
+                    let old_results = op.results(db);
+                    for (i, &old_ty) in old_results.iter().enumerate() {
+                        let _ = old_ty;
+                        let old_val = op.result(db, i);
+                        let new_val = new_op.result(db, i);
+                        if old_val != new_val {
+                            result_remap.insert(old_val, new_val);
+                        }
+                    }
+                }
+                new_ops.push(new_op);
             }
         }
 

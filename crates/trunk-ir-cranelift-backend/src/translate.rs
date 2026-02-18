@@ -161,7 +161,9 @@ fn emit_module_impl<'db>(
                         .append_block_params_for_function_params(entry_block);
 
                     if let Some(ir_entry_block) = ir_blocks.first() {
-                        translator.block_map.insert(*ir_entry_block, entry_block);
+                        translator
+                            .block_map
+                            .insert(ir_entry_block.id(db), entry_block);
                     }
 
                     // Create Cranelift blocks for non-entry IR blocks
@@ -172,7 +174,7 @@ fn emit_module_impl<'db>(
                             let cl_ty = crate::function::translate_type(db, arg.ty(db))?;
                             translator.builder.append_block_param(cl_block, cl_ty);
                         }
-                        translator.block_map.insert(*ir_block, cl_block);
+                        translator.block_map.insert(ir_block.id(db), cl_block);
                     }
 
                     // Phase 2: Translate operations in each block
@@ -197,7 +199,14 @@ fn emit_module_impl<'db>(
 
                         // Translate each operation in this block
                         for ir_op in ir_block.operations(db).iter() {
-                            translator.translate_op(ir_op)?;
+                            translator.translate_op(ir_op).map_err(|e| {
+                                CompilationError::codegen(format!(
+                                    "{e} (in {}.{} of function {})",
+                                    ir_op.dialect(db),
+                                    ir_op.name(db),
+                                    name_sym,
+                                ))
+                            })?;
                         }
                     }
 

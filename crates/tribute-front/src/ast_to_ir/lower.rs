@@ -922,7 +922,11 @@ fn lower_expr<'db>(
         }
         ExprKind::Case { scrutinee, arms } => {
             let scrutinee_val = lower_expr(builder, scrutinee)?;
-            let result_ty = tribute_rt::any_type(builder.db());
+            let result_ty = builder
+                .ctx
+                .get_node_type(expr.id)
+                .map(|ty| builder.ctx.convert_type(*ty))
+                .unwrap_or_else(|| tribute_rt::any_type(builder.db()));
             let location = builder.location(expr.id);
             lower_case_chain(
                 builder.ctx,
@@ -1765,7 +1769,7 @@ fn emit_literal_check<'db>(
         LiteralPattern::Nat(n) => {
             let const_val = builder
                 .block
-                .op(arith::Const::i64(builder.db(), location, *n as i64))
+                .op(arith::Const::i32(builder.db(), location, *n as i32))
                 .result(builder.db());
             Some(
                 builder
@@ -1783,7 +1787,7 @@ fn emit_literal_check<'db>(
         LiteralPattern::Int(n) => {
             let const_val = builder
                 .block
-                .op(arith::Const::i64(builder.db(), location, *n))
+                .op(arith::Const::i32(builder.db(), location, *n as i32))
                 .result(builder.db());
             Some(
                 builder
@@ -1869,7 +1873,9 @@ fn build_guarded_arm_region<'db>(
         let mut inner_block = BlockBuilder::new(ctx.db, location);
         let result = {
             let mut builder = IrBuilder::new(ctx, &mut inner_block);
-            lower_expr(&mut builder, arm.body.clone())
+            let val = lower_expr(&mut builder, arm.body.clone());
+            // Cast to result_ty if needed
+            val.map(|v| builder.cast_if_needed(location, v, result_ty))
         };
         let yield_val = result.unwrap_or_else(|| {
             let ty = core::Nil::new(ctx.db).as_type();
@@ -1908,7 +1914,7 @@ fn build_arm_region<'db>(
     location: Location<'db>,
     scrutinee: trunk_ir::Value<'db>,
     arm: &Arm<TypedRef<'db>>,
-    _result_ty: trunk_ir::Type<'db>,
+    result_ty: trunk_ir::Type<'db>,
 ) -> Region<'db> {
     let mut block = BlockBuilder::new(ctx.db, location);
 
@@ -1917,7 +1923,9 @@ fn build_arm_region<'db>(
 
     let result = {
         let mut builder = IrBuilder::new(ctx, &mut block);
-        lower_expr(&mut builder, arm.body.clone())
+        let val = lower_expr(&mut builder, arm.body.clone());
+        // Cast to result_ty (e.g., tribute_rt.any) if the arm body type differs
+        val.map(|v| builder.cast_if_needed(location, v, result_ty))
     };
 
     ctx.exit_scope();
@@ -1943,12 +1951,18 @@ fn build_else_chain_region<'db>(
     let mut block = BlockBuilder::new(ctx.db, location);
     let result = lower_case_chain(ctx, &mut block, location, scrutinee, result_ty, arms);
 
-    let yield_val = result.unwrap_or_else(|| {
-        let ty = core::Nil::new(ctx.db).as_type();
-        block
-            .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
-            .result(ctx.db)
-    });
+    let yield_val = {
+        let val = result.unwrap_or_else(|| {
+            let ty = core::Nil::new(ctx.db).as_type();
+            block
+                .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
+                .result(ctx.db)
+        });
+        // Cast to result_ty if needed (e.g., the last unconditional arm
+        // returns a concrete type but scf.if expects tribute_rt.any)
+        let mut builder = IrBuilder::new(ctx, &mut block);
+        builder.cast_if_needed(location, val, result_ty)
+    };
     block.op(scf::r#yield(ctx.db, location, vec![yield_val]));
     Region::new(ctx.db, location, idvec![block.build()])
 }
