@@ -54,6 +54,8 @@ pub mod lookup;
 mod node_id;
 mod pattern;
 mod phases;
+#[cfg(test)]
+pub mod prop;
 mod span_map;
 mod types;
 
