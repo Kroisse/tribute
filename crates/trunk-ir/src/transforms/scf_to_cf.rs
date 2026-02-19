@@ -370,12 +370,19 @@ fn lower_region_to_br<'db>(
     for block in region.blocks(db).iter() {
         let ops = block.operations(db);
         let mut new_ops = IdVec::new();
+        // Track result value remappings when transform_op_regions creates
+        // new operations (e.g., scf.if with transformed nested regions).
+        let mut result_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
         for op in ops.iter() {
             if scf::Yield::matches(db, *op) {
                 // Replace scf.yield with cf.br to merge block
                 let yield_op = scf::Yield::from_operation(db, *op).unwrap();
-                let values: Vec<Value<'db>> = yield_op.values(db).to_vec();
+                let values: Vec<Value<'db>> = yield_op
+                    .values(db)
+                    .iter()
+                    .map(|v| result_remap.get(v).copied().unwrap_or(*v))
+                    .collect();
                 let expected = merge_block.args(db).len();
                 assert_eq!(
                     values.len(),
@@ -387,7 +394,18 @@ fn lower_region_to_br<'db>(
                 let br_op = cf::br(db, location, values, merge_block);
                 new_ops.push(br_op.as_operation());
             } else {
-                new_ops.push(transform_op_regions(db, op));
+                let new_op = transform_op_regions(db, op);
+                // If the operation changed, map old result values to new ones
+                if new_op != *op {
+                    for i in 0..op.results(db).len() {
+                        let old_val = op.result(db, i);
+                        let new_val = new_op.result(db, i);
+                        if old_val != new_val {
+                            result_remap.insert(old_val, new_val);
+                        }
+                    }
+                }
+                new_ops.push(new_op);
             }
         }
 
@@ -1967,6 +1985,114 @@ mod tests {
         assert!(
             call_find_yield_type_outside_block_arg(db),
             "find_yield_type should return None for BlockArg from outside the region"
+        );
+    }
+
+    // === Nested scf.if value remapping ===
+
+    /// Create module: outer scf.if yields the result of an inner scf.if.
+    #[salsa::tracked]
+    fn make_nested_if_module(db: &dyn salsa::Database) -> core::Module<'_> {
+        parse_test_module(
+            db,
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %cond1 = arith.const {value = true} : core.i1
+    %cond2 = arith.const {value = false} : core.i1
+    %r = scf.if %cond1 : core.i32 {
+      %inner = scf.if %cond2 : core.i32 {
+        %a = arith.const {value = 1} : core.i32
+        scf.yield %a
+      } {
+        %b = arith.const {value = 2} : core.i32
+        scf.yield %b
+      }
+      scf.yield %inner
+    } {
+      %c = arith.const {value = 3} : core.i32
+      scf.yield %c
+    }
+    func.return %r
+  }
+}"#,
+        )
+    }
+
+    /// Lower nested-if-yield-inner module and return (block_count, all_op_names,
+    /// per-block last op names, per-block arg counts).
+    #[salsa::tracked]
+    fn lower_and_check_nested_if_yield_inner(
+        db: &dyn salsa::Database,
+        module: core::Module<'_>,
+    ) -> (usize, Vec<String>, Vec<String>, Vec<usize>) {
+        let lowered = lower_scf_to_cf(db, module);
+        let func_op =
+            func::Func::from_operation(db, lowered.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body = func_op.body(db);
+        let blocks = body.blocks(db);
+        let block_count = blocks.len();
+        let all_ops = collect_all_op_names(db, &body);
+        let last_ops: Vec<String> = blocks
+            .iter()
+            .filter_map(|b| b.operations(db).last().map(|op| op.full_name(db)))
+            .collect();
+        let arg_counts: Vec<usize> = blocks.iter().map(|b| b.args(db).len()).collect();
+        (block_count, all_ops, last_ops, arg_counts)
+    }
+
+    #[salsa_test]
+    fn test_nested_if_yield_inner_result(db: &salsa::DatabaseImpl) {
+        let module = make_nested_if_module(db);
+        let (block_count, all_ops, last_ops, arg_counts) =
+            lower_and_check_nested_if_yield_inner(db, module);
+
+        // No scf ops should remain
+        assert!(
+            !all_ops.iter().any(|n| n.starts_with("scf.")),
+            "No scf ops should remain after nested-if lowering, but found: {:?}",
+            all_ops
+        );
+
+        // Outer if: entry, then, else, outer-merge = 4 blocks
+        // Inner if (inside then): inner-then, inner-else, inner-merge = 3 blocks
+        // Total = 7 blocks
+        assert_eq!(
+            block_count, 7,
+            "Expected 7 blocks (4 outer + 3 inner), got {}",
+            block_count
+        );
+
+        // Every block should end with a branch or return
+        for (i, last_op) in last_ops.iter().enumerate() {
+            assert!(
+                last_op == "cf.cond_br" || last_op == "cf.br" || last_op == "func.return",
+                "Block {} should end with a branch or return, got: {}",
+                i,
+                last_op
+            );
+        }
+
+        // All cf.br that target merge blocks should have matching arg counts.
+        // Merge blocks (those with args) should have exactly 1 arg (the if result).
+        let merge_blocks: Vec<_> = arg_counts
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .collect();
+        for (idx, count) in &merge_blocks {
+            assert_eq!(
+                **count, 1,
+                "Merge block {} should have 1 block arg, got {}",
+                idx, count
+            );
+        }
+        // There should be exactly 2 merge blocks (inner merge + outer merge)
+        assert_eq!(
+            merge_blocks.len(),
+            2,
+            "Expected 2 merge blocks (inner + outer), got {}",
+            merge_blocks.len()
         );
     }
 }

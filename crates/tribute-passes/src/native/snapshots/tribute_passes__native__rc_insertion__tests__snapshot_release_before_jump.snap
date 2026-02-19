@@ -1,0 +1,14 @@
+---
+source: crates/tribute-passes/src/native/rc_insertion.rs
+assertion_line: 1162
+expression: ir
+---
+core.module @test {
+  clif.func {sym_name = @branch_with_ptr, type = core.func(core.nil, core.ptr)} {
+  ^bb1(%p: core.ptr):
+    %0 = tribute_rt.retain %p : core.ptr
+    clif.jump %p
+  ^bb2(%q: core.ptr):
+    clif.return %q
+  }
+}

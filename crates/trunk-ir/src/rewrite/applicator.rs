@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use crate::dialect::core::{self, Module};
 use crate::ops::DialectOp;
-use crate::{Block, BlockId, IdVec, Operation, Region, Type, Value};
+use crate::{Block, BlockArg, BlockId, IdVec, Operation, Region, Type, Value};
 
 use super::context::RewriteContext;
 use super::conversion_target::{ConversionError, ConversionTarget};
@@ -295,6 +295,11 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Rewrite a block.
+    ///
+    /// Block argument types are converted FIRST so that the context has
+    /// up-to-date types before operations are rewritten. This ensures
+    /// `ctx.get_value_type()` returns the converted type for block args,
+    /// preventing stale types on the legal-op fast path.
     fn rewrite_block(
         &self,
         db: &'db dyn salsa::Database,
@@ -302,19 +307,33 @@ impl<'db> PatternApplicator<'db> {
         ctx: &mut RewriteContext<'db>,
         target: &ConversionTarget,
     ) -> Block<'db> {
+        // FIRST: Convert block argument types and update context
+        let block_id = block.id(db);
+        let args = block.args(db);
+        let new_args: IdVec<BlockArg<'db>> = args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                let ty = arg.ty(db);
+                match self.type_converter.convert_type(db, ty) {
+                    Some(new_ty) => {
+                        ctx.record_change();
+                        ctx.update_block_arg_type(block_id, i, new_ty);
+                        BlockArg::new(db, new_ty, arg.attrs(db).clone())
+                    }
+                    None => *arg,
+                }
+            })
+            .collect();
+
+        // THEN: Rewrite operations (context now has converted block arg types)
         let new_ops: IdVec<Operation<'db>> = block
             .operations(db)
             .iter()
             .flat_map(|op| self.rewrite_operation(db, op, ctx, target))
             .collect();
 
-        Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            new_ops,
-        )
+        Block::new(db, block.id(db), block.location(db), new_args, new_ops)
     }
 
     /// Check if an operation is legal according to the conversion target.
@@ -1398,6 +1417,82 @@ mod tests {
         let target = ConversionTarget::new();
         let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(Const99To100);
         applicator.apply_partial(db, module, target).module
+    }
+
+    // === Block Arg Type Conversion Order Test ===
+    // Regression test: block arg types must be converted BEFORE operations
+    // are rewritten. Previously, type conversion happened after op rewrite,
+    // causing the legal-op fast path to see stale (unconverted) types and
+    // insert unnecessary unrealized_conversion_cast operations.
+
+    /// Create a module with func containing i32 block arg used by arith.add.
+    #[salsa::tracked]
+    fn make_func_with_block_arg_add(db: &dyn salsa::Database) -> Module<'_> {
+        parse_test_module(
+            db,
+            r#"core.module @test {
+  func.func @f(%arg0: core.i32) -> core.i32 {
+    %0 = arith.add %arg0, %arg0 : core.i32
+    func.return %0
+  }
+}"#,
+        )
+    }
+
+    /// Apply with i32→i64 converter and arith marked as legal dialect.
+    #[salsa::tracked]
+    fn apply_with_i32_to_i64_and_legal_arith<'db>(
+        db: &'db dyn salsa::Database,
+        module: Module<'db>,
+    ) -> (bool, usize, Module<'db>) {
+        use super::ConversionTarget;
+
+        let type_converter = TypeConverter::new().add_conversion(|db, ty| {
+            core::I32::from_type(db, ty).map(|_| core::I64::new(db).as_type())
+        });
+
+        let target = ConversionTarget::new().legal_dialect("arith");
+        let applicator = PatternApplicator::new(type_converter);
+        let result = applicator.apply_partial(db, module, target);
+        (result.reached_fixpoint, result.total_changes, result.module)
+    }
+
+    #[salsa_test]
+    fn test_block_arg_type_converted_before_op_rewrite(db: &salsa::DatabaseImpl) {
+        let module = make_func_with_block_arg_add(db);
+
+        let (reached_fixpoint, _total_changes, result_module) =
+            apply_with_i32_to_i64_and_legal_arith(db, module);
+
+        assert!(reached_fixpoint);
+
+        // Navigate into func.func body
+        let func_op =
+            func::Func::from_operation(db, result_module.body(db).blocks(db)[0].operations(db)[0])
+                .unwrap();
+        let body_block = &func_op.body(db).blocks(db)[0];
+
+        // Block arg type should be converted to i64
+        let arg_ty = body_block.args(db)[0].ty(db);
+        let i64_ty = core::I64::new(db).as_type();
+        assert_eq!(
+            arg_ty, i64_ty,
+            "Block arg type should be converted from i32 to i64"
+        );
+
+        // Legal ops (arith.add) should NOT have unnecessary unrealized_conversion_cast
+        // before them. If block arg conversion happened AFTER op rewrite, the legal-op
+        // fast path would see stale i32 types and insert casts.
+        let ops = body_block.operations(db);
+        let cast_count = ops
+            .iter()
+            .filter(|op| op.name(db) == core::UNREALIZED_CONVERSION_CAST())
+            .count();
+        assert_eq!(
+            cast_count, 0,
+            "Legal ops should not have unrealized_conversion_cast inserted \
+             when block arg types are converted before op rewrite"
+        );
     }
 
     #[salsa_test]

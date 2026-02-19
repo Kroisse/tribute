@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/src/ast_to_ir/lower.rs
-assertion_line: 4582
+assertion_line: 4586
 expression: "trunk_ir::printer::print_op(db, ir_module.as_operation())"
 ---
 core.module @test {
@@ -15,10 +15,12 @@ core.module @test {
       %5 = scf.if %4 : tribute_rt.any {
         %6 = adt.variant_cast %x {type = tribute_rt.any, tag = @None} : tribute_rt.any
         %7 = arith.const {value = 0} : core.i32
-        scf.yield %7
-      } {
-        %8 = arith.const {value = unit} : core.nil
+        %8 = core.unrealized_conversion_cast %7 : tribute_rt.any
         scf.yield %8
+      } {
+        %9 = arith.const {value = unit} : core.nil
+        %10 = core.unrealized_conversion_cast %9 : tribute_rt.any
+        scf.yield %10
       }
       scf.yield %5
     }

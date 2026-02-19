@@ -100,6 +100,11 @@ impl<'db> RewriteContext<'db> {
         }
     }
 
+    /// Update the type of a single block argument entry.
+    pub fn update_block_arg_type(&mut self, block_id: BlockId, index: usize, ty: Type<'db>) {
+        self.block_arg_types.insert((block_id, index), ty);
+    }
+
     /// Set the block argument types map.
     pub fn set_block_arg_types(&mut self, types: HashMap<(BlockId, usize), Type<'db>>) {
         self.block_arg_types = types;

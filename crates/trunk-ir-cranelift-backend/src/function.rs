@@ -11,7 +11,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{
-    Block as IrBlock, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef,
+    Block as IrBlock, BlockId, DialectOp, DialectType, Operation, Symbol, Type, Value, ValueDef,
 };
 
 use crate::{CompilationError, CompilationResult};
@@ -82,8 +82,12 @@ pub(crate) struct FunctionTranslator<'a, 'db> {
     pub(crate) values: HashMap<Value<'db>, cl_ir::Value>,
     /// Maps function symbols to Cranelift FuncRefs for call instructions.
     func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
-    /// Maps TrunkIR blocks to Cranelift blocks for multi-block functions.
-    pub(crate) block_map: HashMap<IrBlock<'db>, cl_ir::Block>,
+    /// Maps TrunkIR block IDs to Cranelift blocks for multi-block functions.
+    ///
+    /// Uses `BlockId` rather than `Block` because successor references may
+    /// point to different `Block` tracked-struct instances that share the same
+    /// `BlockId` (e.g., stub blocks created by scf_to_cf).
+    pub(crate) block_map: HashMap<BlockId, cl_ir::Block>,
 }
 
 impl<'a, 'db> FunctionTranslator<'a, 'db> {
@@ -104,13 +108,28 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
     /// Look up a TrunkIR value in the value mapping.
     fn lookup(&self, ir_val: Value<'db>) -> CompilationResult<cl_ir::Value> {
         self.values.get(&ir_val).copied().ok_or_else(|| {
-            CompilationError::codegen("TrunkIR value not found in Cranelift mapping")
+            let db = self.db;
+            let detail = match ir_val.def(db) {
+                ValueDef::OpResult(op) => format!(
+                    "result #{} of {}.{}",
+                    ir_val.index(db),
+                    op.dialect(db),
+                    op.name(db),
+                ),
+                ValueDef::BlockArg(block_id) => {
+                    format!("block arg #{} of block {:?}", ir_val.index(db), block_id,)
+                }
+            };
+            CompilationError::codegen(format!(
+                "TrunkIR value not found in Cranelift mapping: {detail}",
+            ))
         })
     }
 
-    /// Look up a TrunkIR block in the block mapping.
+    /// Look up a TrunkIR block in the block mapping by its BlockId.
     pub(crate) fn lookup_block(&self, ir_block: IrBlock<'db>) -> CompilationResult<cl_ir::Block> {
-        self.block_map.get(&ir_block).copied().ok_or_else(|| {
+        let id = ir_block.id(self.db);
+        self.block_map.get(&id).copied().ok_or_else(|| {
             CompilationError::codegen("TrunkIR block not found in Cranelift block mapping")
         })
     }
@@ -288,6 +307,24 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
             return Ok(());
         }
 
+        // === Comparisons ===
+        if let Ok(o) = clif::Icmp::from_operation(db, *op) {
+            let cond = parse_int_cc(o.cond(db))?;
+            let lhs = self.lookup(o.lhs(db))?;
+            let rhs = self.lookup(o.rhs(db))?;
+            let val = self.builder.ins().icmp(cond, lhs, rhs);
+            self.values.insert(o.result(db), val);
+            return Ok(());
+        }
+        if let Ok(o) = clif::Fcmp::from_operation(db, *op) {
+            let cond = parse_float_cc(o.cond(db))?;
+            let lhs = self.lookup(o.lhs(db))?;
+            let rhs = self.lookup(o.rhs(db))?;
+            let val = self.builder.ins().fcmp(cond, lhs, rhs);
+            self.values.insert(o.result(db), val);
+            return Ok(());
+        }
+
         // === Memory ===
         if let Ok(load) = clif::Load::from_operation(db, *op) {
             let addr = self.lookup(load.addr(db))?;
@@ -379,6 +416,42 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
         self.values.insert(result_ir, cl_val);
         Ok(())
     }
+}
+
+/// Parse a condition symbol into a Cranelift integer condition code.
+fn parse_int_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::IntCC> {
+    use cl_ir::condcodes::IntCC;
+    sym.with_str(|s| match s {
+        "eq" => Ok(IntCC::Equal),
+        "ne" => Ok(IntCC::NotEqual),
+        "slt" => Ok(IntCC::SignedLessThan),
+        "sle" => Ok(IntCC::SignedLessThanOrEqual),
+        "sgt" => Ok(IntCC::SignedGreaterThan),
+        "sge" => Ok(IntCC::SignedGreaterThanOrEqual),
+        "ult" => Ok(IntCC::UnsignedLessThan),
+        "ule" => Ok(IntCC::UnsignedLessThanOrEqual),
+        "ugt" => Ok(IntCC::UnsignedGreaterThan),
+        "uge" => Ok(IntCC::UnsignedGreaterThanOrEqual),
+        other => Err(CompilationError::codegen(format!(
+            "unknown integer comparison condition: {other}"
+        ))),
+    })
+}
+
+/// Parse a condition symbol into a Cranelift float condition code.
+fn parse_float_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::FloatCC> {
+    use cl_ir::condcodes::FloatCC;
+    sym.with_str(|s| match s {
+        "eq" => Ok(FloatCC::Equal),
+        "ne" => Ok(FloatCC::NotEqual),
+        "lt" => Ok(FloatCC::LessThan),
+        "le" => Ok(FloatCC::LessThanOrEqual),
+        "gt" => Ok(FloatCC::GreaterThan),
+        "ge" => Ok(FloatCC::GreaterThanOrEqual),
+        other => Err(CompilationError::codegen(format!(
+            "unknown float comparison condition: {other}"
+        ))),
+    })
 }
 
 #[cfg(test)]

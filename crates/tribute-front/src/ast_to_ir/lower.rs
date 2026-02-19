@@ -922,7 +922,11 @@ fn lower_expr<'db>(
         }
         ExprKind::Case { scrutinee, arms } => {
             let scrutinee_val = lower_expr(builder, scrutinee)?;
-            let result_ty = tribute_rt::any_type(builder.db());
+            let result_ty = builder
+                .ctx
+                .get_node_type(expr.id)
+                .map(|ty| builder.ctx.convert_type(*ty))
+                .unwrap_or_else(|| tribute_rt::any_type(builder.db()));
             let location = builder.location(expr.id);
             lower_case_chain(
                 builder.ctx,
@@ -1763,9 +1767,10 @@ fn emit_literal_check<'db>(
     let bool_ty = builder.ctx.bool_type();
     match lit {
         LiteralPattern::Nat(n) => {
+            let value = i32::try_from(*n).expect("literal pattern Nat value exceeds i32 range");
             let const_val = builder
                 .block
-                .op(arith::Const::i64(builder.db(), location, *n as i64))
+                .op(arith::Const::i32(builder.db(), location, value))
                 .result(builder.db());
             Some(
                 builder
@@ -1781,9 +1786,10 @@ fn emit_literal_check<'db>(
             )
         }
         LiteralPattern::Int(n) => {
+            let value = i32::try_from(*n).expect("literal pattern Int value exceeds i32 range");
             let const_val = builder
                 .block
-                .op(arith::Const::i64(builder.db(), location, *n))
+                .op(arith::Const::i32(builder.db(), location, value))
                 .result(builder.db());
             Some(
                 builder
@@ -1869,7 +1875,9 @@ fn build_guarded_arm_region<'db>(
         let mut inner_block = BlockBuilder::new(ctx.db, location);
         let result = {
             let mut builder = IrBuilder::new(ctx, &mut inner_block);
-            lower_expr(&mut builder, arm.body.clone())
+            let val = lower_expr(&mut builder, arm.body.clone());
+            // Cast to result_ty if needed
+            val.map(|v| builder.cast_if_needed(location, v, result_ty))
         };
         let yield_val = result.unwrap_or_else(|| {
             let ty = core::Nil::new(ctx.db).as_type();
@@ -1908,7 +1916,7 @@ fn build_arm_region<'db>(
     location: Location<'db>,
     scrutinee: trunk_ir::Value<'db>,
     arm: &Arm<TypedRef<'db>>,
-    _result_ty: trunk_ir::Type<'db>,
+    result_ty: trunk_ir::Type<'db>,
 ) -> Region<'db> {
     let mut block = BlockBuilder::new(ctx.db, location);
 
@@ -1917,7 +1925,9 @@ fn build_arm_region<'db>(
 
     let result = {
         let mut builder = IrBuilder::new(ctx, &mut block);
-        lower_expr(&mut builder, arm.body.clone())
+        let val = lower_expr(&mut builder, arm.body.clone());
+        // Cast to result_ty (e.g., tribute_rt.any) if the arm body type differs
+        val.map(|v| builder.cast_if_needed(location, v, result_ty))
     };
 
     ctx.exit_scope();
@@ -1943,12 +1953,18 @@ fn build_else_chain_region<'db>(
     let mut block = BlockBuilder::new(ctx.db, location);
     let result = lower_case_chain(ctx, &mut block, location, scrutinee, result_ty, arms);
 
-    let yield_val = result.unwrap_or_else(|| {
-        let ty = core::Nil::new(ctx.db).as_type();
-        block
-            .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
-            .result(ctx.db)
-    });
+    let yield_val = {
+        let val = result.unwrap_or_else(|| {
+            let ty = core::Nil::new(ctx.db).as_type();
+            block
+                .op(arith::r#const(ctx.db, location, ty, Attribute::Unit))
+                .result(ctx.db)
+        });
+        // Cast to result_ty if needed (e.g., the last unconditional arm
+        // returns a concrete type but scf.if expects tribute_rt.any)
+        let mut builder = IrBuilder::new(ctx, &mut block);
+        builder.cast_if_needed(location, val, result_ty)
+    };
     block.op(scf::r#yield(ctx.db, location, vec![yield_val]));
     Region::new(ctx.db, location, idvec![block.build()])
 }
@@ -4570,6 +4586,143 @@ mod tests {
         let path = PathId::new(db, "test.trb".to_owned());
         let ir_module = test_lower_case_variant_module(db, path);
         assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
+    }
+
+    /// Tracked helper: build case on Nat with literal patterns.
+    ///
+    /// ```tribute
+    /// fn classify(n: Nat) -> Nat {
+    ///   case n {
+    ///     0 => 10,
+    ///     _ => 20,
+    ///   }
+    /// }
+    /// ```
+    #[salsa::tracked]
+    fn test_lower_case_nat_literal_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let nat_ty = AstType::new(db, TypeKind::Nat);
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), nat_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Literal pattern: 0
+        let pat_zero = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Literal(LiteralPattern::Nat(0)),
+        );
+
+        let arms = vec![
+            arm(pat_zero, nat_lit_expr(10)),
+            arm(wildcard_pattern(), nat_lit_expr(20)),
+        ];
+
+        // Use a specific NodeId for the case expression so we can register its type
+        let case_node_id = NodeId::from_raw(200);
+        let case = Expr::new(case_node_id, ExprKind::Case { scrutinee, arms });
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("classify"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        let node_types: HashMap<NodeId, AstType<'db>> =
+            vec![(case_node_id, nat_ty)].into_iter().collect();
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            node_types,
+        )
+    }
+
+    #[salsa_test]
+    fn test_snapshot_case_nat_literal(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        let ir_module = test_lower_case_nat_literal_helper(db, path);
+        assert_snapshot!(trunk_ir::printer::print_op(db, ir_module.as_operation()));
+    }
+
+    // === Nat literal range check regression test ===
+
+    /// Tracked helper: attempt to lower a case with Nat literal exceeding i32 range.
+    /// This should panic with a descriptive message.
+    #[salsa::tracked]
+    fn test_lower_case_nat_literal_overflow_helper<'db>(
+        db: &'db dyn salsa::Database,
+        path: PathId<'db>,
+    ) -> core::Module<'db> {
+        let nat_ty = AstType::new(db, TypeKind::Nat);
+        let n_name = Symbol::new("n");
+        let n_id = LocalId::new(0);
+
+        let n_ref = TypedRef::new(ResolvedRef::local(n_id, n_name), nat_ty);
+        let scrutinee = var_expr(n_ref);
+
+        // Literal pattern with u64::MAX — exceeds i32 range
+        let pat_overflow = Pattern::new(
+            fresh_node_id(),
+            PatternKind::Literal(LiteralPattern::Nat(u64::MAX)),
+        );
+
+        let arms = vec![
+            arm(pat_overflow, nat_lit_expr(10)),
+            arm(wildcard_pattern(), nat_lit_expr(20)),
+        ];
+
+        let case_node_id = NodeId::from_raw(200);
+        let case = Expr::new(case_node_id, ExprKind::Case { scrutinee, arms });
+
+        let func = FuncDecl {
+            id: fresh_node_id(),
+            is_pub: false,
+            name: Symbol::new("classify"),
+            type_params: vec![],
+            params: vec![ParamDecl {
+                id: fresh_node_id(),
+                name: n_name,
+                ty: None,
+                local_id: Some(n_id),
+            }],
+            return_ty: None,
+            effects: None,
+            body: case,
+        };
+        let module = simple_module(vec![Decl::Function(func)]);
+        let node_types: HashMap<NodeId, AstType<'db>> =
+            vec![(case_node_id, nat_ty)].into_iter().collect();
+        lower_module(
+            db,
+            path,
+            SpanMap::default(),
+            module,
+            HashMap::new(),
+            node_types,
+        )
+    }
+
+    #[salsa_test]
+    #[should_panic(expected = "literal pattern Nat value exceeds i32 range")]
+    fn test_nat_literal_exceeding_i32(db: &salsa::DatabaseImpl) {
+        let path = PathId::new(db, "test.trb".to_owned());
+        test_lower_case_nat_literal_overflow_helper(db, path);
     }
 
     #[salsa_test]
