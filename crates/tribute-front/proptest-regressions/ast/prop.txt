@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0d98bcf213f8cf3595a8ae1d54ab5ee9b019baab585051e60721a9ea438de6d6 # shrinks to module = Module { id: NodeId(7021460579487784223), name: None, decls: [Function(FuncDecl { id: NodeId(6472735538662127870), is_pub: false, name: Symbol("main"), type_params: [], params: [], return_ty: None, effects: None, body: Expr { id: NodeId(12589787153639051819), kind: NatLit(0) } })] }
