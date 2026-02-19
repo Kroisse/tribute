@@ -20,8 +20,12 @@ const VAR_NAMES: &[&str] = &[
 ];
 
 /// Strategy for a random [`NodeId`], excluded from shrinking.
+///
+/// Uses `u32` for architecture-stable generation (consistent across 32/64-bit).
 fn node_id() -> impl Strategy<Value = NodeId> {
-    any::<usize>().no_shrink().prop_map(NodeId::from_raw)
+    any::<u32>()
+        .no_shrink()
+        .prop_map(|n| NodeId::from_raw(n as usize))
 }
 
 // ============================================================================
@@ -250,10 +254,11 @@ fn block_variant(
     }
 }
 
-/// Core recursive strategy parameterized by environment size and depth.
+/// Core recursive strategy parameterized by environment size and nesting budget.
 ///
 /// * `env_size` — number of names from `VAR_NAMES` currently in scope.
-/// * `max_depth` — remaining nesting depth (0 → leaf only).
+/// * `max_depth` — remaining nesting budget (0 → leaf only; the resulting
+///   tree depth is at most `max_depth + 1`).
 fn expr_with_env(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<UnresolvedName>> {
     let leaf = leaf_expr(env_size);
     if max_depth == 0 {
@@ -283,12 +288,13 @@ fn expr_with_env(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unreso
 // Public expression strategies
 // ============================================================================
 
-/// Strategy that produces arbitrary expressions up to `depth` levels deep.
+/// Strategy that produces arbitrary expressions with the given nesting budget.
 ///
 /// Uses manual recursion with `expr_with_env` to generate scope-correct
 /// expressions including `Block`, `Let`, and `Var`.
 ///
-/// * `depth` – maximum nesting depth
+/// * `depth` – nesting budget; the generated tree can be up to `depth + 1`
+///   levels deep (a budget of 0 yields a leaf with depth 1).
 /// * `_desired_size` – kept for API compatibility (unused with manual recursion)
 /// * `_expected_branch_size` – kept for API compatibility (unused)
 pub fn expr(
@@ -299,9 +305,9 @@ pub fn expr(
     expr_with_env(0, depth as usize)
 }
 
-/// Strategy with reasonable defaults: depth 5, empty initial scope.
+/// Strategy with reasonable defaults: budget 5 (max depth 6), empty initial scope.
 ///
-/// Manual recursion builds the strategy tree eagerly, so depth is kept
+/// Manual recursion builds the strategy tree eagerly, so the budget is kept
 /// moderate to avoid exponential construction cost.
 pub fn expr_default() -> impl Strategy<Value = Expr<UnresolvedName>> {
     expr_with_env(0, 5)
@@ -483,6 +489,11 @@ mod tests {
         fn module_construction_does_not_panic(_module in parsed_module()) {
             // reaching here without panic is the assertion
         }
+    }
+
+    // Pipeline smoke tests: resolve and typecheck are heavier, so run fewer cases.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
 
         /// Name resolution does not panic on generated ASTs.
         ///
