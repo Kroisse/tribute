@@ -178,7 +178,7 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: closures require adt.ref_cast/ref_null lowering"]
+#[ignore = "native backend: closure codegen causes linker crash (needs investigation)"]
 fn test_native_closure() {
     let status = compile_and_run_native(
         "closure.trb",
