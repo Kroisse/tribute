@@ -10,12 +10,9 @@ use proptest::prelude::*;
 use super::{BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, Module, NodeId, UnresolvedName};
 use trunk_ir::Symbol;
 
-/// Dummy [`NodeId`] used by all generated nodes.
-///
-/// Property tests don't need real span information, and `NodeId::from_raw`
-/// is `#[cfg(test)]`-gated, so this is fine.
-fn dummy_id() -> NodeId {
-    NodeId::from_raw(0)
+/// Strategy for a random [`NodeId`], excluded from shrinking.
+fn node_id() -> impl Strategy<Value = NodeId> {
+    any::<usize>().no_shrink().prop_map(NodeId::from_raw)
 }
 
 // ============================================================================
@@ -23,7 +20,7 @@ fn dummy_id() -> NodeId {
 // ============================================================================
 
 /// Strategy for arithmetic binary operators only.
-pub fn arb_arith_op() -> impl Strategy<Value = BinOpKind> {
+pub fn arith_op() -> impl Strategy<Value = BinOpKind> {
     prop_oneof![
         Just(BinOpKind::Add),
         Just(BinOpKind::Sub),
@@ -34,7 +31,7 @@ pub fn arb_arith_op() -> impl Strategy<Value = BinOpKind> {
 }
 
 /// Strategy for all `BinOpKind` variants.
-pub fn arb_binop_kind() -> impl Strategy<Value = BinOpKind> {
+pub fn binop_kind() -> impl Strategy<Value = BinOpKind> {
     prop_oneof![
         Just(BinOpKind::Add),
         Just(BinOpKind::Sub),
@@ -56,20 +53,20 @@ pub fn arb_binop_kind() -> impl Strategy<Value = BinOpKind> {
 /// Strategy that produces literal expressions (leaf nodes).
 ///
 /// Covers: `NatLit`, `IntLit`, `FloatLit`, `BoolLit`, `Nil`.
-pub fn arb_literal_expr() -> impl Strategy<Value = Expr<UnresolvedName>> {
+pub fn literal_expr() -> impl Strategy<Value = Expr<UnresolvedName>> {
     prop_oneof![
         // NatLit: 0..=u32::MAX keeps values reasonable
-        (0u64..=u32::MAX as u64).prop_map(|n| Expr::new(dummy_id(), ExprKind::NatLit(n))),
+        (node_id(), 0u64..=u32::MAX as u64).prop_map(|(id, n)| Expr::new(id, ExprKind::NatLit(n))),
         // IntLit
-        (i32::MIN as i64..=i32::MAX as i64)
-            .prop_map(|n| Expr::new(dummy_id(), ExprKind::IntLit(n))),
+        (node_id(), i32::MIN as i64..=i32::MAX as i64)
+            .prop_map(|(id, n)| Expr::new(id, ExprKind::IntLit(n))),
         // FloatLit: finite values only (NaN/Inf testing is a follow-up)
-        (-1e15f64..1e15f64)
-            .prop_map(|f| Expr::new(dummy_id(), ExprKind::FloatLit(FloatBits::new(f)))),
+        (node_id(), -1e15f64..1e15f64)
+            .prop_map(|(id, f)| Expr::new(id, ExprKind::FloatLit(FloatBits::new(f)))),
         // BoolLit
-        any::<bool>().prop_map(|b| Expr::new(dummy_id(), ExprKind::BoolLit(b))),
+        (node_id(), any::<bool>()).prop_map(|(id, b)| Expr::new(id, ExprKind::BoolLit(b))),
         // Nil
-        Just(Expr::new(dummy_id(), ExprKind::Nil)),
+        node_id().prop_map(|id| Expr::new(id, ExprKind::Nil)),
     ]
 }
 
@@ -85,20 +82,20 @@ pub fn arb_literal_expr() -> impl Strategy<Value = Expr<UnresolvedName>> {
 /// * `depth` – maximum nesting depth
 /// * `desired_size` – target number of nodes
 /// * `expected_branch_size` – expected children per recursive node
-pub fn arb_expr(
+pub fn expr(
     depth: u32,
     desired_size: u32,
     expected_branch_size: u32,
 ) -> impl Strategy<Value = Expr<UnresolvedName>> {
-    arb_literal_expr().prop_recursive(depth, desired_size, expected_branch_size, |inner| {
-        (arb_binop_kind(), inner.clone(), inner)
-            .prop_map(|(op, lhs, rhs)| Expr::new(dummy_id(), ExprKind::BinOp { op, lhs, rhs }))
+    literal_expr().prop_recursive(depth, desired_size, expected_branch_size, |inner| {
+        (node_id(), binop_kind(), inner.clone(), inner)
+            .prop_map(|(id, op, lhs, rhs)| Expr::new(id, ExprKind::BinOp { op, lhs, rhs }))
     })
 }
 
 /// Strategy with reasonable defaults: depth 8, size 64, branch 3.
-pub fn arb_expr_default() -> impl Strategy<Value = Expr<UnresolvedName>> {
-    arb_expr(8, 64, 3)
+pub fn expr_default() -> impl Strategy<Value = Expr<UnresolvedName>> {
+    expr(8, 64, 3)
 }
 
 // ============================================================================
@@ -106,10 +103,10 @@ pub fn arb_expr_default() -> impl Strategy<Value = Expr<UnresolvedName>> {
 // ============================================================================
 
 /// Wraps an expression into a `fn main() { expr }` parsed module.
-pub fn arb_parsed_module() -> impl Strategy<Value = Module<UnresolvedName>> {
-    arb_expr_default().prop_map(|body| {
+pub fn parsed_module() -> impl Strategy<Value = Module<UnresolvedName>> {
+    (node_id(), node_id(), expr_default()).prop_map(|(module_id, func_id, body)| {
         let main_fn = FuncDecl {
-            id: dummy_id(),
+            id: func_id,
             is_pub: false,
             name: Symbol::new("main"),
             type_params: vec![],
@@ -118,7 +115,7 @@ pub fn arb_parsed_module() -> impl Strategy<Value = Module<UnresolvedName>> {
             effects: None,
             body,
         };
-        Module::new(dummy_id(), None, vec![Decl::Function(main_fn)])
+        Module::new(module_id, None, vec![Decl::Function(main_fn)])
     })
 }
 
@@ -145,7 +142,7 @@ mod tests {
     proptest! {
         /// Generated expressions implement Clone, Debug, PartialEq correctly.
         #[test]
-        fn generated_expr_is_valid(expr in arb_expr_default()) {
+        fn generated_expr_is_valid(expr in expr_default()) {
             // Clone + PartialEq
             let cloned = expr.clone();
             prop_assert_eq!(&expr, &cloned);
@@ -158,20 +155,20 @@ mod tests {
         /// `prop_recursive(depth=4, ...)` limits recursive nesting, so adding 1
         /// for the leaf level means total depth ≤ 5.
         #[test]
-        fn depth_is_bounded(expr in arb_expr(4, 32, 3)) {
+        fn depth_is_bounded(expr in expr(4, 32, 3)) {
             let depth = expr_depth(&expr);
             prop_assert!(depth <= 5, "depth {} exceeded maximum 5", depth);
         }
 
         /// The literal-only strategy always produces depth-1 (leaf) expressions.
         #[test]
-        fn literals_are_leaves(expr in arb_literal_expr()) {
+        fn literals_are_leaves(expr in literal_expr()) {
             prop_assert_eq!(expr_depth(&expr), 1);
         }
 
         /// Wrapping into a module never panics.
         #[test]
-        fn module_construction_does_not_panic(_module in arb_parsed_module()) {
+        fn module_construction_does_not_panic(_module in parsed_module()) {
             // reaching here without panic is the assertion
         }
     }
