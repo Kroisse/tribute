@@ -20,4 +20,5 @@ trunk-ir.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true
 salsa-test-macros = { workspace = true }
