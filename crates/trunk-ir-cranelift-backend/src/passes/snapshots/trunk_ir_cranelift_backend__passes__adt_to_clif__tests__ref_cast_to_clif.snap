@@ -1,0 +1,7 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
+expression: do_lower_ref_cast(db)
+---
+core.module @test {
+  %0 = clif.iconst {value = 100} : core.ptr
+}

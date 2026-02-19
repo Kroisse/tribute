@@ -63,6 +63,10 @@ fn adapt_closure_structs<'db>(db: &'db dyn salsa::Database, module: Module<'db>)
 }
 
 /// Pattern for `func.func` -> `clif.func`
+///
+/// Converts the function type attribute's parameter and return types using
+/// the type converter, ensuring high-level types (e.g., `core.array`) are
+/// mapped to their native representations before Cranelift emission.
 struct FuncFuncPattern;
 
 impl<'db> RewritePattern<'db> for FuncFuncPattern {
@@ -70,14 +74,27 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
-        let Ok(_func_op) = func::Func::from_operation(db, *op) else {
+        let Ok(func_op) = func::Func::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        let new_op = op.modify(db).dialect_str("clif").name_str("func").build();
-        RewriteResult::Replace(new_op)
+        let type_converter = adaptor.type_converter();
+        let func_type_attr = func_op.r#type(db);
+
+        // Convert parameter and return types in the function signature
+        let mut builder = op.modify(db).dialect_str("clif").name_str("func");
+        if let Some(func_ty) = core::Func::from_type(db, func_type_attr) {
+            let new_params = type_converter.convert_types(db, &func_ty.params(db));
+            let new_ret = type_converter
+                .convert_type(db, func_ty.result(db))
+                .unwrap_or(func_ty.result(db));
+            let new_func_ty = core::Func::new(db, new_params, new_ret).as_type();
+            builder = builder.attr("type", Attribute::Type(new_func_ty));
+        }
+
+        RewriteResult::Replace(builder.build())
     }
 }
 
