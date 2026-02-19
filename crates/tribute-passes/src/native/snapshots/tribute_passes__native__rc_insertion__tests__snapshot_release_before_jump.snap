@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-passes/src/native/rc_insertion.rs
-assertion_line: 971
+assertion_line: 1162
 expression: ir
 ---
 core.module @test {
@@ -8,7 +8,6 @@ core.module @test {
   ^bb1(%p: core.ptr):
     %0 = tribute_rt.retain %p : core.ptr
     clif.jump %p
-    tribute_rt.release %p {alloc_size = 0}
   ^bb2(%q: core.ptr):
     clif.return %q
   }

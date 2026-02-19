@@ -139,12 +139,14 @@ fn is_return_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
 
 /// Check if an operation is a block terminator.
 fn is_terminator_op(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
-    clif::Return::from_operation(db, *op).is_ok()
-        || clif::Jump::from_operation(db, *op).is_ok()
-        || clif::Brif::from_operation(db, *op).is_ok()
-        || clif::Trap::from_operation(db, *op).is_ok()
-        || clif::ReturnCall::from_operation(db, *op).is_ok()
-        || clif::BrTable::from_operation(db, *op).is_ok()
+    // Use `matches` (dialect+name check) instead of `from_operation` to avoid
+    // spurious failures when successor blocks are not yet attached.
+    clif::Return::matches(db, *op)
+        || clif::Jump::matches(db, *op)
+        || clif::Brif::matches(db, *op)
+        || clif::Trap::matches(db, *op)
+        || clif::ReturnCall::matches(db, *op)
+        || clif::BrTable::matches(db, *op)
 }
 
 /// Check if an operation is `clif.load`.
@@ -726,6 +728,11 @@ fn insert_rc_in_block<'db>(
             // If the last use is a terminator (jump/brif), insert release BEFORE it
             // to avoid adding instructions after a block-ending operation.
             if is_terminator_op(db, last_op) {
+                // clif.jump transfers all operands to the successor block
+                // as block arguments — ownership transfers, no release needed.
+                if clif::Jump::matches(db, *last_op) {
+                    continue;
+                }
                 plan.before
                     .entry(last_use_idx)
                     .or_default()
@@ -1138,7 +1145,7 @@ mod tests {
 
     #[salsa_test]
     fn test_snapshot_release_before_jump(db: &salsa::DatabaseImpl) {
-        // ptr value passed as clif.jump operand — release must be inserted BEFORE the jump
+        // ptr value passed as clif.jump operand — ownership transfers to successor block, no release
         let ir = run_rc(
             db,
             r#"
@@ -1153,6 +1160,58 @@ mod tests {
             "#,
         );
         insta::assert_snapshot!(ir);
+    }
+
+    #[salsa_test]
+    fn test_jump_multiple_ptr_operands_no_release(db: &salsa::DatabaseImpl) {
+        // Multiple ptr operands passed via clif.jump — all transfer ownership, none released
+        // in the source block. The successor block handles its own block args.
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr, core.ptr)} {
+                    ^entry(%p: core.ptr, %q: core.ptr):
+                        clif.jump %p, %q
+                    ^target(%a: core.ptr, %b: core.ptr):
+                        clif.return %a
+                }
+            }
+            "#,
+        );
+
+        // Extract the source block (^bb1) content — no release should appear there
+        let bb1_content = ir.split("^bb1").nth(1).unwrap();
+        let bb1_content = bb1_content.split("^bb2").next().unwrap();
+        assert!(
+            !bb1_content.contains("tribute_rt.release"),
+            "source block should not release jump operands: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_brif_ptr_cond_still_released(db: &salsa::DatabaseImpl) {
+        // clif.brif condition is consumed, not transferred — must still be released
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil, core.ptr)} {
+                    ^entry(%p: core.ptr):
+                        clif.brif %p
+                    ^then():
+                        clif.return
+                    ^else():
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        assert!(
+            ir.contains("tribute_rt.release"),
+            "should release brif condition ptr: {ir}"
+        );
     }
 
     // === Yield point tests ===
