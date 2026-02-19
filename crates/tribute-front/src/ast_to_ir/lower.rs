@@ -192,6 +192,19 @@ fn prescan_struct_fields<'db>(
                     .map(|f| f.name.unwrap_or_else(|| Symbol::new("_")))
                     .collect();
                 ctx.register_struct_fields(ctor_id, field_names);
+
+                // Build full struct IR type with field names and types
+                let ir_fields: Vec<(Symbol, trunk_ir::Type<'db>)> = s
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let name = f.name.unwrap_or_else(|| Symbol::new("_"));
+                        let ty = convert_annotation_to_ir_type(ctx, Some(&f.ty));
+                        (name, ty)
+                    })
+                    .collect();
+                let struct_ir_type = adt::struct_type(ctx.db, s.name, ir_fields);
+                ctx.register_struct_ir_type(ctor_id, struct_ir_type);
             }
             Decl::Module(m) => {
                 // Recursively scan nested modules
@@ -825,7 +838,6 @@ fn lower_expr<'db>(
             spread,
         } => {
             let db = builder.db();
-            let result_ty = tribute_rt::any_type(db);
 
             // Spread syntax is not yet supported
             if spread.is_some() {
@@ -905,13 +917,20 @@ fn lower_expr<'db>(
                 }
             }
 
+            // Use the registered struct IR type (with field info) for the type attribute,
+            // falling back to tribute_rt.any for unregistered types (e.g., tuples).
+            let type_attr = builder
+                .ctx
+                .get_struct_ir_type(ctor_id)
+                .unwrap_or_else(|| tribute_rt::any_type(db));
+
             // Generate adt.struct_new directly
             let op = builder.block.op(adt::struct_new(
                 db,
                 location,
                 ordered_values,
                 struct_ty,
-                result_ty,
+                type_attr,
             ));
             Some(op.result(db))
         }
@@ -1493,6 +1512,22 @@ fn lower_struct_decl<'db>(
         })
         .collect();
 
+    // Use the registered full struct IR type for adt.struct_get (needed by native backend
+    // to compute field offsets). Falls back to adt.typeref for WASM compatibility.
+    // Note: CtorId path must match prescan_struct_fields convention (empty for top-level).
+    let ctor_id = {
+        let module_path = ctx.module_path();
+        // prescan uses [] for top-level, [Mod] for nested modules;
+        // ctx.module_path() is [root, Mod, ...]; skip the root module name.
+        let prescan_path = if module_path.len() > 1 {
+            trunk_ir::SymbolVec::from_slice(&module_path[1..])
+        } else {
+            trunk_ir::SymbolVec::new()
+        };
+        CtorId::new(db, prescan_path, name)
+    };
+    let struct_get_ty = ctx.get_struct_ir_type(ctor_id).unwrap_or(struct_ty);
+
     // Build qualified accessor names using module_path
     // This must match what TDNR generates via build_qualified_field_name
     let module_path = ctx.module_path();
@@ -1525,7 +1560,7 @@ fn lower_struct_decl<'db>(
                         location,
                         self_value,
                         *field_type,
-                        struct_ty,
+                        struct_get_ty,
                         idx as u64,
                     ));
                     entry.op(func::Return::value(db, location, field_value.result(db)));

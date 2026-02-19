@@ -134,10 +134,14 @@ fn collect_struct_types_in_op<'db>(
     op: &Operation<'db>,
     rtti_map: &mut RttiMap<'db>,
 ) {
-    // Check if this op is adt.struct_new
+    // Check if this op is adt.struct_new with a proper struct type
     if let Ok(struct_new) = adt::StructNew::from_operation(db, *op) {
         let struct_ty = struct_new.r#type(db);
-        rtti_map.get_or_insert(struct_ty);
+        // Only register types that are actual adt.struct types (with field info).
+        // Skip non-struct types like tribute_rt.any (used for tuples).
+        if adt::is_struct_type(db, struct_ty) {
+            rtti_map.get_or_insert(struct_ty);
+        }
     }
 
     // Recurse into regions

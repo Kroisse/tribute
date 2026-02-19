@@ -157,7 +157,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: struct RTTI requires tribute_rt.any support"]
 fn test_native_struct() {
     let status = compile_and_run_native(
         "struct.trb",
