@@ -247,6 +247,17 @@ impl<'db> IrLoweringCtx<'db> {
         self.type_map.get(&name).copied()
     }
 
+    /// Resolve an AST type to its registered ADT IR type (struct or enum).
+    ///
+    /// For `Named { name, .. }` types, looks up the type_map by name.
+    /// Returns `None` if the type is not a registered ADT type.
+    pub fn resolve_adt_type(&self, ty: crate::ast::Type<'db>) -> Option<Type<'db>> {
+        match ty.kind(self.db) {
+            TypeKind::Named { name, .. } => self.get_type(*name),
+            _ => None,
+        }
+    }
+
     /// Track the IR type of a generated SSA value.
     ///
     /// This is used by `cast_if_needed` to determine if a cast is required.

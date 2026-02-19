@@ -1,12 +1,12 @@
-//! Lower `adt.struct_new` operations with RC header initialization.
+//! Lower `adt.struct_new` and `adt.variant_new` operations with RC header initialization.
 //!
-//! This pass converts `adt.struct_new` to `clif.*` operations that:
+//! This pass converts ADT construction ops to `clif.*` operations that:
 //! 1. Allocate memory via `__tribute_alloc(payload_size + RC_HEADER_SIZE)`
 //! 2. Store refcount = 1 and rtti_idx in the RC header
 //! 3. Store field values in the payload area
 //!
 //! This is a Tribute-specific pass that must run before the language-agnostic
-//! `adt_to_clif` pass (which handles `adt.struct_get` / `adt.struct_set`).
+//! `adt_to_clif` pass (which handles field access operations).
 //!
 //! ## Pipeline Position
 //!
@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use tracing::warn;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
-use trunk_ir::adt_layout::compute_struct_layout;
+use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::{
@@ -45,6 +45,9 @@ pub fn lower<'db>(
 
     PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
+            rtti_map: rtti_map.clone(),
+        })
+        .add_pattern(VariantNewPattern {
             rtti_map: rtti_map.clone(),
         })
         .apply_partial(db, module, target)
@@ -143,6 +146,127 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         }
 
         // 7. Identity pass-through so the last op produces the payload ptr result.
+        let zero_op = clif::iconst(db, location, i64_ty, 0);
+        let zero_val = zero_op.result(db);
+        ops.push(zero_op.as_operation());
+
+        let identity_op = clif::iadd(db, location, payload_val, zero_val, ptr_ty);
+        ops.push(identity_op.as_operation());
+
+        RewriteResult::expand(ops)
+    }
+}
+
+/// Pattern for `adt.variant_new(fields...)` -> heap allocation + RC header + tag + stores.
+///
+/// Generates:
+/// ```text
+/// %size      = clif.iconst(enum_layout.total_size + 8)
+/// %raw_ptr   = clif.call @__tribute_alloc(%size)
+/// %rc_one    = clif.iconst(1)
+/// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
+/// %rtti_idx  = clif.iconst(<rtti_idx>)
+/// clif.store(%rtti_idx, %raw_ptr, offset=4)      // rtti_idx
+/// %hdr_size  = clif.iconst(8)
+/// %payload   = clif.iadd(%raw_ptr, %hdr_size)    // payload_ptr
+/// %tag       = clif.iconst(<tag_value>)
+/// clif.store(%tag, %payload, offset=0)            // discriminant
+/// clif.store(%field0, %payload, offset=8)         // first field
+/// clif.store(%field1, %payload, offset=16)        // second field
+/// ...
+/// %result    = clif.iadd(%payload, %zero)         // identity
+/// ```
+struct VariantNewPattern<'db> {
+    rtti_map: HashMap<Type<'db>, u32>,
+}
+
+impl<'db> RewritePattern<'db> for VariantNewPattern<'db> {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let enum_ty = variant_new.r#type(db);
+        let tag = variant_new.tag(db);
+        let type_converter = adaptor.type_converter();
+
+        let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
+            warn!(
+                "adt_rc_header: cannot compute enum layout for variant_new at {:?}",
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
+            warn!(
+                "adt_rc_header: unknown variant tag {:?} at {:?}",
+                tag,
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let location = op.location(db);
+        let ptr_ty = core::Ptr::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
+        let i32_ty = core::I32::new(db).as_type();
+        let fields = adaptor.operands();
+
+        let mut ops: Vec<Operation<'db>> = Vec::new();
+
+        // 1. Compute allocation size (payload + RC header)
+        let alloc_size = enum_layout.total_size as u64 + RC_HEADER_SIZE;
+        let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
+        let size_val = size_op.result(db);
+        ops.push(size_op.as_operation());
+
+        // 2. Call __tribute_alloc
+        let call_op = clif::call(db, location, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
+        let raw_ptr = call_op.result(db);
+        ops.push(call_op.as_operation());
+
+        // 3. Store refcount = 1 at raw_ptr + 0
+        let rc_one = clif::iconst(db, location, i32_ty, 1);
+        ops.push(rc_one.as_operation());
+        let store_rc = clif::store(db, location, rc_one.result(db), raw_ptr, 0);
+        ops.push(store_rc.as_operation());
+
+        // 4. Store rtti_idx at raw_ptr + 4
+        let rtti_idx = self.rtti_map.get(&enum_ty).copied().unwrap_or(0) as i64;
+        let rtti_val = clif::iconst(db, location, i32_ty, rtti_idx);
+        ops.push(rtti_val.as_operation());
+        let store_rtti = clif::store(db, location, rtti_val.result(db), raw_ptr, 4);
+        ops.push(store_rtti.as_operation());
+
+        // 5. Compute payload pointer = raw_ptr + 8
+        let hdr_size = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+        ops.push(hdr_size.as_operation());
+        let payload_ptr = clif::iadd(db, location, raw_ptr, hdr_size.result(db), ptr_ty);
+        let payload_val = payload_ptr.result(db);
+        ops.push(payload_ptr.as_operation());
+
+        // 6. Store tag at payload + 0
+        let tag_val = clif::iconst(db, location, i32_ty, variant_layout.tag_value as i64);
+        ops.push(tag_val.as_operation());
+        let store_tag = clif::store(db, location, tag_val.result(db), payload_val, 0);
+        ops.push(store_tag.as_operation());
+
+        // 7. Store each field at its computed offset (relative to payload + fields_offset)
+        for (i, &field_val) in fields.iter().enumerate() {
+            if i < variant_layout.field_offsets.len() {
+                let offset = (enum_layout.fields_offset + variant_layout.field_offsets[i]) as i32;
+                let store_op = clif::store(db, location, field_val, payload_val, offset);
+                ops.push(store_op.as_operation());
+            }
+        }
+
+        // 8. Identity pass-through so the last op produces the payload ptr result.
         let zero_op = clif::iconst(db, location, i64_ty, 0);
         let zero_val = zero_op.result(db);
         ops.push(zero_op.as_operation());

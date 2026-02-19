@@ -65,7 +65,8 @@ dialect! {
         fn variant_cast(r#ref) -> result;
 
         /// `adt.variant_get` operation: reads a field from a variant by index.
-        #[attr(field: u64)]
+        /// Type and tag attributes identify the enum type and variant for layout computation.
+        #[attr(r#type: Type, tag: Symbol, field: u64)]
         fn variant_get(r#ref) -> result;
 
         // === Array ===
