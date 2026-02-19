@@ -334,6 +334,9 @@ fn test_state_type_name_deterministic() {
     });
     assert_eq!(name1, name2, "Same inputs should produce same name");
 
+    // Pin exact value so any hash-function change is caught
+    insta::assert_snapshot!(name1, @"__State_931c664a6756");
+
     // Name should start with __State_ prefix
     assert!(
         name1.starts_with("__State_"),

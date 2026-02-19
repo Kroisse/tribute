@@ -44,6 +44,9 @@ pub struct IrLoweringCtx<'db> {
     /// Struct field order: CtorId → [field_names in definition order].
     /// Used for lowering Record expressions to adt.struct_new.
     struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
+    /// Struct IR types: CtorId → adt.struct type with full field info.
+    /// Used to set the correct type attribute on adt.struct_new operations.
+    struct_ir_types: HashMap<CtorId<'db>, Type<'db>>,
     /// Counter for generating unique prompt tags (per-module deterministic).
     prompt_tag_counter: u32,
     /// Stack of active prompt tags for nested handlers.
@@ -78,6 +81,7 @@ impl<'db> IrLoweringCtx<'db> {
             local_id_counter: 0x8000_0000, // Start high to avoid collisions with parsed LocalIds
             lifted_functions: Vec::new(),
             struct_fields: HashMap::new(),
+            struct_ir_types: HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
             value_types: HashMap::new(),
@@ -231,6 +235,16 @@ impl<'db> IrLoweringCtx<'db> {
     /// Get struct field order (for lowering Record → adt.struct_new).
     pub fn get_struct_field_order(&self, ctor_id: CtorId<'db>) -> Option<&Vec<Symbol>> {
         self.struct_fields.get(&ctor_id)
+    }
+
+    /// Register the full IR type for a struct (adt.struct with field names and types).
+    pub fn register_struct_ir_type(&mut self, ctor_id: CtorId<'db>, ir_type: Type<'db>) {
+        self.struct_ir_types.insert(ctor_id, ir_type);
+    }
+
+    /// Get the registered IR type for a struct.
+    pub fn get_struct_ir_type(&self, ctor_id: CtorId<'db>) -> Option<Type<'db>> {
+        self.struct_ir_types.get(&ctor_id).copied()
     }
 
     /// Track the IR type of a generated SSA value.
