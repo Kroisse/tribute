@@ -1,13 +1,14 @@
 ---
 source: crates/trunk-ir/src/parser.rs
+assertion_line: 1999
 expression: printed
 ---
 core.module @test {
   func.func @f() -> core.i32 {
     %0 = arith.const {value = 10} : core.i32
     %1 = arith.const {value = 20} : core.i32
-    %2 = adt.struct_new %0, %1 {type = adt.struct() {name = @Point, fields = [@x, @y]}} : adt.struct() {name = @Point, fields = [@x, @y]}
-    %3 = adt.struct_get %2 {type = adt.struct() {name = @Point, fields = [@x, @y]}, field = 0} : core.i32
+    %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [@x, @y], name = @Point}} : adt.struct() {fields = [@x, @y], name = @Point}
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [@x, @y], name = @Point}} : core.i32
     func.return %3
   }
 }

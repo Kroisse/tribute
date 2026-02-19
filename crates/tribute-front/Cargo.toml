@@ -8,6 +8,7 @@ description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 
 [dependencies]
 fluent-uri.workspace = true
+im.workspace = true
 salsa.workspace = true
 ropey.workspace = true
 smallvec.workspace = true

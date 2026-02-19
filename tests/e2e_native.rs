@@ -362,3 +362,22 @@ fn main() {
         status
     );
 }
+
+#[test]
+fn test_native_tuple_create_and_match() {
+    let status = compile_and_run_native(
+        "tuple_create_match.trb",
+        r#"
+fn main() {
+    let t = (1, 2)
+    let (a, b) = t
+    let _ = a + b
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}

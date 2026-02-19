@@ -204,7 +204,7 @@ fn prescan_struct_fields<'db>(
                     })
                     .collect();
                 let struct_ir_type = adt::struct_type(ctx.db, s.name, ir_fields);
-                ctx.register_struct_ir_type(ctor_id, struct_ir_type);
+                ctx.register_type(s.name, struct_ir_type);
             }
             Decl::Module(m) => {
                 // Recursively scan nested modules
@@ -449,6 +449,41 @@ fn lower_extern_function<'db>(
     );
 
     top.op(func_op);
+}
+
+/// Create (or reuse) an `adt.struct` type for a tuple and register it in the type map.
+///
+/// Returns `(tuple_name, struct_type)` if the node has a `Tuple` type; `None` otherwise.
+fn get_or_create_tuple_type<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    node_id: NodeId,
+) -> Option<(Symbol, trunk_ir::Type<'db>)> {
+    let ast_ty = ctx.get_node_type(node_id)?;
+    let TypeKind::Tuple(elem_tys) = ast_ty.kind(ctx.db) else {
+        return None;
+    };
+    let ir_fields: Vec<(Symbol, trunk_ir::Type<'db>)> = elem_tys
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| {
+            let name = Symbol::from_dynamic(&i.to_string());
+            let ir_ty = ctx.convert_type(*ty);
+            (name, ir_ty)
+        })
+        .collect();
+    let type_names: Vec<String> = ir_fields
+        .iter()
+        .map(|(_, ty)| ty.name(ctx.db).to_string())
+        .collect();
+    let tuple_name = Symbol::from_dynamic(&format!("__tuple_{}", type_names.join("_")));
+
+    if let Some(struct_ty) = ctx.get_type(tuple_name) {
+        return Some((tuple_name, struct_ty));
+    }
+
+    let struct_ty = adt::struct_type(ctx.db, tuple_name, ir_fields);
+    ctx.register_type(tuple_name, struct_ty);
+    Some((tuple_name, struct_ty))
 }
 
 /// Lower an expression to TrunkIR.
@@ -823,10 +858,14 @@ fn lower_expr<'db>(
                 .iter()
                 .map(|elem| lower_expr(builder, elem.clone()))
                 .collect::<Option<Vec<_>>>()?;
-            let result_ty = tribute_rt::any_type(db);
+            let any_ty = tribute_rt::any_type(db);
+            let (result_ty, type_attr) = match get_or_create_tuple_type(builder.ctx, expr.id) {
+                Some((name, struct_ty)) => (adt::typeref(db, name), struct_ty),
+                None => (any_ty, any_ty),
+            };
             let op = builder
                 .block
-                .op(adt::struct_new(db, location, values, result_ty, result_ty));
+                .op(adt::struct_new(db, location, values, result_ty, type_attr));
             let result = op.result(db);
             builder.ctx.track_value_type(result, result_ty);
             Some(result)
@@ -918,10 +957,10 @@ fn lower_expr<'db>(
             }
 
             // Use the registered struct IR type (with field info) for the type attribute,
-            // falling back to tribute_rt.any for unregistered types (e.g., tuples).
+            // falling back to tribute_rt.any for unregistered types.
             let type_attr = builder
                 .ctx
-                .get_struct_ir_type(ctor_id)
+                .get_type(struct_name)
                 .unwrap_or_else(|| tribute_rt::any_type(db));
 
             // Generate adt.struct_new directly
@@ -1514,19 +1553,7 @@ fn lower_struct_decl<'db>(
 
     // Use the registered full struct IR type for adt.struct_get (needed by native backend
     // to compute field offsets). Falls back to adt.typeref for WASM compatibility.
-    // Note: CtorId path must match prescan_struct_fields convention (empty for top-level).
-    let ctor_id = {
-        let module_path = ctx.module_path();
-        // prescan uses [] for top-level, [Mod] for nested modules;
-        // ctx.module_path() is [root, Mod, ...]; skip the root module name.
-        let prescan_path = if module_path.len() > 1 {
-            trunk_ir::SymbolVec::from_slice(&module_path[1..])
-        } else {
-            trunk_ir::SymbolVec::new()
-        };
-        CtorId::new(db, prescan_path, name)
-    };
-    let struct_get_ty = ctx.get_struct_ir_type(ctor_id).unwrap_or(struct_ty);
+    let struct_get_ty = ctx.get_type(name).unwrap_or(struct_ty);
 
     // Build qualified accessor names using module_path
     // This must match what TDNR generates via build_qualified_field_name
@@ -1745,6 +1772,9 @@ fn emit_pattern_check<'db>(
             // We need to recursively check all element patterns
             let mut conditions = Vec::new();
             let any_ty = tribute_rt::any_type(builder.db());
+            let struct_ty = get_or_create_tuple_type(builder.ctx, pattern.id)
+                .map(|(_, st)| st)
+                .unwrap_or(any_ty);
 
             for (i, elem_pat) in elements.iter().enumerate() {
                 // Extract the element from the tuple
@@ -1755,7 +1785,7 @@ fn emit_pattern_check<'db>(
                         location,
                         scrutinee,
                         any_ty,
-                        any_ty,
+                        struct_ty,
                         i as u64,
                     ))
                     .result(builder.db());
@@ -2059,10 +2089,13 @@ fn bind_pattern_fields<'db>(
         PatternKind::Tuple(elements) => {
             // Extract each element from the tuple and recursively bind
             let any_ty = tribute_rt::any_type(ctx.db);
+            let struct_ty = get_or_create_tuple_type(ctx, pattern.id)
+                .map(|(_, st)| st)
+                .unwrap_or(any_ty);
             for (i, elem_pat) in elements.iter().enumerate() {
                 let elem_val = block
                     .op(adt::struct_get(
-                        ctx.db, location, scrutinee, any_ty, any_ty, i as u64,
+                        ctx.db, location, scrutinee, any_ty, struct_ty, i as u64,
                     ))
                     .result(ctx.db);
                 bind_pattern_fields(ctx, block, location, elem_val, elem_pat);
