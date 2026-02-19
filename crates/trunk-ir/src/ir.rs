@@ -20,8 +20,29 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 ///
 /// Uses lasso for string interning with 4-byte Spur keys.
 /// Significantly smaller than Salsa's interned types.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+///
+/// Ordering is based on the underlying string content (not interning order),
+/// so that `BTreeMap<Symbol, _>` iteration is deterministic.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub struct Symbol(Spur);
+
+impl PartialOrd for Symbol {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Symbol {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self.0 == other.0 {
+            return std::cmp::Ordering::Equal;
+        }
+        let interner = INTERNER.read_recursive();
+        let a = interner.resolve(&self.0);
+        let b = interner.resolve(&other.0);
+        a.cmp(b)
+    }
+}
 
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

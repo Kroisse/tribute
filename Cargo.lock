@@ -1480,6 +1480,7 @@ name = "tribute-front"
 version = "0.1.0"
 dependencies = [
  "fluent-uri",
+ "im",
  "insta",
  "proptest",
  "ropey",
