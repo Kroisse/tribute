@@ -457,6 +457,42 @@ fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> u64 {
     0
 }
 
+/// Check if a value is an intermediate allocation pointer that should not be
+/// released individually.
+///
+/// The ADT construction pattern (`adt_rc_header`) produces three pointer values:
+/// 1. `raw_ptr` = `__tribute_alloc(size)` — RC header base
+/// 2. `payload_ptr` = `iadd(raw_ptr, 8)` — points past the RC header
+/// 3. `identity` = `iadd(payload_ptr, 0)` — the "real" result
+///
+/// Only the identity pointer (#3) should be RC-tracked. The raw_ptr's release
+/// would compute `raw_ptr - 8` (before the allocation), and the payload_ptr's
+/// release would double-free with the identity pointer's release.
+fn is_alloc_intermediate(db: &dyn salsa::Database, value: Value<'_>) -> bool {
+    let ValueDef::OpResult(def_op) = value.def(db) else {
+        return false;
+    };
+
+    // Case 1: direct `__tribute_alloc` result
+    if let Ok(call_op) = clif::Call::from_operation(db, def_op) {
+        return call_op.callee(db) == Symbol::new("__tribute_alloc");
+    }
+
+    // Case 2: `iadd(alloc_result, offset)` where LHS is a direct alloc result
+    // This covers the payload_ptr but NOT the identity (whose LHS is payload_ptr).
+    if let Ok(iadd_op) = clif::Iadd::from_operation(db, def_op) {
+        let lhs = iadd_op.lhs(db);
+        let ValueDef::OpResult(lhs_op) = lhs.def(db) else {
+            return false;
+        };
+        if let Ok(call_op) = clif::Call::from_operation(db, lhs_op) {
+            return call_op.callee(db) == Symbol::new("__tribute_alloc");
+        }
+    }
+
+    false
+}
+
 /// Insert RC operations in a single block.
 fn insert_rc_in_block<'db>(
     db: &'db dyn salsa::Database,
@@ -697,8 +733,13 @@ fn insert_rc_in_block<'db>(
     // Values defined in this block that are not in live_out
     for v in &defs_in_block {
         if !live_out.contains(v) && !returned_values.contains(v) {
-            // Skip alloc results — they start with refcount=1, so we DO need to release them
-            // unless they're returned. The retain at entry already handles params.
+            // Skip raw alloc results — the release code subtracts 8 from the pointer
+            // to find the RC header, but the alloc result IS the header base. Releasing
+            // it would read/write at `raw_ptr - 8` which is before the allocation.
+            // The derived payload pointer (`raw_ptr + 8`) handles the release correctly.
+            if is_alloc_intermediate(db, *v) {
+                continue;
+            }
             dying_values.insert(*v);
         }
     }

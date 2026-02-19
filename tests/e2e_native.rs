@@ -197,7 +197,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: clif.iconst value mapping issue in case expression codegen"]
 fn test_native_enum_case() {
     let status = compile_and_run_native(
         "enum_case.trb",
@@ -260,7 +259,6 @@ fn main() {
 
 /// Test enum with mixed variant arities (Option-like).
 #[test]
-#[ignore = "native backend: duplicate function definition with mixed-arity enum variants"]
 fn test_native_enum_option_like() {
     let status = compile_and_run_native(
         "enum_option.trb",
@@ -270,7 +268,7 @@ enum Maybe {
     Nothing,
 }
 
-fn unwrap_or(m: Maybe, default: Nat) -> Nat {
+fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
     case m {
         Just(x) -> x
         Nothing -> default
@@ -278,8 +276,8 @@ fn unwrap_or(m: Maybe, default: Nat) -> Nat {
 }
 
 fn main() {
-    let _ = unwrap_or(Just(42), 0)
-    let _ = unwrap_or(Nothing, 99)
+    let _ = maybe_unwrap(Just(42), 0)
+    let _ = maybe_unwrap(Nothing, 99)
 }
 "#,
     );

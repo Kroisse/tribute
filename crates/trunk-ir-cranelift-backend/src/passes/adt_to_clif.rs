@@ -308,11 +308,31 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
 
         let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_get.r#ref(db));
 
-        let result_ty = adaptor
-            .result_type(db, 0)
-            .unwrap_or_else(|| op.results(db)[0]);
+        // Determine the load type from the enum type definition.
+        // The field was stored with its native type, so we must load with the
+        // same type rather than the type-erased result type (which may be
+        // core.ptr when the IR uses tribute_rt.any).
+        let load_ty = adt::get_enum_variants(db, enum_ty)
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|(name, _)| *name == tag)
+                    .and_then(|(_, fields)| fields.get(field_idx).copied())
+            })
+            .map(|field_ty| {
+                // Convert the field type to native (e.g., tribute_rt.any → core.ptr).
+                // If already native (e.g., core.i32), keep as-is.
+                type_converter
+                    .convert_type(db, field_ty)
+                    .unwrap_or(field_ty)
+            })
+            .unwrap_or_else(|| {
+                adaptor
+                    .result_type(db, 0)
+                    .unwrap_or_else(|| op.results(db)[0])
+            });
 
-        let load_op = clif::load(db, location, ref_val, result_ty, offset);
+        let load_op = clif::load(db, location, ref_val, load_ty, offset);
         RewriteResult::Replace(load_op.as_operation())
     }
 }

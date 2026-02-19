@@ -1056,11 +1056,29 @@ fn lower_expr<'db>(
         }
         ExprKind::Case { scrutinee, arms } => {
             let scrutinee_val = lower_expr(builder, scrutinee)?;
-            let result_ty = builder
+            let any_ty = tribute_rt::any_type(builder.db());
+            let mut result_ty = builder
                 .ctx
                 .get_node_type(expr.id)
                 .map(|ty| builder.ctx.convert_type(*ty))
-                .unwrap_or_else(|| tribute_rt::any_type(builder.db()));
+                .unwrap_or(any_ty);
+
+            // If the case expression type was erased to any (e.g., due to a
+            // UniVar surviving substitution), try to infer a concrete type
+            // from the first arm's body. This avoids a type mismatch where
+            // the scf.if produces `tribute_rt.any` but the enclosing function
+            // expects a concrete type like `core.i32`.
+            if result_ty == any_ty {
+                if let Some(first_arm) = arms.first() {
+                    if let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id) {
+                        let converted = builder.ctx.convert_type(*arm_ty);
+                        if converted != any_ty {
+                            result_ty = converted;
+                        }
+                    }
+                }
+            }
+
             let location = builder.location(expr.id);
             lower_case_chain(
                 builder.ctx,
