@@ -238,7 +238,7 @@ fn emit_module_impl<'db>(
 /// uniqueness with predictable length.
 fn mangle_native_name(name: &str) -> String {
     use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
     name.hash(&mut hasher);
     let hash = hasher.finish();
 
@@ -1032,6 +1032,17 @@ mod tests {
         let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![const_op]);
         let region = Region::new(db, location, idvec![block]);
         core::Module::create(db, location, "test".into(), region)
+    }
+
+    #[test]
+    fn test_mangle_native_name() {
+        // Pin exact mangled names so any hash-function change is caught.
+        insta::assert_snapshot!(mangle_native_name("main"), @"_trb_main_h0b47e05e4c5c1745");
+        insta::assert_snapshot!(mangle_native_name("Foo::bar"), @"_trb_bar_h35024d165ec188ad");
+        insta::assert_snapshot!(mangle_native_name("std::List::map"), @"_trb_map_hec4bdfe12f592d9c");
+
+        // Same input → same output (deterministic)
+        assert_eq!(mangle_native_name("main"), mangle_native_name("main"));
     }
 
     #[salsa_test]

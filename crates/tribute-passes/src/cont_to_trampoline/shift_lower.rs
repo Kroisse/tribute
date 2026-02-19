@@ -33,10 +33,9 @@ pub(crate) struct StateTypeKey {
 /// Generate a unique state type name based on ability, operation info, module, span and shift index.
 /// Uses module name and span for uniqueness since the tag is runtime-determined.
 pub(crate) fn state_type_name(key: StateTypeKey) -> String {
-    use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = rustc_hash::FxHasher::default();
 
     if let Some(ability) = key.ability_name {
         ability.to_string().hash(&mut hasher);

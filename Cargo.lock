@@ -1556,6 +1556,7 @@ dependencies = [
  "cranelift-object",
  "derive_more",
  "insta",
+ "rustc-hash",
  "salsa",
  "salsa-test-macros",
  "target-lexicon",
