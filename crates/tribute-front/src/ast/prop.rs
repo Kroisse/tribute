@@ -404,6 +404,29 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::SpanMap;
+    use crate::resolve;
+    use crate::typeck;
+
+    /// Salsa input wrapper so that generated modules can be passed into
+    /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
+    #[salsa::input]
+    struct PropTestInput {
+        #[returns(ref)]
+        module: Module<UnresolvedName>,
+    }
+
+    /// Tracked wrapper: resolve → typecheck pipeline.
+    ///
+    /// Running inside a tracked function provides the accumulator context
+    /// that the type checker needs to report diagnostics.
+    #[salsa::tracked]
+    fn run_resolve_and_typecheck<'db>(db: &'db dyn salsa::Database, input: PropTestInput) {
+        let module = input.module(db).clone();
+        let span_map = SpanMap::default();
+        let resolved = resolve::resolve_module(db, module, span_map.clone());
+        let _output = typeck::typecheck_module(db, resolved, span_map);
+    }
 
     proptest! {
         /// Generated expressions implement Clone, Debug, PartialEq correctly.
@@ -459,6 +482,29 @@ mod tests {
         #[test]
         fn module_construction_does_not_panic(_module in parsed_module()) {
             // reaching here without panic is the assertion
+        }
+
+        /// Name resolution does not panic on generated ASTs.
+        ///
+        /// All variables are bound by enclosing `let` bindings, so resolve
+        /// should succeed without errors.
+        #[test]
+        fn resolve_does_not_panic(module in parsed_module()) {
+            let db = salsa::DatabaseImpl::new();
+            let _resolved = resolve::resolve_module(&db, module, SpanMap::default());
+        }
+
+        /// Type checking does not panic on generated ASTs.
+        ///
+        /// Type errors (e.g. `bool + int`) are expected and collected as
+        /// diagnostics — the key property is that the pipeline never panics.
+        /// Runs inside a `#[salsa::tracked]` wrapper to provide the
+        /// accumulator context required by the type checker.
+        #[test]
+        fn typecheck_does_not_panic(module in parsed_module()) {
+            let db = salsa::DatabaseImpl::new();
+            let input = PropTestInput::new(&db, module);
+            run_resolve_and_typecheck(&db, input);
         }
     }
 }
