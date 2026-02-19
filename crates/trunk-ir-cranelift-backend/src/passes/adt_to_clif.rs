@@ -346,29 +346,14 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn make_ref_null_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        let struct_ty = adt::struct_type(db, Symbol::new("Env"), vec![(Symbol::new("x"), i32_ty)]);
-
-        let ref_null_op = adt::ref_null(db, location, ptr_ty, struct_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![ref_null_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
     fn do_lower_ref_null(db: &dyn salsa::Database) -> String {
-        lower_and_print(db, make_ref_null_module(db))
+        let module = trunk_ir::parser::parse_test_module(
+            db,
+            r#"core.module @test {
+  %0 = adt.ref_null {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+}"#,
+        );
+        lower_and_print(db, module)
     }
 
     #[salsa_test]
@@ -377,30 +362,15 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn make_ref_cast_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        let struct_ty = adt::struct_type(db, Symbol::new("Env"), vec![(Symbol::new("x"), i32_ty)]);
-
-        let ref_op = clif::iconst(db, location, ptr_ty, 100);
-        let ref_cast_op = adt::ref_cast(db, location, ref_op.result(db), ptr_ty, struct_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![ref_op.as_operation(), ref_cast_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
     fn do_lower_ref_cast(db: &dyn salsa::Database) -> String {
-        lower_and_print(db, make_ref_cast_module(db))
+        let module = trunk_ir::parser::parse_test_module(
+            db,
+            r#"core.module @test {
+  %0 = clif.iconst {value = 100} : core.ptr
+  %1 = adt.ref_cast %0 {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+}"#,
+        );
+        lower_and_print(db, module)
     }
 
     #[salsa_test]
@@ -409,28 +379,15 @@ mod tests {
     }
 
     #[salsa::tracked]
-    fn make_ref_is_null_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let i1_ty = core::I1::new(db).as_type();
-
-        let ref_op = clif::iconst(db, location, ptr_ty, 42);
-        let ref_is_null_op = adt::ref_is_null(db, location, ref_op.result(db), i1_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![ref_op.as_operation(), ref_is_null_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
     fn do_lower_ref_is_null(db: &dyn salsa::Database) -> String {
-        lower_and_print(db, make_ref_is_null_module(db))
+        let module = trunk_ir::parser::parse_test_module(
+            db,
+            r#"core.module @test {
+  %0 = clif.iconst {value = 42} : core.ptr
+  %1 = adt.ref_is_null %0 : core.i1
+}"#,
+        );
+        lower_and_print(db, module)
     }
 
     #[salsa_test]
