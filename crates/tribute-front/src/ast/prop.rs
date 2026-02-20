@@ -574,11 +574,15 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
     let main_arg = expr_with_env(0, 3);
     (
         (node_id(), node_id(), node_id()),
-        (node_id(), node_id(), node_id()),
+        (node_id(), node_id(), node_id(), node_id()),
         (helper_body, main_arg),
     )
         .prop_map(
-            |((mod_id, helper_fid, helper_pid), (main_fid, call_id, callee_nid), (h_body, arg))| {
+            |(
+                (mod_id, helper_fid, helper_pid),
+                (main_fid, call_id, callee_expr_id, callee_nid),
+                (h_body, arg),
+            )| {
                 let helper = FuncDecl {
                     id: helper_fid,
                     is_pub: false,
@@ -595,7 +599,7 @@ fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     body: h_body,
                 };
                 let callee_name = UnresolvedName::simple(Symbol::new(FUNC_NAMES[0]), callee_nid);
-                let callee_expr = Expr::new(call_id, ExprKind::Var(callee_name));
+                let callee_expr = Expr::new(callee_expr_id, ExprKind::Var(callee_name));
                 let main_body = Expr::new(
                     call_id,
                     ExprKind::Call {
@@ -637,13 +641,20 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
     (
         (node_id(), node_id(), node_id(), node_id()),
         (node_id(), node_id(), node_id(), node_id()),
-        (node_id(), alpha_body, beta_body, inner_arg),
+        (node_id(), node_id(), node_id(), node_id()),
+        (alpha_body, beta_body, inner_arg),
     )
         .prop_map(
             |(
                 (mod_id, alpha_fid, alpha_pid, beta_fid),
                 (beta_pid, main_fid, call_outer_id, call_inner_id),
-                (callee_nid, a_body, b_body, arg),
+                (
+                    alpha_callee_expr_id,
+                    alpha_callee_name_id,
+                    beta_callee_expr_id,
+                    beta_callee_name_id,
+                ),
+                (a_body, b_body, arg),
             )| {
                 let alpha_fn = FuncDecl {
                     id: alpha_fid,
@@ -677,10 +688,10 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                 };
                 // main body: alpha(beta(arg))
                 let beta_callee = Expr::new(
-                    callee_nid,
+                    beta_callee_expr_id,
                     ExprKind::Var(UnresolvedName::simple(
                         Symbol::new(FUNC_NAMES[1]),
-                        callee_nid,
+                        beta_callee_name_id,
                     )),
                 );
                 let inner_call = Expr::new(
@@ -691,10 +702,10 @@ fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
                     },
                 );
                 let alpha_callee = Expr::new(
-                    callee_nid,
+                    alpha_callee_expr_id,
                     ExprKind::Var(UnresolvedName::simple(
                         Symbol::new(FUNC_NAMES[0]),
-                        callee_nid,
+                        alpha_callee_name_id,
                     )),
                 );
                 let outer_call = Expr::new(
