@@ -1,15 +1,18 @@
 //! Random AST generators for property-based testing.
 //!
 //! Provides `proptest` strategy functions that generate syntactically valid
-//! Tribute AST nodes. Phase 1 covered literals and arithmetic expressions;
-//! Phase 2 adds `Block`, `Let`, and `Var` with scope-correct variable
-//! references via a parameterized `env_size` approach.
+//! Tribute AST nodes.
+//!
+//! - Phase 1: Literals and arithmetic expressions.
+//! - Phase 2: `Block`, `Let`, and `Var` with scope-correct variable
+//!   references via a parameterized `env_size` approach.
+//! - Phase 3: `Lambda`, `Call`, `Tuple`, and multi-function modules.
 
 use proptest::prelude::*;
 
 use super::{
-    BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, Module, NodeId, Pattern, PatternKind,
-    Stmt, UnresolvedName,
+    BinOpKind, Decl, Expr, ExprKind, FloatBits, FuncDecl, Module, NodeId, Param, ParamDecl,
+    Pattern, PatternKind, Stmt, UnresolvedName,
 };
 use trunk_ir::Symbol;
 
@@ -18,6 +21,9 @@ use trunk_ir::Symbol;
 const VAR_NAMES: &[&str] = &[
     "foo", "bar", "baz", "qux", "quux", "corge", "grault", "garply",
 ];
+
+/// Fixed pool of helper function names for multi-function module generation.
+const FUNC_NAMES: &[&str] = &["alpha", "beta"];
 
 /// Strategy for a random [`NodeId`], excluded from shrinking.
 ///
@@ -254,6 +260,207 @@ fn block_variant(
     }
 }
 
+/// Strategy for a Tuple expression with 0–3 elements.
+///
+/// No scope change — all elements are generated in the same environment.
+fn tuple_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<UnresolvedName>> {
+    let child_depth = max_depth - 1;
+    prop_oneof![
+        // 0-element (unit tuple)
+        node_id().prop_map(|id| Expr::new(id, ExprKind::Tuple(vec![]))),
+        // 1-element
+        (node_id(), expr_with_env(env_size, child_depth))
+            .prop_map(|(id, e)| Expr::new(id, ExprKind::Tuple(vec![e]))),
+        // 2-element
+        (
+            node_id(),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+        )
+            .prop_map(|(id, a, b)| Expr::new(id, ExprKind::Tuple(vec![a, b]))),
+        // 3-element
+        (
+            node_id(),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+        )
+            .prop_map(|(id, a, b, c)| Expr::new(id, ExprKind::Tuple(vec![a, b, c]))),
+    ]
+    .boxed()
+}
+
+/// Strategy for a Lambda expression with 1–3 parameters.
+///
+/// Parameters are drawn from `VAR_NAMES[env_size..]`, and the body is
+/// generated in a scope extended by those parameter names.
+///
+/// # Panics
+/// Panics if `remaining` (`VAR_NAMES.len() - env_size`) is 0.
+fn lambda_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<UnresolvedName>> {
+    let remaining = VAR_NAMES.len().saturating_sub(env_size);
+    assert!(remaining > 0, "lambda_variant requires remaining > 0");
+    let child_depth = max_depth - 1;
+
+    let mut variants: Vec<BoxedStrategy<Expr<UnresolvedName>>> = Vec::new();
+
+    // --- 1 param ---
+    {
+        let p0 = VAR_NAMES[env_size];
+        let body = expr_with_env(env_size + 1, child_depth);
+        variants.push(
+            (node_id(), node_id(), body)
+                .prop_map(move |(expr_id, param_id, body)| {
+                    Expr::new(
+                        expr_id,
+                        ExprKind::Lambda {
+                            params: vec![Param {
+                                id: param_id,
+                                name: Symbol::new(p0),
+                                ty: None,
+                                local_id: None,
+                            }],
+                            body,
+                        },
+                    )
+                })
+                .boxed(),
+        );
+    }
+
+    // --- 2 params ---
+    if remaining >= 2 {
+        let p0 = VAR_NAMES[env_size];
+        let p1 = VAR_NAMES[env_size + 1];
+        let body = expr_with_env(env_size + 2, child_depth);
+        variants.push(
+            (node_id(), node_id(), node_id(), body)
+                .prop_map(move |(expr_id, pid0, pid1, body)| {
+                    Expr::new(
+                        expr_id,
+                        ExprKind::Lambda {
+                            params: vec![
+                                Param {
+                                    id: pid0,
+                                    name: Symbol::new(p0),
+                                    ty: None,
+                                    local_id: None,
+                                },
+                                Param {
+                                    id: pid1,
+                                    name: Symbol::new(p1),
+                                    ty: None,
+                                    local_id: None,
+                                },
+                            ],
+                            body,
+                        },
+                    )
+                })
+                .boxed(),
+        );
+    }
+
+    // --- 3 params ---
+    if remaining >= 3 {
+        let p0 = VAR_NAMES[env_size];
+        let p1 = VAR_NAMES[env_size + 1];
+        let p2 = VAR_NAMES[env_size + 2];
+        let body = expr_with_env(env_size + 3, child_depth);
+        variants.push(
+            ((node_id(), node_id(), node_id()), (node_id(), body))
+                .prop_map(move |((expr_id, pid0, pid1), (pid2, body))| {
+                    Expr::new(
+                        expr_id,
+                        ExprKind::Lambda {
+                            params: vec![
+                                Param {
+                                    id: pid0,
+                                    name: Symbol::new(p0),
+                                    ty: None,
+                                    local_id: None,
+                                },
+                                Param {
+                                    id: pid1,
+                                    name: Symbol::new(p1),
+                                    ty: None,
+                                    local_id: None,
+                                },
+                                Param {
+                                    id: pid2,
+                                    name: Symbol::new(p2),
+                                    ty: None,
+                                    local_id: None,
+                                },
+                            ],
+                            body,
+                        },
+                    )
+                })
+                .boxed(),
+        );
+    }
+
+    match variants.len() {
+        1 => variants.pop().unwrap(),
+        2 => {
+            let [a, b] = <[_; 2]>::try_from(variants).unwrap();
+            prop_oneof![a, b].boxed()
+        }
+        3 => {
+            let [a, b, c] = <[_; 3]>::try_from(variants).unwrap();
+            prop_oneof![a, b, c].boxed()
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Strategy for a Call expression with 0–2 arguments.
+///
+/// The callee is an arbitrary expression from the current scope; arguments
+/// are also generated from the same scope.
+fn call_variant(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<UnresolvedName>> {
+    let child_depth = max_depth - 1;
+    prop_oneof![
+        // 0 args
+        (node_id(), expr_with_env(env_size, child_depth)).prop_map(|(id, callee)| Expr::new(
+            id,
+            ExprKind::Call {
+                callee,
+                args: vec![]
+            }
+        )),
+        // 1 arg
+        (
+            node_id(),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+        )
+            .prop_map(|(id, callee, a)| Expr::new(
+                id,
+                ExprKind::Call {
+                    callee,
+                    args: vec![a],
+                },
+            )),
+        // 2 args
+        (
+            node_id(),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+            expr_with_env(env_size, child_depth),
+        )
+            .prop_map(|(id, callee, a, b)| Expr::new(
+                id,
+                ExprKind::Call {
+                    callee,
+                    args: vec![a, b],
+                },
+            )),
+    ]
+    .boxed()
+}
+
 /// Core recursive strategy parameterized by environment size and nesting budget.
 ///
 /// * `env_size` — number of names from `VAR_NAMES` currently in scope.
@@ -268,10 +475,12 @@ fn expr_with_env(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unreso
     let remaining = VAR_NAMES.len().saturating_sub(env_size);
 
     if remaining == 0 {
-        // Pool exhausted: only leaf and binop variants.
+        // Pool exhausted: no block or lambda (both need fresh names).
         prop_oneof![
             4 => leaf,
             3 => binop_variant(env_size, max_depth),
+            2 => tuple_variant(env_size, max_depth),
+            2 => call_variant(env_size, max_depth),
         ]
         .boxed()
     } else {
@@ -279,6 +488,9 @@ fn expr_with_env(env_size: usize, max_depth: usize) -> BoxedStrategy<Expr<Unreso
             4 => leaf,
             3 => binop_variant(env_size, max_depth),
             3 => block_variant(env_size, max_depth, remaining),
+            2 => tuple_variant(env_size, max_depth),
+            2 => lambda_variant(env_size, max_depth),
+            2 => call_variant(env_size, max_depth),
         ]
         .boxed()
     }
@@ -305,33 +517,215 @@ pub fn expr(
     expr_with_env(0, depth as usize)
 }
 
-/// Strategy with reasonable defaults: budget 5 (max depth 6), empty initial scope.
+/// Strategy with reasonable defaults: budget 3 (max depth 4), empty initial scope.
 ///
 /// Manual recursion builds the strategy tree eagerly, so the budget is kept
-/// moderate to avoid exponential construction cost.
+/// moderate to avoid exponential construction cost. With 6 variant types
+/// (leaf, binop, block, tuple, lambda, call) the branching factor is high.
 pub fn expr_default() -> impl Strategy<Value = Expr<UnresolvedName>> {
-    expr_with_env(0, 5)
+    expr_with_env(0, 3)
 }
 
 // ============================================================================
 // Module-level strategy
 // ============================================================================
 
-/// Wraps an expression into a `fn main() { expr }` parsed module.
+/// Strategy producing a module with 1–3 top-level functions.
+///
+/// Variants:
+/// - `single_fn_module`: `fn main() { expr }`
+/// - `two_fn_module`: `fn alpha(foo) { ... }` + `fn main() { alpha(expr) }`
+/// - `three_fn_module`: `fn alpha(foo) { ... }` + `fn beta(foo) { ... }` + `fn main() { ... }`
 pub fn parsed_module() -> impl Strategy<Value = Module<UnresolvedName>> {
-    (node_id(), node_id(), expr_default()).prop_map(|(module_id, func_id, body)| {
-        let main_fn = FuncDecl {
-            id: func_id,
-            is_pub: false,
-            name: Symbol::new("main"),
-            type_params: vec![],
-            params: vec![],
-            return_ty: None,
-            effects: None,
-            body,
-        };
-        Module::new(module_id, None, vec![Decl::Function(main_fn)])
-    })
+    prop_oneof![
+        4 => single_fn_module(),
+        3 => two_fn_module(),
+        3 => three_fn_module(),
+    ]
+}
+
+/// Wraps an expression into a `fn main() { expr }` parsed module.
+fn single_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
+    (node_id(), node_id(), expr_default())
+        .prop_map(|(module_id, func_id, body)| {
+            let main_fn = FuncDecl {
+                id: func_id,
+                is_pub: false,
+                name: Symbol::new("main"),
+                type_params: vec![],
+                params: vec![],
+                return_ty: None,
+                effects: None,
+                body,
+            };
+            Module::new(module_id, None, vec![Decl::Function(main_fn)])
+        })
+        .boxed()
+}
+
+/// Module with one helper function + main that calls it.
+///
+/// ```text
+/// fn alpha(foo) { <body using foo> }
+/// fn main() { alpha(<expr>) }
+/// ```
+fn two_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
+    let helper_body = expr_with_env(1, 3); // env has "foo"
+    let main_arg = expr_with_env(0, 3);
+    (
+        (node_id(), node_id(), node_id()),
+        (node_id(), node_id(), node_id()),
+        (helper_body, main_arg),
+    )
+        .prop_map(
+            |((mod_id, helper_fid, helper_pid), (main_fid, call_id, callee_nid), (h_body, arg))| {
+                let helper = FuncDecl {
+                    id: helper_fid,
+                    is_pub: false,
+                    name: Symbol::new(FUNC_NAMES[0]),
+                    type_params: vec![],
+                    params: vec![ParamDecl {
+                        id: helper_pid,
+                        name: Symbol::new(VAR_NAMES[0]),
+                        ty: None,
+                        local_id: None,
+                    }],
+                    return_ty: None,
+                    effects: None,
+                    body: h_body,
+                };
+                let callee_name = UnresolvedName::simple(Symbol::new(FUNC_NAMES[0]), callee_nid);
+                let callee_expr = Expr::new(call_id, ExprKind::Var(callee_name));
+                let main_body = Expr::new(
+                    call_id,
+                    ExprKind::Call {
+                        callee: callee_expr,
+                        args: vec![arg],
+                    },
+                );
+                let main_fn = FuncDecl {
+                    id: main_fid,
+                    is_pub: false,
+                    name: Symbol::new("main"),
+                    type_params: vec![],
+                    params: vec![],
+                    return_ty: None,
+                    effects: None,
+                    body: main_body,
+                };
+                Module::new(
+                    mod_id,
+                    None,
+                    vec![Decl::Function(helper), Decl::Function(main_fn)],
+                )
+            },
+        )
+        .boxed()
+}
+
+/// Module with two helper functions + main.
+///
+/// ```text
+/// fn alpha(foo) { <body> }
+/// fn beta(foo) { <body> }
+/// fn main() { alpha(beta(<expr>)) }
+/// ```
+fn three_fn_module() -> BoxedStrategy<Module<UnresolvedName>> {
+    let alpha_body = expr_with_env(1, 3);
+    let beta_body = expr_with_env(1, 3);
+    let inner_arg = expr_with_env(0, 3);
+    (
+        (node_id(), node_id(), node_id(), node_id()),
+        (node_id(), node_id(), node_id(), node_id()),
+        (node_id(), alpha_body, beta_body, inner_arg),
+    )
+        .prop_map(
+            |(
+                (mod_id, alpha_fid, alpha_pid, beta_fid),
+                (beta_pid, main_fid, call_outer_id, call_inner_id),
+                (callee_nid, a_body, b_body, arg),
+            )| {
+                let alpha_fn = FuncDecl {
+                    id: alpha_fid,
+                    is_pub: false,
+                    name: Symbol::new(FUNC_NAMES[0]),
+                    type_params: vec![],
+                    params: vec![ParamDecl {
+                        id: alpha_pid,
+                        name: Symbol::new(VAR_NAMES[0]),
+                        ty: None,
+                        local_id: None,
+                    }],
+                    return_ty: None,
+                    effects: None,
+                    body: a_body,
+                };
+                let beta_fn = FuncDecl {
+                    id: beta_fid,
+                    is_pub: false,
+                    name: Symbol::new(FUNC_NAMES[1]),
+                    type_params: vec![],
+                    params: vec![ParamDecl {
+                        id: beta_pid,
+                        name: Symbol::new(VAR_NAMES[0]),
+                        ty: None,
+                        local_id: None,
+                    }],
+                    return_ty: None,
+                    effects: None,
+                    body: b_body,
+                };
+                // main body: alpha(beta(arg))
+                let beta_callee = Expr::new(
+                    callee_nid,
+                    ExprKind::Var(UnresolvedName::simple(
+                        Symbol::new(FUNC_NAMES[1]),
+                        callee_nid,
+                    )),
+                );
+                let inner_call = Expr::new(
+                    call_inner_id,
+                    ExprKind::Call {
+                        callee: beta_callee,
+                        args: vec![arg],
+                    },
+                );
+                let alpha_callee = Expr::new(
+                    callee_nid,
+                    ExprKind::Var(UnresolvedName::simple(
+                        Symbol::new(FUNC_NAMES[0]),
+                        callee_nid,
+                    )),
+                );
+                let outer_call = Expr::new(
+                    call_outer_id,
+                    ExprKind::Call {
+                        callee: alpha_callee,
+                        args: vec![inner_call],
+                    },
+                );
+                let main_fn = FuncDecl {
+                    id: main_fid,
+                    is_pub: false,
+                    name: Symbol::new("main"),
+                    type_params: vec![],
+                    params: vec![],
+                    return_ty: None,
+                    effects: None,
+                    body: outer_call,
+                };
+                Module::new(
+                    mod_id,
+                    None,
+                    vec![
+                        Decl::Function(alpha_fn),
+                        Decl::Function(beta_fn),
+                        Decl::Function(main_fn),
+                    ],
+                )
+            },
+        )
+        .boxed()
 }
 
 // ============================================================================
@@ -353,6 +747,12 @@ fn expr_depth(expr: &Expr<UnresolvedName>) -> usize {
                 .unwrap_or(0);
             1 + stmt_max.max(expr_depth(value))
         }
+        ExprKind::Lambda { body, .. } => 1 + expr_depth(body),
+        ExprKind::Call { callee, args } => {
+            let arg_max = args.iter().map(expr_depth).max().unwrap_or(0);
+            1 + expr_depth(callee).max(arg_max)
+        }
+        ExprKind::Tuple(elems) => 1 + elems.iter().map(expr_depth).max().unwrap_or(0),
         _ => 1,
     }
 }
@@ -398,6 +798,15 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
             }
             all_vars_bound(value, &scope)
         }
+        ExprKind::Lambda { params, body } => {
+            let mut scope = bound.to_vec();
+            scope.extend(params.iter().map(|p| p.name));
+            all_vars_bound(body, &scope)
+        }
+        ExprKind::Call { callee, args } => {
+            all_vars_bound(callee, bound) && args.iter().all(|a| all_vars_bound(a, bound))
+        }
+        ExprKind::Tuple(elems) => elems.iter().all(|e| all_vars_bound(e, bound)),
         // All other node kinds (literals, Nil, etc.) have no var references.
         _ => true,
     }
@@ -447,9 +856,9 @@ mod tests {
 
         /// The depth of generated expressions is bounded by the configured maximum.
         #[test]
-        fn depth_is_bounded(expr in expr(4, 32, 3)) {
+        fn depth_is_bounded(expr in expr(3, 32, 3)) {
             let depth = expr_depth(&expr);
-            prop_assert!(depth <= 5, "depth {} exceeded maximum 5", depth);
+            prop_assert!(depth <= 4, "depth {} exceeded maximum 4", depth);
         }
 
         /// The literal-only strategy always produces depth-1 (leaf) expressions.
@@ -477,11 +886,41 @@ mod tests {
         /// Every `Var` in a generated expression references a name that was
         /// bound by an enclosing `let` in the same tree.
         #[test]
-        fn all_vars_in_scope(expr in expr_with_env(0, 6)) {
+        fn all_vars_in_scope(expr in expr_with_env(0, 4)) {
             prop_assert!(
                 all_vars_bound(&expr, &[]),
                 "found Var referencing unbound name"
             );
+        }
+
+        /// Lambda variants always have at least one parameter.
+        #[test]
+        fn lambda_has_params(expr in lambda_variant(0, 3)) {
+            if let ExprKind::Lambda { params, .. } = expr.kind.as_ref() {
+                prop_assert!(!params.is_empty(), "lambda must have ≥1 parameter");
+            } else {
+                panic!("lambda_variant must produce Lambda");
+            }
+        }
+
+        /// Call variants always have a callee expression.
+        #[test]
+        fn call_callee_exists(expr in call_variant(0, 3)) {
+            if let ExprKind::Call { args, .. } = expr.kind.as_ref() {
+                prop_assert!(args.len() <= 2, "call must have ≤2 args");
+            } else {
+                panic!("call_variant must produce Call");
+            }
+        }
+
+        /// Tuple element count is bounded by 3.
+        #[test]
+        fn tuple_elements_bounded(expr in tuple_variant(0, 3)) {
+            if let ExprKind::Tuple(elems) = expr.kind.as_ref() {
+                prop_assert!(elems.len() <= 3, "tuple must have ≤3 elements, got {}", elems.len());
+            } else {
+                panic!("tuple_variant must produce Tuple");
+            }
         }
 
         /// Wrapping into a module never panics.
