@@ -526,6 +526,11 @@ impl<'db> PatternApplicator<'db> {
         // Step 7: No pattern matched - recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
 
+        // Step 7b: Convert result types even when no pattern matched.
+        // This ensures type conversions (e.g., cont.prompt_tag → core.i32)
+        // propagate to all operations, not just pattern-matched ones.
+        let final_op = self.convert_result_types(db, &final_op, ctx);
+
         // Step 8: Map ORIGINAL op results to FINAL op results if they differ
         // This is critical when operands were remapped but no pattern matched
         if final_op != *op {
@@ -536,6 +541,40 @@ impl<'db> PatternApplicator<'db> {
         let mut result = cast_ops;
         result.push(final_op);
         result
+    }
+
+    /// Convert result types of an operation using the type converter.
+    ///
+    /// Returns the original operation unchanged if no result types need conversion.
+    fn convert_result_types(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        ctx: &mut RewriteContext<'db>,
+    ) -> Operation<'db> {
+        let results = op.results(db);
+        if results.is_empty() {
+            return *op;
+        }
+
+        let mut needs_conversion = false;
+        let new_results: IdVec<Type<'db>> = results
+            .iter()
+            .map(|ty| match self.type_converter.convert_type(db, *ty) {
+                Some(new_ty) => {
+                    needs_conversion = true;
+                    new_ty
+                }
+                None => *ty,
+            })
+            .collect();
+
+        if !needs_conversion {
+            return *op;
+        }
+
+        ctx.record_change();
+        op.modify(db).results(new_results).build()
     }
 
     /// Rewrite nested regions within an operation.

@@ -314,10 +314,11 @@ pub fn native_type_converter() -> TypeConverter {
                 return MaterializeResult::ops(box_primitive(db, location, value, 8));
             }
 
-            // nil -> ptr: null pointer
+            // nil -> ptr: null pointer constant
             if core::Nil::from_type(db, from_ty).is_some() {
-                // TODO(M3): emit null pointer constant
-                return MaterializeResult::NoOp;
+                let ptr_ty = core::Ptr::new(db).as_type();
+                let null_op = clif::iconst(db, location, ptr_ty, 0);
+                return MaterializeResult::single(null_op.as_operation());
             }
 
             MaterializeResult::Skip
@@ -959,11 +960,11 @@ mod tests {
             core::Nil::new(db).as_type(),
             core::Ptr::new(db).as_type(),
         );
-        matches!(result, Some(MaterializeResult::NoOp))
+        matches!(result, Some(MaterializeResult::Ops(ref ops)) if ops.len() == 1)
     }
 
     #[salsa_test]
-    fn test_materialize_nil_to_ptr_is_noop(db: &salsa::DatabaseImpl) {
+    fn test_materialize_nil_to_ptr_emits_null_iconst(db: &salsa::DatabaseImpl) {
         assert!(do_materialize_nil_to_ptr(db));
     }
 
