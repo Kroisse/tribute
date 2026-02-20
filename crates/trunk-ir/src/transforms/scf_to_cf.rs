@@ -276,12 +276,39 @@ fn build_merge_block<'db>(
     after_ops: &[&Operation<'db>],
     value_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> Block<'db> {
-    let remapped_ops: IdVec<Operation<'db>> = after_ops
-        .iter()
-        .map(|op| remap_op(db, op, value_map))
-        .collect();
-
+    let remapped_ops = remap_after_ops(db, after_ops, value_map);
     Block::new(db, merge_id, location, merge_args, remapped_ops)
+}
+
+/// Remap a sequence of after_ops, tracking result changes between operations.
+///
+/// When `remap_op` modifies an operation (e.g., by remapping values in nested
+/// regions), the new operation has different result values. Subsequent operations
+/// that reference the old results must see the updated mapping, otherwise they
+/// end up with stale value references.
+fn remap_after_ops<'db>(
+    db: &'db dyn salsa::Database,
+    after_ops: &[&Operation<'db>],
+    value_map: &HashMap<Value<'db>, Value<'db>>,
+) -> IdVec<Operation<'db>> {
+    let mut extended_map = value_map.clone();
+    let mut remapped_ops = IdVec::new();
+
+    for op in after_ops {
+        let new_op = remap_op(db, op, &extended_map);
+        if new_op != **op {
+            for i in 0..op.results(db).len() {
+                let old_val = op.result(db, i);
+                let new_val = new_op.result(db, i);
+                if old_val != new_val {
+                    extended_map.insert(old_val, new_val);
+                }
+            }
+        }
+        remapped_ops.push(new_op);
+    }
+
+    remapped_ops
 }
 
 /// Lower `scf.if` to cf.cond_br + merge block.
@@ -398,7 +425,31 @@ fn lower_region_to_br<'db>(
                 let br_op = cf::br(db, location, values, merge_block);
                 new_ops.push(br_op.as_operation());
             } else {
-                let new_op = transform_op_regions(db, op);
+                let transformed_op = transform_op_regions(db, op);
+
+                // Remap operands using result_remap (fixes stale references
+                // when a previous op was rebuilt by transform_op_regions).
+                let new_op = if !result_remap.is_empty() {
+                    let operands = transformed_op.operands(db);
+                    let mut new_operands = IdVec::with_capacity(operands.len());
+                    let mut changed = false;
+                    for &operand in operands.iter() {
+                        if let Some(&mapped) = result_remap.get(&operand) {
+                            new_operands.push(mapped);
+                            changed = true;
+                        } else {
+                            new_operands.push(operand);
+                        }
+                    }
+                    if changed {
+                        transformed_op.modify(db).operands(new_operands).build()
+                    } else {
+                        transformed_op
+                    }
+                } else {
+                    transformed_op
+                };
+
                 // If the operation changed, map old result values to new ones
                 if new_op != *op {
                     for i in 0..op.results(db).len() {
@@ -508,8 +559,14 @@ fn lower_scf_loop<'db>(
 
     // Deep-replace scf.continue/scf.break with cf.br throughout the body
     // (including inside nested regions like scf.if's then/else)
-    let replaced_body =
-        replace_continue_break_deep(db, &body, header_block_template, exit_block, location);
+    let replaced_body = replace_continue_break_deep(
+        db,
+        &body,
+        header_block_template,
+        exit_block,
+        location,
+        &HashMap::new(),
+    );
 
     // Now recursively transform the replaced body for remaining scf ops (scf.if, etc.)
     let transformed_body = transform_region(db, &replaced_body);
@@ -529,10 +586,7 @@ fn lower_scf_loop<'db>(
     );
 
     // Build final exit block with after_ops
-    let remapped_after: IdVec<Operation<'db>> = after_ops
-        .iter()
-        .map(|op| remap_op(db, op, value_map))
-        .collect();
+    let remapped_after = remap_after_ops(db, after_ops, value_map);
     let final_exit = Block::new(
         db,
         exit_id,
@@ -554,49 +608,110 @@ fn lower_scf_loop<'db>(
 
 /// Deep-replace `scf.continue` and `scf.break` with `cf.br` throughout a region,
 /// including inside nested regions.
+///
+/// When an operation is rebuilt (e.g., scf.if with modified regions), its result
+/// Values change. Subsequent operations in the same block that reference old results
+/// must be updated. This function tracks result changes and remaps operands to
+/// maintain consistent value references.
+///
+/// `value_remap` propagates value remappings from an enclosing scope into nested
+/// regions, so that operations referencing outer values get updated correctly.
 fn replace_continue_break_deep<'db>(
     db: &'db dyn salsa::Database,
     region: &Region<'db>,
     header_block: Block<'db>,
     exit_block: Block<'db>,
     location: Location<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
 ) -> Region<'db> {
+    let mut any_block_changed = false;
     let new_blocks: IdVec<Block<'db>> = region
         .blocks(db)
         .iter()
         .map(|block| {
+            let mut any_op_changed = false;
+            // Start with inherited remap and extend with local result changes.
+            let mut local_remap = value_remap.clone();
+
             let new_ops: IdVec<Operation<'db>> = block
                 .operations(db)
                 .iter()
-                .map(|op| replace_continue_break_op(db, op, header_block, exit_block, location))
+                .map(|op| {
+                    // Remap operands if any previous sibling was rebuilt.
+                    let input_op = remap_op_operands(db, op, &local_remap);
+
+                    // Replace continue/break and recurse into nested regions.
+                    let new_op = replace_continue_break_op(
+                        db,
+                        &input_op,
+                        header_block,
+                        exit_block,
+                        location,
+                        &local_remap,
+                    );
+
+                    // Track result value changes for subsequent ops.
+                    if new_op != *op {
+                        any_op_changed = true;
+                        for i in 0..op.results(db).len() {
+                            let old_val = op.result(db, i);
+                            let new_val = new_op.result(db, i);
+                            if old_val != new_val {
+                                local_remap.insert(old_val, new_val);
+                            }
+                        }
+                    }
+
+                    new_op
+                })
                 .collect();
-            Block::new(
-                db,
-                block.id(db),
-                block.location(db),
-                block.args(db).clone(),
-                new_ops,
-            )
+
+            if any_op_changed {
+                any_block_changed = true;
+                Block::new(
+                    db,
+                    block.id(db),
+                    block.location(db),
+                    block.args(db).clone(),
+                    new_ops,
+                )
+            } else {
+                *block
+            }
         })
         .collect();
-    Region::new(db, region.location(db), new_blocks)
+
+    if any_block_changed {
+        Region::new(db, region.location(db), new_blocks)
+    } else {
+        *region
+    }
 }
 
 /// Replace scf.continue/scf.break in a single op, recursing into nested regions.
+///
+/// The caller (`replace_continue_break_deep`) has already remapped this op's
+/// operands via `remap_op_operands`, so continue/break values are up-to-date.
+///
+/// `value_remap` is propagated into nested regions so that operations inside
+/// (e.g., scf.yield referencing an outer scf.if result) get remapped correctly.
 fn replace_continue_break_op<'db>(
     db: &'db dyn salsa::Database,
     op: &Operation<'db>,
     header_block: Block<'db>,
     exit_block: Block<'db>,
     location: Location<'db>,
+    value_remap: &HashMap<Value<'db>, Value<'db>>,
 ) -> Operation<'db> {
     if scf::Continue::matches(db, *op) {
+        // Operands already remapped by caller.
         let cont_op = scf::Continue::from_operation(db, *op).unwrap();
         let values: Vec<Value<'db>> = cont_op.values(db).to_vec();
         return cf::br(db, location, values, header_block).as_operation();
     }
 
     if scf::Break::matches(db, *op) {
+        // Operands already remapped by caller.
         let break_op = scf::Break::from_operation(db, *op).unwrap();
         return cf::br(db, location, [break_op.value(db)], exit_block).as_operation();
     }
@@ -615,13 +730,42 @@ fn replace_continue_break_op<'db>(
 
     let new_regions: IdVec<Region<'db>> = regions
         .iter()
-        .map(|r| replace_continue_break_deep(db, r, header_block, exit_block, location))
+        .map(|r| {
+            replace_continue_break_deep(db, r, header_block, exit_block, location, value_remap)
+        })
         .collect();
 
     if new_regions == *regions {
         *op
     } else {
         op.modify(db).regions(new_regions).build()
+    }
+}
+
+/// Remap an operation's operands using a value map. Does not recurse into regions.
+fn remap_op_operands<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    remap: &HashMap<Value<'db>, Value<'db>>,
+) -> Operation<'db> {
+    if remap.is_empty() {
+        return *op;
+    }
+    let operands = op.operands(db);
+    let mut new_operands = IdVec::with_capacity(operands.len());
+    let mut changed = false;
+    for &operand in operands.iter() {
+        if let Some(&mapped) = remap.get(&operand) {
+            new_operands.push(mapped);
+            changed = true;
+        } else {
+            new_operands.push(operand);
+        }
+    }
+    if changed {
+        op.modify(db).operands(new_operands).build()
+    } else {
+        *op
     }
 }
 
@@ -781,10 +925,7 @@ fn lower_scf_switch<'db>(
     all_blocks.extend(default_blocks);
 
     // Build merge block with after ops
-    let remapped_after: IdVec<Operation<'db>> = after_ops
-        .iter()
-        .map(|op| remap_op(db, op, value_map))
-        .collect();
+    let remapped_after = remap_after_ops(db, after_ops, value_map);
     let final_merge = Block::new(db, merge_id, location, merge_args, remapped_after);
 
     let merge_transformed = transform_block(db, &final_merge);

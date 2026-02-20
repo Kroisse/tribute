@@ -107,12 +107,13 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
             // First, cast all values to ptr
             let mut field_ptrs = Vec::new();
             for (value, ty) in &live_ins {
+                let remapped = adaptor.lookup_value(*value);
                 if *ty != ptr_ty {
-                    let cast = core::unrealized_conversion_cast(db, location, *value, ptr_ty);
+                    let cast = core::unrealized_conversion_cast(db, location, remapped, ptr_ty);
                     ops.push(cast.as_operation());
                     field_ptrs.push(cast.as_operation().result(db, 0));
                 } else {
-                    field_ptrs.push(*value);
+                    field_ptrs.push(remapped);
                 }
             }
 
