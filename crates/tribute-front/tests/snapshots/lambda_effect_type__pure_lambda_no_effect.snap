@@ -8,6 +8,7 @@ Module(test) {
             body: [
                 "arith.const",
                 "arith.add",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

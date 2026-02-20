@@ -27,6 +27,7 @@ Module(test) {
                 "func.call",
                 "func.call",
                 "func.call",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

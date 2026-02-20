@@ -7,6 +7,7 @@ Module(test) {
         func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "func.call",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

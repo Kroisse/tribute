@@ -1398,6 +1398,10 @@ fn lower_lambda<'db>(
             // Lower the lambda body
             let mut inner_builder = IrBuilder::new(builder.ctx, body_block);
             if let Some(result) = lower_expr(&mut inner_builder, body.clone()) {
+                // Cast return value to any_ty — the lifted function's return type is
+                // type-erased to `tribute_rt.any`, but the body expression may produce
+                // a concrete type (e.g., core.i32 from an effectful call).
+                let result = inner_builder.cast_if_needed(location, result, any_ty);
                 inner_builder
                     .block
                     .op(func::Return::value(db, location, result));
