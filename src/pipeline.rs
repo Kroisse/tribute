@@ -761,10 +761,12 @@ fn compile_module_to_native<'db>(
     // Phase 1.5 - Lower cf dialect to clif dialect
     let module = cf_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "cf_to_clif");
 
     // Phase 1.9 - RTTI pass: assign rtti_idx per struct type, generate release functions
     let (module, rtti_map) =
         tribute_passes::native::rtti::generate_rtti(db, module, &native_type_converter());
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "generate_rtti");
 
     // Phase 1.95 - Lower adt.struct_new to clif with RC header (Tribute-specific)
     let module = tribute_passes::native::adt_rc_header::lower(
@@ -773,26 +775,30 @@ fn compile_module_to_native<'db>(
         native_type_converter(),
         &rtti_map.type_to_idx,
     );
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "adt_rc_header");
 
     // Phase 2 - Lower ADT struct access operations to clif dialect (struct_get/struct_set)
     let module = adt_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "adt_to_clif");
 
     // Phase 2.5 - Lower arith dialect to clif dialect
     let module = arith_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "arith_to_clif");
 
     // Phase 2.7 - Lower tribute_rt boxing/unboxing operations to clif dialect
     let module =
         tribute_passes::native::tribute_rt_to_clif::lower(db, module, native_type_converter());
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "tribute_rt_to_clif");
 
     // Phase 2.8 - Insert reference counting (retain/release) for pointer values
     let module = tribute_passes::native::rc_insertion::insert_rc(db, module);
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "rc_insertion");
 
     // Phase 2.85 - Rewrite continuation ops to use RC-safe wrappers
     let module = tribute_passes::native::cont_rc::rewrite_cont_rc(db, module);
-
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "arith_to_clif");
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "cont_rc");
 
     // Phase 3 - Resolve unrealized_conversion_cast operations
     let module = {
@@ -822,6 +828,7 @@ fn compile_module_to_native<'db>(
         }
         result.module
     };
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "resolve_unrealized_casts");
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     let module = tribute_passes::native::rc_lowering::lower_rc(db, module);
