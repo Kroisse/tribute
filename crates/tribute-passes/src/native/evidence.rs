@@ -318,6 +318,12 @@ fn rewrite_evidence_ops_in_block<'db>(
     let mut marker_struct_operands: std::collections::HashMap<Value<'db>, Vec<Value<'db>>> =
         std::collections::HashMap::new();
 
+    // Track value remapping: when an operation is replaced, its result Value
+    // changes. Subsequent operations referencing the old result must use the
+    // new one.
+    let mut value_remap: std::collections::HashMap<Value<'db>, Value<'db>> =
+        std::collections::HashMap::new();
+
     for op in ops.iter() {
         // --- adt.array_new(0, evidence_ty) → func.call @__tribute_evidence_empty() ---
         if let Ok(array_new) = adt::ArrayNew::from_operation(db, *op) {
@@ -332,6 +338,10 @@ fn rewrite_evidence_ops_in_block<'db>(
                     Symbol::new("__tribute_evidence_empty"),
                 );
                 new_ops.push(call.as_operation());
+                // Remap old result → new result
+                let old_result = op.result(db, 0);
+                let new_result = call.as_operation().result(db, 0);
+                value_remap.insert(old_result, new_result);
                 changed = true;
                 continue;
             }
@@ -341,7 +351,11 @@ fn rewrite_evidence_ops_in_block<'db>(
         if let Ok(struct_new) = adt::StructNew::from_operation(db, *op) {
             let result_ty = struct_new.as_operation().results(db);
             if !result_ty.is_empty() && ability::is_marker_type(db, result_ty[0]) {
-                let operands = op.operands(db).to_vec();
+                let operands: Vec<Value<'db>> = op
+                    .operands(db)
+                    .iter()
+                    .map(|v| remap_value(*v, &value_remap))
+                    .collect();
                 let result_val = op.result(db, 0);
                 marker_struct_operands.insert(result_val, operands);
                 // Don't emit the struct_new — it will be inlined into the extend call.
@@ -357,7 +371,7 @@ fn rewrite_evidence_ops_in_block<'db>(
             let operands = op.operands(db);
             // Original: (ev, marker)  — 2 operands
             if operands.len() == 2 {
-                let ev_val = operands[0];
+                let ev_val = remap_value(operands[0], &value_remap);
                 let marker_val = operands[1];
 
                 let fields = marker_struct_operands.get(&marker_val).unwrap_or_else(|| {
@@ -378,9 +392,53 @@ fn rewrite_evidence_ops_in_block<'db>(
                     Symbol::new("__tribute_evidence_extend"),
                 );
                 new_ops.push(new_call.as_operation());
+                // Remap old result → new result
+                let old_result = op.result(db, 0);
+                let new_result = new_call.as_operation().result(db, 0);
+                value_remap.insert(old_result, new_result);
                 changed = true;
                 continue;
             }
+        }
+
+        // --- Apply value remapping to operands if needed ---
+        let needs_remap = op.operands(db).iter().any(|v| value_remap.contains_key(v));
+
+        if needs_remap {
+            let new_operands: IdVec<Value<'db>> = op
+                .operands(db)
+                .iter()
+                .map(|v| remap_value(*v, &value_remap))
+                .collect();
+
+            // Recurse into nested regions
+            let regions = op.regions(db);
+            let mut new_regions: Vec<Region<'db>> = Vec::with_capacity(regions.len());
+            let mut region_changed = false;
+            for region in regions.iter() {
+                let (new_region, rc) = rewrite_evidence_ops_in_region(db, region);
+                region_changed |= rc;
+                new_regions.push(new_region);
+            }
+
+            let rebuilt = Operation::of(db, op.location(db), op.dialect(db), op.name(db))
+                .operands(new_operands)
+                .results(op.results(db).clone())
+                .successors(op.successors(db).clone())
+                .attrs(op.attributes(db).clone())
+                .regions(if region_changed {
+                    IdVec::from(new_regions)
+                } else {
+                    regions.clone()
+                })
+                .build();
+            // Remap results of rebuilt operation so downstream ops see the new Values
+            for (i, _) in op.results(db).iter().enumerate() {
+                value_remap.insert(op.result(db, i), rebuilt.result(db, i));
+            }
+            new_ops.push(rebuilt);
+            changed = true;
+            continue;
         }
 
         // --- Recurse into nested regions ---
@@ -422,6 +480,15 @@ fn rewrite_evidence_ops_in_block<'db>(
         IdVec::from(new_ops),
     );
     (new_block, true)
+}
+
+/// Remap a value through the value_remap table, returning the original if
+/// no remapping exists.
+fn remap_value<'db>(
+    value: Value<'db>,
+    remap: &std::collections::HashMap<Value<'db>, Value<'db>>,
+) -> Value<'db> {
+    remap.get(&value).copied().unwrap_or(value)
 }
 
 // =============================================================================
