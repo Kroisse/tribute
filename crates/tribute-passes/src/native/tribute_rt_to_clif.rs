@@ -304,7 +304,7 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
 
 /// Pattern for `tribute_rt.unbox_bool` → `clif.load` (i32 from offset 0).
 ///
-/// If the input value is already `core.i32` or `core.i1`, the unbox is a no-op.
+/// If the input value is already `core.i32`, the unbox is a no-op.
 struct UnboxBoolPattern;
 
 impl<'db> RewritePattern<'db> for UnboxBoolPattern {
@@ -320,9 +320,9 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
         let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // If the input is already a small integer type, the unbox is a no-op.
+        // If the input is already i32, the unbox is a no-op.
         if let Some(val_ty) = adaptor.get_value_type(db, value)
-            && (val_ty == i32_ty || core::I1::from_type(db, val_ty).is_some())
+            && val_ty == i32_ty
         {
             return RewriteResult::Erase {
                 replacement_values: vec![value],
