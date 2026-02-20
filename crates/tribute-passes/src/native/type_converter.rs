@@ -166,10 +166,9 @@ pub fn native_type_converter() -> TypeConverter {
         })
         // Convert adt.struct / adt.enum / variant instance -> core.ptr (opaque reference)
         .add_conversion(|db, ty| {
-            if (adt::is_struct_type(db, ty)
+            if adt::is_struct_type(db, ty)
                 || adt::is_enum_type(db, ty)
-                || adt::is_variant_instance_type(db, ty))
-                && !ability::is_marker_type(db, ty)
+                || adt::is_variant_instance_type(db, ty)
             {
                 Some(core::Ptr::new(db).as_type())
             } else {
@@ -204,14 +203,9 @@ pub fn native_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
-        // Convert marker ADT type -> pass through (already standard ADT struct)
-        .add_conversion(|db, ty| {
-            if ability::is_marker_type(db, ty) {
-                Some(ability::marker_adt_type(db))
-            } else {
-                None
-            }
-        })
+        // Note: marker ADT type is now converted to core.ptr like other structs.
+        // Field layout info is preserved in adt.struct_get's `type` attribute,
+        // so adt_to_clif can still calculate correct field offsets.
         // === Materializations ===
         //
         // Primitive type equivalences: same underlying representation, no-op.
@@ -535,12 +529,12 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_convert_marker_type_not_to_ptr(db: &salsa::DatabaseImpl) {
+    fn test_convert_marker_type_to_ptr(db: &salsa::DatabaseImpl) {
         let converter = native_type_converter();
         let marker_ty = ability::marker_adt_type(db);
         let result = converter.convert_type(db, marker_ty);
-        // marker type should NOT be converted to ptr, it passes through
-        assert_ne!(result, Some(core::Ptr::new(db).as_type()));
+        // marker type is converted to ptr like other struct types
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
     }
 
     #[salsa_test]
