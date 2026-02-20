@@ -91,15 +91,22 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
 
-        let Some(result_ty) = op.results(db).first().copied() else {
+        let Some(raw_result_ty) = op.results(db).first().copied() else {
             return RewriteResult::Unchanged;
         };
+
+        // Apply type conversion (e.g., cont.prompt_tag → core.i32) before
+        // determining the output category and emitting the clif constant.
+        let result_ty = adaptor
+            .type_converter()
+            .convert_type(db, raw_result_ty)
+            .unwrap_or(raw_result_ty);
 
         let category = type_category(db, Some(result_ty));
         if category == "nil" {

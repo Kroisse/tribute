@@ -300,7 +300,11 @@ fn lower_scf_if<'db>(
         "scf.if must have at most 1 result, got {}",
         results.len()
     );
-    let result_ty = results.first().copied();
+    // Treat core.nil result the same as no result (void): don't create a merge block arg.
+    let result_ty = results
+        .first()
+        .copied()
+        .filter(|ty| core::Nil::from_type(db, *ty).is_none());
 
     // Create merge block (will be the target of then/else branches)
     let merge_id = BlockId::fresh();

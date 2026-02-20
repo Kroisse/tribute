@@ -679,7 +679,10 @@ pub fn run_native_pipeline<'db>(
     let module = run_shared_pipeline(db, source);
 
     let module = stage_cont_to_libmprompt(db, module)?;
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "cont_to_libmprompt");
+
     let module = stage_evidence_to_native(db, module);
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "evidence_to_native");
 
     let module = stage_dce(db, module);
     Ok(stage_resolve_casts(db, module))
@@ -747,10 +750,13 @@ fn compile_module_to_native<'db>(
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     let module = lower_scf_to_cf(db, module);
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_scf_to_cf");
 
     // Phase 1 - Lower func dialect to clif dialect
     let module = func_to_clif::lower(db, module, native_type_converter())
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
+
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "func_to_clif");
 
     // Phase 1.5 - Lower cf dialect to clif dialect
     let module = cf_to_clif::lower(db, module, native_type_converter())
@@ -786,6 +792,8 @@ fn compile_module_to_native<'db>(
     // Phase 2.85 - Rewrite continuation ops to use RC-safe wrappers
     let module = tribute_passes::native::cont_rc::rewrite_cont_rc(db, module);
 
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "arith_to_clif");
+
     // Phase 3 - Resolve unrealized_conversion_cast operations
     let module = {
         let type_converter = native_type_converter();
@@ -817,6 +825,7 @@ fn compile_module_to_native<'db>(
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     let module = tribute_passes::native::rc_lowering::lower_rc(db, module);
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_rc");
 
     // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
     let _span = tracing::info_span!("emit_module_to_native").entered();
