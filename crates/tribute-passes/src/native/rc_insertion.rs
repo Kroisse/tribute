@@ -626,7 +626,7 @@ fn insert_rc_in_block<'db>(
                 ValueDef::BlockArg(_) => (0usize, v.index(db)),
                 ValueDef::OpResult(def_op) => {
                     let pos = ops.iter().position(|o| *o == def_op).unwrap_or(usize::MAX);
-                    (1 + pos, v.index(db))
+                    (pos.saturating_add(1), v.index(db))
                 }
             });
             live
@@ -753,7 +753,7 @@ fn insert_rc_in_block<'db>(
                 .iter()
                 .position(|op| *op == def_op)
                 .unwrap_or(usize::MAX);
-            (1 + pos, v.index(db))
+            (pos.saturating_add(1), v.index(db))
         }
     });
 
