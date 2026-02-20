@@ -1,16 +1,12 @@
 //! Continuation RC rewrite pass.
 //!
-//! Rewrites handler dispatch code to use RC-safe continuation wrappers:
+//! Wraps raw resume pointers with RC root metadata by inserting
+//! `clif.call @__tribute_cont_wrap_from_tls(k)` after each
+//! `clif.call @__tribute_get_yield_continuation()`.
 //!
-//! 1. After `clif.call @__tribute_get_yield_continuation()`, inserts
-//!    `clif.call @__tribute_cont_wrap_from_tls(k)` to wrap the raw resume
-//!    pointer with captured RC roots from TLS.
-//!
-//! 2. Replaces `clif.call @__tribute_resume(k, val)` with
-//!    `clif.call @__tribute_resume_safe(wrapped_k, val)`.
-//!
-//! 3. Replaces `clif.call @__tribute_resume_drop(k)` with
-//!    `clif.call @__tribute_resume_drop_safe(wrapped_k)`.
+//! The wrapped pointer (`TributeContinuation*`) is then used by the
+//! existing `__tribute_resume` / `__tribute_resume_drop` calls, which
+//! expect wrapped continuations.
 //!
 //! ## Pipeline Position
 //!
@@ -111,10 +107,8 @@ fn rewrite_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Re
 
 /// Rewrite a single block's operations.
 ///
-/// Scans for continuation-related calls and applies the three rewrites:
-/// 1. Wrap `__tribute_get_yield_continuation` results
-/// 2. Replace `__tribute_resume` with `__tribute_resume_safe`
-/// 3. Replace `__tribute_resume_drop` with `__tribute_resume_drop_safe`
+/// Scans for `__tribute_get_yield_continuation` calls and inserts
+/// `__tribute_cont_wrap_from_tls` to wrap the raw resume pointer.
 fn rewrite_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Block<'db> {
     let ops = block.operations(db);
     let mut new_ops: Vec<Operation<'db>> = Vec::with_capacity(ops.len() + 4);
@@ -149,24 +143,6 @@ fn rewrite_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Block
                 let wrapped_k = wrap_call.as_operation().result(db, 0);
                 value_remap.insert(raw_k, wrapped_k);
                 new_ops.push(wrap_call.as_operation());
-                changed = true;
-                continue;
-            }
-
-            if callee == Symbol::new("__tribute_resume") {
-                // Replace callee: __tribute_resume → __tribute_resume_safe
-                let new_call =
-                    rebuild_call_with_callee(db, &op, Symbol::new("__tribute_resume_safe"));
-                new_ops.push(new_call);
-                changed = true;
-                continue;
-            }
-
-            if callee == Symbol::new("__tribute_resume_drop") {
-                // Replace callee: __tribute_resume_drop → __tribute_resume_drop_safe
-                let new_call =
-                    rebuild_call_with_callee(db, &op, Symbol::new("__tribute_resume_drop_safe"));
-                new_ops.push(new_call);
                 changed = true;
                 continue;
             }
@@ -252,21 +228,6 @@ fn rewrite_nested_regions<'db>(
     op.modify(db).regions(new_regions).build()
 }
 
-/// Rebuild a `clif.call` operation with a different callee symbol.
-///
-/// Preserves all operands, results, and location.
-fn rebuild_call_with_callee<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    new_callee: Symbol,
-) -> Operation<'db> {
-    use trunk_ir::Attribute;
-
-    let mut attrs = op.attributes(db).clone();
-    attrs.insert(Symbol::new("callee"), Attribute::Symbol(new_callee));
-    op.modify(db).attrs(attrs).build()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,19 +302,15 @@ mod tests {
             ir.contains("__tribute_cont_wrap_from_tls"),
             "should insert cont_wrap_from_tls: {ir}"
         );
-        // Should replace resume with resume_safe
+        // __tribute_resume callee should be unchanged (it now expects wrapped pointers)
         assert!(
-            ir.contains("__tribute_resume_safe"),
-            "should rewrite resume to resume_safe: {ir}"
-        );
-        assert!(
-            !ir.contains("callee = @__tribute_resume}"),
-            "original resume should be replaced: {ir}"
+            ir.contains("callee = @__tribute_resume}"),
+            "resume callee should remain unchanged: {ir}"
         );
     }
 
     #[salsa_test]
-    fn test_resume_drop_replaced(db: &salsa::DatabaseImpl) {
+    fn test_resume_drop_with_wrapped_continuation(db: &salsa::DatabaseImpl) {
         let ir = run_rewrite(
             db,
             r#"
@@ -373,42 +330,10 @@ mod tests {
             ir.contains("__tribute_cont_wrap_from_tls"),
             "should wrap continuation: {ir}"
         );
-        // Should replace resume_drop with resume_drop_safe
+        // __tribute_resume_drop callee should be unchanged
         assert!(
-            ir.contains("__tribute_resume_drop_safe"),
-            "should rewrite resume_drop to resume_drop_safe: {ir}"
-        );
-        assert!(
-            !ir.contains("callee = @__tribute_resume_drop}"),
-            "original resume_drop should be replaced: {ir}"
-        );
-    }
-
-    #[salsa_test]
-    fn test_resume_without_get_continuation_still_replaced(db: &salsa::DatabaseImpl) {
-        // __tribute_resume in a block where k comes from a block argument
-        // (no get_yield_continuation in the same block). Callee should still
-        // be replaced; no wrap is inserted.
-        let ir = run_rewrite(
-            db,
-            r#"
-            core.module @test {
-                clif.func @arm {type = core.func(core.ptr, core.ptr, core.ptr)} {
-                    ^entry(%k: core.ptr, %v: core.ptr):
-                        %r = clif.call %k, %v {callee = @__tribute_resume} : core.ptr
-                        clif.return %r
-                }
-            }
-            "#,
-        );
-
-        assert!(
-            ir.contains("__tribute_resume_safe"),
-            "resume should be replaced even without get_yield_continuation: {ir}"
-        );
-        assert!(
-            !ir.contains("__tribute_cont_wrap_from_tls"),
-            "no wrap needed when k is a block arg: {ir}"
+            ir.contains("callee = @__tribute_resume_drop}"),
+            "resume_drop callee should remain unchanged: {ir}"
         );
     }
 }

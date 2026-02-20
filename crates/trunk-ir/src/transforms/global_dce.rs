@@ -408,6 +408,14 @@ impl<'db> GlobalDcePass<'db> {
                         && let Some(func_name) = self.extract_func_name(op, module_path)
                         && !reachable.contains(&func_name)
                     {
+                        // Preserve extern function declarations (imports).
+                        // They take no space in the output and may be needed
+                        // by later passes (e.g., cont_rc rewrites resume calls).
+                        if op.attributes(self.db).get(&Symbol::new("abi")).is_some() {
+                            new_ops.push(*op);
+                            continue;
+                        }
+
                         // Remove this function
                         removed.push(func_name);
                         changed = true;

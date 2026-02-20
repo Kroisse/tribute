@@ -328,11 +328,11 @@ captured stack, resuming the continuation accesses freed memory.
    `mp_resume` pointer that carries an array of `RcRoot` captured at
    yield time. Created by `__tribute_cont_wrap_from_tls`.
 
-3. **`cont_rc` rewrite pass (Phase 2.85):** Rewrites handler dispatch code:
-   - `__tribute_get_yield_continuation()` result → wrapped via
-     `__tribute_cont_wrap_from_tls`
-   - `__tribute_resume` → `__tribute_resume_safe`
-   - `__tribute_resume_drop` → `__tribute_resume_drop_safe`
+3. **`cont_rc` rewrite pass (Phase 2.85):** Wraps raw resume pointers by
+   inserting `__tribute_cont_wrap_from_tls` after each
+   `__tribute_get_yield_continuation()`. The existing `__tribute_resume`
+   and `__tribute_resume_drop` functions accept the wrapped
+   `TributeContinuation*` directly.
 
 **RC flow:**
 
@@ -345,7 +345,7 @@ Resume path:   yield returns
                release(ptr)    → refcount - 1 (cancel extra retain)
                body continues with normal release path
 
-Drop path:     __tribute_resume_drop_safe(wrapped_k)
+Drop path:     __tribute_resume_drop(wrapped_k)
                runtime: release each rc_root → refcount - 1
                runtime: mp_resume_drop → discard captured stack
 ```
@@ -353,7 +353,7 @@ Drop path:     __tribute_resume_drop_safe(wrapped_k)
 **Drop path cleanup (Phase 4b):** On the drop path, the body's normal
 `release` calls do not execute (the captured stack is discarded). Phase 4b
 mitigates this via double `release_deep` per RC root in
-`__tribute_resume_drop_safe`: the first cancels the extra retain, the
+`__tribute_resume_drop`: the first cancels the extra retain, the
 second replaces the body's missing normal release.
 
 ### Phase 4b: Continuation Cleanup on Drop Path (Implemented)
@@ -372,7 +372,7 @@ continuation is discarded without being resumed.
 
 2. **Lost normal releases:** When `mp_resume_drop` discards a captured
    continuation, the body's remaining `release` calls never execute,
-   leaking objects. **Fix:** `__tribute_resume_drop_safe` now performs
+   leaking objects. **Fix:** `__tribute_resume_drop` now performs
    **two** deep releases per RC root:
    - 1st: cancel the extra retain (refcount N+1 → N)
    - 2nd: replace the body's missing normal release (refcount N → N-1)
