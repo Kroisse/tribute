@@ -3,23 +3,27 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
+//! - `adt.variant_is(ref, type, tag)` -> `clif.load(ref, 0)` + `clif.icmp(eq, tag_val, expected)`
+//! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
+//! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, fields_offset + field_offset)`
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
 //! - `adt.ref_cast(ref, type)` -> identity (native pointers are untyped)
 //! - `adt.ref_is_null(ref)` -> `clif.icmp(eq, ref, 0)`
 //!
 //! ## Note
 //!
-//! `adt.struct_new` is handled by a separate Tribute-specific pass
-//! (`tribute_passes::native::adt_rc_header`) that initializes RC headers.
-//! This pass only handles field access and reference operations.
+//! `adt.struct_new` and `adt.variant_new` are handled by a separate
+//! Tribute-specific pass (`tribute_passes::native::adt_rc_header`) that
+//! initializes RC headers. This pass only handles field access and
+//! reference operations.
 //!
 //! ## Limitations
 //!
-//! - Variant/array ops are left unchanged
+//! - Array ops are left unchanged
 
 use tracing::warn;
 
-use crate::adt_layout::compute_struct_layout;
+use crate::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::{
@@ -47,6 +51,9 @@ pub fn lower<'db>(
     Ok(PatternApplicator::new(type_converter)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
+        .add_pattern(VariantIsPattern)
+        .add_pattern(VariantCastPattern)
+        .add_pattern(VariantGetPattern)
         .add_pattern(RefNullPattern)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
@@ -149,6 +156,184 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
 
         let store_op = clif::store(db, location, value_val, ref_val, offset);
         RewriteResult::Replace(store_op.as_operation())
+    }
+}
+
+// =============================================================================
+// Variant Patterns
+// =============================================================================
+
+/// Pattern for `adt.variant_is(ref, type, tag)` -> load tag + compare.
+///
+/// Loads the tag (i32) at offset 0 from the payload pointer and compares
+/// with the expected discriminant value.
+struct VariantIsPattern;
+
+impl<'db> RewritePattern<'db> for VariantIsPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let enum_ty = variant_is.r#type(db);
+        let tag = variant_is.tag(db);
+        let type_converter = adaptor.type_converter();
+
+        let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
+            warn!(
+                "adt_to_clif: cannot compute enum layout for variant_is at {:?}",
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
+            warn!(
+                "adt_to_clif: unknown variant tag {:?} at {:?}",
+                tag,
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let location = op.location(db);
+        let i32_ty = core::I32::new(db).as_type();
+        let i1_ty = core::I1::new(db).as_type();
+
+        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_is.r#ref(db));
+
+        // Load tag from payload_ptr + 0
+        let tag_load = clif::load(db, location, ref_val, i32_ty, 0);
+        let tag_val = tag_load.result(db);
+
+        // Compare with expected discriminant
+        let expected = clif::iconst(db, location, i32_ty, variant_layout.tag_value as i64);
+        let cmp_op = clif::icmp(
+            db,
+            location,
+            tag_val,
+            expected.result(db),
+            i1_ty,
+            Symbol::new("eq"),
+        );
+
+        RewriteResult::Expand(vec![
+            tag_load.as_operation(),
+            expected.as_operation(),
+            cmp_op.as_operation(),
+        ])
+    }
+}
+
+/// Pattern for `adt.variant_cast(ref, type, tag)` -> identity (no-op).
+///
+/// In native code, all references are opaque pointers, so variant casts
+/// are purely a type-system concept and require no runtime operation.
+struct VariantCastPattern;
+
+impl<'db> RewritePattern<'db> for VariantCastPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_cast.r#ref(db));
+        RewriteResult::Erase {
+            replacement_values: vec![ref_val],
+        }
+    }
+}
+
+/// Pattern for `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, offset)`.
+///
+/// Uses the enum layout and variant tag to compute the field offset:
+/// `fields_offset + variant_field_offsets[field_idx]`
+struct VariantGetPattern;
+
+impl<'db> RewritePattern<'db> for VariantGetPattern {
+    fn match_and_rewrite(
+        &self,
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        adaptor: &OpAdaptor<'db, '_>,
+    ) -> RewriteResult<'db> {
+        let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
+            return RewriteResult::Unchanged;
+        };
+
+        let enum_ty = variant_get.r#type(db);
+        let tag = variant_get.tag(db);
+        let field_idx = variant_get.field(db) as usize;
+        let type_converter = adaptor.type_converter();
+
+        let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
+            warn!(
+                "adt_to_clif: cannot compute enum layout for variant_get at {:?}",
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
+            warn!(
+                "adt_to_clif: unknown variant tag {:?} at {:?}",
+                tag,
+                op.location(db)
+            );
+            return RewriteResult::Unchanged;
+        };
+
+        if field_idx >= variant_layout.field_offsets.len() {
+            warn!(
+                "adt_to_clif: field index {} out of bounds for variant {:?} ({} fields)",
+                field_idx,
+                tag,
+                variant_layout.field_offsets.len()
+            );
+            return RewriteResult::Unchanged;
+        }
+
+        let location = op.location(db);
+        let offset = (enum_layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32;
+
+        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_get.r#ref(db));
+
+        // Determine the load type from the enum type definition.
+        // The field was stored with its native type, so we must load with the
+        // same type rather than the type-erased result type (which may be
+        // core.ptr when the IR uses tribute_rt.any).
+        let load_ty = adt::get_enum_variants(db, enum_ty)
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|(name, _)| *name == tag)
+                    .and_then(|(_, fields)| fields.get(field_idx).copied())
+            })
+            .map(|field_ty| {
+                // Convert the field type to native (e.g., tribute_rt.any → core.ptr).
+                // If already native (e.g., core.i32), keep as-is.
+                type_converter
+                    .convert_type(db, field_ty)
+                    .unwrap_or(field_ty)
+            })
+            .unwrap_or_else(|| {
+                adaptor
+                    .result_type(db, 0)
+                    .unwrap_or_else(|| op.results(db)[0])
+            });
+
+        let load_op = clif::load(db, location, ref_val, load_ty, offset);
+        RewriteResult::Replace(load_op.as_operation())
     }
 }
 

@@ -197,7 +197,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: enum requires adt.variant_* lowering"]
 fn test_native_enum_case() {
     let status = compile_and_run_native(
         "enum_case.trb",
@@ -216,6 +215,69 @@ fn area(s: Shape) -> Nat {
 
 fn main() {
     let _ = area(Circle(5))
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+/// Test enum with empty variants (no fields).
+#[test]
+fn test_native_enum_empty_variants() {
+    let status = compile_and_run_native(
+        "enum_empty.trb",
+        r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn to_num(c: Color) -> Nat {
+    case c {
+        Red -> 1
+        Green -> 2
+        Blue -> 3
+    }
+}
+
+fn main() {
+    let _ = to_num(Green)
+}
+"#,
+    );
+    assert!(
+        status.success(),
+        "Native binary exited with non-zero status: {:?}",
+        status
+    );
+}
+
+/// Test enum with mixed variant arities (Option-like).
+#[test]
+fn test_native_enum_option_like() {
+    let status = compile_and_run_native(
+        "enum_option.trb",
+        r#"
+enum Maybe {
+    Just(Nat),
+    Nothing,
+}
+
+fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
+    case m {
+        Just(x) -> x
+        Nothing -> default
+    }
+}
+
+fn main() {
+    let _ = maybe_unwrap(Just(42), 0)
+    let _ = maybe_unwrap(Nothing, 99)
 }
 "#,
     );

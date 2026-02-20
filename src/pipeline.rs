@@ -791,10 +791,24 @@ fn compile_module_to_native<'db>(
         let type_converter = native_type_converter();
         let result = resolve_unrealized_casts(db, module, &type_converter);
         if !result.unresolved.is_empty() {
+            let details: Vec<String> = result
+                .unresolved
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}.{} -> {}.{}",
+                        c.from_type.dialect(db),
+                        c.from_type.name(db),
+                        c.to_type.dialect(db),
+                        c.to_type.name(db),
+                    )
+                })
+                .collect();
             return Err(trunk_ir_cranelift_backend::CompilationError::ir_validation(
                 format!(
-                    "{} unresolved cast(s) remain after native type conversion",
-                    result.unresolved.len()
+                    "{} unresolved cast(s) remain after native type conversion: [{}]",
+                    result.unresolved.len(),
+                    details.join(", "),
                 ),
             ));
         }

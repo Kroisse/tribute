@@ -164,9 +164,11 @@ pub fn native_type_converter() -> TypeConverter {
                 None
             }
         })
-        // Convert adt.struct / variant instance -> core.ptr (opaque reference)
+        // Convert adt.struct / adt.enum / variant instance -> core.ptr (opaque reference)
         .add_conversion(|db, ty| {
-            if (adt::is_struct_type(db, ty) || adt::is_variant_instance_type(db, ty))
+            if (adt::is_struct_type(db, ty)
+                || adt::is_enum_type(db, ty)
+                || adt::is_variant_instance_type(db, ty))
                 && !ability::is_marker_type(db, ty)
             {
                 Some(core::Ptr::new(db).as_type())
@@ -369,8 +371,8 @@ pub fn native_type_converter() -> TypeConverter {
 /// evidence types, and any/intref types. In the native backend, all of
 /// these are represented as `core.ptr`.
 fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
-    // adt.struct or adt.typeref
-    if adt::is_struct_type(db, ty) || adt::is_typeref(db, ty) {
+    // adt.struct, adt.enum, or adt.typeref
+    if adt::is_struct_type(db, ty) || adt::is_enum_type(db, ty) || adt::is_typeref(db, ty) {
         return true;
     }
 

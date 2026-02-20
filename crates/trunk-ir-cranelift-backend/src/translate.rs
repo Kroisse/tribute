@@ -215,7 +215,7 @@ fn emit_module_impl<'db>(
         let mut ctx = Context::for_function(cl_func);
         obj_module
             .define_function(func_id, &mut ctx)
-            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+            .map_err(|e| CompilationError::codegen(format!("Function {} {e:?}", name_sym)))?;
     }
 
     // 4b. Define RTTI table and __tribute_deep_release

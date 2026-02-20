@@ -176,6 +176,23 @@ fn qualified_type_name(db: &dyn salsa::Database, ctor_id: &CtorId<'_>) -> Symbol
     Symbol::from_dynamic(&ctor_id.qualified_name(db).to_string())
 }
 
+/// Resolve the ADT (enum/struct) type attribute for a constructor.
+///
+/// Given a constructor's AST type (either `Func { result: Named { name } }` or `Named { name }`),
+/// extracts the result type name and looks it up in the type map.
+/// Falls back to `tribute_rt.any` if the type is not registered.
+fn resolve_enum_type_attr<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ctor_ty: crate::ast::Type<'db>,
+) -> trunk_ir::Type<'db> {
+    let result_ty = match ctor_ty.kind(ctx.db) {
+        TypeKind::Func { result, .. } => *result,
+        _ => ctor_ty,
+    };
+    ctx.resolve_adt_type(result_ty)
+        .unwrap_or_else(|| tribute_rt::any_type(ctx.db))
+}
+
 /// Pre-scan declarations to register struct field orders.
 ///
 /// This ensures Record expressions can be lowered correctly even when they
@@ -214,6 +231,26 @@ fn prescan_struct_fields<'db>(
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
                 let struct_ir_type = adt::struct_type(ctx.db, s.name, ir_fields);
                 ctx.register_type(qualified, struct_ir_type);
+            }
+            Decl::Enum(e) => {
+                let ctor_id = CtorId::new(ctx.db, path_vec.clone(), e.name);
+
+                // Build adt.enum IR type with variant names and field types
+                let ir_variants: Vec<(Symbol, Vec<trunk_ir::Type<'db>>)> = e
+                    .variants
+                    .iter()
+                    .map(|v| {
+                        let field_types: Vec<trunk_ir::Type<'db>> = v
+                            .fields
+                            .iter()
+                            .map(|f| convert_annotation_to_ir_type(ctx, Some(&f.ty)))
+                            .collect();
+                        (v.name, field_types)
+                    })
+                    .collect();
+                let qualified = qualified_type_name(ctx.db, &ctor_id);
+                let enum_ir_type = adt::enum_type(ctx.db, e.name, ir_variants);
+                ctx.register_type(qualified, enum_ir_type);
             }
             Decl::Module(m) => {
                 // Recursively scan nested modules
@@ -626,14 +663,41 @@ fn lower_expr<'db>(
                 Some(result)
             }
             ResolvedRef::Constructor { variant, .. } => {
-                let func_ty = builder.ctx.convert_type(typed_ref.ty);
-                let op =
-                    builder
-                        .block
-                        .op(func::constant(builder.db(), location, func_ty, *variant));
-                let result = op.result(builder.db());
-                builder.ctx.track_value_type(result, func_ty);
-                Some(result)
+                // Zero-argument constructors (e.g., `Green` in `enum Color { Red, Green, Blue }`)
+                // are referenced as Var, not Call. For these, emit adt.variant_new directly
+                // instead of func.constant, which would create a symbol address that doesn't
+                // correspond to any actual function.
+                match typed_ref.ty.kind(builder.db()) {
+                    TypeKind::Func { .. } => {
+                        // Constructor with args used as a first-class function value
+                        let func_ty = builder.ctx.convert_type(typed_ref.ty);
+                        let op = builder.block.op(func::constant(
+                            builder.db(),
+                            location,
+                            func_ty,
+                            *variant,
+                        ));
+                        let result = op.result(builder.db());
+                        builder.ctx.track_value_type(result, func_ty);
+                        Some(result)
+                    }
+                    _ => {
+                        // Zero-argument constructor: emit adt.variant_new with no args
+                        let result_ty = builder.ctx.convert_type(typed_ref.ty);
+                        let type_attr = resolve_enum_type_attr(builder.ctx, typed_ref.ty);
+                        let op = builder.block.op(adt::variant_new(
+                            builder.db(),
+                            location,
+                            vec![],
+                            result_ty,
+                            type_attr,
+                            *variant,
+                        ));
+                        let result = op.result(builder.db());
+                        builder.ctx.track_value_type(result, result_ty);
+                        Some(result)
+                    }
+                }
             }
             ResolvedRef::Builtin(_)
             | ResolvedRef::Module { .. }
@@ -781,12 +845,13 @@ fn lower_expr<'db>(
                     }
                     ResolvedRef::Constructor { variant, .. } => {
                         let result_ty = builder.call_result_type(&typed_ref.ty);
+                        let type_attr = resolve_enum_type_attr(builder.ctx, typed_ref.ty);
                         let op = builder.block.op(adt::variant_new(
                             builder.db(),
                             location,
                             arg_values,
                             result_ty,
-                            result_ty,
+                            type_attr,
                             *variant,
                         ));
                         let result = op.result(builder.db());
@@ -844,12 +909,13 @@ fn lower_expr<'db>(
             match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
                     let result_ty = builder.call_result_type(&ctor.ty);
+                    let type_attr = resolve_enum_type_attr(builder.ctx, ctor.ty);
                     let op = builder.block.op(adt::variant_new(
                         builder.db(),
                         location,
                         arg_values,
                         result_ty,
-                        result_ty,
+                        type_attr,
                         *variant,
                     ));
                     let result = op.result(builder.db());
@@ -990,11 +1056,28 @@ fn lower_expr<'db>(
         }
         ExprKind::Case { scrutinee, arms } => {
             let scrutinee_val = lower_expr(builder, scrutinee)?;
-            let result_ty = builder
+            let any_ty = tribute_rt::any_type(builder.db());
+            let mut result_ty = builder
                 .ctx
                 .get_node_type(expr.id)
                 .map(|ty| builder.ctx.convert_type(*ty))
-                .unwrap_or_else(|| tribute_rt::any_type(builder.db()));
+                .unwrap_or(any_ty);
+
+            // If the case expression type was erased to any (e.g., due to a
+            // UniVar surviving substitution), try to infer a concrete type
+            // from the first arm's body. This avoids a type mismatch where
+            // the scf.if produces `tribute_rt.any` but the enclosing function
+            // expects a concrete type like `core.i32`.
+            if result_ty == any_ty
+                && let Some(first_arm) = arms.first()
+                && let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id)
+            {
+                let converted = builder.ctx.convert_type(*arm_ty);
+                if converted != any_ty {
+                    result_ty = converted;
+                }
+            }
+
             let location = builder.location(expr.id);
             lower_case_chain(
                 builder.ctx,
@@ -1003,6 +1086,7 @@ fn lower_expr<'db>(
                 scrutinee_val,
                 result_ty,
                 &arms,
+                false, // top-level: always emit condition checks
             )
         }
         ExprKind::Lambda { params, body } => {
@@ -1673,18 +1757,24 @@ fn extract_ctor_id<'db>(resolved: &ResolvedRef<'db>) -> CtorId<'db> {
 /// Check if a pattern is unconditional (always matches without runtime checks).
 ///
 /// Returns true for `_` (wildcard) and `x` (bind) patterns, which match any value.
-/// Returns false for patterns that require runtime checks (variant, literal, etc.).
-fn is_unconditional_pattern(pattern: &Pattern<TypedRef<'_>>) -> bool {
+/// Lower a case expression as a chain of scf.if operations.
+///
+/// Pattern: `case scrutinee { p1 => e1, p2 => e2, ... }` becomes a nested
+/// Returns `true` if the pattern always matches (irrefutable), e.g. wildcard
+/// or plain variable binding.
+fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> bool {
     matches!(
         &*pattern.kind,
         PatternKind::Wildcard | PatternKind::Bind { .. }
     )
 }
 
-/// Lower a case expression as a chain of scf.if operations.
-///
-/// Pattern: `case scrutinee { p1 => e1, p2 => e2, ... }` becomes a nested
 /// if-else chain testing each pattern in order.
+/// If `is_else_chain` is true, we are inside the recursive else-branch of a
+/// multi-arm match.  In that context the last guard-free arm can be lowered
+/// unconditionally (the earlier arms already cover the other cases).
+/// At the top-level call site `is_else_chain` must be `false` so that even a
+/// single-arm case still emits the `adt.variant_is` + `scf.if` check.
 fn lower_case_chain<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     block: &mut BlockBuilder<'db>,
@@ -1692,17 +1782,28 @@ fn lower_case_chain<'db>(
     scrutinee: trunk_ir::Value<'db>,
     result_ty: trunk_ir::Type<'db>,
     arms: &[Arm<TypedRef<'db>>],
+    is_else_chain: bool,
 ) -> Option<trunk_ir::Value<'db>> {
     match arms {
         [] => {
-            // No arms — exhaustiveness failure fallback, emit nil
+            // No arms — exhaustiveness failure fallback, emit unreachable
+            block.op(func::unreachable(ctx.db, location));
+            // Produce a nil placeholder value; the unreachable above ensures
+            // this code path is never executed at runtime.
             let ty = core::Nil::new(ctx.db).as_type();
             let op = block.op(arith::r#const(ctx.db, location, ty, Attribute::Unit));
             Some(op.result(ctx.db))
         }
-        [last] if last.guard.is_none() && is_unconditional_pattern(&last.pattern) => {
-            // Single unconditional arm (wildcard or bind, no guard)
-            // — bind pattern and lower body directly (no scf.if needed)
+        [last]
+            if last.guard.is_none() && (is_else_chain || is_irrefutable_pattern(&last.pattern)) =>
+        {
+            // This arm can be lowered unconditionally when:
+            // - We are in the else-chain of a multi-arm match (the preceding
+            //   arms already covered the other cases), OR
+            // - The pattern itself is irrefutable (wildcard / bind) so it
+            //   always matches regardless of context.
+            // Skipping the condition check avoids generating an unreachable
+            // else branch with a type-mismatched nil yield.
             ctx.enter_scope();
             bind_pattern_fields(ctx, block, location, scrutinee, &last.pattern);
             let result = {
@@ -1772,7 +1873,8 @@ fn emit_pattern_check<'db>(
             // Test if scrutinee is of the specific variant
             let (variant_name, enum_ty) = match &ctor.resolved {
                 ResolvedRef::Constructor { variant, .. } => {
-                    (*variant, builder.ctx.convert_type(ctor.ty))
+                    let ty = resolve_enum_type_attr(builder.ctx, ctor.ty);
+                    (*variant, ty)
                 }
                 _ => {
                     unreachable!("non-constructor in variant pattern: {:?}", ctor.resolved)
@@ -2038,7 +2140,7 @@ fn build_else_chain_region<'db>(
     arms: &[Arm<TypedRef<'db>>],
 ) -> Region<'db> {
     let mut block = BlockBuilder::new(ctx.db, location);
-    let result = lower_case_chain(ctx, &mut block, location, scrutinee, result_ty, arms);
+    let result = lower_case_chain(ctx, &mut block, location, scrutinee, result_ty, arms, true);
 
     let yield_val = {
         let val = result.unwrap_or_else(|| {
@@ -2073,7 +2175,10 @@ fn bind_pattern_fields<'db>(
         }
         PatternKind::Variant { ctor, fields } => {
             let (variant_name, enum_ty) = match &ctor.resolved {
-                ResolvedRef::Constructor { variant, .. } => (*variant, ctx.convert_type(ctor.ty)),
+                ResolvedRef::Constructor { variant, .. } => {
+                    let ty = resolve_enum_type_attr(ctx, ctor.ty);
+                    (*variant, ty)
+                }
                 _ => unreachable!("non-constructor in variant pattern: {:?}", ctor.resolved),
             };
 
@@ -2095,7 +2200,13 @@ fn bind_pattern_fields<'db>(
             for (i, field_pat) in fields.iter().enumerate() {
                 let field_val = block
                     .op(adt::variant_get(
-                        ctx.db, location, cast_val, any_ty, i as u64,
+                        ctx.db,
+                        location,
+                        cast_val,
+                        any_ty,
+                        enum_ty,
+                        variant_name,
+                        i as u64,
                     ))
                     .as_operation()
                     .result(ctx.db, 0);

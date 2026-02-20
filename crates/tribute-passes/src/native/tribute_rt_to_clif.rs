@@ -238,6 +238,9 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
 // =============================================================================
 
 /// Pattern for `tribute_rt.unbox_int` → `clif.load` (i32 from offset 0).
+///
+/// If the input value is already `core.i32` (e.g., from a variant field that
+/// was stored as a raw integer), the unbox is a no-op.
 struct UnboxIntPattern;
 
 impl<'db> RewritePattern<'db> for UnboxIntPattern {
@@ -245,18 +248,31 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(unbox_op) = tribute_rt::UnboxInt::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+        let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
-        let load_op = clif::load(db, op.location(db), unbox_op.value(db), i32_ty, 0);
+
+        // If the input is already i32, the unbox is a no-op (value was stored raw).
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == i32_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
+        }
+
+        let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
         RewriteResult::Replace(load_op.as_operation())
     }
 }
 
 /// Pattern for `tribute_rt.unbox_nat` → `clif.load` (i32 from offset 0).
+///
+/// If the input value is already `core.i32`, the unbox is a no-op.
 struct UnboxNatPattern;
 
 impl<'db> RewritePattern<'db> for UnboxNatPattern {
@@ -264,18 +280,31 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(unbox_op) = tribute_rt::UnboxNat::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+        let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
-        let load_op = clif::load(db, op.location(db), unbox_op.value(db), i32_ty, 0);
+
+        // If the input is already i32, the unbox is a no-op.
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == i32_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
+        }
+
+        let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
         RewriteResult::Replace(load_op.as_operation())
     }
 }
 
 /// Pattern for `tribute_rt.unbox_bool` → `clif.load` (i32 from offset 0).
+///
+/// If the input value is already `core.i32`, the unbox is a no-op.
 struct UnboxBoolPattern;
 
 impl<'db> RewritePattern<'db> for UnboxBoolPattern {
@@ -283,18 +312,31 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(unbox_op) = tribute_rt::UnboxBool::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+        let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
-        let load_op = clif::load(db, op.location(db), unbox_op.value(db), i32_ty, 0);
+
+        // If the input is already i32, the unbox is a no-op.
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == i32_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
+        }
+
+        let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
         RewriteResult::Replace(load_op.as_operation())
     }
 }
 
 /// Pattern for `tribute_rt.unbox_float` → `clif.load` (f64 from offset 0).
+///
+/// If the input value is already `core.f64`, the unbox is a no-op.
 struct UnboxFloatPattern;
 
 impl<'db> RewritePattern<'db> for UnboxFloatPattern {
@@ -302,13 +344,24 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
+        adaptor: &OpAdaptor<'db, '_>,
     ) -> RewriteResult<'db> {
         let Ok(unbox_op) = tribute_rt::UnboxFloat::from_operation(db, *op) else {
             return RewriteResult::Unchanged;
         };
+        let value = unbox_op.value(db);
         let f64_ty = core::F64::new(db).as_type();
-        let load_op = clif::load(db, op.location(db), unbox_op.value(db), f64_ty, 0);
+
+        // If the input is already f64, the unbox is a no-op.
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == f64_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
+        }
+
+        let load_op = clif::load(db, op.location(db), value, f64_ty, 0);
         RewriteResult::Replace(load_op.as_operation())
     }
 }

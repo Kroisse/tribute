@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
-use trunk_ir::adt_layout::compute_struct_layout;
+use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout};
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::TypeConverter;
 use trunk_ir::{
@@ -94,8 +94,9 @@ pub fn generate_rtti<'db>(
 ) -> (core::Module<'db>, RttiMap<'db>) {
     let mut rtti_map = RttiMap::new();
 
-    // Phase 1: Scan module for all adt.struct_new operations to collect struct types.
+    // Phase 1: Scan module for all adt.struct_new and adt.variant_new operations.
     collect_struct_types(db, &module, &mut rtti_map);
+    collect_enum_types(db, &module, &mut rtti_map);
 
     if rtti_map.type_to_idx.is_empty() {
         return (module, rtti_map);
@@ -154,12 +155,48 @@ fn collect_struct_types_in_op<'db>(
     }
 }
 
-/// Generate per-type release functions for all struct types in the RTTI map.
+/// Scan module body for `adt.variant_new` operations and register their base enum types.
+fn collect_enum_types<'db>(
+    db: &'db dyn salsa::Database,
+    module: &core::Module<'db>,
+    rtti_map: &mut RttiMap<'db>,
+) {
+    let body = module.body(db);
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            collect_enum_types_in_op(db, op, rtti_map);
+        }
+    }
+}
+
+/// Recursively scan an operation (and its nested regions) for `adt.variant_new`.
+fn collect_enum_types_in_op<'db>(
+    db: &'db dyn salsa::Database,
+    op: &Operation<'db>,
+    rtti_map: &mut RttiMap<'db>,
+) {
+    if let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) {
+        let enum_ty = variant_new.r#type(db);
+        if adt::is_enum_type(db, enum_ty) {
+            rtti_map.get_or_insert(enum_ty);
+        }
+    }
+
+    // Recurse into regions
+    for region in op.regions(db).iter() {
+        for block in region.blocks(db).iter() {
+            for nested_op in block.operations(db).iter() {
+                collect_enum_types_in_op(db, nested_op, rtti_map);
+            }
+        }
+    }
+}
+
+/// Generate per-type release functions for all registered types in the RTTI map.
 ///
 /// Each release function:
-/// 1. Loads each pointer field from the struct payload
-/// 2. Calls `tribute_rt.release` on each pointer field (to be lowered later by rc_lowering)
-/// 3. Deallocates the struct itself (payload_ptr - 8 = raw_ptr)
+/// 1. Loads and releases pointer fields from the payload
+/// 2. Deallocates the object itself (payload_ptr - 8 = raw_ptr)
 fn generate_release_functions<'db>(
     db: &'db dyn salsa::Database,
     rtti_map: &RttiMap<'db>,
@@ -171,9 +208,12 @@ fn generate_release_functions<'db>(
     let mut entries: Vec<_> = rtti_map.type_to_idx.iter().collect();
     entries.sort_by_key(|(_, idx)| *idx);
 
-    for (struct_ty, rtti_idx) in entries {
-        let func_op =
-            generate_release_function_for_struct(db, *struct_ty, *rtti_idx, type_converter);
+    for (ty, rtti_idx) in entries {
+        let func_op = if adt::is_enum_type(db, *ty) {
+            generate_release_function_for_enum(db, *ty, *rtti_idx, type_converter)
+        } else {
+            generate_release_function_for_struct(db, *ty, *rtti_idx, type_converter)
+        };
         funcs.push(func_op);
     }
 
@@ -297,6 +337,309 @@ fn generate_release_function_for_struct<'db>(
     let body = Region::new(db, location, IdVec::from(vec![entry_block]));
 
     // Build the function operation
+    let func_op = clif::func(
+        db,
+        location,
+        Symbol::from_dynamic(&func_name),
+        func_ty,
+        body,
+    );
+
+    func_op.as_operation()
+}
+
+/// Generate a release function for an enum type.
+///
+/// The function loads the tag, then for each variant with pointer fields,
+/// branches to a release block. Finally deallocates the object.
+///
+/// Uses `clif.brif` and basic blocks directly (not `scf.if`) because
+/// this function is generated after `lower_scf_to_cf` has already run.
+///
+/// All non-entry blocks have NO block parameters. They reference the entry
+/// block's `payload_ptr` value directly via SSA dominance, since `clif.brif`
+/// does not pass block arguments.
+///
+/// ```text
+/// clif.func @__tribute_release_<idx> {type = core.func(core.nil, core.ptr)} {
+/// ^entry(%payload_ptr: core.ptr):
+///   %tag = clif.load %payload_ptr {offset = 0} : core.i32
+///   %expected_0 = clif.iconst <tag_0>
+///   %is_v0 = clif.icmp eq %tag, %expected_0
+///   clif.brif %is_v0, ^release_v0, ^check_v1
+/// ^check_v1:
+///   %expected_1 = clif.iconst <tag_1>
+///   %is_v1 = clif.icmp eq %tag, %expected_1
+///   clif.brif %is_v1, ^release_v1, ^dealloc
+/// ^release_v0:
+///   // load & release pointer fields for variant 0
+///   clif.jump ^dealloc
+/// ^release_v1:
+///   // load & release pointer fields for variant 1
+///   clif.jump ^dealloc
+/// ^dealloc:
+///   clif.call @__tribute_dealloc(raw_ptr, size)
+///   clif.return
+/// }
+/// ```
+fn generate_release_function_for_enum<'db>(
+    db: &'db dyn salsa::Database,
+    enum_ty: Type<'db>,
+    rtti_idx: u32,
+    type_converter: &TypeConverter,
+) -> Operation<'db> {
+    let layout = compute_enum_layout(db, enum_ty, type_converter).unwrap_or_else(|| {
+        unreachable!(
+            "enum type registered in RttiMap must have a valid layout: {}.{}",
+            enum_ty.dialect(db),
+            enum_ty.name(db),
+        )
+    });
+
+    let variants = adt::get_enum_variants(db, enum_ty).unwrap_or_default();
+
+    let ptr_ty = core::Ptr::new(db).as_type();
+    let nil_ty = core::Nil::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
+    let i32_ty = core::I32::new(db).as_type();
+    let i1_ty = core::I1::new(db).as_type();
+
+    let path = trunk_ir::PathId::new(db, "<rtti>".to_owned());
+    let location = Location::new(path, trunk_ir::Span::new(0, 0));
+
+    let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
+    let func_ty = core::Func::new(db, IdVec::from(vec![ptr_ty]), nil_ty).as_type();
+
+    let entry_block_id = BlockId::fresh();
+    let payload_arg = trunk_ir::BlockArg::of_type(db, ptr_ty);
+    let payload_ptr = Value::new(db, trunk_ir::ValueDef::BlockArg(entry_block_id), 0);
+
+    // Collect variants that have pointer fields and need release blocks
+    struct VariantRelease {
+        tag_value: u32,
+        ptr_field_offsets: Vec<i32>,
+    }
+    let mut variants_with_ptrs: Vec<VariantRelease> = Vec::new();
+
+    for (variant_idx, (_variant_name, field_types)) in variants.iter().enumerate() {
+        let variant_layout = &layout.variant_layouts[variant_idx];
+
+        let ptr_field_offsets: Vec<i32> = field_types
+            .iter()
+            .enumerate()
+            .filter_map(|(field_idx, field_ty)| {
+                let native_ty = type_converter
+                    .convert_type(db, *field_ty)
+                    .unwrap_or(*field_ty);
+                if core::Ptr::from_type(db, native_ty).is_some() {
+                    Some((layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !ptr_field_offsets.is_empty() {
+            variants_with_ptrs.push(VariantRelease {
+                tag_value: variant_layout.tag_value,
+                ptr_field_offsets,
+            });
+        }
+    }
+
+    // Build dealloc block (final block, all paths converge here).
+    // No block params — references entry's payload_ptr via SSA dominance.
+    let dealloc_block_id = BlockId::fresh();
+    let dealloc_block = {
+        let mut ops: Vec<Operation<'db>> = Vec::new();
+
+        let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+        ops.push(hdr_sz.as_operation());
+        let raw_ptr = clif::isub(db, location, payload_ptr, hdr_sz.result(db), ptr_ty);
+        ops.push(raw_ptr.as_operation());
+
+        let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
+        let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
+        ops.push(size_op.as_operation());
+
+        let dealloc_call = clif::call(
+            db,
+            location,
+            [raw_ptr.result(db), size_op.result(db)],
+            nil_ty,
+            Symbol::new(DEALLOC_FN),
+        );
+        ops.push(dealloc_call.as_operation());
+
+        let ret_op = clif::r#return(db, location, []);
+        ops.push(ret_op.as_operation());
+
+        Block::new(
+            db,
+            dealloc_block_id,
+            location,
+            IdVec::new(),
+            ops.into_iter().collect(),
+        )
+    };
+
+    if variants_with_ptrs.is_empty() {
+        // No pointer fields in any variant: entry jumps straight to dealloc
+        let jump = clif::jump(db, location, [], dealloc_block);
+
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            IdVec::from(vec![payload_arg]),
+            IdVec::from(vec![jump.as_operation()]),
+        );
+
+        let body = Region::new(db, location, IdVec::from(vec![entry_block, dealloc_block]));
+        let func_op = clif::func(
+            db,
+            location,
+            Symbol::from_dynamic(&func_name),
+            func_ty,
+            body,
+        );
+        return func_op.as_operation();
+    }
+
+    // Build release blocks for each variant.
+    // No block params — references entry's payload_ptr via SSA dominance.
+    let mut release_blocks: Vec<Block<'db>> = Vec::new();
+
+    for vr in &variants_with_ptrs {
+        let release_block_id = BlockId::fresh();
+        let mut release_ops: Vec<Operation<'db>> = Vec::new();
+
+        for &offset in &vr.ptr_field_offsets {
+            let load_op = clif::load(db, location, payload_ptr, ptr_ty, offset);
+            let field_val = load_op.result(db);
+            release_ops.push(load_op.as_operation());
+
+            let release_op = tribute_rt::release(db, location, field_val, 0);
+            release_ops.push(release_op.as_operation());
+        }
+
+        let jump_to_dealloc = clif::jump(db, location, [], dealloc_block);
+        release_ops.push(jump_to_dealloc.as_operation());
+
+        let release_block = Block::new(
+            db,
+            release_block_id,
+            location,
+            IdVec::new(),
+            release_ops.into_iter().collect(),
+        );
+        release_blocks.push(release_block);
+    }
+
+    // Build the entry block: load tag, then chain check-and-branch for each variant.
+    // For a single variant with ptrs, the entry block does:
+    //   load tag → icmp → brif(release_block, dealloc)
+    // For multiple, we chain: entry checks first, then check_blocks for the rest.
+    //
+    // Entry block handles the first check. Additional check blocks handle the rest.
+    let mut entry_ops: Vec<Operation<'db>> = Vec::new();
+
+    // Load tag from payload_ptr + 0
+    let tag_load = clif::load(db, location, payload_ptr, i32_ty, 0);
+    let tag_val = tag_load.result(db);
+    entry_ops.push(tag_load.as_operation());
+
+    // Build additional check blocks (for variants_with_ptrs[1..]) in reverse order
+    // so we can reference the "next" block when building each one.
+    let mut check_blocks: Vec<Block<'db>> = Vec::new();
+    let num_variants = variants_with_ptrs.len();
+
+    // Build check blocks for index 1..n in reverse
+    // The last check's else goes to dealloc, previous checks' else goes to the next check.
+    let mut next_else_block: Block<'db> = dealloc_block;
+
+    for i in (1..num_variants).rev() {
+        let vr = &variants_with_ptrs[i];
+        let check_block_id = BlockId::fresh();
+        let mut check_ops: Vec<Operation<'db>> = Vec::new();
+
+        let expected = clif::iconst(db, location, i32_ty, vr.tag_value as i64);
+        check_ops.push(expected.as_operation());
+
+        let cmp_op = clif::icmp(
+            db,
+            location,
+            tag_val,
+            expected.result(db),
+            i1_ty,
+            Symbol::new("eq"),
+        );
+        check_ops.push(cmp_op.as_operation());
+
+        let brif_op = clif::brif(
+            db,
+            location,
+            cmp_op.result(db),
+            release_blocks[i],
+            next_else_block,
+        );
+        check_ops.push(brif_op.as_operation());
+
+        let check_block = Block::new(
+            db,
+            check_block_id,
+            location,
+            IdVec::new(),
+            check_ops.into_iter().collect(),
+        );
+
+        next_else_block = check_block;
+        check_blocks.push(check_block);
+    }
+
+    // Reverse to get forward order (check[1], check[2], ...)
+    check_blocks.reverse();
+
+    // Entry block: check for first variant, else goes to first check block (or dealloc)
+    let first_vr = &variants_with_ptrs[0];
+    let expected = clif::iconst(db, location, i32_ty, first_vr.tag_value as i64);
+    entry_ops.push(expected.as_operation());
+
+    let cmp_op = clif::icmp(
+        db,
+        location,
+        tag_val,
+        expected.result(db),
+        i1_ty,
+        Symbol::new("eq"),
+    );
+    entry_ops.push(cmp_op.as_operation());
+
+    let brif_op = clif::brif(
+        db,
+        location,
+        cmp_op.result(db),
+        release_blocks[0],
+        next_else_block,
+    );
+    entry_ops.push(brif_op.as_operation());
+
+    let entry_block = Block::new(
+        db,
+        entry_block_id,
+        location,
+        IdVec::from(vec![payload_arg]),
+        entry_ops.into_iter().collect(),
+    );
+
+    // Assemble all blocks: entry, check blocks, release blocks, dealloc
+    let mut all_blocks: Vec<Block<'db>> = Vec::new();
+    all_blocks.push(entry_block);
+    all_blocks.extend(check_blocks);
+    all_blocks.extend(release_blocks);
+    all_blocks.push(dealloc_block);
+
+    let body = Region::new(db, location, all_blocks.into_iter().collect());
     let func_op = clif::func(
         db,
         location,
