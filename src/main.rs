@@ -14,11 +14,12 @@ use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
     compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, link_native_binary,
+    run_native_pipeline, run_wasm_pipeline,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
-use tribute_passes::diagnostic::Diagnostic;
+use tribute_passes::{Diagnostic, DiagnosticSeverity};
 use trunk_ir::DialectOp;
 
 fn main() {
@@ -75,17 +76,44 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str,
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         if dump_ir {
-            let result = compile_with_diagnostics(db, source);
-            if !result.diagnostics.is_empty() {
+            let result = match target {
+                "native" => run_native_pipeline(db, source),
+                _ => run_wasm_pipeline(db, source),
+            };
+
+            // Collect diagnostics from the target-specific pipeline
+            let diagnostics: Vec<Diagnostic> = match target {
+                "native" => run_native_pipeline::accumulated::<Diagnostic>(db, source),
+                _ => run_wasm_pipeline::accumulated::<Diagnostic>(db, source),
+            }
+            .into_iter()
+            .cloned()
+            .collect();
+
+            if !diagnostics.is_empty() {
                 let file_path = input_path.display().to_string();
                 let source_text = source.text(db);
-                for diag in &result.diagnostics {
+                for diag in &diagnostics {
                     print_diagnostic(diag, source_text, &file_path);
                 }
-                std::process::exit(1);
+                if diagnostics
+                    .iter()
+                    .any(|d| d.severity == DiagnosticSeverity::Error)
+                {
+                    std::process::exit(1);
+                }
             }
-            let ir_text = trunk_ir::printer::print_op(db, result.module.as_operation());
-            println!("{}", ir_text);
+
+            match result {
+                Ok(module) => {
+                    let ir_text = trunk_ir::printer::print_op(db, module.as_operation());
+                    println!("{}", ir_text);
+                }
+                Err(e) => {
+                    eprintln!("Pipeline failed: {e}");
+                    std::process::exit(1);
+                }
+            }
             return;
         }
 
