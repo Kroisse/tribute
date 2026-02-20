@@ -120,7 +120,8 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
             let env_struct_ty = build_env_struct_type(db, live_ins.len());
 
             // adt.struct_new to create the env
-            let struct_new = adt::struct_new(db, location, field_ptrs, env_struct_ty, ptr_ty);
+            let struct_new =
+                adt::struct_new(db, location, field_ptrs, env_struct_ty, env_struct_ty);
             ops.push(struct_new.as_operation());
 
             // Cast struct to ptr for FFI

@@ -3,7 +3,7 @@ ability State(s) {
     fn set(value: s) -> Nil
 }
 
-fn counter() ->{State(Int)} Int {
+fn counter() ->{State(Nat)} Nat {
     let n = State::get()
     State::set(n + 1)
     n
@@ -17,10 +17,11 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Int {
+fn main() -> Nil {
     run_state(fn() {
         counter()
         counter()
         counter()
     }, 0)
+    Nil
 }
