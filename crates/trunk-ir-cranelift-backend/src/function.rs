@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{self as cl_ir, InstBuilder};
+use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::dialect::{clif, core};
@@ -355,6 +355,12 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
                 .ok_or_else(|| CompilationError::function_not_found(&sym.to_string()))?;
             let val = self.builder.ins().func_addr(cl_types::I64, func_ref);
             self.values.insert(sym_addr.result(db), val);
+            return Ok(());
+        }
+
+        // === Trap ===
+        if clif::Trap::from_operation(db, *op).is_ok() {
+            self.builder.ins().trap(TrapCode::unwrap_user(1));
             return Ok(());
         }
 
