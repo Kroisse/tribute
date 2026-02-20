@@ -257,12 +257,12 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already i32, the unbox is a no-op (value was stored raw).
-        if let Some(val_ty) = adaptor.get_value_type(db, value) {
-            if val_ty == i32_ty {
-                return RewriteResult::Erase {
-                    replacement_values: vec![value],
-                };
-            }
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == i32_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
@@ -289,12 +289,12 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already i32, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value) {
-            if val_ty == i32_ty {
-                return RewriteResult::Erase {
-                    replacement_values: vec![value],
-                };
-            }
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == i32_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
@@ -321,12 +321,12 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already a small integer type, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value) {
-            if val_ty == i32_ty || core::I1::from_type(db, val_ty).is_some() {
-                return RewriteResult::Erase {
-                    replacement_values: vec![value],
-                };
-            }
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && (val_ty == i32_ty || core::I1::from_type(db, val_ty).is_some())
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
@@ -353,12 +353,12 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
         let f64_ty = core::F64::new(db).as_type();
 
         // If the input is already f64, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value) {
-            if val_ty == f64_ty {
-                return RewriteResult::Erase {
-                    replacement_values: vec![value],
-                };
-            }
+        if let Some(val_ty) = adaptor.get_value_type(db, value)
+            && val_ty == f64_ty
+        {
+            return RewriteResult::Erase {
+                replacement_values: vec![value],
+            };
         }
 
         let load_op = clif::load(db, op.location(db), value, f64_ty, 0);

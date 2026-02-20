@@ -1068,14 +1068,13 @@ fn lower_expr<'db>(
             // from the first arm's body. This avoids a type mismatch where
             // the scf.if produces `tribute_rt.any` but the enclosing function
             // expects a concrete type like `core.i32`.
-            if result_ty == any_ty {
-                if let Some(first_arm) = arms.first() {
-                    if let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id) {
-                        let converted = builder.ctx.convert_type(*arm_ty);
-                        if converted != any_ty {
-                            result_ty = converted;
-                        }
-                    }
+            if result_ty == any_ty
+                && let Some(first_arm) = arms.first()
+                && let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id)
+            {
+                let converted = builder.ctx.convert_type(*arm_ty);
+                if converted != any_ty {
+                    result_ty = converted;
                 }
             }
 

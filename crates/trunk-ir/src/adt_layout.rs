@@ -182,10 +182,7 @@ pub fn compute_enum_layout<'db>(
 }
 
 /// Find the variant layout for a given tag name.
-pub fn find_variant_layout<'a>(
-    layout: &'a EnumLayout,
-    tag: Symbol,
-) -> Option<&'a VariantFieldLayout> {
+pub fn find_variant_layout(layout: &EnumLayout, tag: Symbol) -> Option<&VariantFieldLayout> {
     layout.variant_layouts.iter().find(|v| v.name == tag)
 }
 
