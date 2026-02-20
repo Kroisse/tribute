@@ -184,6 +184,10 @@ pub fn native_type_converter() -> TypeConverter {
                 None
             }
         })
+        // Convert core.func -> core.ptr (function pointers are pointers)
+        .add_conversion(|db, ty| {
+            core::Func::from_type(db, ty).map(|_| core::Ptr::new(db).as_type())
+        })
         // Convert evidence type (core.array(Marker)) -> core.ptr
         .add_conversion(|db, ty| {
             if ability::is_evidence_type(db, ty) {
@@ -400,6 +404,11 @@ fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 
     // closure.closure
     if closure::Closure::from_type(db, ty).is_some() {
+        return true;
+    }
+
+    // core.func (function pointers)
+    if core::Func::from_type(db, ty).is_some() {
         return true;
     }
 
