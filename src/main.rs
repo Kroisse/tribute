@@ -19,7 +19,7 @@ use tribute::pipeline::{
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
-use tribute_passes::Diagnostic;
+use tribute_passes::{Diagnostic, DiagnosticSeverity};
 use trunk_ir::DialectOp;
 
 fn main() {
@@ -95,6 +95,12 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str,
                 let source_text = source.text(db);
                 for diag in &diagnostics {
                     print_diagnostic(diag, source_text, &file_path);
+                }
+                if diagnostics
+                    .iter()
+                    .any(|d| d.severity == DiagnosticSeverity::Error)
+                {
+                    std::process::exit(1);
                 }
             }
 
