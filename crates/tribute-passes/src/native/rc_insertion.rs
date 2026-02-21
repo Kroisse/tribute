@@ -207,7 +207,9 @@ fn collect_ptr_values<'db>(
             for (idx, ty) in op.results(db).iter().enumerate() {
                 if is_ptr_type(db, *ty) {
                     let val = op.result(db, idx);
-                    ptr_values.insert(val);
+                    if !is_static_ptr(db, val) {
+                        ptr_values.insert(val);
+                    }
                 }
             }
         }
@@ -217,7 +219,7 @@ fn collect_ptr_values<'db>(
     for block in body.blocks(db).iter() {
         for op in block.operations(db).iter() {
             for operand in op.operands(db).iter() {
-                if is_ptr_value(db, *operand, block_arg_types) {
+                if is_ptr_value(db, *operand, block_arg_types) && !is_static_ptr(db, *operand) {
                     ptr_values.insert(*operand);
                 }
             }
@@ -291,7 +293,9 @@ fn compute_use_def_sets<'db>(
             for (idx, ty) in op.results(db).iter().enumerate() {
                 if is_ptr_type(db, *ty) {
                     let val = op.result(db, idx);
-                    defs.insert(val);
+                    if !is_static_ptr(db, val) {
+                        defs.insert(val);
+                    }
                 }
             }
         }
@@ -457,6 +461,28 @@ fn infer_alloc_size(db: &dyn salsa::Database, value: Value<'_>) -> u64 {
     0
 }
 
+/// Check if a value is a static/constant pointer that should not be RC-managed.
+///
+/// Static pointers include:
+/// - `clif.symbol_addr` results (function pointers in `__TEXT` segment)
+/// - `clif.iconst` with ptr type (null pointers from nil materialization)
+fn is_static_ptr(db: &dyn salsa::Database, value: Value<'_>) -> bool {
+    let ValueDef::OpResult(def_op) = value.def(db) else {
+        return false;
+    };
+    // Function pointers from symbol_addr
+    if clif::SymbolAddr::from_operation(db, def_op).is_ok() {
+        return true;
+    }
+    // Null pointer constants (e.g. nil → ptr materialization)
+    if clif::Iconst::from_operation(db, def_op).is_ok()
+        && is_ptr_type(db, def_op.results(db)[value.index(db)])
+    {
+        return true;
+    }
+    false
+}
+
 /// Check if a value is an intermediate allocation pointer that should not be
 /// released individually.
 ///
@@ -556,7 +582,7 @@ fn insert_rc_in_block<'db>(
         // clif.store: if the stored value is a ptr, retain before store
         if let Ok(store_op) = clif::Store::from_operation(db, *op) {
             let stored_val = store_op.value(db);
-            if is_ptr_value(db, stored_val, block_arg_types) {
+            if is_ptr_value(db, stored_val, block_arg_types) && !is_static_ptr(db, stored_val) {
                 let retain_op = tribute_rt::retain(db, op.location(db), stored_val, ptr_ty);
                 plan.before
                     .entry(op_idx)
@@ -1388,6 +1414,64 @@ mod tests {
         assert!(
             !ir.contains("__tribute_yield_set_rc_roots"),
             "no rc_roots setup when no ptr lives past yield: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_symbol_addr_no_rc(db: &salsa::DatabaseImpl) {
+        // clif.symbol_addr produces a static function pointer — no retain/release
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil)} {
+                    ^entry():
+                        %fn_ptr = clif.symbol_addr {sym = @some_func} : core.ptr
+                        %size = clif.iconst {value = 24} : core.i64
+                        %obj = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        %id = clif.iadd %obj, %size : core.ptr
+                        clif.store %fn_ptr, %id {offset = 0}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // symbol_addr result should NOT have retain or release
+        assert!(
+            !ir.contains("tribute_rt.retain"),
+            "should not retain static fn ptr before store: {ir}"
+        );
+        assert!(
+            !ir.contains("tribute_rt.release"),
+            "should not release static fn ptr: {ir}"
+        );
+    }
+
+    #[salsa_test]
+    fn test_null_ptr_iconst_no_rc(db: &salsa::DatabaseImpl) {
+        // clif.iconst with core.ptr type (null pointer) — no retain/release
+        let ir = run_rc(
+            db,
+            r#"
+            core.module @test {
+                clif.func @f {type = core.func(core.nil)} {
+                    ^entry():
+                        %null = clif.iconst {value = 0} : core.ptr
+                        %size = clif.iconst {value = 24} : core.i64
+                        %obj = clif.call %size {callee = @__tribute_alloc} : core.ptr
+                        %id = clif.iadd %obj, %size : core.ptr
+                        clif.store %null, %id {offset = 8}
+                        clif.return
+                }
+            }
+            "#,
+        );
+
+        // null ptr should not be retained before store
+        assert!(
+            !ir.contains("tribute_rt.retain"),
+            "should not retain null ptr: {ir}"
         );
     }
 

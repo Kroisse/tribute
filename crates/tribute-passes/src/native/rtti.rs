@@ -27,7 +27,7 @@
 use std::collections::HashMap;
 
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
-use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout};
+use trunk_ir::adt_layout::{StructLayout, compute_enum_layout, compute_struct_layout};
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::TypeConverter;
 use trunk_ir::{
@@ -261,6 +261,7 @@ fn generate_release_function_for_struct<'db>(
     let ptr_ty = core::Ptr::new(db).as_type();
     let nil_ty = core::Nil::new(db).as_type();
     let i64_ty = core::I64::new(db).as_type();
+    let i8_ty = core::I8::new(db).as_type();
 
     // Create a dummy location for generated code
     let path = trunk_ir::PathId::new(db, "<rtti>".to_owned());
@@ -271,70 +272,162 @@ fn generate_release_function_for_struct<'db>(
     // Function type: (core.ptr) -> core.nil
     let func_ty = core::Func::new(db, IdVec::from(vec![ptr_ty]), nil_ty).as_type();
 
-    // Build body
+    // Collect pointer field offsets, skipping function pointer fields.
+    //
+    // Fields named "func_ptr" hold static code pointers (in __TEXT segment)
+    // and must not be RC-released. This convention is established by the
+    // native closure struct in func_to_clif.
+    let func_ptr_sym = Symbol::new("func_ptr");
+    let ptr_field_offsets: Vec<i32> = fields
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (name, field_ty))| {
+            if *name == func_ptr_sym {
+                return None;
+            }
+            let native_ty = type_converter
+                .convert_type(db, *field_ty)
+                .unwrap_or(*field_ty);
+            if core::Ptr::from_type(db, native_ty).is_some() {
+                Some(layout.field_offsets[i] as i32)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let entry_block_id = BlockId::fresh();
     let payload_arg = trunk_ir::BlockArg::of_type(db, ptr_ty);
     let payload_ptr = Value::new(db, trunk_ir::ValueDef::BlockArg(entry_block_id), 0);
 
-    let mut ops: Vec<Operation<'db>> = Vec::new();
+    // Build body with null-guarded field releases.
+    //
+    // For each pointer field, we emit a null check before releasing. This
+    // prevents SIGBUS when a field contains a null pointer (e.g., nil-typed
+    // closure environments) or a static/code pointer.
+    //
+    // Structure (built backwards, then reversed):
+    //   ^entry:      load f0, null-check → ^after_f0 / ^release_f0
+    //   ^release_f0: release f0, jump ^after_f0
+    //   ^after_f0:   load f1, null-check → ^after_f1 / ^release_f1
+    //   ^release_f1: release f1, jump ^after_f1
+    //   ...
+    //   ^dealloc:    dealloc self, return
 
-    // For each pointer field, load and release
-    for (i, (_field_name, field_ty)) in fields.iter().enumerate() {
-        let native_ty = type_converter
-            .convert_type(db, *field_ty)
-            .unwrap_or(*field_ty);
+    // Step 1: Build the dealloc block (always the last block)
+    let dealloc_block_id = BlockId::fresh();
+    let mut dealloc_ops: Vec<Operation<'db>> = Vec::new();
+    gen_dealloc_and_return(
+        db,
+        location,
+        payload_ptr,
+        &layout,
+        ptr_ty,
+        i64_ty,
+        &mut dealloc_ops,
+    );
+    let dealloc_block = Block::new(
+        db,
+        dealloc_block_id,
+        location,
+        IdVec::new(),
+        dealloc_ops.into_iter().collect(),
+    );
 
-        // Only release pointer fields
-        if core::Ptr::from_type(db, native_ty).is_none() {
-            continue;
-        }
+    // Step 2: Build field check/release blocks backwards from the last field
+    // to the first. Each iteration produces a "check" block and a "release" block.
+    // `next_block` tracks the continuation destination.
+    let mut blocks_reversed: Vec<Block<'db>> = vec![dealloc_block];
+    let mut next_block_for_field: Block<'db> = *blocks_reversed.last().unwrap();
 
-        let offset = layout.field_offsets[i] as i32;
+    for &offset in ptr_field_offsets.iter().rev() {
+        let release_block_id = BlockId::fresh();
+        let check_block_id = BlockId::fresh();
 
-        // Load field value
-        let load_op = clif::load(db, location, payload_ptr, ptr_ty, offset);
-        let field_val = load_op.result(db);
-        ops.push(load_op.as_operation());
+        // Release block: reload field, release, jump to next
+        let mut release_ops: Vec<Operation<'db>> = Vec::new();
+        let reload = clif::load(db, location, payload_ptr, ptr_ty, offset);
+        release_ops.push(reload.as_operation());
+        let release = tribute_rt::release(db, location, reload.result(db), 0);
+        release_ops.push(release.as_operation());
+        // Jump to the next field check (or dealloc) after releasing.
+        // rc_lowering will split this block further for the refcount check,
+        // placing this jump in the resulting "continue" block.
+        let jump = clif::jump(db, location, [], next_block_for_field);
+        release_ops.push(jump.as_operation());
 
-        // Release field (will be lowered by rc_lowering later)
-        let release_op = tribute_rt::release(db, location, field_val, 0);
-        ops.push(release_op.as_operation());
+        let release_block = Block::new(
+            db,
+            release_block_id,
+            location,
+            IdVec::new(),
+            release_ops.into_iter().collect(),
+        );
+
+        // Check block: load field, compare to null, branch
+        let mut check_ops: Vec<Operation<'db>> = Vec::new();
+        let load = clif::load(db, location, payload_ptr, ptr_ty, offset);
+        check_ops.push(load.as_operation());
+        let null_const = clif::iconst(db, location, ptr_ty, 0);
+        check_ops.push(null_const.as_operation());
+        let is_null = clif::icmp(
+            db,
+            location,
+            load.result(db),
+            null_const.result(db),
+            i8_ty,
+            Symbol::new("eq"),
+        );
+        check_ops.push(is_null.as_operation());
+        let brif = clif::brif(
+            db,
+            location,
+            is_null.result(db),
+            next_block_for_field, // null → skip to next field / dealloc
+            release_block,        // non-null → release
+        );
+        check_ops.push(brif.as_operation());
+
+        let check_block = Block::new(
+            db,
+            check_block_id,
+            location,
+            IdVec::new(),
+            check_ops.into_iter().collect(),
+        );
+
+        blocks_reversed.push(release_block);
+        blocks_reversed.push(check_block);
+        next_block_for_field = check_block;
     }
 
-    // Dealloc self: raw_ptr = payload_ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
-    ops.push(hdr_sz.as_operation());
-    let raw_ptr = clif::isub(db, location, payload_ptr, hdr_sz.result(db), ptr_ty);
-    ops.push(raw_ptr.as_operation());
+    // Step 3: Build the entry block
+    let body = if ptr_field_offsets.is_empty() {
+        // No ptr fields: entry block is just dealloc
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            IdVec::from(vec![payload_arg]),
+            blocks_reversed.pop().unwrap().operations(db).clone(),
+        );
+        Region::new(db, location, IdVec::from(vec![entry_block]))
+    } else {
+        // Entry block jumps to the first check block
+        let first_check = blocks_reversed.pop().unwrap();
+        let entry_block = Block::new(
+            db,
+            entry_block_id,
+            location,
+            IdVec::from(vec![payload_arg]),
+            first_check.operations(db).clone(),
+        );
 
-    // Total allocation size = payload + header
-    let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
-    let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
-    ops.push(size_op.as_operation());
-
-    // Call __tribute_dealloc(raw_ptr, size)
-    let dealloc_call = clif::call(
-        db,
-        location,
-        [raw_ptr.result(db), size_op.result(db)],
-        nil_ty,
-        Symbol::new(DEALLOC_FN),
-    );
-    ops.push(dealloc_call.as_operation());
-
-    // Return
-    let ret_op = clif::r#return(db, location, []);
-    ops.push(ret_op.as_operation());
-
-    // Build the block and region
-    let entry_block = Block::new(
-        db,
-        entry_block_id,
-        location,
-        IdVec::from(vec![payload_arg]),
-        ops.into_iter().collect(),
-    );
-    let body = Region::new(db, location, IdVec::from(vec![entry_block]));
+        blocks_reversed.reverse();
+        let mut all_blocks = vec![entry_block];
+        all_blocks.extend(blocks_reversed);
+        Region::new(db, location, all_blocks.into_iter().collect())
+    };
 
     // Build the function operation
     let func_op = clif::func(
@@ -346,6 +439,48 @@ fn generate_release_function_for_struct<'db>(
     );
 
     func_op.as_operation()
+}
+
+/// Emit dealloc + return ops into the given `ops` vector.
+///
+/// Generates:
+/// ```text
+/// %hdr_sz  = clif.iconst(8) : core.i64
+/// %raw_ptr = clif.isub(%payload, %hdr_sz) : core.ptr
+/// %size    = clif.iconst(<alloc_size>) : core.i64
+/// clif.call @__tribute_dealloc(%raw_ptr, %size) : core.nil
+/// clif.return
+/// ```
+fn gen_dealloc_and_return<'db>(
+    db: &'db dyn salsa::Database,
+    location: Location<'db>,
+    payload_ptr: Value<'db>,
+    layout: &StructLayout,
+    ptr_ty: Type<'db>,
+    i64_ty: Type<'db>,
+    ops: &mut Vec<Operation<'db>>,
+) {
+    let nil_ty = core::Nil::new(db).as_type();
+    let hdr_sz = clif::iconst(db, location, i64_ty, RC_HEADER_SIZE as i64);
+    ops.push(hdr_sz.as_operation());
+    let raw_ptr = clif::isub(db, location, payload_ptr, hdr_sz.result(db), ptr_ty);
+    ops.push(raw_ptr.as_operation());
+
+    let alloc_size = layout.total_size as u64 + RC_HEADER_SIZE;
+    let size_op = clif::iconst(db, location, i64_ty, alloc_size as i64);
+    ops.push(size_op.as_operation());
+
+    let dealloc_call = clif::call(
+        db,
+        location,
+        [raw_ptr.result(db), size_op.result(db)],
+        nil_ty,
+        Symbol::new(DEALLOC_FN),
+    );
+    ops.push(dealloc_call.as_operation());
+
+    let ret_op = clif::r#return(db, location, []);
+    ops.push(ret_op.as_operation());
 }
 
 /// Generate a release function for an enum type.
@@ -844,6 +979,35 @@ mod tests {
         assert!(
             ir.contains("__tribute_release_33"),
             "should generate release for second struct: {ir}"
+        );
+    }
+
+    // === generate_rtti: closure struct with func_ptr field skipped ===
+
+    #[salsa_test]
+    fn test_closure_struct_skips_func_ptr(db: &salsa::DatabaseImpl) {
+        let ir = run_rtti_pass(
+            db,
+            r#"
+            core.module @test {
+                %fp = clif.iconst {value = 0} : core.ptr
+                %env = clif.iconst {value = 0} : core.ptr
+                %s = adt.struct_new %fp, %env {type = adt.struct() {fields = [[@func_ptr, core.ptr], [@env, core.ptr]], name = @_closure}} : adt.struct() {fields = [[@func_ptr, core.ptr], [@env, core.ptr]], name = @_closure}
+            }
+            "#,
+        );
+        assert!(
+            ir.contains("__tribute_release_32"),
+            "should generate release function: {ir}"
+        );
+        // The release function should only release the env field (offset 8),
+        // not the func_ptr field (offset 0) which is a static code pointer.
+        let release_section = ir.split("__tribute_release_32").nth(1).unwrap();
+        let release_count = release_section.matches("tribute_rt.release").count();
+        assert_eq!(
+            release_count, 1,
+            "should have exactly 1 release (env only), got {}: {ir}",
+            release_count
         );
     }
 
