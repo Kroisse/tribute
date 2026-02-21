@@ -27,7 +27,7 @@ use crate::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
 use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
@@ -69,22 +69,22 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(struct_get) = adt::StructGet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let struct_ty = struct_get.r#type(db);
         let field_idx = struct_get.field(db) as usize;
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout(db, struct_ty, type_converter) else {
             warn!(
                 "adt_to_clif: cannot compute layout for struct_get type at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         if field_idx >= layout.field_offsets.len() {
@@ -93,22 +93,23 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
                 field_idx,
                 layout.field_offsets.len()
             );
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
         let offset = layout.field_offsets[field_idx] as i32;
 
         // Get the remapped ref operand
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| struct_get.r#ref(db));
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| struct_get.r#ref(db));
 
-        // Result type: use the converted result type from the adaptor
-        let result_ty = adaptor
-            .result_type(db, 0)
+        // Result type: use the converted result type from the rewriter
+        let result_ty = rewriter
+            .result_type(db, op, 0)
             .unwrap_or_else(|| op.results(db)[0]);
 
         let load_op = clif::load(db, location, ref_val, result_ty, offset);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 
@@ -120,22 +121,22 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(struct_set) = adt::StructSet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let struct_ty = struct_set.r#type(db);
         let field_idx = struct_set.field(db) as usize;
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout(db, struct_ty, type_converter) else {
             warn!(
                 "adt_to_clif: cannot compute layout for struct_set type at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         if field_idx >= layout.field_offsets.len() {
@@ -144,18 +145,19 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
                 field_idx,
                 layout.field_offsets.len()
             );
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
         let offset = layout.field_offsets[field_idx] as i32;
 
         // Get remapped operands: ref (0) and value (1)
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| struct_set.r#ref(db));
-        let value_val = adaptor.operand(1).unwrap_or_else(|| struct_set.value(db));
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| struct_set.r#ref(db));
+        let value_val = rewriter.operand(1).unwrap_or_else(|| struct_set.value(db));
 
         let store_op = clif::store(db, location, value_val, ref_val, offset);
-        RewriteResult::Replace(store_op.as_operation())
+        rewriter.replace_op(store_op.as_operation());
+        true
     }
 }
 
@@ -174,22 +176,22 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let enum_ty = variant_is.r#type(db);
         let tag = variant_is.tag(db);
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
             warn!(
                 "adt_to_clif: cannot compute enum layout for variant_is at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
@@ -198,14 +200,14 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
                 tag,
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
         let i1_ty = core::I1::new(db).as_type();
 
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_is.r#ref(db));
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| variant_is.r#ref(db));
 
         // Load tag from payload_ptr + 0
         let tag_load = clif::load(db, location, ref_val, i32_ty, 0);
@@ -222,11 +224,10 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
             Symbol::new("eq"),
         );
 
-        RewriteResult::Expand(vec![
-            tag_load.as_operation(),
-            expected.as_operation(),
-            cmp_op.as_operation(),
-        ])
+        rewriter.insert_op(tag_load.as_operation());
+        rewriter.insert_op(expected.as_operation());
+        rewriter.replace_op(cmp_op.as_operation());
+        true
     }
 }
 
@@ -241,16 +242,17 @@ impl<'db> RewritePattern<'db> for VariantCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_cast.r#ref(db));
-        RewriteResult::Erase {
-            replacement_values: vec![ref_val],
-        }
+        let ref_val = rewriter
+            .operand(0)
+            .unwrap_or_else(|| variant_cast.r#ref(db));
+        rewriter.erase_op(vec![ref_val]);
+        true
     }
 }
 
@@ -265,23 +267,23 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_get) = adt::VariantGet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let enum_ty = variant_get.r#type(db);
         let tag = variant_get.tag(db);
         let field_idx = variant_get.field(db) as usize;
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
             warn!(
                 "adt_to_clif: cannot compute enum layout for variant_get at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
@@ -290,7 +292,7 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
                 tag,
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         if field_idx >= variant_layout.field_offsets.len() {
@@ -300,13 +302,13 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
                 tag,
                 variant_layout.field_offsets.len()
             );
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
         let offset = (enum_layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32;
 
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| variant_get.r#ref(db));
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| variant_get.r#ref(db));
 
         // Determine the load type from the enum type definition.
         // The field was stored with its native type, so we must load with the
@@ -327,13 +329,14 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
                     .unwrap_or(field_ty)
             })
             .unwrap_or_else(|| {
-                adaptor
-                    .result_type(db, 0)
+                rewriter
+                    .result_type(db, op, 0)
                     .unwrap_or_else(|| op.results(db)[0])
             });
 
         let load_op = clif::load(db, location, ref_val, load_ty, offset);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 
@@ -347,17 +350,18 @@ impl<'db> RewritePattern<'db> for RefNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if adt::RefNull::from_operation(db, *op).is_err() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
 
         let iconst_op = clif::iconst(db, location, ptr_ty, 0);
-        RewriteResult::Replace(iconst_op.as_operation())
+        rewriter.replace_op(iconst_op.as_operation());
+        true
     }
 }
 
@@ -372,17 +376,16 @@ impl<'db> RewritePattern<'db> for RefCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(ref_cast) = adt::RefCast::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Pass the input operand directly as the result — no runtime work needed.
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| ref_cast.r#ref(db));
-        RewriteResult::Erase {
-            replacement_values: vec![ref_val],
-        }
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| ref_cast.r#ref(db));
+        rewriter.erase_op(vec![ref_val]);
+        true
     }
 }
 
@@ -396,17 +399,17 @@ impl<'db> RewritePattern<'db> for RefIsNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(ref_is_null) = adt::RefIsNull::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
         let i1_ty = core::I1::new(db).as_type();
 
-        let ref_val = adaptor.operand(0).unwrap_or_else(|| ref_is_null.r#ref(db));
+        let ref_val = rewriter.operand(0).unwrap_or_else(|| ref_is_null.r#ref(db));
 
         // Create a null constant to compare against
         let null_op = clif::iconst(db, location, ptr_ty, 0);
@@ -418,7 +421,9 @@ impl<'db> RewritePattern<'db> for RefIsNullPattern {
             i1_ty,
             Symbol::new("eq"),
         );
-        RewriteResult::Expand(vec![null_op.as_operation(), icmp_op.as_operation()])
+        rewriter.insert_op(null_op.as_operation());
+        rewriter.replace_op(icmp_op.as_operation());
+        true
     }
 }
 

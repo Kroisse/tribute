@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
@@ -195,10 +195,10 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_func_op) = func::Func::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // wasm.func has the same structure: sym_name, type attributes, body region
@@ -222,7 +222,8 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
             );
         }
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -234,10 +235,10 @@ impl<'db> RewritePattern<'db> for FuncCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(call_op) = func::Call::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Build wasm.call with same callee and operands
@@ -249,7 +250,8 @@ impl<'db> RewritePattern<'db> for FuncCallPattern {
             .attr("callee", Attribute::Symbol(call_op.callee(db)))
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -264,10 +266,10 @@ impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_call_indirect) = func::CallIndirect::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Build wasm.call_indirect with same operands
@@ -278,7 +280,8 @@ impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
             .name_str("call_indirect")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -290,15 +293,16 @@ impl<'db> RewritePattern<'db> for FuncReturnPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_return_op) = func::Return::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let new_op = op.modify(db).dialect_str("wasm").name_str("return").build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -310,10 +314,10 @@ impl<'db> RewritePattern<'db> for FuncTailCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(tail_call_op) = func::TailCall::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Build wasm.return_call with same callee and operands
@@ -324,7 +328,8 @@ impl<'db> RewritePattern<'db> for FuncTailCallPattern {
             .attr("callee", Attribute::Symbol(tail_call_op.callee(db)))
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -336,10 +341,10 @@ impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_unreachable_op) = func::Unreachable::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let new_op = op
@@ -348,7 +353,8 @@ impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
             .name_str("unreachable")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -365,10 +371,10 @@ impl<'db> RewritePattern<'db> for FuncConstantPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(const_op) = func::Constant::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let func_ref = const_op.func_ref(db);
@@ -385,7 +391,8 @@ impl<'db> RewritePattern<'db> for FuncConstantPattern {
         let i32_ty = core::I32::new(db).as_type();
         let new_op = wasm::i32_const(db, op.location(db), i32_ty, table_idx as i32);
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 

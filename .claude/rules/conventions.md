@@ -123,6 +123,35 @@ Benefits of typed helpers and wrappers:
 - Compile-time verification of operation structure
 - Cleaner, more readable code
 
+## Rewrite Patterns
+
+### Pattern Interface
+
+Patterns implement `RewritePattern` with `match_and_rewrite`:
+
+- `op`: Original operation (for matching via
+  `from_operation`, attribute/region access)
+- `rewriter`: `PatternRewriter` for operand access
+  and mutations
+
+### Operand Access
+
+Always use `rewriter.operand(i)` for operands —
+never `op.operands(db)` (original, possibly stale).
+
+### Mutation Methods
+
+| Method | Description |
+| ------ | ----------- |
+| `rewriter.replace_op(new_op)` | Replace the current operation |
+| `rewriter.insert_op(op)` | Insert before the replacement |
+| `rewriter.erase_op(vals)` | Erase, mapping results to given values |
+| `rewriter.add_module_op(op)` | Add a top-level operation to the module |
+
+### Return Value
+
+Return `true` if the pattern matched and recorded mutations, `false` otherwise.
+
 ## Bindings
 
 Three kinds of bindings in `crates/tribute-front/src/resolve/env.rs`:

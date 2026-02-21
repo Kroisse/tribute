@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::trampoline;
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
 
 // ============================================================================
@@ -19,17 +19,17 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match func.func operations
         let Ok(func) = Func::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Only process effectful functions
         let func_name = func.sym_name(db);
         if !self.effectful_funcs.contains(&func_name) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         tracing::debug!(
@@ -50,12 +50,13 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
         );
 
         if !modified {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Rebuild the function with the transformed body
         let new_op = op.modify(db).regions(IdVec::from(vec![new_body])).build();
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

@@ -45,9 +45,7 @@ use std::collections::HashSet;
 use crate::type_converter::generic_type_converter;
 use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
 };
@@ -390,32 +388,32 @@ impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        _rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: func.func
         let func_op = match func::Func::from_operation(db, *op) {
             Ok(f) => f,
-            Err(_) => return RewriteResult::Unchanged,
+            Err(_) => return false,
         };
 
         let func_name = func_op.sym_name(db);
 
         // Check if this function is effectful
         if !self.effectful_fns.contains(&func_name) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Already has evidence parameter? (check for re-application)
         let func_ty = func_op.r#type(db);
         let Some(core_func) = core::Func::from_type(db, func_ty) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let params = core_func.params(db);
         if !params.is_empty() {
             // Check if first param is already evidence type
             if ability::is_evidence_type(db, params[0]) {
-                return RewriteResult::Unchanged;
+                return false;
             }
         }
 
@@ -457,7 +455,8 @@ impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
         // Build new func.func operation
         let new_func = func::func(db, location, func_name, *new_func_ty, new_body);
 
-        RewriteResult::Replace(new_func.as_operation())
+        _rewriter.replace_op(new_func.as_operation());
+        true
     }
 }
 
@@ -481,12 +480,12 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: func.func
         let func_op = match func::Func::from_operation(db, *op) {
             Ok(f) => f,
-            Err(_) => return RewriteResult::Unchanged,
+            Err(_) => return false,
         };
 
         let func_name = func_op.sym_name(db);
@@ -495,12 +494,12 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
         let body = func_op.body(db);
         let blocks = body.blocks(db);
         let Some(entry_block) = blocks.first() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let args = entry_block.args(db);
         if args.is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Check if this function has an evidence parameter.
@@ -514,7 +513,7 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
             first_param_type.is_some_and(|ty| ability::is_evidence_type(db, ty));
 
         if !self.effectful_fns.contains(&func_name) && !has_evidence_param {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // First arg should be evidence_ptr after Phase 1 transformation
@@ -535,7 +534,7 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
             .collect();
 
         if !changed {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Rebuild function with transformed body
@@ -545,7 +544,8 @@ impl<'db> RewritePattern<'db> for TransformCallsPattern {
 
         let new_func = func::func(db, location, func_name, func_ty, new_body);
 
-        RewriteResult::Replace(new_func.as_operation())
+        rewriter.replace_op(new_func.as_operation());
+        true
     }
 }
 

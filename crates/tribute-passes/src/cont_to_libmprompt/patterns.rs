@@ -9,7 +9,7 @@
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self};
 use trunk_ir::dialect::{arith, cont};
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 use crate::cont_util::compute_op_idx;
@@ -25,17 +25,17 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(shift_op) = cont::Shift::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
         let ptr_ty = core::Ptr::new(db).as_type();
 
-        let operands = adaptor.operands();
+        let operands = rewriter.operands();
 
         // First operand is the tag (prompt tag value)
         let tag = operands
@@ -62,7 +62,7 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
         // %shift_val = shift_value or null ptr
         let shift_val = if let Some(v) = shift_value {
             // Cast to ptr if needed
-            if adaptor.get_value_type(db, v) != Some(ptr_ty) {
+            if rewriter.get_value_type(db, v) != Some(ptr_ty) {
                 let cast = core::unrealized_conversion_cast(db, location, v, ptr_ty);
                 ops.push(cast.as_operation());
                 cast.as_operation().result(db, 0)
@@ -95,7 +95,12 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern {
             ops.push(cast.as_operation());
         }
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -110,16 +115,16 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_) = cont::Resume::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
 
-        let operands = adaptor.operands();
+        let operands = rewriter.operands();
 
         // First operand: continuation
         let continuation = operands
@@ -133,7 +138,7 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         let mut ops = Vec::new();
 
         // Cast continuation to ptr if needed
-        let cont_ptr = if adaptor.get_value_type(db, continuation) != Some(ptr_ty) {
+        let cont_ptr = if rewriter.get_value_type(db, continuation) != Some(ptr_ty) {
             let cast = core::unrealized_conversion_cast(db, location, continuation, ptr_ty);
             ops.push(cast.as_operation());
             cast.as_operation().result(db, 0)
@@ -143,7 +148,7 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
 
         // Cast value to ptr if needed
         let val_ptr = if let Some(v) = value {
-            if adaptor.get_value_type(db, v) != Some(ptr_ty) {
+            if rewriter.get_value_type(db, v) != Some(ptr_ty) {
                 let cast = core::unrealized_conversion_cast(db, location, v, ptr_ty);
                 ops.push(cast.as_operation());
                 cast.as_operation().result(db, 0)
@@ -176,7 +181,12 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
             ops.push(cast.as_operation());
         }
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -191,17 +201,17 @@ impl<'db> RewritePattern<'db> for LowerDropPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_) = cont::Drop::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
         let nil_ty = core::Nil::new(db).as_type();
 
-        let operands = adaptor.operands();
+        let operands = rewriter.operands();
 
         // First operand: continuation
         let continuation = operands
@@ -212,7 +222,7 @@ impl<'db> RewritePattern<'db> for LowerDropPattern {
         let mut ops = Vec::new();
 
         // Cast continuation to ptr if needed
-        let cont_ptr = if adaptor.get_value_type(db, continuation) != Some(ptr_ty) {
+        let cont_ptr = if rewriter.get_value_type(db, continuation) != Some(ptr_ty) {
             let cast = core::unrealized_conversion_cast(db, location, continuation, ptr_ty);
             ops.push(cast.as_operation());
             cast.as_operation().result(db, 0)
@@ -230,6 +240,11 @@ impl<'db> RewritePattern<'db> for LowerDropPattern {
         );
         ops.push(call.as_operation());
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }

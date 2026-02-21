@@ -30,7 +30,7 @@ use tribute_ir::dialect::{closure, tribute_rt};
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::{func, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, LegalityCheck, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionTarget, LegalityCheck, PatternApplicator, PatternRewriter, RewritePattern,
 };
 use trunk_ir::{Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Type};
 
@@ -213,18 +213,18 @@ impl<'db> RewritePattern<'db> for NormalizeFuncFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let func_op = func::Func::from_operation(db, *op).ok();
         let func_op = match func_op {
             Some(f) => f,
-            None => return RewriteResult::Unchanged,
+            None => return false,
         };
 
         let func_ty = func_op.r#type(db);
         let new_func_ty = match normalize_func_type(db, func_ty) {
             Some(ty) => ty,
-            None => return RewriteResult::Unchanged,
+            None => return false,
         };
 
         debug!(
@@ -244,7 +244,8 @@ impl<'db> RewritePattern<'db> for NormalizeFuncFuncPattern {
             new_body,
         );
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -256,23 +257,23 @@ impl<'db> RewritePattern<'db> for NormalizeCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let call_op = func::Call::from_operation(db, *op).ok();
         let call_op = match call_op {
             Some(c) => c,
-            None => return RewriteResult::Unchanged,
+            None => return false,
         };
 
         let results = op.results(db);
         if results.is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let result_ty = results[0];
         let new_result_ty = match convert_primitive_type(db, result_ty) {
             Some(ty) => ty,
-            None => return RewriteResult::Unchanged,
+            None => return false,
         };
 
         debug!(
@@ -287,12 +288,13 @@ impl<'db> RewritePattern<'db> for NormalizeCallPattern {
         let new_op = func::call(
             db,
             op.location(db),
-            adaptor.operands().clone(),
+            rewriter.operands().clone(),
             new_result_ty,
             call_op.callee(db),
         );
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -304,24 +306,24 @@ impl<'db> RewritePattern<'db> for NormalizeCallIndirectPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let _call_op = func::CallIndirect::from_operation(db, *op).ok();
         let _call_op = match _call_op {
             Some(c) => c,
-            None => return RewriteResult::Unchanged,
+            None => return false,
         };
 
         let results = op.results(db);
         if results.is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let result_ty = results[0];
 
         // Convert primitive types to their WASM equivalents
         let Some(new_result_ty) = convert_primitive_type(db, result_ty) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         debug!(
@@ -332,13 +334,14 @@ impl<'db> RewritePattern<'db> for NormalizeCallIndirectPattern {
             new_result_ty.name(db)
         );
 
-        let operands = adaptor.operands();
+        let operands = rewriter.operands();
         let callee = operands[0];
         let args: IdVec<_> = operands.iter().skip(1).copied().collect();
 
         let new_op = func::call_indirect(db, op.location(db), callee, args, new_result_ty);
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -353,11 +356,11 @@ impl<'db> RewritePattern<'db> for NormalizeOpResultPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let results = op.results(db);
         if results.is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Check if any result types need normalization
@@ -375,7 +378,7 @@ impl<'db> RewritePattern<'db> for NormalizeOpResultPattern {
             .collect();
 
         if !any_changed {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Skip operations already handled by other patterns
@@ -385,7 +388,7 @@ impl<'db> RewritePattern<'db> for NormalizeOpResultPattern {
             || (dialect == func::DIALECT_NAME() && name == func::CALL())
             || (dialect == func::DIALECT_NAME() && name == func::CALL_INDIRECT())
         {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         debug!(
@@ -395,7 +398,8 @@ impl<'db> RewritePattern<'db> for NormalizeOpResultPattern {
 
         let new_op = op.modify(db).results(new_results).build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

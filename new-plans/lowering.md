@@ -165,6 +165,8 @@ impl<'db> PatternApplicator<'db> {
     ) -> Module<'db> {
         let mut ctx = RewriteContext::new();
         // Fixpoint: patterns를 변화 없을 때까지 반복 적용
+        // 각 iteration 후 pending_module_ops를 처리하여
+        // 모듈에 추가하고 value remapping 적용
         while self.iteration < self.max_iterations {
             if !self.rewrite_operations(db, module, &mut ctx) {
                 break;
@@ -177,7 +179,8 @@ impl<'db> PatternApplicator<'db> {
 
 ### RewritePattern
 
-패턴은 단일 연산 종류를 처리:
+패턴은 단일 연산 종류를 처리. `op`는 원본 연산(매칭/속성 접근용)이고,
+operand 접근 및 mutation은 모두 `rewriter`를 통해 수행:
 
 ```rust
 // trunk-ir/src/rewrite/pattern.rs
@@ -186,41 +189,81 @@ pub trait RewritePattern<'db> {
         &self,
         db: &'db dyn Database,
         op: Operation<'db>,
-        ctx: &mut RewriteContext<'db>,
-    ) -> RewriteResult<'db>;
-}
-
-pub enum RewriteResult<'db> {
-    NoChange,
-    Replace(Operation<'db>),
-    Expand(Vec<Operation<'db>>),
-    Erase(Vec<Value<'db>>),
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool;
 }
 ```
 
+`true`를 반환하면 패턴이 매칭되어 mutation이 기록된 것이고,
+`false`를 반환하면 매칭되지 않은 것이다.
+
+### PatternRewriter
+
+패턴이 사용하는 단일 인터페이스. Operand 접근(remap+cast 적용됨)과
+mutation 메서드를 결합:
+
+```rust
+// trunk-ir/src/rewrite/pattern_rewriter.rs
+pub struct PatternRewriter<'db, 'ctx> { /* ... */ }
+
+impl<'db, 'ctx> PatternRewriter<'db, 'ctx> {
+    // --- Operand access (remapped + cast applied) ---
+
+    /// i번째 operand 조회 (remap 적용됨)
+    pub fn operand(&self, i: usize) -> Value<'db>;
+
+    /// 모든 operands 조회
+    pub fn operands(&self) -> &[Value<'db>];
+
+    // --- Type access ---
+
+    /// i번째 operand의 타입 조회
+    pub fn operand_type(&self, i: usize) -> Type<'db>;
+
+    /// 원본 연산의 i번째 result 타입 조회
+    pub fn result_type(&self, db: &'db dyn Database, op: Operation<'db>, i: usize) -> Type<'db>;
+
+    /// 임의 value의 타입 조회
+    pub fn get_value_type(&self, db: &'db dyn Database, v: Value<'db>) -> Type<'db>;
+
+    // --- Value resolution ---
+
+    /// Value를 현재 매핑에서 조회
+    pub fn lookup_value(&self, v: Value<'db>) -> Value<'db>;
+
+    // --- Mutation methods ---
+
+    /// 현재 연산을 new_op으로 교체
+    pub fn replace_op(&mut self, new_op: Operation<'db>);
+
+    /// 교체 연산 앞에 prefix 연산 삽입
+    pub fn insert_op(&mut self, op: Operation<'db>);
+
+    /// 연산을 제거하고 results를 주어진 values로 매핑
+    pub fn erase_op(&mut self, vals: Vec<Value<'db>>);
+
+    /// 모듈 최상위에 연산 추가 (e.g., outlined 함수)
+    pub fn add_module_op(&mut self, op: Operation<'db>);
+}
+```
+
+**Note:** `OpAdaptor`는 `pub(crate)` 내부 구현이며 패턴에 노출되지 않는다.
+
 ### RewriteContext
 
-Value 매핑을 자동 관리:
+Value 매핑을 자동 관리하고, module-level 추가 연산을 수집:
 
 ```rust
 // trunk-ir/src/rewrite/context.rs
 pub struct RewriteContext<'db> {
     value_map: HashMap<Value<'db>, Value<'db>>,
+    pending_module_ops: Vec<Operation<'db>>,
 }
 
 impl<'db> RewriteContext<'db> {
     /// Old value → New value 매핑 조회
     pub fn lookup(&self, value: Value<'db>) -> Value<'db> {
         self.value_map.get(&value).copied().unwrap_or(value)
-    }
-
-    /// 연산의 operands를 remapping
-    pub fn remap_operands(
-        &self,
-        db: &'db dyn Database,
-        op: Operation<'db>,
-    ) -> Operation<'db> {
-        // operands의 각 value를 lookup으로 치환
     }
 
     /// Old op의 results를 new op의 results로 매핑
@@ -236,6 +279,9 @@ impl<'db> RewriteContext<'db> {
     }
 }
 ```
+
+Applicator는 각 iteration 후 `pending_module_ops`를 처리하여 모듈에 추가하고,
+전체 value remapping을 적용한다.
 
 ### Pass 예시
 
@@ -264,10 +310,10 @@ impl RewritePattern for StructNewPattern {
         &self,
         db: &dyn Database,
         op: Operation,
-        ctx: &mut RewriteContext,
-    ) -> RewriteResult {
+        rewriter: &mut PatternRewriter,
+    ) -> bool {
         let Ok(struct_new) = adt::StructNew::from_operation(db, op) else {
-            return RewriteResult::NoChange;
+            return false;
         };
 
         let ty = struct_new.struct_type(db);
@@ -278,10 +324,11 @@ impl RewritePattern for StructNewPattern {
         let new_op = wasm::struct_new(
             db,
             type_idx,
-            ctx.remap_operands(db, op).operands(),
+            rewriter.operands(),
         );
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 ```
@@ -791,8 +838,9 @@ struct GoodPattern {
 하지만 Analysis 분리 후:
 
 1. State는 Salsa analysis로 분리 → 읽기 전용
-2. Structural transformation은 `RewriteResult::Expand`로 처리
-3. PatternApplicator가 자동으로 region 재귀
+2. 1-to-many expansion은 `insert_op()` + `replace_op()` 조합으로 처리
+3. Module-level 추가(outlined 함수 등)는 `add_module_op()`으로 처리
+4. PatternApplicator가 자동으로 region 재귀
 
 ---
 
