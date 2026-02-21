@@ -36,6 +36,7 @@ type MpStartFun = unsafe extern "C" fn(*mut MpPrompt, *mut u8) -> *mut u8;
 type MpYieldFun = unsafe extern "C" fn(*mut MpResume, *mut u8) -> *mut u8;
 
 unsafe extern "C" {
+    fn mp_init(config: *const std::ffi::c_void);
     fn mp_prompt(fun: MpStartFun, arg: *mut u8) -> *mut u8;
     fn mp_yield(p: *mut MpPrompt, fun: MpYieldFun, arg: *mut u8) -> *mut u8;
     fn mp_resume(r: *mut MpResume, result: *mut u8) -> *mut u8;
@@ -68,6 +69,19 @@ thread_local! {
 thread_local! {
     static PROMPT_REGISTRY: std::cell::RefCell<HashMap<i32, Vec<*mut MpPrompt>>> =
         std::cell::RefCell::new(HashMap::new());
+}
+
+// =============================================================================
+// Initialization
+// =============================================================================
+
+/// Initialize the Tribute runtime (must be called once before any ability use).
+///
+/// Calls `mp_init(NULL)` to set up libmprompt's internal state (signal handlers,
+/// thread-local storage, gstack pools, etc.).
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_init() {
+    unsafe { mp_init(std::ptr::null()) };
 }
 
 // =============================================================================
