@@ -159,28 +159,38 @@ pub fn validate_value_integrity<'db>(
     db: &'db dyn salsa::Database,
     module: crate::dialect::core::Module<'db>,
 ) -> ValidationResult {
-    use crate::DialectOp;
-
     let mut errors = Vec::new();
     let body = module.body(db);
+    validate_functions_in_region(db, &body, &mut errors);
+    ValidationResult { errors }
+}
 
-    for block in body.blocks(db).iter() {
+/// Recursively walk a region to find and validate all `func.func` operations,
+/// including those inside nested `core.module` ops.
+fn validate_functions_in_region<'db>(
+    db: &'db dyn salsa::Database,
+    region: &Region<'db>,
+    errors: &mut Vec<StaleValueError>,
+) {
+    use crate::DialectOp;
+
+    for block in region.blocks(db).iter() {
         for op in block.operations(db).iter() {
             if let Ok(func_op) = func::Func::from_operation(db, *op) {
                 let func_name = func_op.sym_name(db).to_string();
                 let func_body = func_op.body(db);
 
-                // Collect all values defined within this function
                 let mut defined = HashSet::new();
                 collect_defined_in_region(db, &func_body, &mut defined);
+                check_operands_in_region(db, &func_body, &defined, &func_name, errors);
+            }
 
-                // Check all operands reference defined values
-                check_operands_in_region(db, &func_body, &defined, &func_name, &mut errors);
+            // Recurse into nested regions (e.g., core.module bodies)
+            for nested_region in op.regions(db).iter() {
+                validate_functions_in_region(db, nested_region, errors);
             }
         }
     }
-
-    ValidationResult { errors }
 }
 
 /// Debug-only validation that panics on stale values.

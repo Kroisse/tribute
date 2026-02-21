@@ -429,26 +429,7 @@ fn lower_region_to_br<'db>(
 
                 // Remap operands using result_remap (fixes stale references
                 // when a previous op was rebuilt by transform_op_regions).
-                let new_op = if !result_remap.is_empty() {
-                    let operands = transformed_op.operands(db);
-                    let mut new_operands = IdVec::with_capacity(operands.len());
-                    let mut changed = false;
-                    for &operand in operands.iter() {
-                        if let Some(&mapped) = result_remap.get(&operand) {
-                            new_operands.push(mapped);
-                            changed = true;
-                        } else {
-                            new_operands.push(operand);
-                        }
-                    }
-                    if changed {
-                        transformed_op.modify(db).operands(new_operands).build()
-                    } else {
-                        transformed_op
-                    }
-                } else {
-                    transformed_op
-                };
+                let new_op = remap_op_operands(db, &transformed_op, &result_remap);
 
                 // If the operation changed, map old result values to new ones
                 if new_op != *op {
