@@ -27,7 +27,9 @@ mod tests;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use trunk_ir::DialectType;
 use trunk_ir::dialect::core::Module;
+use trunk_ir::dialect::{cont, core};
 use trunk_ir::rewrite::{ConversionError, ConversionTarget, PatternApplicator, TypeConverter};
 
 use ffi::ensure_libmprompt_ffi;
@@ -52,7 +54,11 @@ pub fn lower_cont_to_libmprompt<'db>(
     let outlined_bodies = Rc::new(RefCell::new(Vec::new()));
     let body_counter = Rc::new(RefCell::new(0u32));
 
-    let applicator = PatternApplicator::new(TypeConverter::new())
+    let type_converter = TypeConverter::new().add_conversion(|db, ty| {
+        cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
+    });
+
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(LowerShiftPattern)
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerDropPattern)

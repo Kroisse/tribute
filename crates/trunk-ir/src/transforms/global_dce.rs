@@ -86,6 +86,7 @@ struct GlobalDcePass<'db> {
     sym_func_ref: Symbol,
     sym_func_attr: Symbol,
     sym_name_attr: Symbol,
+    sym_abi: Symbol,
     sym_main: Symbol,
     sym_start: Symbol,
     dialect_func: Symbol,
@@ -113,6 +114,7 @@ impl<'db> GlobalDcePass<'db> {
             sym_func_ref: Symbol::new("func_ref"),
             sym_func_attr: Symbol::new("func"),
             sym_name_attr: Symbol::new("name"),
+            sym_abi: Symbol::new("abi"),
             sym_main: Symbol::new("main"),
             sym_start: Symbol::new("_start"),
             dialect_func: Symbol::new("func"),
@@ -408,6 +410,14 @@ impl<'db> GlobalDcePass<'db> {
                         && let Some(func_name) = self.extract_func_name(op, module_path)
                         && !reachable.contains(&func_name)
                     {
+                        // Preserve extern function declarations (imports).
+                        // They take no space in the output and may be needed
+                        // by later passes (e.g., cont_rc rewrites resume calls).
+                        if op.attributes(self.db).get(&self.sym_abi).is_some() {
+                            new_ops.push(*op);
+                            continue;
+                        }
+
                         // Remove this function
                         removed.push(func_name);
                         changed = true;
@@ -850,5 +860,61 @@ mod tests {
         // With recursive=false, nested modules are not processed
         let removed_count = run_dce_nested_non_recursive(db);
         assert_eq!(removed_count, 0); // Nothing removed (nested module not analyzed)
+    }
+
+    // Test that extern declarations with "abi" attribute are preserved by DCE
+
+    #[salsa::tracked]
+    fn build_extern_function<'db>(db: &'db dyn salsa::Database) -> core::Module<'db> {
+        let loc = test_location(db);
+        let nil_ty = core::Nil::new(db).as_type();
+        core::Module::build(db, loc, "test".into(), |top| {
+            top.op(func::Func::build(
+                db,
+                loc,
+                "main",
+                idvec![],
+                nil_ty,
+                |entry| {
+                    entry.op(func::Return::empty(db, loc));
+                },
+            ));
+            // Unreachable extern function with abi attribute — should be preserved
+            top.op(func::Func::build_extern(
+                db,
+                loc,
+                "extern_fn",
+                None,
+                std::iter::empty::<(crate::Type, Option<Symbol>)>(),
+                nil_ty,
+                None,
+                Some("C"),
+            ));
+        })
+    }
+
+    #[salsa::tracked]
+    fn run_dce_extern_function(db: &dyn salsa::Database) -> (usize, usize) {
+        let module = build_extern_function(db);
+        let result = eliminate_dead_functions(db, module);
+        let func_count = result
+            .module
+            .body(db)
+            .blocks(db)
+            .iter()
+            .flat_map(|b| b.operations(db).iter())
+            .filter(|op| {
+                op.dialect(db) == Symbol::new("func") && op.name(db) == Symbol::new("func")
+            })
+            .count();
+        (result.removed_count, func_count)
+    }
+
+    #[salsa_test]
+    fn preserves_extern_declarations(db: &salsa::DatabaseImpl) {
+        let (removed_count, func_count) = run_dce_extern_function(db);
+        // extern_fn is unreachable but has abi attribute — must not be removed
+        assert_eq!(removed_count, 0, "extern function should not be removed");
+        assert_eq!(func_count, 2, "both main and extern_fn should be preserved");
     }
 }

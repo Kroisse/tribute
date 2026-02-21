@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::types as cl_types;
-use cranelift_codegen::ir::{self as cl_ir, InstBuilder};
+use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::dialect::{clif, core};
@@ -110,20 +110,43 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
         self.values.get(&ir_val).copied().ok_or_else(|| {
             let db = self.db;
             let detail = match ir_val.def(db) {
-                ValueDef::OpResult(op) => format!(
-                    "result #{} of {}.{}",
-                    ir_val.index(db),
-                    op.dialect(db),
-                    op.name(db),
-                ),
+                ValueDef::OpResult(op) => {
+                    let idx = ir_val.index(db);
+                    let results = op.results(db);
+                    let result_ty = results
+                        .get(idx)
+                        .map(|ty| format!("{}.{}", ty.dialect(db), ty.name(db)))
+                        .unwrap_or_else(|| "<index out of bounds>".to_string());
+                    format!(
+                        "result #{} of {}.{} (result type: {}, op has {} results)",
+                        idx,
+                        op.dialect(db),
+                        op.name(db),
+                        result_ty,
+                        results.len(),
+                    )
+                }
                 ValueDef::BlockArg(block_id) => {
                     format!("block arg #{} of block {:?}", ir_val.index(db), block_id,)
                 }
             };
             CompilationError::codegen(format!(
-                "TrunkIR value not found in Cranelift mapping: {detail}",
+                "TrunkIR value not found in Cranelift mapping: {detail} (mapped {} values total)",
+                self.values.len(),
             ))
         })
+    }
+
+    /// Check if a value has `core.nil` type by examining its definition.
+    fn is_nil_typed(&self, val: Value<'db>) -> bool {
+        let db = self.db;
+        match val.def(db) {
+            ValueDef::OpResult(op) => op
+                .results(db)
+                .get(val.index(db))
+                .is_some_and(|ty| core::Nil::from_type(db, *ty).is_some()),
+            ValueDef::BlockArg(_) => false,
+        }
     }
 
     /// Look up a TrunkIR block in the block mapping by its BlockId.
@@ -327,6 +350,10 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
 
         // === Memory ===
         if let Ok(load) = clif::Load::from_operation(db, *op) {
+            // Nil loads have no runtime representation — skip emission.
+            if core::Nil::from_type(db, load.result_ty(db)).is_some() {
+                return Ok(());
+            }
             let addr = self.lookup(load.addr(db))?;
             let ty = translate_type(db, load.result_ty(db))?;
             let val = self
@@ -337,6 +364,10 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
             return Ok(());
         }
         if let Ok(store) = clif::Store::from_operation(db, *op) {
+            // Nil values have no runtime representation — skip the store.
+            if self.is_nil_typed(store.value(db)) {
+                return Ok(());
+            }
             let value = self.lookup(store.value(db))?;
             let addr = self.lookup(store.addr(db))?;
             self.builder
@@ -355,6 +386,12 @@ impl<'a, 'db> FunctionTranslator<'a, 'db> {
                 .ok_or_else(|| CompilationError::function_not_found(&sym.to_string()))?;
             let val = self.builder.ins().func_addr(cl_types::I64, func_ref);
             self.values.insert(sym_addr.result(db), val);
+            return Ok(());
+        }
+
+        // === Trap ===
+        if clif::Trap::from_operation(db, *op).is_ok() {
+            self.builder.ins().trap(TrapCode::unwrap_user(1));
             return Ok(());
         }
 

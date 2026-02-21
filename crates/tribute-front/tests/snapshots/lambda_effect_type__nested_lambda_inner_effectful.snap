@@ -16,6 +16,7 @@ Module(test) {
                 "arith.const",
                 "closure.new",
                 "func.call",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

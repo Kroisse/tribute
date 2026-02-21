@@ -12,6 +12,7 @@ Module(test) {
                 "arith.add",
                 "arith.const",
                 "cont.shift",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

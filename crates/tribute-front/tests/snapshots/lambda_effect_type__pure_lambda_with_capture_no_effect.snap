@@ -9,6 +9,7 @@ Module(test) {
                 "adt.ref_cast",
                 "adt.struct_get",
                 "arith.add",
+                "core.unrealized_conversion_cast",
                 "func.return",
             ],
         },

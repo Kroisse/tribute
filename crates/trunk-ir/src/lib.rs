@@ -23,6 +23,7 @@ pub mod rewrite;
 pub mod transforms;
 pub mod type_interface;
 pub mod types;
+pub mod validation;
 pub mod walk;
 
 // Re-export paste for use in macros

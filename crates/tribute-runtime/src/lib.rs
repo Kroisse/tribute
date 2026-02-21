@@ -5,7 +5,7 @@
 //! - Delimited continuations via libmprompt (`__tribute_prompt`, `__tribute_yield`, etc.)
 //! - TLS-based yield state for handler dispatch
 //! - Evidence-based ability dispatch (`__tribute_evidence_*`)
-//! - RC-safe continuation wrapping (`__tribute_cont_wrap_*`, `__tribute_resume_safe`, etc.)
+//! - RC-safe continuation wrapping (`__tribute_cont_wrap_*`, `__tribute_resume`, etc.)
 
 #![allow(private_interfaces)]
 
@@ -36,6 +36,7 @@ type MpStartFun = unsafe extern "C" fn(*mut MpPrompt, *mut u8) -> *mut u8;
 type MpYieldFun = unsafe extern "C" fn(*mut MpResume, *mut u8) -> *mut u8;
 
 unsafe extern "C" {
+    fn mp_init(config: *const std::ffi::c_void);
     fn mp_prompt(fun: MpStartFun, arg: *mut u8) -> *mut u8;
     fn mp_yield(p: *mut MpPrompt, fun: MpYieldFun, arg: *mut u8) -> *mut u8;
     fn mp_resume(r: *mut MpResume, result: *mut u8) -> *mut u8;
@@ -68,6 +69,19 @@ thread_local! {
 thread_local! {
     static PROMPT_REGISTRY: std::cell::RefCell<HashMap<i32, Vec<*mut MpPrompt>>> =
         std::cell::RefCell::new(HashMap::new());
+}
+
+// =============================================================================
+// Initialization
+// =============================================================================
+
+/// Initialize the Tribute runtime (must be called once before any ability use).
+///
+/// Calls `mp_init(NULL)` to set up libmprompt's internal state (signal handlers,
+/// thread-local storage, gstack pools, etc.).
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_init() {
+    unsafe { mp_init(std::ptr::null()) };
 }
 
 // =============================================================================
@@ -213,29 +227,59 @@ pub unsafe extern "C" fn __tribute_yield(tag: i32, op_idx: i32, shift_value: *mu
     unsafe { mp_yield(prompt, yield_handler, shift_value) }
 }
 
-/// Resume a captured continuation with a value.
+/// Resume a wrapped continuation with a value.
 ///
-/// Signature: `(continuation: ptr, value: ptr) -> ptr`
+/// Extracts the inner `MpResume`, calls `mp_resume`, then frees the wrapper.
+/// RC roots are NOT released here — the compiler inserts `tribute_rt.release`
+/// after the yield returns (resume path).
+///
+/// Signature: `(wrapped: ptr, val: ptr) -> ptr`
 ///
 /// # Safety
 ///
-/// `k` must be a valid resume object obtained from `__tribute_get_yield_continuation`.
-/// Each resume object can only be resumed once.
+/// `wrapped` must be a valid `TributeContinuation` pointer from
+/// `__tribute_cont_wrap_from_tls`. Each wrapped continuation can only
+/// be resumed once.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_resume(k: *mut u8, val: *mut u8) -> *mut u8 {
-    unsafe { mp_resume(k as *mut MpResume, val) }
+pub unsafe extern "C" fn __tribute_resume(wrapped: *mut u8, val: *mut u8) -> *mut u8 {
+    let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
+    // cont is dropped after this call — wrapper freed, rc_roots Vec freed
+    // RC roots are NOT released; the compiler handles that on the resume path
+    unsafe { mp_resume(cont.resume, val) }
 }
 
-/// Drop a captured continuation without resuming it.
+/// Drop a wrapped continuation without resuming it.
 ///
-/// Signature: `(continuation: ptr) -> ()`
+/// For each RC root, performs **two** deep releases:
+/// 1. Cancel the extra retain inserted by the compiler before yield
+/// 2. Replace the body's normal release that will never execute
+///    (since `mp_resume_drop` discards the captured stack)
+///
+/// Then calls `mp_resume_drop` to discard the captured stack, and frees
+/// the wrapper.
+///
+/// Signature: `(wrapped: ptr) -> ()`
 ///
 /// # Safety
 ///
-/// `k` must be a valid resume object that has not yet been resumed or dropped.
+/// `wrapped` must be a valid `TributeContinuation` pointer that has not
+/// been resumed or dropped yet.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_resume_drop(k: *mut u8) {
-    unsafe { mp_resume_drop(k as *mut MpResume) }
+pub unsafe extern "C" fn __tribute_resume_drop(wrapped: *mut u8) {
+    let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
+
+    // Two releases per root:
+    // 1st: cancel the extra retain inserted before yield (refcount N+1 → N)
+    // 2nd: replace the body's normal release that won't run (refcount N → N-1)
+    // The 2nd release may reach refcount 0 → deep release via RTTI dispatch
+    for root in cont.rc_roots.iter() {
+        unsafe { root.release_deep() }; // cancel extra retain
+        unsafe { root.release_deep() }; // replace body's missing release
+    }
+
+    // Drop the captured continuation (without executing its body)
+    unsafe { mp_resume_drop(cont.resume) };
+    // cont is dropped here — wrapper freed
 }
 
 // =============================================================================
@@ -342,7 +386,7 @@ impl RcRoot {
 
 /// Wrapper around a libmprompt resume object with RC root metadata.
 ///
-/// Opaque to compiled code — only accessed through `__tribute_*_safe` FFI.
+/// Opaque to compiled code — only accessed through `__tribute_resume` / `__tribute_resume_drop` FFI.
 struct TributeContinuation {
     resume: *mut MpResume,
     rc_roots: Box<[RcRoot]>,
@@ -428,61 +472,6 @@ pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u
         rc_roots,
     });
     Box::into_raw(cont) as *mut u8
-}
-
-/// Resume a wrapped continuation with a value.
-///
-/// Extracts the inner `MpResume`, calls `mp_resume`, then frees the wrapper.
-/// RC roots are NOT released here — the compiler inserts `tribute_rt.release`
-/// after the yield returns (resume path).
-///
-/// Signature: `(wrapped: ptr, val: ptr) -> ptr`
-///
-/// # Safety
-///
-/// `wrapped` must be a valid `TributeContinuation` pointer from
-/// `__tribute_cont_wrap_from_tls`. Each wrapped continuation can only
-/// be resumed once.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_resume_safe(wrapped: *mut u8, val: *mut u8) -> *mut u8 {
-    let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
-    // cont is dropped after this call — wrapper freed, rc_roots Vec freed
-    // RC roots are NOT released; the compiler handles that on the resume path
-    unsafe { mp_resume(cont.resume, val) }
-}
-
-/// Drop a wrapped continuation without resuming it.
-///
-/// For each RC root, performs **two** deep releases:
-/// 1. Cancel the extra retain inserted by the compiler before yield
-/// 2. Replace the body's normal release that will never execute
-///    (since `mp_resume_drop` discards the captured stack)
-///
-/// Then calls `mp_resume_drop` to discard the captured stack, and frees
-/// the wrapper.
-///
-/// Signature: `(wrapped: ptr) -> ()`
-///
-/// # Safety
-///
-/// `wrapped` must be a valid `TributeContinuation` pointer that has not
-/// been resumed or dropped yet.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_resume_drop_safe(wrapped: *mut u8) {
-    let cont = unsafe { Box::from_raw(wrapped as *mut TributeContinuation) };
-
-    // Two releases per root:
-    // 1st: cancel the extra retain inserted before yield (refcount N+1 → N)
-    // 2nd: replace the body's normal release that won't run (refcount N → N-1)
-    // The 2nd release may reach refcount 0 → deep release via RTTI dispatch
-    for root in cont.rc_roots.iter() {
-        unsafe { root.release_deep() }; // cancel extra retain
-        unsafe { root.release_deep() }; // replace body's missing release
-    }
-
-    // Drop the captured continuation (without executing its body)
-    unsafe { mp_resume_drop(cont.resume) };
-    // cont is dropped here — wrapper freed
 }
 
 // =============================================================================
@@ -689,10 +678,11 @@ mod tests {
             assert_eq!(__tribute_yield_active(), 1);
             assert_eq!(__tribute_get_yield_op_idx(), 0);
 
-            // Resume the continuation with value 999
+            // Wrap and resume the continuation with value 999
             let k = __tribute_get_yield_continuation();
             assert!(!k.is_null());
-            let final_result = __tribute_resume(k, 999usize as *mut u8);
+            let wrapped_k = __tribute_cont_wrap_from_tls(k);
+            let final_result = __tribute_resume(wrapped_k, 999usize as *mut u8);
             // body returns the resumed value (999)
             assert_eq!(final_result as usize, 999);
 

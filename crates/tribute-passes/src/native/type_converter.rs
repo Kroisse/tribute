@@ -166,10 +166,9 @@ pub fn native_type_converter() -> TypeConverter {
         })
         // Convert adt.struct / adt.enum / variant instance -> core.ptr (opaque reference)
         .add_conversion(|db, ty| {
-            if (adt::is_struct_type(db, ty)
+            if adt::is_struct_type(db, ty)
                 || adt::is_enum_type(db, ty)
-                || adt::is_variant_instance_type(db, ty))
-                && !ability::is_marker_type(db, ty)
+                || adt::is_variant_instance_type(db, ty)
             {
                 Some(core::Ptr::new(db).as_type())
             } else {
@@ -183,6 +182,10 @@ pub fn native_type_converter() -> TypeConverter {
             } else {
                 None
             }
+        })
+        // Convert core.func -> core.ptr (function pointers are pointers)
+        .add_conversion(|db, ty| {
+            core::Func::from_type(db, ty).map(|_| core::Ptr::new(db).as_type())
         })
         // Convert evidence type (core.array(Marker)) -> core.ptr
         .add_conversion(|db, ty| {
@@ -200,14 +203,9 @@ pub fn native_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
-        // Convert marker ADT type -> pass through (already standard ADT struct)
-        .add_conversion(|db, ty| {
-            if ability::is_marker_type(db, ty) {
-                Some(ability::marker_adt_type(db))
-            } else {
-                None
-            }
-        })
+        // Note: marker ADT type is now converted to core.ptr like other structs.
+        // Field layout info is preserved in adt.struct_get's `type` attribute,
+        // so adt_to_clif can still calculate correct field offsets.
         // === Materializations ===
         //
         // Primitive type equivalences: same underlying representation, no-op.
@@ -316,10 +314,11 @@ pub fn native_type_converter() -> TypeConverter {
                 return MaterializeResult::ops(box_primitive(db, location, value, 8));
             }
 
-            // nil -> ptr: null pointer
+            // nil -> ptr: null pointer constant
             if core::Nil::from_type(db, from_ty).is_some() {
-                // TODO(M3): emit null pointer constant
-                return MaterializeResult::NoOp;
+                let ptr_ty = core::Ptr::new(db).as_type();
+                let null_op = clif::iconst(db, location, ptr_ty, 0);
+                return MaterializeResult::single(null_op.as_operation());
             }
 
             MaterializeResult::Skip
@@ -400,6 +399,11 @@ fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
 
     // closure.closure
     if closure::Closure::from_type(db, ty).is_some() {
+        return true;
+    }
+
+    // core.func (function pointers)
+    if core::Func::from_type(db, ty).is_some() {
         return true;
     }
 
@@ -526,12 +530,12 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_convert_marker_type_not_to_ptr(db: &salsa::DatabaseImpl) {
+    fn test_convert_marker_type_to_ptr(db: &salsa::DatabaseImpl) {
         let converter = native_type_converter();
         let marker_ty = ability::marker_adt_type(db);
         let result = converter.convert_type(db, marker_ty);
-        // marker type should NOT be converted to ptr, it passes through
-        assert_ne!(result, Some(core::Ptr::new(db).as_type()));
+        // marker type is converted to ptr like other struct types
+        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
     }
 
     #[salsa_test]
@@ -956,11 +960,11 @@ mod tests {
             core::Nil::new(db).as_type(),
             core::Ptr::new(db).as_type(),
         );
-        matches!(result, Some(MaterializeResult::NoOp))
+        matches!(result, Some(MaterializeResult::Ops(ref ops)) if ops.len() == 1)
     }
 
     #[salsa_test]
-    fn test_materialize_nil_to_ptr_is_noop(db: &salsa::DatabaseImpl) {
+    fn test_materialize_nil_to_ptr_emits_null_iconst(db: &salsa::DatabaseImpl) {
         assert!(do_materialize_nil_to_ptr(db));
     }
 

@@ -64,20 +64,41 @@ pub fn generate_native_entrypoint<'db>(
 
     // Rebuild module: rename main -> _tribute_main, rewrite call sites, then append new entrypoint
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
+    let mut has_tribute_init = false;
+    let init_sym = Symbol::new("__tribute_init");
 
     for op in entry_block.operations(db).iter() {
-        if let Ok(func_op) = func::Func::from_operation(db, *op)
-            && func_op.sym_name(db) == main_sym
-        {
-            let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
-            // Also rewrite any call @main inside this function's body to @_tribute_main
-            let rewritten = rewrite_symbol_refs(db, &renamed, main_sym, tribute_main_sym);
-            new_ops.push(rewritten);
-            continue;
+        if let Ok(func_op) = func::Func::from_operation(db, *op) {
+            if func_op.sym_name(db) == init_sym {
+                has_tribute_init = true;
+            }
+            if func_op.sym_name(db) == main_sym {
+                let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
+                // Also rewrite any call @main inside this function's body to @_tribute_main
+                let rewritten = rewrite_symbol_refs(db, &renamed, main_sym, tribute_main_sym);
+                new_ops.push(rewritten);
+                continue;
+            }
         }
         // Rewrite call @main in other functions too
         let rewritten = rewrite_symbol_refs(db, op, main_sym, tribute_main_sym);
         new_ops.push(rewritten);
+    }
+
+    // Ensure __tribute_init is declared (may already exist from cont_to_libmprompt FFI pass)
+    if !has_tribute_init {
+        let nil_ty = core::Nil::new(db).as_type();
+        let init_decl = func::Func::build_extern(
+            db,
+            location,
+            "__tribute_init",
+            None,
+            [],
+            nil_ty,
+            None,
+            Some("C"),
+        );
+        new_ops.insert(0, init_decl.as_operation());
     }
 
     // Append the C ABI entrypoint
@@ -232,7 +253,17 @@ fn build_entrypoint<'db>(
     tribute_main_return_ty: trunk_ir::Type<'db>,
     i32_ty: trunk_ir::Type<'db>,
 ) -> Operation<'db> {
+    let nil_ty = core::Nil::new(db).as_type();
+
     func::Func::build(db, location, "main", IdVec::new(), i32_ty, |builder| {
+        // Initialize libmprompt runtime before any ability use
+        builder.op(func::call(
+            db,
+            location,
+            vec![],
+            nil_ty,
+            Symbol::new("__tribute_init"),
+        ));
         // Call _tribute_main() — result is ignored
         builder.op(func::call(
             db,
@@ -297,6 +328,11 @@ mod tests {
         }
 
         assert!(
+            names.contains(&"__tribute_init".to_string()),
+            "Expected __tribute_init, got: {:?}",
+            names
+        );
+        assert!(
             names.contains(&"_tribute_main".to_string()),
             "Expected _tribute_main, got: {:?}",
             names
@@ -308,8 +344,8 @@ mod tests {
         );
         assert_eq!(
             names.len(),
-            2,
-            "Expected exactly 2 functions, got: {:?}",
+            3,
+            "Expected exactly 3 functions, got: {:?}",
             names
         );
     }
