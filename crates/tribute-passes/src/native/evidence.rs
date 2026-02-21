@@ -22,9 +22,7 @@
 
 use tribute_ir::dialect::ability;
 use trunk_ir::dialect::{adt, core, func};
-use trunk_ir::{
-    Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Value,
-};
+use trunk_ir::{Block, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Value};
 
 /// Lower evidence operations for the native backend.
 ///
@@ -108,24 +106,16 @@ fn make_evidence_empty_extern<'db>(
     location: Location<'db>,
 ) -> Operation<'db> {
     let ptr_ty = core::Ptr::new(db).as_type();
-    let func_ty = core::Func::new(db, IdVec::new(), ptr_ty);
 
-    let unreachable_op = func::unreachable(db, location);
-    let body_block = Block::new(
-        db,
-        trunk_ir::BlockId::fresh(),
-        location,
-        IdVec::new(),
-        IdVec::from(vec![unreachable_op.as_operation()]),
-    );
-    let body = Region::new(db, location, IdVec::from(vec![body_block]));
-
-    func::func(
+    func::Func::build_extern(
         db,
         location,
-        Symbol::new("__tribute_evidence_empty"),
-        *func_ty,
-        body,
+        "__tribute_evidence_empty",
+        None,
+        [],
+        ptr_ty,
+        None,
+        Some("C"),
     )
     .as_operation()
 }
@@ -143,27 +133,15 @@ fn make_evidence_lookup_extern<'db>(
     let i32_ty = core::I32::new(db).as_type();
     let marker_ty = ability::marker_adt_type(db);
 
-    let func_ty = core::Func::new(db, IdVec::from(vec![ptr_ty, i32_ty]), marker_ty);
-
-    let unreachable_op = func::unreachable(db, location);
-    let body_block = Block::new(
-        db,
-        trunk_ir::BlockId::fresh(),
-        location,
-        IdVec::from(vec![
-            BlockArg::of_type(db, ptr_ty),
-            BlockArg::of_type(db, i32_ty),
-        ]),
-        IdVec::from(vec![unreachable_op.as_operation()]),
-    );
-    let body = Region::new(db, location, IdVec::from(vec![body_block]));
-
-    func::func(
+    func::Func::build_extern(
         db,
         location,
-        Symbol::new("__tribute_evidence_lookup"),
-        *func_ty,
-        body,
+        "__tribute_evidence_lookup",
+        None,
+        [(ptr_ty, None), (i32_ty, None)],
+        marker_ty,
+        None,
+        Some("C"),
     )
     .as_operation()
 }
@@ -176,33 +154,20 @@ fn make_evidence_extend_extern<'db>(
     let ptr_ty = core::Ptr::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
 
-    let func_ty = core::Func::new(
+    func::Func::build_extern(
         db,
-        IdVec::from(vec![ptr_ty, i32_ty, i32_ty, i32_ty]),
+        location,
+        "__tribute_evidence_extend",
+        None,
+        [
+            (ptr_ty, None),
+            (i32_ty, None),
+            (i32_ty, None),
+            (i32_ty, None),
+        ],
         ptr_ty,
-    );
-
-    let unreachable_op = func::unreachable(db, location);
-    let body_block = Block::new(
-        db,
-        trunk_ir::BlockId::fresh(),
-        location,
-        IdVec::from(vec![
-            BlockArg::of_type(db, ptr_ty),
-            BlockArg::of_type(db, i32_ty),
-            BlockArg::of_type(db, i32_ty),
-            BlockArg::of_type(db, i32_ty),
-        ]),
-        IdVec::from(vec![unreachable_op.as_operation()]),
-    );
-    let body = Region::new(db, location, IdVec::from(vec![body_block]));
-
-    func::func(
-        db,
-        location,
-        Symbol::new("__tribute_evidence_extend"),
-        *func_ty,
-        body,
+        None,
+        Some("C"),
     )
     .as_operation()
 }
@@ -499,7 +464,7 @@ fn remap_value<'db>(
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Attribute, BlockId, PathId, Span, Value, ValueDef, idvec};
+    use trunk_ir::{Attribute, BlockArg, BlockId, PathId, Span, Value, ValueDef, idvec};
 
     fn test_location(db: &dyn salsa::Database) -> Location<'_> {
         let path = PathId::new(db, "test.trb".to_owned());
