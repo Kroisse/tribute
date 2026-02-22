@@ -100,12 +100,16 @@ fn replace_stubs_and_add_empty<'db>(
     core::Module::create(db, module.location(db), module.name(db), new_body)
 }
 
-/// `fn __tribute_evidence_empty() -> ptr`  (extern declaration)
+/// `fn __tribute_evidence_empty() -> i64`  (extern declaration)
+///
+/// Returns an opaque evidence handle as `core.i64` (not `core.ptr`)
+/// to prevent the RC insertion pass from tracking evidence pointers.
+/// Evidence is allocated via `Box` in the runtime and has no RC header.
 fn make_evidence_empty_extern<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
 ) -> Operation<'db> {
-    let ptr_ty = core::Ptr::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
 
     func::Func::build_extern(
         db,
@@ -113,45 +117,44 @@ fn make_evidence_empty_extern<'db>(
         "__tribute_evidence_empty",
         None,
         [],
-        ptr_ty,
+        i64_ty,
         None,
         Some("C"),
     )
     .as_operation()
 }
 
-/// `fn __tribute_evidence_lookup(ev: ptr, ability_id: i32) -> Marker`  (extern)
+/// `fn __tribute_evidence_lookup(ev: i64, ability_id: i32) -> i32`  (extern)
 ///
-/// Marker is kept as `ability.marker_adt_type` — the native type converter
-/// leaves it as-is (pass-through), and downstream `adt_to_clif` lowers
-/// field accesses (`adt.struct_get`) to `clif.load` with correct offsets.
+/// Returns the `prompt_tag` field of the matching marker directly as `i32`.
+/// This avoids returning a borrow pointer into the evidence array, which
+/// would be incorrectly RC-tracked by the native backend's RC insertion pass.
 fn make_evidence_lookup_extern<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
 ) -> Operation<'db> {
-    let ptr_ty = core::Ptr::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
-    let marker_ty = ability::marker_adt_type(db);
 
     func::Func::build_extern(
         db,
         location,
         "__tribute_evidence_lookup",
         None,
-        [(ptr_ty, None), (i32_ty, None)],
-        marker_ty,
+        [(i64_ty, None), (i32_ty, None)],
+        i32_ty,
         None,
         Some("C"),
     )
     .as_operation()
 }
 
-/// `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> ptr`
+/// `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> i64`
 fn make_evidence_extend_extern<'db>(
     db: &'db dyn salsa::Database,
     location: Location<'db>,
 ) -> Operation<'db> {
-    let ptr_ty = core::Ptr::new(db).as_type();
+    let i64_ty = core::I64::new(db).as_type();
     let i32_ty = core::I32::new(db).as_type();
 
     func::Func::build_extern(
@@ -160,12 +163,12 @@ fn make_evidence_extend_extern<'db>(
         "__tribute_evidence_extend",
         None,
         [
-            (ptr_ty, None),
+            (i64_ty, None),
             (i32_ty, None),
             (i32_ty, None),
             (i32_ty, None),
         ],
-        ptr_ty,
+        i64_ty,
         None,
         Some("C"),
     )
@@ -283,6 +286,11 @@ fn rewrite_evidence_ops_in_block<'db>(
     let mut marker_struct_operands: std::collections::HashMap<Value<'db>, Vec<Value<'db>>> =
         std::collections::HashMap::new();
 
+    // Track evidence_lookup results so we can eliminate subsequent struct_get ops.
+    // Maps: old result (ptr to Marker) → new result (i32 prompt_tag).
+    let mut evidence_lookup_results: std::collections::HashMap<Value<'db>, Value<'db>> =
+        std::collections::HashMap::new();
+
     // Track value remapping: when an operation is replaced, its result Value
     // changes. Subsequent operations referencing the old result must use the
     // new one.
@@ -294,12 +302,12 @@ fn rewrite_evidence_ops_in_block<'db>(
         if let Ok(array_new) = adt::ArrayNew::from_operation(db, *op) {
             let result_ty = array_new.as_operation().results(db);
             if !result_ty.is_empty() && ability::is_evidence_type(db, result_ty[0]) {
-                let ptr_ty = core::Ptr::new(db).as_type();
+                let i64_ty = core::I64::new(db).as_type();
                 let call = func::call(
                     db,
                     op.location(db),
                     vec![],
-                    ptr_ty,
+                    i64_ty,
                     Symbol::new("__tribute_evidence_empty"),
                 );
                 new_ops.push(call.as_operation());
@@ -329,6 +337,60 @@ fn rewrite_evidence_ops_in_block<'db>(
             }
         }
 
+        // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 (prompt_tag) ---
+        //
+        // The runtime's __tribute_evidence_lookup now returns the prompt_tag
+        // field directly as i32, avoiding an intermediate borrow pointer that
+        // would be incorrectly RC-tracked.
+        if let Ok(call_op) = func::Call::from_operation(db, *op)
+            && call_op.callee(db) == "__tribute_evidence_lookup"
+        {
+            let i32_ty = core::I32::new(db).as_type();
+            let operands: Vec<Value<'db>> = op
+                .operands(db)
+                .iter()
+                .map(|v| remap_value(*v, &value_remap))
+                .collect();
+            let new_call = func::call(
+                db,
+                op.location(db),
+                operands,
+                i32_ty,
+                Symbol::new("__tribute_evidence_lookup"),
+            );
+            new_ops.push(new_call.as_operation());
+            // Track the lookup result so we can eliminate the struct_get
+            let old_result = op.result(db, 0);
+            let new_result = new_call.as_operation().result(db, 0);
+            evidence_lookup_results.insert(old_result, new_result);
+            value_remap.insert(old_result, new_result);
+            changed = true;
+            continue;
+        }
+
+        // --- Eliminate adt.struct_get on evidence_lookup results ---
+        //
+        // Before: evidence_lookup returns *const Marker, then struct_get
+        //         extracts prompt_tag (field 1).
+        // After:  evidence_lookup returns prompt_tag directly as i32.
+        //         The struct_get is eliminated; its uses are remapped to
+        //         the lookup result.
+        if let Ok(_struct_get) = adt::StructGet::from_operation(db, *op) {
+            let operands = op.operands(db);
+            if !operands.is_empty() {
+                let base_val = remap_value(operands[0], &value_remap);
+                if evidence_lookup_results.contains_key(&operands[0])
+                    || evidence_lookup_results.values().any(|v| *v == base_val)
+                {
+                    // The struct_get's result is now the lookup's i32 result.
+                    let old_result = op.result(db, 0);
+                    value_remap.insert(old_result, base_val);
+                    changed = true;
+                    continue;
+                }
+            }
+        }
+
         // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → (ev, a, b, c) ---
         if let Ok(call_op) = func::Call::from_operation(db, *op)
             && call_op.callee(db) == "__tribute_evidence_extend"
@@ -346,14 +408,14 @@ fn rewrite_evidence_ops_in_block<'db>(
                     )
                 });
                 // fields = [ability_id, prompt_tag, op_table_index]
-                let ptr_ty = core::Ptr::new(db).as_type();
+                let i64_ty = core::I64::new(db).as_type();
                 let mut args = vec![ev_val];
                 args.extend_from_slice(fields);
                 let new_call = func::call(
                     db,
                     op.location(db),
                     args,
-                    ptr_ty,
+                    i64_ty,
                     Symbol::new("__tribute_evidence_extend"),
                 );
                 new_ops.push(new_call.as_operation());
@@ -550,10 +612,10 @@ mod tests {
         // Should have 3 functions: empty (added) + lookup + extend
         assert_eq!(entry.operations(db).len(), 3);
 
-        let ptr_ty = core::Ptr::new(db).as_type();
+        let i64_ty = core::I64::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
 
-        // First should be __tribute_evidence_empty: () -> ptr
+        // First should be __tribute_evidence_empty: () -> i64
         let empty_op = &entry.operations(db)[0];
         let empty_func = func::Func::from_operation(db, *empty_op).unwrap();
         assert_eq!(
@@ -562,9 +624,9 @@ mod tests {
         );
         let empty_ty = core::Func::from_type(db, empty_func.r#type(db)).unwrap();
         assert!(empty_ty.params(db).is_empty());
-        assert_eq!(empty_ty.result(db), ptr_ty);
+        assert_eq!(empty_ty.result(db), i64_ty);
 
-        // Second: __tribute_evidence_lookup: (ptr, i32) -> Marker
+        // Second: __tribute_evidence_lookup: (i64, i32) -> i32
         let lookup_op = &entry.operations(db)[1];
         let lookup_func = func::Func::from_operation(db, *lookup_op).unwrap();
         assert_eq!(
@@ -572,9 +634,10 @@ mod tests {
             Symbol::new("__tribute_evidence_lookup")
         );
         let lookup_ty = core::Func::from_type(db, lookup_func.r#type(db)).unwrap();
-        assert_eq!(lookup_ty.params(db).as_slice(), &[ptr_ty, i32_ty]);
+        assert_eq!(lookup_ty.params(db).as_slice(), &[i64_ty, i32_ty]);
+        assert_eq!(lookup_ty.result(db), i32_ty);
 
-        // Third: __tribute_evidence_extend: (ptr, i32, i32, i32) -> ptr
+        // Third: __tribute_evidence_extend: (i64, i32, i32, i32) -> i64
         let extend_op = &entry.operations(db)[2];
         let extend_func = func::Func::from_operation(db, *extend_op).unwrap();
         assert_eq!(
@@ -584,9 +647,9 @@ mod tests {
         let extend_ty = core::Func::from_type(db, extend_func.r#type(db)).unwrap();
         assert_eq!(
             extend_ty.params(db).as_slice(),
-            &[ptr_ty, i32_ty, i32_ty, i32_ty]
+            &[i64_ty, i32_ty, i32_ty, i32_ty]
         );
-        assert_eq!(extend_ty.result(db), ptr_ty);
+        assert_eq!(extend_ty.result(db), i64_ty);
     }
 
     /// Create a module with a function that creates empty evidence via adt.array_new.

@@ -190,34 +190,95 @@ fn lower_nested_regions<'db>(
     }
 }
 
-/// Info collected for each release op during Phase 1.
-struct ReleaseInfo<'db> {
-    is_zero_val: Value<'db>,
-    payload_ptr_val: Value<'db>,
-    alloc_size: u64,
-    free_block_id: BlockId,
+/// How a segment ends — either a null-guarded retain or release.
+enum SegmentEnd<'db> {
+    /// Retain with null guard: produces [entry, do_retain, skip] blocks.
+    Retain {
+        is_null_val: Value<'db>,
+        retain_ops: Vec<Operation<'db>>,
+        do_retain_block_id: BlockId,
+    },
+    /// Release with null guard: produces [entry, do_release, free, skip] blocks.
+    Release {
+        is_null_val: Value<'db>,
+        ptr: Value<'db>,
+        decrement_ops: Vec<Operation<'db>>,
+        is_zero_val: Value<'db>,
+        alloc_size: u64,
+        do_release_block_id: BlockId,
+        free_block_id: BlockId,
+    },
 }
 
-/// A segment of operations between release points.
+/// A segment of operations between RC points.
 struct Segment<'db> {
     ops: Vec<Operation<'db>>,
     block_id: BlockId,
     block_args: IdVec<trunk_ir::BlockArg<'db>>,
-    /// If this segment ends with a release, stores info for the block split.
-    release: Option<ReleaseInfo<'db>>,
+    /// If this segment ends with an RC op, stores info for the block split.
+    end: Option<SegmentEnd<'db>>,
 }
 
 /// Lower RC ops in a single block, potentially splitting it into multiple blocks.
 ///
-/// Returns a Vec of blocks. If the block contains no release ops, returns the
-/// original block unchanged. Each release op causes a block split.
+/// Returns a Vec of blocks. If the block contains no RC ops, returns the
+/// original block unchanged. Each retain/release op causes a block split
+/// with a null pointer guard.
 ///
 /// Uses a two-phase algorithm to ensure `clif.brif` and `clif.jump` operations
 /// reference the actual destination blocks (not empty placeholders):
 ///
-/// - **Phase 1**: Iterate ops and collect segments separated by release points.
+/// - **Phase 1**: Iterate ops and collect segments separated by RC points.
 /// - **Phase 2**: Build blocks from last to first, so each `brif`/`jump` can
 ///   reference the already-created continue block.
+///
+/// ## Retain Lowering (null-guarded, block split)
+///
+/// ```text
+/// // --- entry block ---
+/// %null    = clif.iconst(0) : core.ptr
+/// %is_null = clif.icmp(ptr, %null, eq) : core.i8
+/// clif.brif(%is_null, ^skip_block, ^do_retain_block)
+///
+/// ^do_retain_block:
+///   %hdr_sz  = clif.iconst(8) : core.i64
+///   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
+///   %rc      = clif.load(%rc_addr, offset=0) : core.i32
+///   %one     = clif.iconst(1) : core.i32
+///   %new_rc  = clif.iadd(%rc, %one) : core.i32
+///   clif.store(%new_rc, %rc_addr, offset=0)
+///   clif.jump(^skip_block)
+///
+/// ^skip_block:
+///   // remaining ops (retain result remapped to original ptr)
+/// ```
+///
+/// ## Release Lowering (null-guarded, block split)
+///
+/// ```text
+/// // --- entry block ---
+/// %null    = clif.iconst(0) : core.ptr
+/// %is_null = clif.icmp(ptr, %null, eq) : core.i8
+/// clif.brif(%is_null, ^skip_block, ^do_release_block)
+///
+/// ^do_release_block:
+///   %hdr_sz  = clif.iconst(8) : core.i64
+///   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
+///   %rc      = clif.load(%rc_addr, offset=0) : core.i32
+///   %one     = clif.iconst(1) : core.i32
+///   %new_rc  = clif.isub(%rc, %one) : core.i32
+///   clif.store(%new_rc, %rc_addr, offset=0)
+///   %zero    = clif.iconst(0) : core.i32
+///   %is_zero = clif.icmp(%new_rc, %zero, eq) : core.i8
+///   clif.brif(%is_zero, ^free_block, ^skip_block)
+///
+/// ^free_block:
+///   clif.call @__tribute_deep_release(ptr, size)
+///   clif.jump(^skip_block)
+///
+/// ^skip_block:
+///   // remaining ops
+/// ```
 fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Vec<Block<'db>> {
     let ops = block.operations(db);
     let location = block.location(db);
@@ -232,9 +293,9 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         return vec![*block];
     }
 
-    // Phase 1: Collect segments separated by release points.
-    // Also maintain a value remap so that uses of retain results are rewritten
-    // to reference the identity op produced by the inline expansion.
+    // Phase 1: Collect segments separated by RC points.
+    // Maintain a value remap so that uses of retain results are rewritten
+    // to reference the original ptr (available in all paths after null guard).
     let mut segments: Vec<Segment<'db>> = Vec::new();
     let mut current_ops: Vec<Operation<'db>> = Vec::new();
     let mut current_id = block.id(db);
@@ -243,44 +304,69 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
 
     for op in ops.iter() {
         if let Ok(retain_op) = tribute_rt::Retain::from_operation(db, *op) {
-            // Retain: inline refcount increment, no block split
+            // Retain: null-guarded refcount increment with block split
             let ptr = remap_value(&value_remap, retain_op.ptr(db));
-            let inline_ops = gen_retain_inline(db, location, ptr);
 
-            // The last inline op's result replaces the original retain result
-            let identity_result = inline_ops.last().unwrap().result(db, 0);
+            // Generate null check ops for entry block
+            let (null_check_ops, is_null_val) = gen_null_check(db, location, ptr);
+            current_ops.extend(null_check_ops);
+
+            // Generate retain RC ops for the do_retain block
+            let retain_ops = gen_retain_rc_ops(db, location, ptr);
+
+            // Remap retain result to original ptr (available in all paths)
             let original_result = op.result(db, 0);
-            value_remap.insert(original_result, identity_result);
+            value_remap.insert(original_result, ptr);
 
-            current_ops.extend(inline_ops);
-        } else if let Ok(release_op) = tribute_rt::Release::from_operation(db, *op) {
-            // Release: refcount decrement + conditional free + block split
-            let ptr = remap_value(&value_remap, release_op.ptr(db));
-            let alloc_size = release_op.alloc_size(db);
+            let skip_block_id = BlockId::fresh();
+            let do_retain_block_id = BlockId::fresh();
 
-            let continue_block_id = BlockId::fresh();
-            let free_block_id = BlockId::fresh();
-
-            // Generate decrement ops (brif will be appended in Phase 2)
-            let (decrement_ops, is_zero_val, _rc_addr_val) =
-                gen_release_decrement(db, location, ptr);
-            current_ops.extend(decrement_ops);
-
-            // Finish this segment
             segments.push(Segment {
                 ops: std::mem::take(&mut current_ops),
                 block_id: current_id,
                 block_args: current_args,
-                release: Some(ReleaseInfo {
+                end: Some(SegmentEnd::Retain {
+                    is_null_val,
+                    retain_ops,
+                    do_retain_block_id,
+                }),
+            });
+
+            current_id = skip_block_id;
+            current_args = IdVec::new();
+        } else if let Ok(release_op) = tribute_rt::Release::from_operation(db, *op) {
+            // Release: null-guarded refcount decrement + conditional free + block split
+            let ptr = remap_value(&value_remap, release_op.ptr(db));
+            let alloc_size = release_op.alloc_size(db);
+
+            // Generate null check ops for entry block
+            let (null_check_ops, is_null_val) = gen_null_check(db, location, ptr);
+            current_ops.extend(null_check_ops);
+
+            // Generate decrement ops for the do_release block
+            let (decrement_ops, is_zero_val, _rc_addr_val) =
+                gen_release_decrement(db, location, ptr);
+
+            let skip_block_id = BlockId::fresh();
+            let do_release_block_id = BlockId::fresh();
+            let free_block_id = BlockId::fresh();
+
+            segments.push(Segment {
+                ops: std::mem::take(&mut current_ops),
+                block_id: current_id,
+                block_args: current_args,
+                end: Some(SegmentEnd::Release {
+                    is_null_val,
+                    ptr,
+                    decrement_ops,
                     is_zero_val,
-                    payload_ptr_val: ptr,
                     alloc_size,
+                    do_release_block_id,
                     free_block_id,
                 }),
             });
 
-            // Next segment starts as the continue block
-            current_id = continue_block_id;
+            current_id = skip_block_id;
             current_args = IdVec::new();
         } else {
             // Remap operands for non-RC ops
@@ -288,23 +374,21 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
         }
     }
 
-    // Push the final segment (no release)
+    // Push the final segment (no RC op)
     segments.push(Segment {
         ops: current_ops,
         block_id: current_id,
         block_args: current_args,
-        release: None,
+        end: None,
     });
 
     // Phase 2: Build blocks from last to first.
-    // The last segment has no release, so it's just a plain block.
-    // Working backwards, each segment with a release creates:
-    //   1. The continue block (already built from previous iteration)
-    //   2. A free block (dealloc + jump to continue block)
-    //   3. The current block (segment ops + brif to free/continue)
+    // Working backwards, each segment with an RC op creates blocks:
+    //   Retain:  [entry, do_retain, skip]
+    //   Release: [entry, do_release, free, skip]
     let mut result_blocks: Vec<Block<'db>> = Vec::new();
 
-    // Build the last segment first
+    // Build the last segment first (no RC op, just a plain block)
     let last = segments.pop().expect("at least one segment");
     let mut continue_block = Block::new(
         db,
@@ -316,48 +400,100 @@ fn lower_rc_in_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> V
 
     // Process remaining segments in reverse
     for segment in segments.into_iter().rev() {
-        let release = segment.release.expect("non-last segment must have release");
+        let end = segment.end.expect("non-last segment must have RC end");
+        let skip_block = continue_block;
 
-        // Build free block: deep_release + jump to continue_block
-        let free_ops = gen_deep_release_call(
-            db,
-            location,
-            release.payload_ptr_val,
-            release.alloc_size,
-            continue_block,
-        );
-        let free_block = Block::new(
-            db,
-            release.free_block_id,
-            location,
-            IdVec::new(),
-            free_ops.into_iter().collect(),
-        );
+        match end {
+            SegmentEnd::Retain {
+                is_null_val,
+                retain_ops,
+                do_retain_block_id,
+            } => {
+                // do_retain block: RC increment + jump to skip
+                let mut do_ops = retain_ops;
+                do_ops.push(clif::jump(db, location, [], skip_block).as_operation());
+                let do_retain_block = Block::new(
+                    db,
+                    do_retain_block_id,
+                    location,
+                    IdVec::new(),
+                    do_ops.into_iter().collect(),
+                );
 
-        // Append brif to segment ops
-        let mut ops = segment.ops;
-        let brif_op = clif::brif(
-            db,
-            location,
-            release.is_zero_val,
-            free_block,
-            continue_block,
-        );
-        ops.push(brif_op.as_operation());
+                // entry block: segment ops + null check brif
+                // brif: if null → skip (then_dest), else → do_retain (else_dest)
+                let mut ops = segment.ops;
+                ops.push(
+                    clif::brif(db, location, is_null_val, skip_block, do_retain_block)
+                        .as_operation(),
+                );
+                let entry_block = Block::new(
+                    db,
+                    segment.block_id,
+                    location,
+                    segment.block_args,
+                    ops.into_iter().collect(),
+                );
 
-        // Build current block
-        let current_block = Block::new(
-            db,
-            segment.block_id,
-            location,
-            segment.block_args,
-            ops.into_iter().collect(),
-        );
+                // Push in reverse order (will be reversed at end)
+                result_blocks.push(skip_block);
+                result_blocks.push(do_retain_block);
+                continue_block = entry_block;
+            }
+            SegmentEnd::Release {
+                is_null_val,
+                ptr,
+                decrement_ops,
+                is_zero_val,
+                alloc_size,
+                do_release_block_id,
+                free_block_id,
+            } => {
+                // free block: deep_release + jump to skip
+                let free_ops = gen_deep_release_call(db, location, ptr, alloc_size, skip_block);
+                let free_block = Block::new(
+                    db,
+                    free_block_id,
+                    location,
+                    IdVec::new(),
+                    free_ops.into_iter().collect(),
+                );
 
-        // Prepend free_block and continue_block (they come after current in forward order)
-        result_blocks.push(continue_block);
-        result_blocks.push(free_block);
-        continue_block = current_block;
+                // do_release block: decrement + brif(is_zero → free, else → skip)
+                let mut do_ops = decrement_ops;
+                do_ops.push(
+                    clif::brif(db, location, is_zero_val, free_block, skip_block).as_operation(),
+                );
+                let do_release_block = Block::new(
+                    db,
+                    do_release_block_id,
+                    location,
+                    IdVec::new(),
+                    do_ops.into_iter().collect(),
+                );
+
+                // entry block: segment ops + null check brif
+                // brif: if null → skip (then_dest), else → do_release (else_dest)
+                let mut ops = segment.ops;
+                ops.push(
+                    clif::brif(db, location, is_null_val, skip_block, do_release_block)
+                        .as_operation(),
+                );
+                let entry_block = Block::new(
+                    db,
+                    segment.block_id,
+                    location,
+                    segment.block_args,
+                    ops.into_iter().collect(),
+                );
+
+                // Push in reverse order (will be reversed at end)
+                result_blocks.push(skip_block);
+                result_blocks.push(free_block);
+                result_blocks.push(do_release_block);
+                continue_block = entry_block;
+            }
+        }
     }
 
     // The first block (entry or first segment)
@@ -404,8 +540,32 @@ fn remap_op_operands<'db>(
     op.modify(db).operands(new_operands).build()
 }
 
-/// Generate inline retain ops: load RC, increment, store back, identity result.
-fn gen_retain_inline<'db>(
+/// Generate null-check ops: `iconst(0)` + `icmp(ptr, 0, eq)`.
+///
+/// Returns `(ops, is_null_val)` where `is_null_val` is nonzero when `ptr` is null.
+fn gen_null_check<'db>(
+    db: &'db dyn salsa::Database,
+    location: trunk_ir::Location<'db>,
+    ptr: Value<'db>,
+) -> (Vec<Operation<'db>>, Value<'db>) {
+    let ptr_ty = core::Ptr::new(db).as_type();
+    let i8_ty = core::I8::new(db).as_type();
+
+    let null = clif::iconst(db, location, ptr_ty, 0);
+    let is_null = clif::icmp(db, location, ptr, null.result(db), i8_ty, Symbol::new("eq"));
+
+    (
+        vec![null.as_operation(), is_null.as_operation()],
+        is_null.result(db),
+    )
+}
+
+/// Generate retain RC ops: load RC, increment, store back.
+///
+/// These ops go in the `do_retain` block (only executed when ptr is non-null).
+/// Unlike the old `gen_retain_inline`, this does NOT produce an identity result;
+/// the retain result is remapped to the original `ptr` value instead.
+fn gen_retain_rc_ops<'db>(
     db: &'db dyn salsa::Database,
     location: trunk_ir::Location<'db>,
     ptr: Value<'db>,
@@ -435,12 +595,6 @@ fn gen_retain_inline<'db>(
     // store(new_rc, rc_addr, offset=0)
     let store = clif::store(db, location, new_rc.result(db), rc_addr.result(db), 0);
     ops.push(store.as_operation());
-
-    // result = ptr (identity via iadd + iconst 0)
-    let zero_ptr = clif::iconst(db, location, ptr_ty, 0);
-    ops.push(zero_ptr.as_operation());
-    let result = clif::iadd(db, location, ptr, zero_ptr.result(db), ptr_ty);
-    ops.push(result.as_operation());
 
     ops
 }
@@ -663,9 +817,12 @@ mod tests {
             !ir.contains("tribute_rt."),
             "no tribute_rt ops should remain: {ir}"
         );
-        // Two releases → two block splits → at least 2 brif + 2 jump + 2 dealloc
+        // Two null-guarded releases → 2 null-check brifs + 2 is-zero brifs = 4 brifs
         let brif_count = ir.matches("clif.brif").count();
-        assert_eq!(brif_count, 2, "should have 2 brifs for 2 releases: {ir}");
+        assert_eq!(
+            brif_count, 4,
+            "should have 4 brifs for 2 null-guarded releases: {ir}"
+        );
     }
 
     #[salsa_test]
@@ -713,40 +870,58 @@ mod tests {
         let body = func.body(db);
         let region_blocks: Vec<Block> = body.blocks(db).iter().copied().collect();
 
-        // After release lowering: entry block, free block, continue block
-        assert_eq!(region_blocks.len(), 3, "release should produce 3 blocks");
+        // After null-guarded release lowering:
+        // entry (null check), do_release (decrement), free, skip
+        assert_eq!(region_blocks.len(), 4, "release should produce 4 blocks");
 
-        // Find brif in entry block
-        let brif_op = region_blocks[0]
+        // Find brif in entry block (null check)
+        let null_brif = region_blocks[0]
             .operations(db)
             .iter()
             .find_map(|op| clif::Brif::from_operation(db, *op).ok())
-            .expect("entry block should end with brif");
+            .expect("entry block should end with brif (null check)");
 
-        // brif successors must be the actual region blocks, not placeholders
+        // null brif: then_dest = skip (null → skip), else_dest = do_release
         assert_eq!(
-            brif_op.then_dest(db),
-            region_blocks[1],
-            "brif.then_dest must be the free block in the region"
+            null_brif.then_dest(db),
+            region_blocks[3],
+            "null brif.then_dest must be the skip block"
         );
         assert_eq!(
-            brif_op.else_dest(db),
+            null_brif.else_dest(db),
+            region_blocks[1],
+            "null brif.else_dest must be the do_release block"
+        );
+
+        // Find brif in do_release block (is_zero check)
+        let zero_brif = region_blocks[1]
+            .operations(db)
+            .iter()
+            .find_map(|op| clif::Brif::from_operation(db, *op).ok())
+            .expect("do_release block should end with brif (is_zero)");
+
+        assert_eq!(
+            zero_brif.then_dest(db),
             region_blocks[2],
-            "brif.else_dest must be the continue block in the region"
+            "zero brif.then_dest must be the free block"
+        );
+        assert_eq!(
+            zero_brif.else_dest(db),
+            region_blocks[3],
+            "zero brif.else_dest must be the skip block"
         );
 
         // Find jump in free block
-        let jump_op = region_blocks[1]
+        let jump_op = region_blocks[2]
             .operations(db)
             .iter()
             .find_map(|op| clif::Jump::from_operation(db, *op).ok())
             .expect("free block should end with jump");
 
-        // jump dest must be the continue block in the region
         assert_eq!(
             jump_op.dest(db),
-            region_blocks[2],
-            "jump.dest must be the continue block in the region"
+            region_blocks[3],
+            "jump.dest must be the skip block"
         );
     }
 
@@ -774,11 +949,12 @@ mod tests {
         let body = func.body(db);
         let region_blocks: Vec<Block> = body.blocks(db).iter().copied().collect();
 
-        // Two releases → 5 blocks: entry, free1, continue1, free2, continue2
+        // Two null-guarded releases → 7 blocks:
+        // entry, do_release1, free1, skip1, do_release2, free2, skip2
         assert_eq!(
             region_blocks.len(),
-            5,
-            "two releases should produce 5 blocks"
+            7,
+            "two null-guarded releases should produce 7 blocks"
         );
 
         // Verify all brif/jump successors are actual region blocks

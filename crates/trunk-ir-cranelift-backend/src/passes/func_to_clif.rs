@@ -274,18 +274,21 @@ fn is_closure_struct(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         .unwrap_or(false)
 }
 
-/// Create the native closure struct type: `{ func_ptr: ptr, env: ptr }`.
+/// Create the native closure struct type: `{ func_ptr: i64, env: ptr }`.
 ///
-/// In the native backend, both fields are pointers (64-bit):
-/// - field 0: function pointer (from `clif.symbol_addr`)
+/// In the native backend, both fields are 64-bit:
+/// - field 0: function pointer (from `clif.symbol_addr`) — typed `i64` rather
+///   than `ptr` so the RC insertion pass does NOT retain/release it (function
+///   pointers are code addresses, not heap-allocated objects)
 /// - field 1: environment pointer (boxed captures)
 fn native_closure_struct_type(db: &dyn salsa::Database) -> Type<'_> {
+    let i64_ty = core::I64::new(db).as_type();
     let ptr_ty = core::Ptr::new(db).as_type();
     adt::struct_type(
         db,
         Symbol::new(CLOSURE_STRUCT_NAME),
         vec![
-            (Symbol::new("func_ptr"), ptr_ty),
+            (Symbol::new("func_ptr"), i64_ty),
             (Symbol::new("env"), ptr_ty),
         ],
     )
@@ -294,11 +297,11 @@ fn native_closure_struct_type(db: &dyn salsa::Database) -> Type<'_> {
 /// Adapt closure struct operations for the native backend.
 ///
 /// The shared `closure_lower` pass produces `_closure { i32, anyref }` structs
-/// (designed for WASM). For native codegen, we need `_closure { ptr, ptr }`:
-/// - `adt.struct_new` on `_closure`: change type attribute to `{ ptr, ptr }`
-/// - `adt.struct_get` on `_closure` field 0: change result type to `ptr`
-///   and update struct type attribute
-/// - `adt.struct_get` on `_closure` field 1: update struct type attribute
+/// (designed for WASM). For native codegen, we need `_closure { i64, ptr }`:
+/// - `adt.struct_new` on `_closure`: change type attribute to `{ i64, ptr }`
+/// - `adt.struct_get` on `_closure` field 0: change result type to `i64`
+///   (NOT `ptr`, so the RC pass doesn't retain/release function pointers)
+/// - `adt.struct_get` on `_closure` field 1: change result type to `ptr`
 struct ClosureStructAdaptPattern;
 
 impl<'db> RewritePattern<'db> for ClosureStructAdaptPattern {
@@ -309,7 +312,6 @@ impl<'db> RewritePattern<'db> for ClosureStructAdaptPattern {
         rewriter: &mut PatternRewriter<'db, '_>,
     ) -> bool {
         let native_ty = native_closure_struct_type(db);
-        let ptr_ty = core::Ptr::new(db).as_type();
 
         // Handle adt.struct_new on _closure
         if let Ok(struct_new) = adt::StructNew::from_operation(db, *op) {
@@ -333,9 +335,14 @@ impl<'db> RewritePattern<'db> for ClosureStructAdaptPattern {
                 return false;
             }
             let field_idx = struct_get.field(db);
-            // Both fields are pointers in the native closure struct
             let mut builder = op.modify(db).attr("type", Attribute::Type(native_ty));
-            if field_idx == 0 || field_idx == 1 {
+            if field_idx == 0 {
+                // func_ptr: i64 (not ptr — avoids RC tracking of function pointers)
+                let i64_ty = core::I64::new(db).as_type();
+                builder = builder.results(vec![i64_ty].into());
+            } else if field_idx == 1 {
+                // env: ptr (heap-allocated captures — needs RC tracking)
+                let ptr_ty = core::Ptr::new(db).as_type();
                 builder = builder.results(vec![ptr_ty].into());
             }
             let new_op = builder.build();

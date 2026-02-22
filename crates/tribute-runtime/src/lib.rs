@@ -185,7 +185,8 @@ pub unsafe extern "C" fn __tribute_prompt(
     env: *mut u8,
 ) -> *mut u8 {
     let ctx = Box::new(PromptContext { tag, body_fn, env });
-    unsafe { mp_prompt(prompt_start, Box::into_raw(ctx) as *mut u8) }
+    let result = unsafe { mp_prompt(prompt_start, Box::into_raw(ctx) as *mut u8) };
+    result
 }
 
 /// The `mp_yield` callback: captures the resume pointer into TLS
@@ -546,18 +547,23 @@ pub extern "C" fn __tribute_evidence_empty() -> *mut Evidence {
 
 /// Look up a marker by ability ID. Aborts if not found (compiler bug).
 ///
-/// Returns the `Marker` by value (`#[repr(C)]` struct, 3×i32).
+/// Returns a pointer to the `Marker` within the evidence array.
+/// The pointer remains valid as long as the evidence is alive.
 ///
-/// Signature: `(ev: ptr, ability_id: i32) -> Marker`
+/// Signature: `(ev: ptr, ability_id: i32) -> i32`
+///
+/// Returns the `prompt_tag` field of the matching marker directly.
+/// This avoids returning a borrow pointer into the evidence array,
+/// which would be incorrectly RC-tracked by the native backend.
 ///
 /// # Safety
 ///
 /// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
 /// `__tribute_evidence_extend`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> Marker {
+pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> i32 {
     let ev = unsafe { &*ev };
-    *ev.lookup(ability_id)
+    ev.lookup(ability_id).prompt_tag
 }
 
 /// Extend evidence with a new marker (persistent — returns a new evidence).
@@ -778,10 +784,8 @@ mod tests {
             let ev = __tribute_evidence_extend(ev, 10, 1, 0);
             let ev = __tribute_evidence_extend(ev, 20, 2, 5);
 
-            let marker = __tribute_evidence_lookup(ev, 20);
-            assert_eq!(marker.ability_id, 20);
-            assert_eq!(marker.prompt_tag, 2);
-            assert_eq!(marker.op_table_index, 5);
+            let prompt_tag = __tribute_evidence_lookup(ev, 20);
+            assert_eq!(prompt_tag, 2);
 
             let _ = Box::from_raw(ev);
         }

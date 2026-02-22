@@ -11,6 +11,7 @@
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
+use tribute_ir::dialect::ability;
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self};
 use trunk_ir::dialect::{adt, arith, cont};
@@ -80,25 +81,36 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
             null.result(db)
         } else {
             // Create an env struct with live-in values
-            // First, cast all values to ptr
-            let mut field_ptrs = Vec::new();
+            let i64_ty = core::I64::new(db).as_type();
+            let mut field_vals = Vec::new();
+            let mut field_types = Vec::new();
             for (value, ty) in &live_ins {
                 let remapped = rewriter.lookup_value(*value);
-                if *ty != ptr_ty {
+                if ability::is_evidence_type(db, *ty) {
+                    // Evidence pointers are NOT RC-managed (allocated via Box::into_raw
+                    // in the runtime, with no RC header). Store as i64 to prevent the
+                    // RC insertion pass from emitting retain/release on them.
+                    let cast = core::unrealized_conversion_cast(db, location, remapped, i64_ty);
+                    ops.push(cast.as_operation());
+                    field_vals.push(cast.as_operation().result(db, 0));
+                    field_types.push(i64_ty);
+                } else if *ty != ptr_ty {
                     let cast = core::unrealized_conversion_cast(db, location, remapped, ptr_ty);
                     ops.push(cast.as_operation());
-                    field_ptrs.push(cast.as_operation().result(db, 0));
+                    field_vals.push(cast.as_operation().result(db, 0));
+                    field_types.push(ptr_ty);
                 } else {
-                    field_ptrs.push(remapped);
+                    field_vals.push(remapped);
+                    field_types.push(ptr_ty);
                 }
             }
 
             // Build env struct type
-            let env_struct_ty = build_env_struct_type(db, live_ins.len());
+            let env_struct_ty = build_env_struct_type(db, &field_types);
 
             // adt.struct_new to create the env
             let struct_new =
-                adt::struct_new(db, location, field_ptrs, env_struct_ty, env_struct_ty);
+                adt::struct_new(db, location, field_vals, env_struct_ty, env_struct_ty);
             ops.push(struct_new.as_operation());
 
             // Cast struct to ptr for FFI
@@ -283,7 +295,20 @@ fn generate_outlined_body<'db>(
 
     // Extract live-in values from env struct
     if !live_ins.is_empty() {
-        let env_struct_ty = build_env_struct_type(db, live_ins.len());
+        let i64_ty = core::I64::new(db).as_type();
+
+        // Build field types matching the call site: evidence → i64, others → ptr
+        let field_types: Vec<Type<'db>> = live_ins
+            .iter()
+            .map(|(_, ty)| {
+                if ability::is_evidence_type(db, *ty) {
+                    i64_ty
+                } else {
+                    ptr_ty
+                }
+            })
+            .collect();
+        let env_struct_ty = build_env_struct_type(db, &field_types);
 
         // Cast ptr → struct type
         let env_cast = core::unrealized_conversion_cast(db, location, env_value, env_struct_ty);
@@ -291,10 +316,11 @@ fn generate_outlined_body<'db>(
         let env_ref = env_cast.as_operation().result(db, 0);
 
         for (i, (orig_value, orig_ty)) in live_ins.iter().enumerate() {
-            let field = adt::struct_get(db, location, env_ref, ptr_ty, env_struct_ty, i as u64);
+            let field_ty = field_types[i];
+            let field = adt::struct_get(db, location, env_ref, field_ty, env_struct_ty, i as u64);
             ops.push(field.as_operation());
 
-            let extracted = if *orig_ty != ptr_ty {
+            let extracted = if *orig_ty != field_ty {
                 let cast =
                     core::unrealized_conversion_cast(db, location, field.result(db), *orig_ty);
                 ops.push(cast.as_operation());
@@ -394,11 +420,18 @@ fn generate_outlined_body<'db>(
 // Helpers
 // ============================================================================
 
-/// Build an env struct type with N ptr fields.
-fn build_env_struct_type<'db>(db: &'db dyn salsa::Database, field_count: usize) -> Type<'db> {
-    let ptr_ty = core::Ptr::new(db).as_type();
-    let fields: Vec<(Symbol, Type<'db>)> = (0..field_count)
-        .map(|i| (Symbol::from_dynamic(&format!("f{i}")), ptr_ty))
+/// Build an env struct type with the given field types.
+///
+/// Evidence fields use `core.i64` (not `core.ptr`) to avoid RC tracking,
+/// since evidence pointers are not RC-managed heap objects.
+fn build_env_struct_type<'db>(
+    db: &'db dyn salsa::Database,
+    field_types: &[Type<'db>],
+) -> Type<'db> {
+    let fields: Vec<(Symbol, Type<'db>)> = field_types
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| (Symbol::from_dynamic(&format!("f{i}")), *ty))
         .collect();
     adt::struct_type(db, Symbol::new("__prompt_env"), fields)
 }

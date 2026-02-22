@@ -187,10 +187,16 @@ pub fn native_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             core::Func::from_type(db, ty).map(|_| core::Ptr::new(db).as_type())
         })
-        // Convert evidence type (core.array(Marker)) -> core.ptr
+        // Convert evidence type (core.array(Marker)) -> core.i64
+        //
+        // Evidence pointers are NOT RC-managed (they are allocated via Box
+        // in the runtime, not via __tribute_alloc). Using core.i64 instead
+        // of core.ptr prevents the RC insertion pass from generating
+        // spurious retain/release operations that corrupt memory.
+        // At the Cranelift level, i64 and ptr are both I64.
         .add_conversion(|db, ty| {
             if ability::is_evidence_type(db, ty) {
-                Some(core::Ptr::new(db).as_type())
+                Some(core::I64::new(db).as_type())
             } else {
                 None
             }
@@ -203,9 +209,9 @@ pub fn native_type_converter() -> TypeConverter {
         .add_conversion(|db, ty| {
             cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
         })
-        // Note: marker ADT type is now converted to core.ptr like other structs.
-        // Field layout info is preserved in adt.struct_get's `type` attribute,
-        // so adt_to_clif can still calculate correct field offsets.
+        // Note: marker ADT type is converted to core.ptr like other structs.
+        // But evidence_to_native rewrites evidence_lookup to return prompt_tag
+        // directly as core.i32, so marker pointers don't appear in user code.
         // === Materializations ===
         //
         // Primitive type equivalences: same underlying representation, no-op.
@@ -254,6 +260,14 @@ pub fn native_type_converter() -> TypeConverter {
             if tribute_rt::Any::from_type(db, from_ty).is_some()
                 && core::Ptr::from_type(db, to_ty).is_some()
             {
+                return MaterializeResult::NoOp;
+            }
+            // evidence type (core.array(Marker)) -> core.i64
+            if ability::is_evidence_type(db, from_ty) && core::I64::from_type(db, to_ty).is_some() {
+                return MaterializeResult::NoOp;
+            }
+            // core.i64 -> evidence type (reverse direction)
+            if core::I64::from_type(db, from_ty).is_some() && ability::is_evidence_type(db, to_ty) {
                 return MaterializeResult::NoOp;
             }
             // cont.prompt_tag -> core.i32
@@ -407,15 +421,9 @@ fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         return true;
     }
 
-    // evidence type
-    if ability::is_evidence_type(db, ty) {
-        return true;
-    }
-
-    // marker type
-    if ability::is_marker_type(db, ty) {
-        return true;
-    }
+    // Evidence and marker types are NOT ptr-like in the native backend.
+    // Evidence is represented as core.i64 (not core.ptr) to avoid RC tracking,
+    // since evidence pointers are not RC-managed heap objects.
 
     false
 }
@@ -548,11 +556,11 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_convert_evidence_to_ptr(db: &salsa::DatabaseImpl) {
+    fn test_convert_evidence_to_i64(db: &salsa::DatabaseImpl) {
         let converter = native_type_converter();
         let evidence_ty = ability::evidence_adt_type(db);
         let result = converter.convert_type(db, evidence_ty);
-        assert_eq!(result, Some(core::Ptr::new(db).as_type()));
+        assert_eq!(result, Some(core::I64::new(db).as_type()));
     }
 
     #[salsa_test]
