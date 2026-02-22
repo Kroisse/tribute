@@ -289,10 +289,10 @@ fn compute_use_def_sets<'db>(
                     uses.insert(*operand);
                 }
                 // If operand is an alias of a ptr value, record the aliased ptr as used
-                if let Some(&aliased) = ptr_alias_map.get(operand) {
-                    if !defs.contains(&aliased) {
-                        uses.insert(aliased);
-                    }
+                if let Some(&aliased) = ptr_alias_map.get(operand)
+                    && !defs.contains(&aliased)
+                {
+                    uses.insert(aliased);
                 }
             }
 
@@ -938,10 +938,10 @@ fn has_use_after<'db>(
                 return true;
             }
             // Check if operand is an alias of the value
-            if let Some(&aliased) = ptr_alias_map.get(operand) {
-                if aliased == value {
-                    return true;
-                }
+            if let Some(&aliased) = ptr_alias_map.get(operand)
+                && aliased == value
+            {
+                return true;
             }
         }
     }

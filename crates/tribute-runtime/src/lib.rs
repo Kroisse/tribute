@@ -185,8 +185,7 @@ pub unsafe extern "C" fn __tribute_prompt(
     env: *mut u8,
 ) -> *mut u8 {
     let ctx = Box::new(PromptContext { tag, body_fn, env });
-    let result = unsafe { mp_prompt(prompt_start, Box::into_raw(ctx) as *mut u8) };
-    result
+    unsafe { mp_prompt(prompt_start, Box::into_raw(ctx) as *mut u8) }
 }
 
 /// The `mp_yield` callback: captures the resume pointer into TLS
