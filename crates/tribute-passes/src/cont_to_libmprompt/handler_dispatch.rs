@@ -65,7 +65,7 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         let user_result_ty = dispatch.result_type(db);
 
         // Get the prompt result operand (from push_prompt's __tribute_prompt call)
-        let prompt_result = op.operands(db).first().copied().unwrap();
+        let prompt_result = rewriter.operand(0).unwrap();
 
         // Get the body region with child ops (cont.done + cont.suspend)
         let body_region = dispatch.body(db);

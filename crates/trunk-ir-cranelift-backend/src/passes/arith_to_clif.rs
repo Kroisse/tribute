@@ -185,11 +185,13 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
             return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
             return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
             return false;
         };
         let category = type_category(db, Some(result_ty));
@@ -265,14 +267,16 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
         let operand_ty = rewriter.operand_type(0);
         let category = type_category(db, operand_ty);
 
-        let result_ty =
-            op.results(db).first().copied().unwrap_or_else(|| {
-                panic!("arith cmp missing result type at {:?}", op.location(db))
-            });
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
+        };
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
+            return false;
+        };
 
         let is_float = matches!(category, "f32" | "f64");
 
@@ -347,10 +351,12 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
             return false;
         };
 
-        let result_ty = op.results(db).first().copied();
+        let result_ty = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied());
         let category = type_category(db, result_ty);
         let location = op.location(db);
-        let operand = neg_op.operand(db);
+        let operand = rewriter.operand(0).unwrap_or_else(|| neg_op.operand(db));
 
         let new_op = match category {
             "f32" => {
@@ -398,11 +404,13 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
             return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
             return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
             return false;
         };
         let location = op.location(db);
@@ -456,16 +464,18 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
         let src_ty = rewriter.operand_type(0);
         let src_cat = type_category(db, src_ty);
 
-        let dst_ty = op.results(db).first().copied().unwrap_or_else(|| {
-            panic!(
-                "arith conversion missing result type at {:?}",
-                op.location(db)
-            )
-        });
+        let Some(dst_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
+        };
         let dst_cat = type_category(db, Some(dst_ty));
 
         let location = op.location(db);
-        let operand = op.operands(db)[0];
+        let Some(operand) = rewriter.operand(0) else {
+            return false;
+        };
 
         let new_op = if name == arith::CAST() {
             // cast: integer sign extension/truncation

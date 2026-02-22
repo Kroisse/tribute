@@ -43,7 +43,7 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         let anyref_ty = tribute_rt::Any::new(db).as_type();
 
         // Get the step operand (result of push_prompt)
-        let step_operand = op.operands(db).first().copied().unwrap();
+        let step_operand = rewriter.operand(0).unwrap();
 
         // Get the handler's tag
         let our_tag = dispatch.tag(db);

@@ -308,7 +308,6 @@ fn generate_outlined_body<'db>(
     }
 
     // Copy body operations with remapping
-    let body_region = &body_region;
     if let Some(body_block) = body_region.blocks(db).first() {
         assert!(
             body_block.args(db).is_empty(),

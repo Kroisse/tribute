@@ -33,10 +33,10 @@ fn count_scf_if_in_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db
         for op in block.operations(db).iter() {
             if scf::If::from_operation(db, *op).is_ok() {
                 count += 1;
-                // Count nested scf.if in the then/else regions
-                for nested_region in op.regions(db).iter() {
-                    count += count_scf_if_in_region(db, nested_region);
-                }
+            }
+            // Always recurse into nested regions (not just scf.if)
+            for nested_region in op.regions(db).iter() {
+                count += count_scf_if_in_region(db, nested_region);
             }
         }
     }
