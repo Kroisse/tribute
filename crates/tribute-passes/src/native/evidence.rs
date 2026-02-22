@@ -379,6 +379,10 @@ fn rewrite_evidence_ops_in_block<'db>(
             let operands = op.operands(db);
             if !operands.is_empty() {
                 let base_val = remap_value(operands[0], &value_remap);
+                // First check: operands[0] is directly a lookup result key.
+                // Second check: handles chained struct_gets — when a previous
+                // struct_get was eliminated and its result remapped, the next
+                // struct_get's operand (after remap) equals a lookup's new_result.
                 if evidence_lookup_results.contains_key(&operands[0])
                     || evidence_lookup_results.values().any(|v| *v == base_val)
                 {

@@ -544,16 +544,12 @@ pub extern "C" fn __tribute_evidence_empty() -> *mut Evidence {
     Box::into_raw(Box::new(Evidence::new()))
 }
 
-/// Look up a marker by ability ID. Aborts if not found (compiler bug).
+/// Look up a marker by ability ID in the `Evidence` and return its
+/// `prompt_tag` (an `i32`).
 ///
-/// Returns a pointer to the `Marker` within the evidence array.
-/// The pointer remains valid as long as the evidence is alive.
+/// Aborts if no marker with the given `ability_id` exists (compiler bug).
 ///
 /// Signature: `(ev: ptr, ability_id: i32) -> i32`
-///
-/// Returns the `prompt_tag` field of the matching marker directly.
-/// This avoids returning a borrow pointer into the evidence array,
-/// which would be incorrectly RC-tracked by the native backend.
 ///
 /// # Safety
 ///

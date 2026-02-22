@@ -399,9 +399,13 @@ fn is_ptr_like(db: &dyn salsa::Database, ty: Type<'_>) -> bool {
         return true;
     }
 
-    // core.array
+    // core.array — but NOT evidence arrays (ability::evidence_adt_type),
+    // which are opaque i64 handles in the native backend.
     if core::Array::from_type(db, ty).is_some() {
-        return true;
+        let evidence_ty = ability::evidence_adt_type(db);
+        if ty != evidence_ty {
+            return true;
+        }
     }
 
     // tribute_rt.any / tribute_rt.intref

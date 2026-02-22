@@ -430,12 +430,24 @@ fn build_ptr_alias_map<'db>(
 
                     if let Some(root) = root {
                         let output = op.result(db, 0);
-                        aliases.insert(output, root);
-                        // Remove cast output from ptr_values — it should not be
-                        // independently tracked for RC. The cast is a no-op alias;
-                        // all uses of the output extend the root's lifetime via
-                        // the alias map.
-                        ptr_values.remove(&output);
+                        // Skip aliasing when the cast output is an integer type
+                        // (e.g., core.i64). Opaque i64 handles (such as evidence)
+                        // are intentionally non-pointer and must not be aliased
+                        // back to a ptr root — doing so would reintroduce RC
+                        // tracking for values that have no RC header.
+                        let output_ty = op.results(db).first().copied();
+                        let is_integer_output = output_ty.is_some_and(|ty| {
+                            core::I64::from_type(db, ty).is_some()
+                                || core::I32::from_type(db, ty).is_some()
+                        });
+                        if !is_integer_output {
+                            aliases.insert(output, root);
+                            // Remove cast output from ptr_values — it should not
+                            // be independently tracked for RC. The cast is a
+                            // no-op alias; all uses of the output extend the
+                            // root's lifetime via the alias map.
+                            ptr_values.remove(&output);
+                        }
                     }
                 }
             }
