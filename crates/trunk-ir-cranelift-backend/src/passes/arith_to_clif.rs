@@ -13,7 +13,7 @@ use tracing::warn;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, clif, core};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
@@ -91,19 +91,19 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(raw_result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Apply type conversion (e.g., cont.prompt_tag → core.i32) before
         // determining the output category and emitting the clif constant.
-        let result_ty = adaptor
+        let result_ty = rewriter
             .type_converter()
             .convert_type(db, raw_result_ty)
             .unwrap_or(raw_result_ty);
@@ -113,7 +113,8 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
             // Nil constants have no runtime representation in Cranelift.
             // Use iconst 0 with the nil type to maintain SSA form.
             let new_op = clif::iconst(db, op.location(db), result_ty, 0);
-            return RewriteResult::Replace(new_op.as_operation());
+            rewriter.replace_op(new_op.as_operation());
+            return true;
         }
 
         let location = op.location(db);
@@ -154,7 +155,8 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
             }
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -166,10 +168,10 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -180,15 +182,17 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
             || name == arith::REM();
 
         if !is_binop {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
-            return RewriteResult::Unchanged;
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
+            return false;
         };
         let category = type_category(db, Some(result_ty));
         let location = op.location(db);
@@ -219,17 +223,18 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
         } else if name == arith::REM() {
             // Cranelift has no float remainder instruction
             match category {
-                "f32" | "f64" => return RewriteResult::Unchanged,
+                "f32" | "f64" => return false,
                 _ if is_unsigned_int(db, Some(result_ty)) => {
                     clif::urem(db, location, lhs, rhs, result_ty).as_operation()
                 }
                 _ => clif::srem(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -241,10 +246,10 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -256,20 +261,22 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
             || name == arith::CMP_GE();
 
         if !is_cmp {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        let operand_ty = adaptor.operand_type(0);
+        let operand_ty = rewriter.operand_type(0);
         let category = type_category(db, operand_ty);
 
-        let result_ty =
-            op.results(db).first().copied().unwrap_or_else(|| {
-                panic!("arith cmp missing result type at {:?}", op.location(db))
-            });
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
+        };
         let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
+            return false;
+        };
 
         let is_float = matches!(category, "f32" | "f64");
 
@@ -312,7 +319,7 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
                 ("sge", false)
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let cond_sym = Symbol::new(cond);
@@ -322,7 +329,8 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
             clif::icmp(db, location, lhs, rhs, result_ty, cond_sym).as_operation()
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -337,16 +345,18 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(neg_op) = arith::Neg::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        let result_ty = op.results(db).first().copied();
+        let result_ty = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied());
         let category = type_category(db, result_ty);
         let location = op.location(db);
-        let operand = neg_op.operand(db);
+        let operand = rewriter.operand(0).unwrap_or_else(|| neg_op.operand(db));
 
         let new_op = match category {
             "f32" => {
@@ -363,7 +373,8 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
             }
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -375,10 +386,10 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -390,15 +401,17 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
             || name == arith::SHRU();
 
         if !is_bitwise {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
-            return RewriteResult::Unchanged;
+        let Some(result_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
-            return RewriteResult::Unchanged;
+        let (Some(lhs), Some(rhs)) = (rewriter.operand(0), rewriter.operand(1)) else {
+            return false;
         };
         let location = op.location(db);
 
@@ -416,10 +429,11 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
         } else if name == arith::SHRU() {
             clif::ushr(db, location, lhs, rhs, result_ty).as_operation()
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -431,10 +445,10 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -444,22 +458,24 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
             || name == arith::CONVERT();
 
         if !is_conv {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        let src_ty = adaptor.operand_type(0);
+        let src_ty = rewriter.operand_type(0);
         let src_cat = type_category(db, src_ty);
 
-        let dst_ty = op.results(db).first().copied().unwrap_or_else(|| {
-            panic!(
-                "arith conversion missing result type at {:?}",
-                op.location(db)
-            )
-        });
+        let Some(dst_ty) = rewriter
+            .result_type(db, op, 0)
+            .or_else(|| op.results(db).first().copied())
+        else {
+            return false;
+        };
         let dst_cat = type_category(db, Some(dst_ty));
 
         let location = op.location(db);
-        let operand = op.operands(db)[0];
+        let Some(operand) = rewriter.operand(0) else {
+            return false;
+        };
 
         let new_op = if name == arith::CAST() {
             // cast: integer sign extension/truncation
@@ -474,7 +490,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                         clif::ireduce(db, location, operand, dst_ty).as_operation()
                     }
                 }
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else if name == arith::TRUNC() {
             match (src_cat, dst_cat) {
@@ -482,7 +498,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                     clif::fcvt_to_sint(db, location, operand, dst_ty).as_operation()
                 }
                 ("int", "int") => clif::ireduce(db, location, operand, dst_ty).as_operation(),
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else if name == arith::EXTEND() {
             match (src_cat, dst_cat) {
@@ -491,7 +507,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                 }
                 ("int", "int") => clif::sextend(db, location, operand, dst_ty).as_operation(),
                 ("f32", "f64") => clif::fpromote(db, location, operand, dst_ty).as_operation(),
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else if name == arith::CONVERT() {
             match (src_cat, dst_cat) {
@@ -514,13 +530,14 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                 // float to float
                 ("f32", "f64") => clif::fpromote(db, location, operand, dst_ty).as_operation(),
                 ("f64", "f32") => clif::fdemote(db, location, operand, dst_ty).as_operation(),
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

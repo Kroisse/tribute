@@ -7,7 +7,7 @@ use std::rc::Rc;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::{arith, cont, core, func, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
-use trunk_ir::rewrite::{OpAdaptor, RewriteContext, RewritePattern, RewriteResult, TypeConverter};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, TypeConverter};
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, PathId, Span, Value};
 
 /// Create a shared test location with a fixed span `(0, 0)`.
@@ -33,10 +33,10 @@ fn count_scf_if_in_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db
         for op in block.operations(db).iter() {
             if scf::If::from_operation(db, *op).is_ok() {
                 count += 1;
-                // Count nested scf.if in the then/else regions
-                for nested_region in op.regions(db).iter() {
-                    count += count_scf_if_in_region(db, nested_region);
-                }
+            }
+            // Always recurse into nested regions (not just scf.if)
+            for nested_region in op.regions(db).iter() {
+                count += count_scf_if_in_region(db, nested_region);
             }
         }
     }
@@ -122,39 +122,42 @@ fn handler_dispatch_scf_if_count(db: &dyn salsa::Database) -> usize {
     )
     .as_operation();
 
-    // Apply pattern
+    // Build a module containing the handler_dispatch op, then apply the pattern
+    let block = Block::new(
+        db,
+        BlockId::fresh(),
+        location,
+        IdVec::new(),
+        IdVec::from(vec![dummy_const.as_operation(), dispatch_op]),
+    );
+    let region = Region::new(db, location, IdVec::from(vec![block]));
+    let module = core::Module::create(db, location, "test".into(), region);
+
+    // Apply the pattern via PatternApplicator
     let effectful_funcs = Rc::new(HashSet::new());
     let handlers_in_effectful_funcs = Rc::new(HashSet::new());
     let pattern = LowerHandlerDispatchPattern {
         effectful_funcs,
         handlers_in_effectful_funcs,
     };
-    let ctx = RewriteContext::new();
-    let type_converter = TypeConverter::new();
-    let adaptor = OpAdaptor::new(
-        dispatch_op,
-        dispatch_op.operands(db).clone(),
-        vec![],
-        &ctx,
-        &type_converter,
-    );
-    let result = pattern.match_and_rewrite(db, &dispatch_op, &adaptor);
+    let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(pattern);
+    let target = ConversionTarget::new();
+    let result = applicator.apply_partial(db, module, target);
 
-    // Count scf.if operations in the loop body
-    // With trampoline loop, the result is a single scf.loop operation
-    match result {
-        RewriteResult::Expand(ops) if ops.len() == 1 => {
-            let loop_op = &ops[0];
-            let regions = loop_op.regions(db);
+    // Count scf.if operations in the lowered module
+    let body = result.module.body(db);
+    let ops = body.blocks(db)[0].operations(db);
+
+    // Find the scf.loop in the result (replaces handler_dispatch)
+    for op in ops.iter() {
+        if scf::Loop::from_operation(db, *op).is_ok() {
+            let regions = op.regions(db);
             if !regions.is_empty() {
-                // Count scf.if in the loop body region
-                count_scf_if_in_region(db, &regions[0])
-            } else {
-                0
+                return count_scf_if_in_region(db, &regions[0]);
             }
         }
-        _ => 0,
     }
+    0
 }
 
 #[salsa_test]

@@ -8,14 +8,13 @@
 //! 2. Create an outlined function that unpacks live-ins from an env struct
 //! 3. Replace the push_prompt with: build env struct → call `__tribute_prompt`
 
-use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self};
 use trunk_ir::dialect::{adt, arith, cont};
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{
     Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
     Type, Value, ValueDef,
@@ -24,45 +23,30 @@ use trunk_ir::{
 use crate::cont_util::{rebuild_op_with_remap, remap_value};
 
 // ============================================================================
-// Types
-// ============================================================================
-
-/// Specification for an outlined prompt body function.
-pub(super) struct OutlinedBodySpec<'db> {
-    /// Function name (e.g., `__prompt_body_0`)
-    pub(super) name: String,
-    /// Live-in values and their types
-    pub(super) live_ins: Vec<(Value<'db>, Type<'db>)>,
-    /// The body region (already transformed by the applicator)
-    pub(super) body_region: Region<'db>,
-    /// Source location
-    pub(super) location: Location<'db>,
-}
-
-/// Shared storage for outlined body specs.
-pub(super) type OutlinedBodies<'db> = Rc<RefCell<Vec<OutlinedBodySpec<'db>>>>;
-
-/// Shared counter for generating unique outlined body names.
-pub(super) type BodyCounter = Rc<RefCell<u32>>;
-
-// ============================================================================
 // Pattern
 // ============================================================================
 
-pub(crate) struct LowerPushPromptPattern<'db> {
-    pub(super) outlined_bodies: OutlinedBodies<'db>,
-    pub(super) body_counter: BodyCounter,
+pub(crate) struct LowerPushPromptPattern {
+    body_counter: Cell<u32>,
 }
 
-impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
+impl LowerPushPromptPattern {
+    pub(crate) fn new() -> Self {
+        Self {
+            body_counter: Cell::new(0),
+        }
+    }
+}
+
+impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
     fn match_and_rewrite(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(push_prompt) = cont::PushPrompt::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -73,25 +57,17 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
         // Get the body region (already recursively transformed by applicator)
         let body = push_prompt.body(db);
 
-        // Compute live-ins for the body region, using adaptor for type lookup
-        let live_ins = compute_live_ins(db, &body, &|db, v| adaptor.get_value_type(db, v));
+        // Compute live-ins for the body region, using rewriter for type lookup
+        let live_ins = compute_live_ins(db, &body, &|db, v| rewriter.get_value_type(db, v));
 
         // Generate unique name
-        let body_idx = {
-            let mut counter = self.body_counter.borrow_mut();
-            let idx = *counter;
-            *counter += 1;
-            idx
-        };
+        let body_idx = self.body_counter.get();
+        self.body_counter.set(body_idx + 1);
         let body_name = format!("__prompt_body_{body_idx}");
 
-        // Store outlined body spec
-        self.outlined_bodies.borrow_mut().push(OutlinedBodySpec {
-            name: body_name.clone(),
-            live_ins: live_ins.clone(),
-            body_region: body,
-            location,
-        });
+        // Generate outlined body function and add to module
+        let outlined_func = generate_outlined_body(db, &body_name, &live_ins, body, location);
+        rewriter.add_module_op(outlined_func);
 
         // Build the call site
         let mut ops = Vec::new();
@@ -107,7 +83,7 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
             // First, cast all values to ptr
             let mut field_ptrs = Vec::new();
             for (value, ty) in &live_ins {
-                let remapped = adaptor.lookup_value(*value);
+                let remapped = rewriter.lookup_value(*value);
                 if *ty != ptr_ty {
                     let cast = core::unrealized_conversion_cast(db, location, remapped, ptr_ty);
                     ops.push(cast.as_operation());
@@ -160,7 +136,12 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern<'db> {
             ops.push(cast.as_operation());
         }
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -283,12 +264,14 @@ fn get_value_type<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> Type<
 // Outlined body generation
 // ============================================================================
 
-/// Generate a `func.func` operation from an outlined body spec.
-pub(super) fn generate_outlined_body<'db>(
+/// Generate a `func.func` operation for an outlined prompt body.
+fn generate_outlined_body<'db>(
     db: &'db dyn salsa::Database,
-    spec: &OutlinedBodySpec<'db>,
+    name: &str,
+    live_ins: &[(Value<'db>, Type<'db>)],
+    body_region: Region<'db>,
+    location: Location<'db>,
 ) -> Operation<'db> {
-    let location = spec.location;
     let ptr_ty = core::Ptr::new(db).as_type();
 
     // Use Vec<Operation> + Block::new pattern for raw remapped ops
@@ -299,15 +282,15 @@ pub(super) fn generate_outlined_body<'db>(
     let mut value_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
 
     // Extract live-in values from env struct
-    if !spec.live_ins.is_empty() {
-        let env_struct_ty = build_env_struct_type(db, spec.live_ins.len());
+    if !live_ins.is_empty() {
+        let env_struct_ty = build_env_struct_type(db, live_ins.len());
 
         // Cast ptr → struct type
         let env_cast = core::unrealized_conversion_cast(db, location, env_value, env_struct_ty);
         ops.push(env_cast.as_operation());
         let env_ref = env_cast.as_operation().result(db, 0);
 
-        for (i, (orig_value, orig_ty)) in spec.live_ins.iter().enumerate() {
+        for (i, (orig_value, orig_ty)) in live_ins.iter().enumerate() {
             let field = adt::struct_get(db, location, env_ref, ptr_ty, env_struct_ty, i as u64);
             ops.push(field.as_operation());
 
@@ -325,7 +308,6 @@ pub(super) fn generate_outlined_body<'db>(
     }
 
     // Copy body operations with remapping
-    let body_region = &spec.body_region;
     if let Some(body_block) = body_region.blocks(db).first() {
         assert!(
             body_block.args(db).is_empty(),
@@ -405,47 +387,7 @@ pub(super) fn generate_outlined_body<'db>(
     let body = Region::new(db, location, IdVec::from(vec![entry_block]));
 
     let func_ty = core::Func::new(db, IdVec::from(vec![ptr_ty]), ptr_ty);
-    func::func(
-        db,
-        location,
-        Symbol::from_dynamic(&spec.name),
-        *func_ty,
-        body,
-    )
-    .as_operation()
-}
-
-/// Add outlined body functions to the module's first block.
-pub(super) fn add_outlined_bodies<'db>(
-    db: &'db dyn salsa::Database,
-    module: trunk_ir::dialect::core::Module<'db>,
-    specs: &[OutlinedBodySpec<'db>],
-) -> trunk_ir::dialect::core::Module<'db> {
-    if specs.is_empty() {
-        return module;
-    }
-
-    let body = module.body(db);
-    let mut blocks: Vec<Block<'db>> = body.blocks(db).iter().copied().collect();
-
-    if let Some(block) = blocks.first_mut() {
-        let mut ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
-
-        for spec in specs {
-            ops.push(generate_outlined_body(db, spec));
-        }
-
-        *block = Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            IdVec::from(ops),
-        );
-    }
-
-    let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
-    trunk_ir::dialect::core::Module::create(db, module.location(db), module.name(db), new_body)
+    func::func(db, location, Symbol::from_dynamic(name), *func_ty, body).as_operation()
 }
 
 // ============================================================================

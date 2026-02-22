@@ -25,7 +25,7 @@ use tribute_ir::dialect::{closure, tribute_rt};
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::{cont, core, func};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{
     Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
@@ -577,17 +577,17 @@ impl<'db> RewritePattern<'db> for UpdateFuncSignaturePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: func.func
         let func_op = match func::Func::from_operation(db, *op) {
             Ok(f) => f,
-            Err(_) => return RewriteResult::Unchanged,
+            Err(_) => return false,
         };
 
         let func_ty = func_op.r#type(db);
         let Some(func_type) = core::Func::from_type(db, func_ty) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let params = func_type.params(db);
@@ -609,7 +609,7 @@ impl<'db> RewritePattern<'db> for UpdateFuncSignaturePattern {
         }
 
         if !needs_update {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Create new function type with updated parameters
@@ -625,7 +625,8 @@ impl<'db> RewritePattern<'db> for UpdateFuncSignaturePattern {
             .attr("type", Attribute::Type(new_func_ty.as_type()))
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -637,12 +638,12 @@ impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: closure.new
         let closure_new = match closure::New::from_operation(db, *op) {
             Ok(c) => c,
-            Err(_) => return RewriteResult::Unchanged,
+            Err(_) => return false,
         };
 
         let location = op.location(db);
@@ -660,8 +661,8 @@ impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
             .map(|ct| ct.func_type(db))
             .unwrap_or_else(|| *core::Nil::new(db));
 
-        // Get env from adaptor (remapped value)
-        let env = adaptor
+        // Get env from rewriter (remapped value)
+        let env = rewriter
             .operand(0)
             .expect("closure.new requires env operand");
 
@@ -682,10 +683,9 @@ impl<'db> RewritePattern<'db> for LowerClosureNewPattern {
             closure_struct_ty,
         );
 
-        RewriteResult::Expand(vec![
-            constant_op.as_operation(),
-            struct_new_op.as_operation(),
-        ])
+        rewriter.insert_op(constant_op.as_operation());
+        rewriter.replace_op(struct_new_op.as_operation());
+        true
     }
 }
 
@@ -707,15 +707,15 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: func.call_indirect
         if func::CallIndirect::from_operation(db, *op).is_err() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        // Get callee from adaptor (remapped value)
-        let callee = adaptor
+        // Get callee from rewriter (remapped value)
+        let callee = rewriter
             .operand(0)
             .expect("call_indirect requires callee operand");
 
@@ -734,7 +734,7 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
         //
         // Block args with core.func type ARE treated as closures because in Tribute,
         // function parameters with function types can receive closures at runtime.
-        let callee_ty_opt = adaptor.operand_type(0);
+        let callee_ty_opt = rewriter.operand_type(0);
 
         let (callee_is_closure, _func_ty) = if let Some(callee_ty) = callee_ty_opt {
             // Type is available - check if it's closure.closure
@@ -793,13 +793,13 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
         };
 
         if !callee_is_closure {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get location and other info
         let location = op.location(db);
-        // Get args from adaptor (remapped values), skipping the callee (index 0)
-        let args: Vec<_> = adaptor.operands().iter().skip(1).copied().collect();
+        // Get args from rewriter (remapped values), skipping the callee (index 0)
+        let args: Vec<_> = rewriter.operands().iter().skip(1).copied().collect();
         let result_ty = op
             .results(db)
             .first()
@@ -827,11 +827,10 @@ impl<'db> RewritePattern<'db> for LowerClosureCallPattern {
 
         let new_call = func::call_indirect(db, location, table_idx, new_args, result_ty);
 
-        RewriteResult::Expand(vec![
-            table_idx_op.as_operation(),
-            env_op.as_operation(),
-            new_call.as_operation(),
-        ])
+        rewriter.insert_op(table_idx_op.as_operation());
+        rewriter.insert_op(env_op.as_operation());
+        rewriter.replace_op(new_call.as_operation());
+        true
     }
 }
 
@@ -847,16 +846,16 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: closure.func
         if closure::Func::from_operation(db, *op).is_err() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
-        // Get closure from adaptor (remapped value)
-        let closure_value = adaptor
+        // Get closure from rewriter (remapped value)
+        let closure_value = rewriter
             .operand(0)
             .expect("closure.func requires closure operand");
 
@@ -875,7 +874,8 @@ impl<'db> RewritePattern<'db> for LowerClosureFuncPattern {
             0,
         );
 
-        RewriteResult::Replace(get_op.as_operation())
+        rewriter.replace_op(get_op.as_operation());
+        true
     }
 }
 
@@ -890,16 +890,16 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match: closure.env
         if closure::Env::from_operation(db, *op).is_err() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
-        // Get closure from adaptor (remapped value)
-        let closure_value = adaptor
+        // Get closure from rewriter (remapped value)
+        let closure_value = rewriter
             .operand(0)
             .expect("closure.env requires closure operand");
 
@@ -916,7 +916,8 @@ impl<'db> RewritePattern<'db> for LowerClosureEnvPattern {
         // Parameter order: (db, location, operand, result_type, struct_type, field_idx)
         let get_op = adt::struct_get(db, location, closure_value, result_ty, struct_ty, 1);
 
-        RewriteResult::Replace(get_op.as_operation())
+        rewriter.replace_op(get_op.as_operation());
+        true
     }
 }
 
@@ -937,10 +938,10 @@ fn is_closure_value<'db>(db: &'db dyn salsa::Database, value: Value<'db>) -> boo
         ValueDef::BlockArg(_) => {
             // For block args, we cannot determine if they're closures without
             // additional type information. The caller (LowerClosureCallPattern)
-            // should use the OpAdaptor to get the actual type.
+            // should use the PatternRewriter to get the actual type.
             //
             // We return false here to be conservative. This means that block args
-            // without explicit closure.closure type in the adaptor won't be
+            // without explicit closure.closure type in the rewriter won't be
             // treated as closures - which is correct for funcref parameters.
             //
             // NOTE: If this breaks existing code that relies on the heuristic,

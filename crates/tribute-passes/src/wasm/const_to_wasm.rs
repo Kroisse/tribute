@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 use super::type_converter::wasm_type_converter;
@@ -211,20 +209,20 @@ impl StringConstPattern {
 }
 
 impl<'db> RewritePattern<'db> for StringConstPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(string_const) = adt::StringConst::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let content = string_const.value(db).clone().into_bytes();
 
         let Some((offset, _len)) = lookup_offset(&self.allocations, &content) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -234,7 +232,8 @@ impl<'db> RewritePattern<'db> for StringConstPattern {
         // Length information is available in ConstAnalysis and will be used by emit.rs.
         let new_op = wasm::i32_const(db, location, i32_ty, offset as i32).as_operation();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -261,24 +260,24 @@ impl BytesConstPattern {
 }
 
 impl<'db> RewritePattern<'db> for BytesConstPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        _rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(bytes_const) = adt::BytesConst::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Attribute::Bytes(value) = bytes_const.value(db) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let content = value.clone();
 
         let Some((data_idx, len)) = lookup_bytes_info(&self.allocations, &content) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -287,7 +286,8 @@ impl<'db> RewritePattern<'db> for BytesConstPattern {
         // Create wasm.bytes_from_data operation
         let new_op = wasm::bytes_from_data(db, location, bytes_ty, data_idx, 0, len).as_operation();
 
-        RewriteResult::Replace(new_op)
+        _rewriter.replace_op(new_op);
+        true
     }
 }
 

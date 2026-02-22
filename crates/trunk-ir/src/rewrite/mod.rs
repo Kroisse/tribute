@@ -9,7 +9,7 @@
 //! The rewriter operates on TrunkIR operations through three key components:
 //!
 //! - [`RewritePattern`]: Trait for defining transformation patterns
-//! - [`RewriteContext`]: Tracks value mappings during rewrites (internal to applicator)
+//! - [`PatternRewriter`]: Unified mutation + operand access interface for patterns
 //! - [`PatternApplicator`]: Drives pattern application to fixpoint
 //!
 //! # Usage
@@ -21,7 +21,7 @@
 //! # use trunk_ir::dialect::{arith, core};
 //! # use trunk_ir::dialect::core::Module;
 //! # use trunk_ir::types::DialectType;
-//! use trunk_ir::rewrite::{ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+//! use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 //!
 //! /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 //! struct ZeroToOnePattern;
@@ -31,18 +31,19 @@
 //!         &self,
 //!         db: &'db dyn salsa::Database,
 //!         op: &Operation<'db>,
-//!         _adaptor: &OpAdaptor<'db, '_>,
-//!     ) -> RewriteResult<'db> {
-//!         // Note: op.operands() are already remapped by the applicator
+//!         rewriter: &mut PatternRewriter<'db, '_>,
+//!     ) -> bool {
+//!         // Note: use rewriter.operand(i) for remapped operands
 //!         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-//!             return RewriteResult::Unchanged;
+//!             return false;
 //!         };
 //!         if const_op.value(db) != Attribute::IntBits(0) {
-//!             return RewriteResult::Unchanged;
+//!             return false;
 //!         }
 //!         let i32_ty = core::I32::new(db).as_type();
 //!         let new_op = arith::r#const(db, op.location(db), i32_ty, Attribute::IntBits(1));
-//!         RewriteResult::Replace(new_op.as_operation())
+//!         rewriter.replace_op(new_op.as_operation());
+//!         true
 //!     }
 //! }
 //! # #[salsa::tracked]
@@ -79,22 +80,24 @@
 //! The `RewriteContext` maintains value mappings so that when an
 //! operation is replaced, subsequent operations can reference the
 //! new values.
+//!
+//! Patterns receive the **original** operation for matching and attribute
+//! access, and a `PatternRewriter` for remapped operand access and
+//! mutation recording.
 
 mod applicator;
 mod context;
 mod conversion_target;
-mod op_adaptor;
 mod pattern;
-mod result;
+mod rewriter;
 mod signature_conversion;
 mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
 pub use context::RewriteContext;
 pub use conversion_target::{ConversionError, ConversionTarget, IllegalOp, LegalityCheck};
-pub use op_adaptor::OpAdaptor;
 pub use pattern::{OperationMatcher, RewritePattern};
-pub use result::RewriteResult;
+pub use rewriter::PatternRewriter;
 pub use signature_conversion::{
     FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern,
 };

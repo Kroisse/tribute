@@ -22,9 +22,7 @@
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{DialectOp, DialectType, Operation};
 
 use super::type_converter::wasm_type_converter;
@@ -87,10 +85,10 @@ impl<'db> RewritePattern<'db> for BoxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxInt::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -102,7 +100,8 @@ impl<'db> RewritePattern<'db> for BoxIntPattern {
         // wasm.ref_i31: i32 -> i31ref
         let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -117,14 +116,19 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxInt::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), true);
-        RewriteResult::Expand(ops)
+        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), true);
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -138,10 +142,10 @@ impl<'db> RewritePattern<'db> for BoxNatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxNat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -149,7 +153,8 @@ impl<'db> RewritePattern<'db> for BoxNatPattern {
         let i31ref_ty = wasm::I31ref::new(db).as_type();
 
         let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -164,14 +169,19 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxNat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
-        RewriteResult::Expand(ops)
+        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -185,10 +195,10 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxFloat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -197,7 +207,8 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
 
         // wasm.struct_new creates BoxedF64 struct with the f64 value
         let new_op = wasm::struct_new(db, location, vec![value], anyref_ty, BOXED_F64_IDX);
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -212,10 +223,10 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxFloat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -239,7 +250,9 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
 
         // wasm.struct_get extracts field 0 (the f64 value) from BoxedF64
         let get_op = wasm::struct_get(db, location, cast_result, f64_ty, BOXED_F64_IDX, 0);
-        RewriteResult::Expand(vec![cast_op.as_operation(), get_op.as_operation()])
+        rewriter.insert_op(cast_op.as_operation());
+        rewriter.replace_op(get_op.as_operation());
+        true
     }
 }
 
@@ -253,10 +266,10 @@ impl<'db> RewritePattern<'db> for BoxBoolPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxBool::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -264,7 +277,8 @@ impl<'db> RewritePattern<'db> for BoxBoolPattern {
         let i31ref_ty = wasm::I31ref::new(db).as_type();
 
         let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -279,15 +293,20 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxBool::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Use unsigned extraction since bool is 0 or 1
-        let ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
-        RewriteResult::Expand(ops)
+        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 

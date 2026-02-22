@@ -34,7 +34,7 @@ use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self};
 use trunk_ir::dialect::{arith, cont, scf};
 use trunk_ir::ir::BlockBuilder;
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{
     Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type,
     Value,
@@ -55,17 +55,17 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(dispatch) = cont::HandlerDispatch::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let user_result_ty = dispatch.result_type(db);
 
         // Get the prompt result operand (from push_prompt's __tribute_prompt call)
-        let prompt_result = op.operands(db).first().copied().unwrap();
+        let prompt_result = rewriter.operand(0).unwrap();
 
         // Get the body region with child ops (cont.done + cont.suspend)
         let body_region = dispatch.body(db);
@@ -79,7 +79,13 @@ impl<'db> RewritePattern<'db> for LowerHandlerDispatchPattern {
         // Create scf.loop with prompt_result as initial value
         let loop_op = scf::r#loop(db, location, vec![prompt_result], user_result_ty, loop_body);
 
-        RewriteResult::expand(vec![loop_op.as_operation()])
+        let ops = [loop_op.as_operation()];
+        let last = *ops.last().unwrap();
+        for op in &ops[..ops.len() - 1] {
+            rewriter.insert_op(*op);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 

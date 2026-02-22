@@ -7,7 +7,7 @@
 use trunk_ir::dialect::cf;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
+    ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
 use trunk_ir::{DialectOp, Operation};
@@ -45,14 +45,15 @@ impl<'db> RewritePattern<'db> for CfBrPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_br_op) = cf::Br::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let new_op = op.modify(db).dialect_str("clif").name_str("jump").build();
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -67,14 +68,15 @@ impl<'db> RewritePattern<'db> for CfCondBrPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_cond_br_op) = cf::CondBr::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let new_op = op.modify(db).dialect_str("clif").name_str("brif").build();
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

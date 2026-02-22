@@ -22,6 +22,10 @@ pub struct RewriteContext<'db> {
 
     /// Number of changes made in this context.
     changes: usize,
+
+    /// Operations to add at module level after iteration completes.
+    /// Used by patterns that need to create top-level functions (e.g., outlining).
+    pending_module_ops: Vec<Operation<'db>>,
 }
 
 impl<'db> RewriteContext<'db> {
@@ -31,6 +35,7 @@ impl<'db> RewriteContext<'db> {
             value_map: HashMap::new(),
             block_arg_types: HashMap::new(),
             changes: 0,
+            pending_module_ops: Vec::new(),
         }
     }
 
@@ -40,6 +45,7 @@ impl<'db> RewriteContext<'db> {
             value_map: HashMap::new(),
             block_arg_types,
             changes: 0,
+            pending_module_ops: Vec::new(),
         }
     }
 
@@ -108,6 +114,16 @@ impl<'db> RewriteContext<'db> {
     /// Set the block argument types map.
     pub fn set_block_arg_types(&mut self, types: HashMap<(BlockId, usize), Type<'db>>) {
         self.block_arg_types = types;
+    }
+
+    /// Add an operation to the pending module-level operations.
+    pub(crate) fn add_module_op(&mut self, op: Operation<'db>) {
+        self.pending_module_ops.push(op);
+    }
+
+    /// Take all pending module-level operations, leaving the list empty.
+    pub(crate) fn take_pending_module_ops(&mut self) -> Vec<Operation<'db>> {
+        std::mem::take(&mut self.pending_module_ops)
     }
 
     /// Remap all operands of an operation using the current value map.
@@ -292,7 +308,7 @@ impl<'db> RewriteContext<'db> {
     }
 
     /// Remap operands of an operation and recursively remap its nested regions.
-    fn remap_operation_deep(
+    pub(crate) fn remap_operation_deep(
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,

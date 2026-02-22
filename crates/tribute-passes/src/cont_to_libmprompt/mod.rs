@@ -24,9 +24,6 @@ pub(crate) mod push_prompt;
 #[cfg(test)]
 mod tests;
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use trunk_ir::DialectType;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{cont, core};
@@ -35,7 +32,7 @@ use trunk_ir::rewrite::{ConversionError, ConversionTarget, PatternApplicator, Ty
 use ffi::ensure_libmprompt_ffi;
 use handler_dispatch::LowerHandlerDispatchPattern;
 use patterns::{LowerDropPattern, LowerResumePattern, LowerShiftPattern};
-use push_prompt::{LowerPushPromptPattern, add_outlined_bodies};
+use push_prompt::LowerPushPromptPattern;
 
 /// Lower cont dialect operations to libmprompt-based FFI calls.
 ///
@@ -51,9 +48,8 @@ pub fn lower_cont_to_libmprompt<'db>(
     let module = ensure_libmprompt_ffi(db, module);
 
     // Step 2: Apply lowering patterns
-    let outlined_bodies = Rc::new(RefCell::new(Vec::new()));
-    let body_counter = Rc::new(RefCell::new(0u32));
-
+    // Outlined body functions are added via `rewriter.add_module_op()` during
+    // pattern application, so no side-channel is needed.
     let type_converter = TypeConverter::new().add_conversion(|db, ty| {
         cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
     });
@@ -63,18 +59,13 @@ pub fn lower_cont_to_libmprompt<'db>(
         .add_pattern(LowerResumePattern)
         .add_pattern(LowerDropPattern)
         .add_pattern(LowerHandlerDispatchPattern)
-        .add_pattern(LowerPushPromptPattern {
-            outlined_bodies: Rc::clone(&outlined_bodies),
-            body_counter: Rc::clone(&body_counter),
-        });
+        .add_pattern(LowerPushPromptPattern::new());
 
     let empty_target = ConversionTarget::new();
     let result = applicator.apply_partial(db, module, empty_target);
+    let module = result.module;
 
-    // Step 3: Add outlined body functions to the module
-    let module = add_outlined_bodies(db, result.module, &outlined_bodies.borrow());
-
-    // Step 4: Verify all cont.* ops are converted
+    // Step 3: Verify all cont.* ops are converted
     // cont.done and cont.suspend are child ops consumed by handler_dispatch
     let target = ConversionTarget::new()
         .illegal_dialect("cont")

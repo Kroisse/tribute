@@ -11,9 +11,7 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use trunk_ir::dialect::{core, wasm};
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{
     Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Type, Value,
     ValueDef,
@@ -224,10 +222,10 @@ impl<'db> RewritePattern<'db> for UpdateStructNewPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !wasm::StructNew::matches(db, *op) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Only process struct_new with placeholder result type (wasm.structref).
@@ -240,7 +238,7 @@ impl<'db> RewritePattern<'db> for UpdateStructNewPattern<'db> {
 
         if !is_placeholder {
             // Not a placeholder type - leave it alone
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get the type_idx for this struct
@@ -248,14 +246,14 @@ impl<'db> RewritePattern<'db> for UpdateStructNewPattern<'db> {
         let type_idx = self.registry.value_to_type_idx.get(&result).copied();
 
         let Some(type_idx) = type_idx else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Check if already has correct type_idx
         if let Some(Attribute::IntBits(existing_idx)) = op.attributes(db).get(&ATTR_TYPE_IDX())
             && *existing_idx as u32 == type_idx
         {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Update the operation with the correct type_idx
@@ -269,7 +267,8 @@ impl<'db> RewritePattern<'db> for UpdateStructNewPattern<'db> {
             type_idx
         );
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -283,31 +282,31 @@ impl<'db> RewritePattern<'db> for UpdateStructGetPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !wasm::StructGet::matches(db, *op) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get the struct operand and trace to find its type_idx
         let Some(&struct_val) = op.operands(db).first() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(type_idx) = trace_value_to_type_idx(db, struct_val, &self.registry) else {
             // Can't determine type_idx, leave unchanged
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Get field_idx from attributes
         let field_idx = match op.attributes(db).get(&ATTR_FIELD_IDX()) {
             Some(Attribute::IntBits(idx)) => *idx as u32,
-            _ => return RewriteResult::Unchanged,
+            _ => return false,
         };
 
         // Get the correct field type
         let Some(field_type) = self.registry.get_field_type(type_idx, field_idx) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Check if update is needed
@@ -321,7 +320,7 @@ impl<'db> RewritePattern<'db> for UpdateStructGetPattern<'db> {
         let current_result_type = op.results(db).first().copied();
 
         if current_type_idx == Some(type_idx) && current_result_type == Some(field_type) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Update the operation
@@ -339,7 +338,8 @@ impl<'db> RewritePattern<'db> for UpdateStructGetPattern<'db> {
             field_type.name(db)
         );
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -353,15 +353,15 @@ impl<'db> RewritePattern<'db> for UpdateRefCastPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !wasm::RefCast::matches(db, *op) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get the source operand and try to trace its type_idx
         let Some(&source_val) = op.operands(db).first() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // If the source has a known type_idx, propagate it to the result
@@ -387,12 +387,13 @@ impl<'db> RewritePattern<'db> for UpdateRefCastPattern<'db> {
                         type_idx
                     );
 
-                    return RewriteResult::Replace(new_op);
+                    rewriter.replace_op(new_op);
+                    return true;
                 }
             }
         }
 
-        RewriteResult::Unchanged
+        false
     }
 }
 

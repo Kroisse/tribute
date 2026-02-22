@@ -6,7 +6,7 @@ use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self};
 use trunk_ir::dialect::{arith, cont, scf, trampoline};
 use trunk_ir::ir::BlockBuilder;
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value};
 
 use super::get_region_result_value;
@@ -22,17 +22,17 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_) = cont::Resume::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let i32_ty = core::I32::new(db).as_type();
         let anyref_ty = tribute_rt::Any::new(db).as_type();
 
-        let operands = adaptor.operands();
+        let operands = rewriter.operands();
         let continuation = operands
             .first()
             .copied()
@@ -93,7 +93,12 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
         );
         ops.push(call_op.as_operation());
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -113,18 +118,18 @@ impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Only handle func.call operations
         let Ok(call) = func::Call::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let callee = call.callee(db);
 
         // Skip if not an effectful function
         if !self.effectful_funcs.contains(&callee) {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Skip if already returns Step
@@ -134,12 +139,12 @@ impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
             .first()
             .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
         {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Skip if no results
         if op.results(db).is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let location = op.location(db);
@@ -157,7 +162,7 @@ impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
             location,
             op.dialect(db),
             op.name(db),
-            adaptor.operands().clone(),
+            rewriter.operands().clone(),
             IdVec::from(vec![step_ty]),
             op.attributes(db).clone(),
             op.regions(db).clone(),
@@ -168,7 +173,8 @@ impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
         // The Step value should propagate up through the effectful context.
         // Any downstream operations that need the original type will need to handle
         // Step unpacking appropriately.
-        RewriteResult::replace(new_call)
+        rewriter.replace_op(new_call);
+        true
     }
 }
 
@@ -189,16 +195,16 @@ impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Only handle scf.if operations
         if scf::If::from_operation(db, *op).is_err() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Skip if no results
         if op.results(db).is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Skip if already returns Step
@@ -208,7 +214,7 @@ impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
             .first()
             .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
         {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Check if any branch contains operations that return Step type
@@ -226,7 +232,7 @@ impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
         });
 
         if !branches_have_step_ops {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let loc = op.location(db);
@@ -249,7 +255,8 @@ impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
             op.successors(db).clone(),
         );
 
-        RewriteResult::replace(new_if)
+        rewriter.replace_op(new_if);
+        true
     }
 }
 
@@ -265,51 +272,52 @@ impl<'db> RewritePattern<'db> for UpdateScfYieldToStepPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Only handle scf.yield operations
         let Ok(_yield_op) = scf::Yield::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Skip if already yielding Step
-        if let Some(operand) = adaptor.operands().first()
-            && let Some(ty) = adaptor.get_raw_value_type(db, *operand)
+        if let Some(operand) = rewriter.operands().first()
+            && let Some(ty) = rewriter.get_raw_value_type(db, *operand)
             && trampoline::Step::from_type(db, ty).is_some()
         {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Check the context to find if there's a Step value we should yield instead
         // We look at the remapped operand types to see what the current value types are
-        let current_operands = adaptor.operands();
+        let current_operands = rewriter.operands();
         if current_operands.is_empty() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get the actual type of the yielded value
         let yielded_value = current_operands[0];
-        let Some(yielded_ty) = adaptor.get_raw_value_type(db, yielded_value) else {
-            return RewriteResult::Unchanged;
+        let Some(yielded_ty) = rewriter.get_raw_value_type(db, yielded_value) else {
+            return false;
         };
 
         // If the yielded value is already Step, no change needed
         if trampoline::Step::from_type(db, yielded_ty).is_some() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Check if we can find the Step value through cast chain
         // The yielded value might be a cast result where the input is Step
-        if let Some(step_value) = find_step_source(db, yielded_value, adaptor) {
+        if let Some(step_value) = find_step_source(db, yielded_value, rewriter) {
             tracing::debug!(
                 "UpdateScfYieldToStepPattern: updating scf.yield to yield Step at {:?}",
                 op.location(db)
             );
             let new_yield = scf::r#yield(db, op.location(db), vec![step_value]);
-            return RewriteResult::replace(new_yield.as_operation());
+            rewriter.replace_op(new_yield.as_operation());
+            return true;
         }
 
-        RewriteResult::Unchanged
+        false
     }
 }
 
@@ -317,10 +325,10 @@ impl<'db> RewritePattern<'db> for UpdateScfYieldToStepPattern {
 fn find_step_source<'db>(
     db: &'db dyn salsa::Database,
     value: Value<'db>,
-    adaptor: &OpAdaptor<'db, '_>,
+    rewriter: &PatternRewriter<'db, '_>,
 ) -> Option<Value<'db>> {
     // Check if the value itself is Step (after remapping)
-    if let Some(ty) = adaptor.get_raw_value_type(db, value)
+    if let Some(ty) = rewriter.get_raw_value_type(db, value)
         && trampoline::Step::from_type(db, ty).is_some()
     {
         return Some(value);
@@ -331,7 +339,7 @@ fn find_step_source<'db>(
         // If this is a cast, check the input
         if let Ok(cast) = core::UnrealizedConversionCast::from_operation(db, defining_op) {
             let input = cast.value(db);
-            if let Some(input_ty) = adaptor.get_raw_value_type(db, input)
+            if let Some(input_ty) = rewriter.get_raw_value_type(db, input)
                 && trampoline::Step::from_type(db, input_ty).is_some()
             {
                 return Some(input);
@@ -360,11 +368,11 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let push_prompt = match cont::PushPrompt::from_operation(db, *op) {
             Ok(p) => p,
-            Err(_) => return RewriteResult::Unchanged,
+            Err(_) => return false,
         };
 
         let location = op.location(db);
@@ -400,7 +408,12 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
         let if_op = scf::r#if(db, location, is_yielding, step_ty, then_region, else_region);
         all_ops.push(if_op.as_operation());
 
-        RewriteResult::expand(all_ops)
+        let last = all_ops.pop().unwrap();
+        for o in all_ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 

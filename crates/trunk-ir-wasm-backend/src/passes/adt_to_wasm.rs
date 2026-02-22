@@ -42,7 +42,7 @@
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
 
@@ -85,10 +85,10 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_struct_new) = adt::StructNew::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Keep type attribute, emit will convert to type_idx
@@ -101,7 +101,8 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
             .name_str("struct_new")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -116,10 +117,10 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_struct_get) = adt::StructGet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Build wasm.struct_get: just change dialect/name
@@ -130,7 +131,8 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
             .name_str("struct_get")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -142,10 +144,10 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_struct_set) = adt::StructSet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Build wasm.struct_set: just change dialect/name
@@ -156,7 +158,8 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
             .name_str("struct_set")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -171,10 +174,10 @@ impl<'db> RewritePattern<'db> for VariantNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let tag_sym = variant_new.tag(db);
@@ -195,7 +198,8 @@ impl<'db> RewritePattern<'db> for VariantNewPattern {
             .results(IdVec::from(vec![variant_type]))
             .build();
 
-        RewriteResult::Replace(struct_new)
+        rewriter.replace_op(struct_new);
+        true
     }
 }
 
@@ -244,18 +248,18 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let tag = variant_is.tag(db);
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
-        let enum_type = adaptor
+        // Using rewriter.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = rewriter
             .operand_type(0)
             .unwrap_or_else(|| variant_is.r#type(db));
 
@@ -271,7 +275,8 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
             .attr("type", Attribute::Type(variant_type))
             .build();
 
-        RewriteResult::Replace(ref_test)
+        rewriter.replace_op(ref_test);
+        true
     }
 }
 
@@ -285,18 +290,18 @@ impl<'db> RewritePattern<'db> for VariantCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let tag = variant_cast.tag(db);
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        // Using OpAdaptor.operand_type() handles both OpResult and BlockArg cases
-        let enum_type = adaptor
+        // Using rewriter.operand_type() handles both OpResult and BlockArg cases
+        let enum_type = rewriter
             .operand_type(0)
             .unwrap_or_else(|| variant_cast.r#type(db));
 
@@ -314,7 +319,8 @@ impl<'db> RewritePattern<'db> for VariantCastPattern {
             .results(IdVec::from(vec![variant_type]))
             .build();
 
-        RewriteResult::Replace(ref_cast)
+        rewriter.replace_op(ref_cast);
+        true
     }
 }
 
@@ -330,10 +336,10 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(_variant_get) = adt::VariantGet::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Infer type from the operand (the cast result has the variant-specific type)
@@ -341,11 +347,12 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
         let mut builder = op.modify(db).dialect_str("wasm").name_str("struct_get");
 
         // Override type attribute with operand type (original might have base enum type)
-        if let Some(ref_type) = adaptor.operand_type(0) {
+        if let Some(ref_type) = rewriter.operand_type(0) {
             builder = builder.attr("type", Attribute::Type(ref_type));
         }
 
-        RewriteResult::Replace(builder.build())
+        rewriter.replace_op(builder.build());
+        true
     }
 }
 
@@ -357,10 +364,10 @@ impl<'db> RewritePattern<'db> for ArrayNewPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_NEW() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let operands = op.operands(db);
@@ -378,7 +385,8 @@ impl<'db> RewritePattern<'db> for ArrayNewPattern {
             .name_str(wasm_name)
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -390,10 +398,10 @@ impl<'db> RewritePattern<'db> for ArrayGetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_GET() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -402,7 +410,8 @@ impl<'db> RewritePattern<'db> for ArrayGetPattern {
             .name_str("array_get")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -414,10 +423,10 @@ impl<'db> RewritePattern<'db> for ArraySetPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_SET() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -426,7 +435,8 @@ impl<'db> RewritePattern<'db> for ArraySetPattern {
             .name_str("array_set")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -438,10 +448,10 @@ impl<'db> RewritePattern<'db> for ArrayLenPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_LEN() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -450,7 +460,8 @@ impl<'db> RewritePattern<'db> for ArrayLenPattern {
             .name_str("array_len")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -462,10 +473,10 @@ impl<'db> RewritePattern<'db> for RefNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_NULL() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -474,7 +485,8 @@ impl<'db> RewritePattern<'db> for RefNullPattern {
             .name_str("ref_null")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -486,10 +498,10 @@ impl<'db> RewritePattern<'db> for RefIsNullPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_IS_NULL() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -498,7 +510,8 @@ impl<'db> RewritePattern<'db> for RefIsNullPattern {
             .name_str("ref_is_null")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -510,10 +523,10 @@ impl<'db> RewritePattern<'db> for RefCastPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_CAST() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let new_op = op
@@ -522,7 +535,8 @@ impl<'db> RewritePattern<'db> for RefCastPattern {
             .name_str("ref_cast")
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

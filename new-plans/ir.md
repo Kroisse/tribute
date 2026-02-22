@@ -782,6 +782,18 @@ text.to_bytes()
 3. **디버그 정보**: Source map 생성 방식
 4. **Wasm Stack Switching**: cont dialect의 wasm lowering 전략
 
+## Recent Changes
+
+### PatternRewriter 도입
+
+Rewrite infrastructure가 `RewriteResult` enum 기반에서 `PatternRewriter`
+mutation API 기반으로 전환되었다. 패턴은 `PatternRewriter`를 통해
+operand 접근(remap+cast 적용됨)과 mutation(`replace_op`, `insert_op`,
+`erase_op`, `add_module_op`)을 수행한다. `OpAdaptor`는 내부 구현으로
+감춰지고, 패턴은 `RewritePattern::match_and_rewrite`에서 `bool`을 반환한다.
+
+자세한 API는 `new-plans/lowering.md`의 "Pattern-based Rewriting" 참조.
+
 ## Future Considerations
 
 ### Persistent Data Structure for Block Operations

@@ -35,7 +35,8 @@
 use crate::dialect::{core, func, wasm};
 use crate::{Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region};
 
-use super::{OpAdaptor, RewritePattern, RewriteResult, TypeConverter};
+use super::rewriter::PatternRewriter;
+use super::{RewritePattern, TypeConverter};
 
 /// Helper to convert function signature types.
 ///
@@ -116,25 +117,6 @@ fn rebuild_entry_block<'db>(
 /// 4. Rebuilds the function with the converted signature
 ///
 /// This is similar to MLIR's `populateFunctionOpInterfaceTypeConversionPattern`.
-///
-/// # Usage
-///
-/// The pattern uses the same TypeConverter that is registered with the `PatternApplicator`:
-///
-/// ```no_run
-/// use trunk_ir::rewrite::{
-///     FuncSignatureConversionPattern, PatternApplicator, TypeConverter, ConversionTarget
-/// };
-///
-/// let converter = TypeConverter::new()
-///     .add_conversion(|db, ty| {
-///         // Type conversion rules...
-///         None
-///     });
-///
-/// let applicator = PatternApplicator::new(converter)
-///     .add_pattern(FuncSignatureConversionPattern);
-/// ```
 pub struct FuncSignatureConversionPattern;
 
 impl<'db> RewritePattern<'db> for FuncSignatureConversionPattern {
@@ -142,24 +124,24 @@ impl<'db> RewritePattern<'db> for FuncSignatureConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(func_op) = func::Func::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let func_type = func_op.r#type(db);
         let Some(func_ty) = core::Func::from_type(db, func_type) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Convert parameter and result types using the applicator's TypeConverter
-        let converter = adaptor.type_converter();
+        let converter = rewriter.type_converter();
         let (new_params, new_result, params_changed, result_changed) =
             convert_func_signature(db, &func_ty, converter);
 
         if !params_changed && !result_changed {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Rebuild function type
@@ -177,7 +159,8 @@ impl<'db> RewritePattern<'db> for FuncSignatureConversionPattern {
             .regions(vec![new_body].into_iter().collect())
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 
     fn name(&self) -> &'static str {
@@ -197,24 +180,24 @@ impl<'db> RewritePattern<'db> for WasmFuncSignatureConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(wasm_func_op) = wasm::Func::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let func_type = wasm_func_op.r#type(db);
         let Some(func_ty) = core::Func::from_type(db, func_type) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Convert parameter and result types using the applicator's TypeConverter
-        let converter = adaptor.type_converter();
+        let converter = rewriter.type_converter();
         let (new_params, new_result, params_changed, result_changed) =
             convert_func_signature(db, &func_ty, converter);
 
         if !params_changed && !result_changed {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Rebuild function type
@@ -232,7 +215,8 @@ impl<'db> RewritePattern<'db> for WasmFuncSignatureConversionPattern {
             .regions(vec![new_body].into_iter().collect())
             .build();
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 
     fn name(&self) -> &'static str {

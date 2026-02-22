@@ -13,9 +13,7 @@ use std::collections::HashMap;
 use tribute_ir::ModulePathExt;
 use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
 
 use super::type_converter::wasm_type_converter;
@@ -284,36 +282,36 @@ impl PrintLinePattern {
 }
 
 impl<'db> RewritePattern<'db> for PrintLinePattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Check if this is wasm.call to __print_line
         let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         if call_op.callee(db).last_segment() != Symbol::new("__print_line") {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         // Get the string literal argument
         let operands = op.operands(db);
         let Some(arg) = operands.first().copied() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let Some((ptr, len)) = get_literal_info(db, arg) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Look up allocated offsets
         let Some(iovec_offset) = self.lookup_iovec(ptr, len) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let Some(nwritten_offset) = self.nwritten_offset else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -347,7 +345,7 @@ impl<'db> RewritePattern<'db> for PrintLinePattern {
 
         let drop_op = wasm::drop(db, location, call.result(db, 0));
 
-        // Use Expand to emit all operations
+        // Emit all operations
         let results = op.results(db);
         if results.is_empty()
             || (results.len() == 1
@@ -355,24 +353,21 @@ impl<'db> RewritePattern<'db> for PrintLinePattern {
                 && results[0].name(db) == Symbol::new("nil"))
         {
             // Void: emit operations and drop the fd_write result
-            RewriteResult::Expand(vec![
-                fd_const.operation(),
-                iovec_const.operation(),
-                iovec_len_const.operation(),
-                nwritten_const.operation(),
-                call.operation(),
-                drop_op.operation(),
-            ])
+            rewriter.insert_op(fd_const.operation());
+            rewriter.insert_op(iovec_const.operation());
+            rewriter.insert_op(iovec_len_const.operation());
+            rewriter.insert_op(nwritten_const.operation());
+            rewriter.insert_op(call.operation());
+            rewriter.replace_op(drop_op.operation());
         } else {
             // Non-void: emit operations, call result becomes the replacement value
-            RewriteResult::Expand(vec![
-                fd_const.operation(),
-                iovec_const.operation(),
-                iovec_len_const.operation(),
-                nwritten_const.operation(),
-                call.operation(),
-            ])
+            rewriter.insert_op(fd_const.operation());
+            rewriter.insert_op(iovec_const.operation());
+            rewriter.insert_op(iovec_len_const.operation());
+            rewriter.insert_op(nwritten_const.operation());
+            rewriter.replace_op(call.operation());
         }
+        true
     }
 }
 
@@ -400,19 +395,19 @@ fn is_bytes_intrinsic_call<'db>(
 struct BytesLenPattern;
 
 impl<'db> RewritePattern<'db> for BytesLenPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !is_bytes_intrinsic_call(db, op, "__bytes_len") {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let operands = op.operands(db);
         let Some(bytes_ref) = operands.first().copied() else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -428,7 +423,8 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
             BYTES_LEN_FIELD,
         );
 
-        RewriteResult::Replace(get_len.operation())
+        rewriter.replace_op(get_len.operation());
+        true
     }
 }
 
@@ -438,19 +434,19 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
 struct BytesGetOrPanicPattern;
 
 impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !is_bytes_intrinsic_call(db, op, "__bytes_get_or_panic") {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let operands = op.operands(db);
         if operands.len() < 2 {
-            return RewriteResult::Unchanged;
+            return false;
         }
         let bytes_ref = operands[0];
         let index = operands[1]; // i32 (Nat)
@@ -494,12 +490,11 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
             BYTES_ARRAY_IDX,
         );
 
-        RewriteResult::Expand(vec![
-            get_data.operation(),
-            get_offset.operation(),
-            add_offset.operation(),
-            array_get.operation(),
-        ])
+        rewriter.insert_op(get_data.operation());
+        rewriter.insert_op(get_offset.operation());
+        rewriter.insert_op(add_offset.operation());
+        rewriter.replace_op(array_get.operation());
+        true
     }
 }
 
@@ -509,19 +504,19 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
 struct BytesSliceOrPanicPattern;
 
 impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !is_bytes_intrinsic_call(db, op, "__bytes_slice_or_panic") {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let operands = op.operands(db);
         if operands.len() < 3 {
-            return RewriteResult::Unchanged;
+            return false;
         }
         let bytes_ref = operands[0];
         let start = operands[1]; // i32 (Nat)
@@ -573,13 +568,12 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
             BYTES_STRUCT_IDX,
         );
 
-        RewriteResult::Expand(vec![
-            get_data.operation(),
-            get_offset.operation(),
-            new_offset.operation(),
-            new_len.operation(),
-            struct_new.operation(),
-        ])
+        rewriter.insert_op(get_data.operation());
+        rewriter.insert_op(get_offset.operation());
+        rewriter.insert_op(new_offset.operation());
+        rewriter.insert_op(new_len.operation());
+        rewriter.replace_op(struct_new.operation());
+        true
     }
 }
 
@@ -587,19 +581,19 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
 struct BytesConcatPattern;
 
 impl<'db> RewritePattern<'db> for BytesConcatPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        db: &'a dyn salsa::Database,
-        op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        db: &'db dyn salsa::Database,
+        op: &Operation<'db>,
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !is_bytes_intrinsic_call(db, op, "__bytes_concat") {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let operands = op.operands(db);
         if operands.len() < 2 {
-            return RewriteResult::Unchanged;
+            return false;
         }
         let left = operands[0];
         let right = operands[1];
@@ -675,7 +669,12 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         ops.push(copy_right.operation());
         ops.push(struct_new.operation());
 
-        RewriteResult::Expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 

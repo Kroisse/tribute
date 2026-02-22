@@ -21,9 +21,7 @@
 //! by ability_id.
 
 use trunk_ir::dialect::{core, func, wasm};
-use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult,
-};
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 use trunk_ir::{
     Block, BlockArg, BlockId, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
     Type, Value, ValueDef,
@@ -159,15 +157,15 @@ fn replace_evidence_function_stubs<'db>(
 struct EvidenceLookupPattern;
 
 impl<'db> RewritePattern<'db> for EvidenceLookupPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        _db: &'a dyn salsa::Database,
-        _op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        _db: &'db dyn salsa::Database,
+        _op: &Operation<'db>,
+        _rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Keep the call unchanged - the stub is replaced with a real implementation
         // by replace_evidence_function_stubs
-        RewriteResult::Unchanged
+        false
     }
 }
 
@@ -212,15 +210,15 @@ impl<'db> RewritePattern<'db> for EvidenceLookupPattern {
 struct EvidenceExtendPattern;
 
 impl<'db> RewritePattern<'db> for EvidenceExtendPattern {
-    fn match_and_rewrite<'a>(
+    fn match_and_rewrite(
         &self,
-        _db: &'a dyn salsa::Database,
-        _op: &Operation<'a>,
-        _adaptor: &OpAdaptor<'a, '_>,
-    ) -> RewriteResult<'a> {
+        _db: &'db dyn salsa::Database,
+        _op: &Operation<'db>,
+        _rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Keep the call unchanged - the stub is replaced with a real implementation
         // by replace_evidence_function_stubs
-        RewriteResult::Unchanged
+        false
     }
 }
 

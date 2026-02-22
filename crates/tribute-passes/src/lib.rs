@@ -40,7 +40,7 @@ pub use native::evidence::lower_evidence_to_native;
 pub use native::type_converter::native_type_converter;
 pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{
-    ApplyResult, PatternApplicator, RewriteContext, RewritePattern, RewriteResult,
+    ApplyResult, PatternApplicator, PatternRewriter, RewriteContext, RewritePattern,
 };
 pub use type_converter::generic_type_converter;
 pub use wasm::type_converter::{closure_adt_type, wasm_type_converter};

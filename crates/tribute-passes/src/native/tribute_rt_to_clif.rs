@@ -20,7 +20,7 @@ use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Value};
 
@@ -145,19 +145,24 @@ impl<'db> RewritePattern<'db> for BoxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxInt::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
-        let ops = box_value(
+        let mut ops = box_value(
             db,
             op.location(db),
             box_op.value(db),
             4,
             super::rtti::RTTI_INT,
         );
-        RewriteResult::Expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -169,19 +174,24 @@ impl<'db> RewritePattern<'db> for BoxNatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxNat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
-        let ops = box_value(
+        let mut ops = box_value(
             db,
             op.location(db),
             box_op.value(db),
             4,
             super::rtti::RTTI_NAT,
         );
-        RewriteResult::Expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -193,19 +203,24 @@ impl<'db> RewritePattern<'db> for BoxBoolPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxBool::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
-        let ops = box_value(
+        let mut ops = box_value(
             db,
             op.location(db),
             box_op.value(db),
             4,
             super::rtti::RTTI_BOOL,
         );
-        RewriteResult::Expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -217,19 +232,24 @@ impl<'db> RewritePattern<'db> for BoxFloatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(box_op) = tribute_rt::BoxFloat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
-        let ops = box_value(
+        let mut ops = box_value(
             db,
             op.location(db),
             box_op.value(db),
             8,
             super::rtti::RTTI_FLOAT,
         );
-        RewriteResult::Expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -248,25 +268,25 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxInt::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already i32, the unbox is a no-op (value was stored raw).
-        if let Some(val_ty) = adaptor.get_value_type(db, value)
+        if let Some(val_ty) = rewriter.get_value_type(db, value)
             && val_ty == i32_ty
         {
-            return RewriteResult::Erase {
-                replacement_values: vec![value],
-            };
+            rewriter.erase_op(vec![value]);
+            return true;
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 
@@ -280,25 +300,25 @@ impl<'db> RewritePattern<'db> for UnboxNatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxNat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already i32, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value)
+        if let Some(val_ty) = rewriter.get_value_type(db, value)
             && val_ty == i32_ty
         {
-            return RewriteResult::Erase {
-                replacement_values: vec![value],
-            };
+            rewriter.erase_op(vec![value]);
+            return true;
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 
@@ -312,25 +332,25 @@ impl<'db> RewritePattern<'db> for UnboxBoolPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxBool::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let value = unbox_op.value(db);
         let i32_ty = core::I32::new(db).as_type();
 
         // If the input is already i32, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value)
+        if let Some(val_ty) = rewriter.get_value_type(db, value)
             && val_ty == i32_ty
         {
-            return RewriteResult::Erase {
-                replacement_values: vec![value],
-            };
+            rewriter.erase_op(vec![value]);
+            return true;
         }
 
         let load_op = clif::load(db, op.location(db), value, i32_ty, 0);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 
@@ -344,25 +364,25 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(unbox_op) = tribute_rt::UnboxFloat::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
         let value = unbox_op.value(db);
         let f64_ty = core::F64::new(db).as_type();
 
         // If the input is already f64, the unbox is a no-op.
-        if let Some(val_ty) = adaptor.get_value_type(db, value)
+        if let Some(val_ty) = rewriter.get_value_type(db, value)
             && val_ty == f64_ty
         {
-            return RewriteResult::Erase {
-                replacement_values: vec![value],
-            };
+            rewriter.erase_op(vec![value]);
+            return true;
         }
 
         let load_op = clif::load(db, op.location(db), value, f64_ty, 0);
-        RewriteResult::Replace(load_op.as_operation())
+        rewriter.replace_op(load_op.as_operation());
+        true
     }
 }
 

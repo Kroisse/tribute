@@ -22,7 +22,7 @@ use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_vari
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, clif, core};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{DialectOp, DialectType, Operation, Symbol, Type};
 
@@ -80,28 +80,28 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(struct_new) = adt::StructNew::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let struct_ty = struct_new.r#type(db);
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout(db, struct_ty, type_converter) else {
             warn!(
                 "adt_rc_header: cannot compute layout for struct_new type at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
         let i64_ty = core::I64::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
-        let fields = adaptor.operands();
+        let fields = rewriter.operands();
 
         let mut ops: Vec<Operation<'db>> = Vec::new();
 
@@ -153,7 +153,12 @@ impl<'db> RewritePattern<'db> for StructNewPattern<'db> {
         let identity_op = clif::iadd(db, location, payload_val, zero_val, ptr_ty);
         ops.push(identity_op.as_operation());
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
@@ -185,22 +190,22 @@ impl<'db> RewritePattern<'db> for VariantNewPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let enum_ty = variant_new.r#type(db);
         let tag = variant_new.tag(db);
-        let type_converter = adaptor.type_converter();
+        let type_converter = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout(db, enum_ty, type_converter) else {
             warn!(
                 "adt_rc_header: cannot compute enum layout for variant_new at {:?}",
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
@@ -209,14 +214,14 @@ impl<'db> RewritePattern<'db> for VariantNewPattern<'db> {
                 tag,
                 op.location(db)
             );
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
         let ptr_ty = core::Ptr::new(db).as_type();
         let i64_ty = core::I64::new(db).as_type();
         let i32_ty = core::I32::new(db).as_type();
-        let fields = adaptor.operands();
+        let fields = rewriter.operands();
 
         let mut ops: Vec<Operation<'db>> = Vec::new();
 
@@ -274,7 +279,12 @@ impl<'db> RewritePattern<'db> for VariantNewPattern<'db> {
         let identity_op = clif::iadd(db, location, payload_val, zero_val, ptr_ty);
         ops.push(identity_op.as_operation());
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 

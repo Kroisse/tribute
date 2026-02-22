@@ -55,6 +55,7 @@ separated responsibilities.
 - `ops.rs` - Dialect operation traits and macros
 - `types.rs` - Type system (interned types with attributes)
 - `dialect/` - All dialect definitions
+- `rewrite/` - Pattern-based rewriting infrastructure (PatternRewriter, PatternApplicator)
 
 **Location**: `crates/trunk-ir/`
 

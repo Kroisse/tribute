@@ -13,7 +13,7 @@ use tracing::warn;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{arith, core, wasm};
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
 
@@ -47,15 +47,15 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let Some(result_ty) = op.results(db).first().copied() else {
             // Missing result type - cannot lower, leave unchanged
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Handle nil type constants specially
@@ -65,7 +65,8 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
             // SSA form for operations that reference them. Use wasm.nop which has
             // no runtime effect but maintains the value reference.
             let nop = wasm::nop(db, op.location(db), result_ty);
-            return RewriteResult::Replace(nop.as_operation());
+            rewriter.replace_op(nop.as_operation());
+            return true;
         }
 
         let location = op.location(db);
@@ -110,7 +111,8 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
             }
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -122,10 +124,10 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -136,17 +138,17 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
             || name == arith::REM();
 
         if !is_binop {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let Some(result_ty) = op.results(db).first().copied() else {
             // Missing result type - cannot lower
-            return RewriteResult::Unchanged;
+            return false;
         };
         let operands = op.operands(db);
         let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
             // Missing operands - cannot lower
-            return RewriteResult::Unchanged;
+            return false;
         };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
@@ -190,10 +192,11 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
                 _ => wasm::i32_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -205,10 +208,10 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -220,11 +223,11 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
             || name == arith::CMP_GE();
 
         if !is_cmp {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        // Get operand type from OpAdaptor (handles BlockArg via RewriteContext)
-        let operand_ty = adaptor.operand_type(0);
+        // Get operand type from rewriter (handles BlockArg via RewriteContext)
+        let operand_ty = rewriter.operand_type(0);
         let suffix = type_suffix(db, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
@@ -286,10 +289,11 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
                 _ => wasm::i32_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -301,10 +305,10 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(neg_op) = arith::Neg::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let result_ty = op.results(db).first().copied();
@@ -316,12 +320,14 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
             "f32" => {
                 let f32_ty = result_ty.unwrap_or_else(|| core::F32::new(db).as_type());
                 let new_op = wasm::f32_neg(db, location, operand, f32_ty);
-                RewriteResult::Replace(new_op.operation())
+                rewriter.replace_op(new_op.operation());
+                true
             }
             "f64" => {
                 let f64_ty = result_ty.unwrap_or_else(|| core::F64::new(db).as_type());
                 let new_op = wasm::f64_neg(db, location, operand, f64_ty);
-                RewriteResult::Replace(new_op.operation())
+                rewriter.replace_op(new_op.operation());
+                true
             }
             "i64" => {
                 // For i64: 0 - x
@@ -329,7 +335,9 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
                 let zero = wasm::i64_const(db, location, i64_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i64_sub(db, location, zero_val, operand, i64_ty);
-                RewriteResult::Expand(vec![zero.operation(), sub.operation()])
+                rewriter.insert_op(zero.operation());
+                rewriter.replace_op(sub.operation());
+                true
             }
             _ => {
                 // Default to i32: 0 - x
@@ -337,7 +345,9 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
                 let zero = wasm::i32_const(db, location, i32_ty, 0);
                 let zero_val = zero.result(db);
                 let sub = wasm::i32_sub(db, location, zero_val, operand, i32_ty);
-                RewriteResult::Expand(vec![zero.operation(), sub.operation()])
+                rewriter.insert_op(zero.operation());
+                rewriter.replace_op(sub.operation());
+                true
             }
         }
     }
@@ -351,10 +361,10 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        _adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -366,17 +376,17 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
             || name == arith::SHRU();
 
         if !is_bitwise {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let Some(result_ty) = op.results(db).first().copied() else {
             // Missing result type - cannot lower
-            return RewriteResult::Unchanged;
+            return false;
         };
         let operands = op.operands(db);
         let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
             // Missing operands - cannot lower
-            return RewriteResult::Unchanged;
+            return false;
         };
         let suffix = type_suffix(db, Some(result_ty));
         let location = op.location(db);
@@ -414,10 +424,11 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
                 _ => wasm::i32_shr_u(db, location, lhs, rhs, result_ty).as_operation(),
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 
@@ -429,10 +440,10 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if op.dialect(db) != arith::DIALECT_NAME() {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
         let name = op.name(db);
@@ -442,11 +453,11 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
             || name == arith::CONVERT();
 
         if !is_conv {
-            return RewriteResult::Unchanged;
+            return false;
         }
 
-        // Get source type from OpAdaptor (handles BlockArg via RewriteContext)
-        let src_ty = adaptor.operand_type(0);
+        // Get source type from rewriter (handles BlockArg via RewriteContext)
+        let src_ty = rewriter.operand_type(0);
         let src_suffix = type_suffix(db, src_ty);
 
         // Get destination type from result
@@ -468,7 +479,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                 ("i32", "i64") => {
                     wasm::i64_extend_i32_s(db, location, operand, dst_ty).as_operation()
                 }
-                _ => return RewriteResult::Unchanged, // unsupported cast
+                _ => return false, // unsupported cast
             }
         } else if name == arith::TRUNC() {
             // trunc: float -> int truncation (signed by default)
@@ -486,7 +497,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                     wasm::i64_trunc_f64_s(db, location, operand, dst_ty).as_operation()
                 }
                 ("i64", "i32") => wasm::i32_wrap_i64(db, location, operand, dst_ty).as_operation(), // integer truncation
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else if name == arith::EXTEND() {
             // extend: smaller -> larger type
@@ -497,7 +508,7 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                 ("f32", "f64") => {
                     wasm::f64_promote_f32(db, location, operand, dst_ty).as_operation()
                 }
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else if name == arith::CONVERT() {
             // convert: int <-> float conversion
@@ -535,13 +546,14 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
                 ("f64", "f32") => {
                     wasm::f32_demote_f64(db, location, operand, dst_ty).as_operation()
                 }
-                _ => return RewriteResult::Unchanged,
+                _ => return false,
             }
         } else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        RewriteResult::Replace(new_op)
+        rewriter.replace_op(new_op);
+        true
     }
 }
 

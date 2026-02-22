@@ -11,7 +11,7 @@ use trunk_ir::dialect::core::{self, Module};
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm;
 use trunk_ir::rewrite::{
-    ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult, TypeConverter,
+    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, idvec};
 
@@ -44,16 +44,16 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(scf_if_op) = scf::If::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // wasm.if has the same structure: cond operand, result, then/else regions
         // PatternApplicator will recursively process the regions
-        // Use adaptor to get remapped cond operand (important when cond is a result of another converted op)
-        let cond = adaptor.operand(0).unwrap_or_else(|| scf_if_op.cond(db));
+        // Use rewriter to get remapped cond operand (important when cond is a result of another converted op)
+        let cond = rewriter.operand(0).unwrap_or_else(|| scf_if_op.cond(db));
         let then_region = scf_if_op.then(db);
         let else_region = scf_if_op.r#else(db);
         let result_ty = op
@@ -71,7 +71,8 @@ impl<'db> RewritePattern<'db> for ScfIfPattern {
             else_region,
         );
 
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -88,10 +89,10 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(loop_op) = scf::Loop::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -104,12 +105,12 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
             .copied()
             .unwrap_or_else(|| core::Nil::new(db).as_type());
 
-        // Remap init operands through the adaptor
+        // Remap init operands through the rewriter
         let init = loop_op.init(db);
         let remapped_init: Vec<_> = init
             .iter()
             .enumerate()
-            .map(|(i, v)| adaptor.operand(i).unwrap_or(*v))
+            .map(|(i, v)| rewriter.operand(i).unwrap_or(*v))
             .collect();
 
         // Create wasm.loop with init operands and the body region
@@ -127,7 +128,8 @@ impl<'db> RewritePattern<'db> for ScfLoopPattern {
 
         let wasm_block = wasm::block(db, location, result_ty, block_body).as_operation();
 
-        RewriteResult::Replace(wasm_block)
+        rewriter.replace_op(wasm_block);
+        true
     }
 }
 
@@ -147,24 +149,24 @@ impl<'db> RewritePattern<'db> for ScfYieldPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         if !scf::Yield::matches(db, *op) {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         // Convert to wasm.yield which tracks the result value
         // This is needed because the yielded value may be defined outside the region
-        // Use adaptor to get remapped operand
-        let Some(value) = adaptor.operand(0) else {
+        // Use rewriter to get remapped operand
+        let Some(value) = rewriter.operand(0) else {
             // No value to yield - just erase
-            return RewriteResult::Erase {
-                replacement_values: vec![],
-            };
+            rewriter.erase_op(vec![]);
+            return true;
         };
 
         let new_op = wasm::r#yield(db, op.location(db), value);
-        RewriteResult::Replace(new_op.as_operation())
+        rewriter.replace_op(new_op.as_operation());
+        true
     }
 }
 
@@ -180,10 +182,10 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(continue_op) = scf::Continue::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
@@ -194,19 +196,22 @@ impl<'db> RewritePattern<'db> for ScfContinuePattern {
         );
 
         if values.is_empty() {
-            // No loop-carried values — simple branch
+            // No loop-carried values -- simple branch
             let br_op = wasm::br(db, location, 1).as_operation();
-            return RewriteResult::Replace(br_op);
+            rewriter.replace_op(br_op);
+            return true;
         }
 
         // Emit wasm.yield(value) + wasm.br(1) for each loop-carried value.
         // The emit layer will translate yield+br targeting a loop into
         // local.set for the loop arg followed by br.
-        let value = adaptor.operand(0).unwrap_or(values[0]);
+        let value = rewriter.operand(0).unwrap_or(values[0]);
         let yield_op = wasm::r#yield(db, location, value).as_operation();
         let br_op = wasm::br(db, location, 1).as_operation();
 
-        RewriteResult::Expand(vec![yield_op, br_op])
+        rewriter.insert_op(yield_op);
+        rewriter.replace_op(br_op);
+        true
     }
 }
 
@@ -227,14 +232,14 @@ impl<'db> RewritePattern<'db> for ScfBreakPattern {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         let Ok(break_op) = scf::Break::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
         let location = op.location(db);
-        let value = adaptor.operand(0).unwrap_or_else(|| break_op.value(db));
+        let value = rewriter.operand(0).unwrap_or_else(|| break_op.value(db));
 
         // Emit the break value via wasm.yield (marks it as region result)
         let yield_op = wasm::r#yield(db, location, value).as_operation();
@@ -242,7 +247,9 @@ impl<'db> RewritePattern<'db> for ScfBreakPattern {
         // Branch to outer block (depth 2: if=0, loop=1, block=2)
         let br_op = wasm::br(db, location, 2).as_operation();
 
-        RewriteResult::Expand(vec![yield_op, br_op])
+        rewriter.insert_op(yield_op);
+        rewriter.replace_op(br_op);
+        true
     }
 }
 
@@ -357,7 +364,7 @@ mod tests {
         let location = test_location(db);
         let i32_ty = core::I32::new(db).as_type();
 
-        // Value to break with — will be provided as loop init arg
+        // Value to break with -- will be provided as loop init arg
         // The loop body receives it as block arg
         let loop_body_block_id = BlockId::fresh();
 
@@ -488,12 +495,12 @@ mod tests {
         let br_targets = lower_and_collect_br_targets(db, module);
         assert!(
             br_targets.contains(&1),
-            "Expected br target=1 (continue → loop), got targets: {:?}",
+            "Expected br target=1 (continue -> loop), got targets: {:?}",
             br_targets
         );
         assert!(
             br_targets.contains(&2),
-            "Expected br target=2 (break → outer block), got targets: {:?}",
+            "Expected br target=2 (break -> outer block), got targets: {:?}",
             br_targets
         );
     }

@@ -11,9 +11,8 @@ use crate::{Block, BlockArg, BlockId, IdVec, Operation, Region, Type, Value};
 
 use super::context::RewriteContext;
 use super::conversion_target::{ConversionError, ConversionTarget};
-use super::op_adaptor::OpAdaptor;
 use super::pattern::RewritePattern;
-use super::result::RewriteResult;
+use super::rewriter::PatternRewriter;
 
 /// Result of applying patterns to a module.
 pub struct ApplyResult<'db> {
@@ -65,7 +64,7 @@ impl<'db> ApplyResult<'db> {
 /// # use trunk_ir::dialect::{arith, core};
 /// # use trunk_ir::dialect::core::Module;
 /// # use trunk_ir::types::DialectType;
-/// use trunk_ir::rewrite::{ConversionTarget, OpAdaptor, PatternApplicator, RewritePattern, RewriteResult};
+/// use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
 ///
 /// /// Pattern that replaces `arith.const(0)` with `arith.const(1)`.
 /// struct ZeroToOnePattern;
@@ -75,17 +74,18 @@ impl<'db> ApplyResult<'db> {
 ///         &self,
 ///         db: &'db dyn salsa::Database,
 ///         op: &Operation<'db>,
-///         _adaptor: &OpAdaptor<'db, '_>,
-///     ) -> RewriteResult<'db> {
+///         _rewriter: &mut PatternRewriter<'db, '_>,
+///     ) -> bool {
 ///         let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-///             return RewriteResult::Unchanged;
+///             return false;
 ///         };
 ///         if const_op.value(db) != Attribute::IntBits(0) {
-///             return RewriteResult::Unchanged;
+///             return false;
 ///         }
 ///         let i32_ty = core::I32::new(db).as_type();
 ///         let new_op = arith::r#const(db, op.location(db), i32_ty, Attribute::IntBits(1));
-///         RewriteResult::Replace(new_op.as_operation())
+///         _rewriter.replace_op(new_op.as_operation());
+///         true
 ///     }
 /// }
 /// # #[salsa::tracked]
@@ -101,10 +101,10 @@ impl<'db> ApplyResult<'db> {
 /// # #[salsa::tracked]
 /// # fn apply_pattern(db: &dyn salsa::Database, module: Module<'_>) -> bool {
 /// #     use trunk_ir::rewrite::TypeConverter;
-/// #     let target = ConversionTarget::new();
 /// #     let applicator = PatternApplicator::new(TypeConverter::new())
 /// #         .add_pattern(ZeroToOnePattern)
 /// #         .with_max_iterations(50);
+/// #     let target = ConversionTarget::new();
 /// #     let result = applicator.apply_partial(db, module, target);
 /// #     result.reached_fixpoint
 /// # }
@@ -123,7 +123,7 @@ pub struct PatternApplicator<'db> {
 impl<'db> PatternApplicator<'db> {
     /// Create a new pattern applicator with a type converter.
     ///
-    /// The `OpAdaptor` will convert types using this converter,
+    /// The `PatternRewriter` will convert types using this converter,
     /// providing patterns with already-converted types via `operand_type()`.
     ///
     /// Use `TypeConverter::new()` for an empty converter if no type
@@ -159,17 +159,6 @@ impl<'db> PatternApplicator<'db> {
     /// 3. Verifies that no illegal operations remain
     ///
     /// Returns `Err(ConversionError)` if illegal operations remain after conversion.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let target = ConversionTarget::new()
-    ///     .legal_dialect("trampoline")
-    ///     .illegal_dialect("cont");
-    ///
-    /// let result = applicator.apply(db, module, target)?;
-    /// // All cont.* ops are guaranteed to be converted
-    /// ```
     pub fn apply(
         &self,
         db: &'db dyn salsa::Database,
@@ -185,21 +174,6 @@ impl<'db> PatternApplicator<'db> {
     ///
     /// This method skips pattern matching for legal operations (optimization)
     /// but does NOT verify that all illegal operations are converted.
-    ///
-    /// Use this for:
-    /// - Partial conversions where some illegal ops may remain
-    /// - Multi-phase lowering where verification happens at a later stage
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let target = ConversionTarget::new()
-    ///     .legal_dialect("func")
-    ///     .illegal_dialect("ability");
-    ///
-    /// // Only convert some ability.* ops, others handled by later passes
-    /// let result = applicator.apply_partial(db, module, target);
-    /// ```
     pub fn apply_partial(
         &self,
         db: &'db dyn salsa::Database,
@@ -221,7 +195,7 @@ impl<'db> PatternApplicator<'db> {
 
         for iteration in 0..self.max_iterations {
             // Collect raw block argument types for this iteration.
-            // Type conversion is applied at access sites (OpAdaptor::get_value_type).
+            // Type conversion is applied at access sites (PatternRewriter::get_value_type).
             let block_arg_types = collect_block_arg_types(db, &current);
             let mut ctx = RewriteContext::with_block_arg_types(block_arg_types);
             let new_module = self.rewrite_module(db, &current, &mut ctx, target);
@@ -260,6 +234,37 @@ impl<'db> PatternApplicator<'db> {
         let body = module.body(db);
         let new_body = self.rewrite_region(db, &body, ctx, target);
 
+        // Process pending module ops: remap with full value map and add to first block
+        let pending = ctx.take_pending_module_ops();
+        let new_body = if !pending.is_empty() {
+            let blocks = new_body.blocks(db);
+            if let Some(first_block) = blocks.first() {
+                let mut ops: Vec<Operation<'db>> =
+                    first_block.operations(db).iter().copied().collect();
+                for pending_op in pending {
+                    let remapped = ctx.remap_operation_deep(db, &pending_op);
+                    ops.push(remapped);
+                }
+                let new_first_block = Block::new(
+                    db,
+                    first_block.id(db),
+                    first_block.location(db),
+                    first_block.args(db).clone(),
+                    IdVec::from(ops),
+                );
+                let mut new_blocks: IdVec<Block<'db>> = IdVec::new();
+                new_blocks.push(new_first_block);
+                for block in blocks.iter().skip(1) {
+                    new_blocks.push(*block);
+                }
+                Region::new(db, new_body.location(db), new_blocks)
+            } else {
+                new_body
+            }
+        } else {
+            new_body
+        };
+
         // Rebuild module with new body
         Module::create(db, module.location(db), module.name(db), new_body)
     }
@@ -297,9 +302,7 @@ impl<'db> PatternApplicator<'db> {
     /// Rewrite a block.
     ///
     /// Block argument types are converted FIRST so that the context has
-    /// up-to-date types before operations are rewritten. This ensures
-    /// `ctx.get_value_type()` returns the converted type for block args,
-    /// preventing stale types on the legal-op fast path.
+    /// up-to-date types before operations are rewritten.
     fn rewrite_block(
         &self,
         db: &'db dyn salsa::Database,
@@ -337,8 +340,6 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Check if an operation is legal according to the conversion target.
-    ///
-    /// This uses `is_legal_op()` which includes dynamic legality checks.
     fn is_op_legal(
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
@@ -348,14 +349,6 @@ impl<'db> PatternApplicator<'db> {
     }
 
     /// Insert `core.unrealized_conversion_cast` operations for type mismatches.
-    ///
-    /// When an operand's raw type differs from its converted type, this method
-    /// inserts a cast operation to bridge the type mismatch. The cast will be
-    /// resolved later by a materialization pass.
-    ///
-    /// Returns:
-    /// - The (possibly modified) operands with cast results replacing original values
-    /// - A vector of cast operations to prepend before the current operation
     fn insert_conversion_casts(
         &self,
         db: &'db dyn salsa::Database,
@@ -395,9 +388,9 @@ impl<'db> PatternApplicator<'db> {
     /// 2. Skip if operation is already legal (remap + region recursion only, NO casts)
     /// 3. Insert unrealized_conversion_cast for type mismatches (illegal ops only)
     /// 4. Compute converted operand types using the type converter
-    /// 5. Create OpAdaptor with remapped operands and pre-converted types
-    /// 6. Try each pattern in order
-    /// 7. If a pattern matches, apply it and record mappings
+    /// 5. Create PatternRewriter with remapped operands and pre-converted types
+    /// 6. Try each pattern in order (passing remapped op for matching)
+    /// 7. If a pattern matches, apply mutations and record mappings
     /// 8. Recursively rewrite any nested regions
     /// 9. Map original operation results to final operation results
     fn rewrite_operation(
@@ -411,8 +404,6 @@ impl<'db> PatternApplicator<'db> {
         let remapped_op = ctx.remap_operands(db, op);
 
         // Step 2: Skip pattern matching and cast insertion for legal operations
-        // Legal ops only need operand remapping and region recursion - no casts.
-        // Only skip if target has constraints - otherwise try all patterns.
         if target.has_constraints() && Self::is_op_legal(db, &remapped_op, target) {
             let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
             if final_op != *op {
@@ -423,7 +414,6 @@ impl<'db> PatternApplicator<'db> {
 
         // Step 3: Insert conversion casts for type mismatches (illegal ops only)
         // Skip inserting casts for unrealized_conversion_cast itself to avoid infinite loops.
-        // The cast op is the type conversion boundary - its operands keep the original type.
         let location = remapped_op.location(db);
         let remapped_operands = remapped_op.operands(db).clone();
         let (casted_operands, cast_ops) = if remapped_op.dialect(db) == core::DIALECT_NAME()
@@ -434,7 +424,10 @@ impl<'db> PatternApplicator<'db> {
             self.insert_conversion_casts(db, location, &remapped_operands, ctx)
         };
 
-        // Update operation with casted operands if any casts were inserted
+        // Update operation with casted operands if any casts were inserted.
+        // This ensures that when no pattern matches, the final operation uses
+        // the cast result values instead of the original operands, preventing
+        // the same type mismatch from being detected again on the next iteration.
         let remapped_op = if !cast_ops.is_empty() {
             ctx.record_change();
             remapped_op
@@ -454,80 +447,91 @@ impl<'db> PatternApplicator<'db> {
             })
             .collect();
 
-        // Step 5: Create OpAdaptor with remapped operands and pre-converted types
-        let adaptor = OpAdaptor::new(
-            remapped_op,
-            casted_operands,
-            operand_types,
-            ctx,
-            &self.type_converter,
-        );
+        // Step 5-6: Create PatternRewriter and try each pattern.
+        // The rewriter borrows ctx immutably, so we scope it to drop before mutating ctx.
+        // Patterns receive &remapped_op (with intra-iteration operand remappings applied) so
+        // that patterns using op.modify(db).build() preserve up-to-date operands.
+        let mutations = {
+            let mut rewriter =
+                PatternRewriter::new(casted_operands, operand_types, ctx, &self.type_converter);
 
-        // Step 6: Try each pattern
-        for pattern in &self.patterns {
-            match pattern.match_and_rewrite(db, &remapped_op, &adaptor) {
-                RewriteResult::Unchanged => continue,
-
-                RewriteResult::Replace(new_op) => {
-                    ctx.record_change();
-                    // Recursively rewrite regions in the new operation
-                    let final_op = self.rewrite_op_regions(db, &new_op, ctx, target);
-                    // Map ORIGINAL op results to FINAL op results
-                    ctx.map_results(db, op, &final_op);
-                    // Prepend cast ops before the result
-                    let mut result = cast_ops;
-                    result.push(final_op);
-                    return result;
+            for pattern in &self.patterns {
+                if pattern.match_and_rewrite(db, &remapped_op, &mut rewriter) {
+                    break;
                 }
+            }
 
-                RewriteResult::Expand(ops) => {
-                    ctx.record_change();
-                    // Recursively rewrite regions in all new operations
-                    let final_ops: Vec<_> = ops
-                        .into_iter()
-                        .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx, target))
-                        .collect();
-                    // Map ORIGINAL op results to LAST expanded op results.
-                    // The pattern is: earlier ops produce intermediate values,
-                    // the last op produces the final result that replaces the original.
-                    if let Some(last) = final_ops.last() {
-                        ctx.map_results(db, op, last);
+            if rewriter.has_mutations() {
+                Some(rewriter.take_mutations())
+            } else {
+                None
+            }
+        };
+
+        // Step 7: Handle mutations (rewriter is dropped, ctx is free to mutate)
+        if let Some(mutations) = mutations {
+            ctx.record_change();
+
+            // Add module ops to context
+            for module_op in mutations.module_ops {
+                ctx.add_module_op(module_op);
+            }
+
+            if let Some(erase_values) = mutations.erase_values {
+                // Erase: map original op results to replacement values
+                let result_count = op.results(db).len();
+                debug_assert_eq!(
+                    erase_values.len(),
+                    result_count,
+                    "erase_op: replacement_values count ({}) must match operation result count ({})",
+                    erase_values.len(),
+                    result_count
+                );
+                for (i, val) in erase_values.into_iter().enumerate() {
+                    if i < result_count {
+                        let old_val = op.result(db, i);
+                        ctx.map_value(old_val, val);
                     }
-                    // Prepend cast ops before the expanded ops
-                    let mut result = cast_ops;
-                    result.extend(final_ops);
-                    return result;
                 }
+                // Cast ops still need to be in the output even if op is erased
+                return cast_ops;
+            }
 
-                RewriteResult::Erase { replacement_values } => {
-                    ctx.record_change();
-                    // Validate replacement count matches result count
-                    let result_count = op.results(db).len();
-                    debug_assert_eq!(
-                        replacement_values.len(),
-                        result_count,
-                        "RewriteResult::Erase: replacement_values count ({}) must match operation result count ({})",
-                        replacement_values.len(),
-                        result_count
-                    );
-                    // Map ORIGINAL op results to replacement values
-                    for (i, val) in replacement_values.into_iter().enumerate() {
-                        if i < result_count {
-                            let old_val = op.result(db, i);
-                            ctx.map_value(old_val, val);
-                        }
-                    }
-                    // Cast ops still need to be in the output even if op is erased
-                    return cast_ops;
+            if let Some(replacement) = mutations.replacement {
+                // Replace: prefix ops + replacement
+                let final_op = self.rewrite_op_regions(db, &replacement, ctx, target);
+                ctx.map_results(db, op, &final_op);
+
+                let mut result = cast_ops;
+                // Add prefix ops (with region rewriting)
+                for prefix_op in mutations.prefix_ops {
+                    let final_prefix = self.rewrite_op_regions(db, &prefix_op, ctx, target);
+                    result.push(final_prefix);
                 }
+                result.push(final_op);
+                return result;
+            }
+
+            // Pattern matched but no replace/erase — treat prefix ops as expand
+            if !mutations.prefix_ops.is_empty() {
+                let final_ops: Vec<_> = mutations
+                    .prefix_ops
+                    .into_iter()
+                    .map(|expanded_op| self.rewrite_op_regions(db, &expanded_op, ctx, target))
+                    .collect();
+                if let Some(last) = final_ops.last() {
+                    ctx.map_results(db, op, last);
+                }
+                let mut result = cast_ops;
+                result.extend(final_ops);
+                return result;
             }
         }
 
-        // Step 7: No pattern matched - recursively process regions
+        // Step 8: No pattern matched — recursively process regions
         let final_op = self.rewrite_op_regions(db, &remapped_op, ctx, target);
 
-        // Step 8: Map ORIGINAL op results to FINAL op results if they differ
-        // This is critical when operands were remapped but no pattern matched
+        // Step 9: Map ORIGINAL op results to FINAL op results if they differ
         if final_op != *op {
             ctx.map_results(db, op, &final_op);
         }
@@ -567,10 +571,6 @@ impl<'db> Default for PatternApplicator<'db> {
 }
 
 /// Remap successor block references in all operations within a block.
-///
-/// If any operation has successors that appear in `block_map`, the successors
-/// are replaced with the mapped blocks. Returns the block unchanged if no
-/// successors need remapping (avoids unnecessary rebuilds).
 fn remap_block_successors<'db>(
     db: &'db dyn salsa::Database,
     block: Block<'db>,
@@ -626,13 +626,6 @@ fn remap_block_successors<'db>(
 }
 
 /// Collect block argument types from a module.
-///
-/// Traverses all blocks in the module and collects the raw (unconverted) types
-/// of their arguments. This is needed because `ValueDef::BlockArg` only stores
-/// the `BlockId`, not the type information.
-///
-/// Type conversion is applied at access sites (e.g., `OpAdaptor::get_value_type`)
-/// rather than during collection to avoid double conversion.
 fn collect_block_arg_types<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<'db>,
@@ -680,16 +673,16 @@ mod tests {
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,
-            _adaptor: &OpAdaptor<'db, '_>,
-        ) -> RewriteResult<'db> {
+            rewriter: &mut PatternRewriter<'db, '_>,
+        ) -> bool {
             // Match arith.const with value 42 only
             let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-                return RewriteResult::Unchanged;
+                return false;
             };
 
             let value = const_op.value(db);
             let Attribute::IntBits(42) = value else {
-                return RewriteResult::Unchanged;
+                return false;
             };
 
             let location = op.location(db);
@@ -707,11 +700,10 @@ mod tests {
             );
 
             // Expand to include all operations
-            RewriteResult::expand(vec![
-                lhs_const.as_operation(),
-                rhs_const.as_operation(),
-                mul_op.as_operation(),
-            ])
+            rewriter.insert_op(lhs_const.as_operation());
+            rewriter.insert_op(rhs_const.as_operation());
+            rewriter.replace_op(mul_op.as_operation());
+            true
         }
     }
 
@@ -911,7 +903,6 @@ mod tests {
     // === Block Argument Reference Tests ===
 
     /// Create a module where an operation uses a block argument as operand.
-    /// This tests that block argument references are preserved after rewriting.
     #[salsa::tracked]
     fn make_module_with_block_arg_usage(db: &dyn salsa::Database) -> Module<'_> {
         parse_test_module(
@@ -942,18 +933,19 @@ mod tests {
                 &self,
                 db: &'db dyn salsa::Database,
                 op: &Operation<'db>,
-                _adaptor: &OpAdaptor<'db, '_>,
-            ) -> RewriteResult<'db> {
+                rewriter: &mut PatternRewriter<'db, '_>,
+            ) -> bool {
                 let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-                    return RewriteResult::Unchanged;
+                    return false;
                 };
                 if const_op.value(db) != Attribute::IntBits(42) {
-                    return RewriteResult::Unchanged;
+                    return false;
                 }
                 let location = op.location(db);
                 let result_ty = op.results(db)[0];
                 let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
-                RewriteResult::Replace(new_op.as_operation())
+                rewriter.replace_op(new_op.as_operation());
+                true
             }
         }
 
@@ -1077,18 +1069,19 @@ mod tests {
                 &self,
                 db: &'db dyn salsa::Database,
                 op: &Operation<'db>,
-                _adaptor: &OpAdaptor<'db, '_>,
-            ) -> RewriteResult<'db> {
+                rewriter: &mut PatternRewriter<'db, '_>,
+            ) -> bool {
                 let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-                    return RewriteResult::Unchanged;
+                    return false;
                 };
                 if const_op.value(db) != Attribute::IntBits(42) {
-                    return RewriteResult::Unchanged;
+                    return false;
                 }
                 let location = op.location(db);
                 let result_ty = op.results(db)[0];
                 let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
-                RewriteResult::Replace(new_op.as_operation())
+                rewriter.replace_op(new_op.as_operation());
+                true
             }
         }
 
@@ -1175,13 +1168,8 @@ mod tests {
     }
 
     // === Region Reconstruction Test ===
-    // This tests the actual problem: when a pattern reconstructs a region with
-    // fresh BlockIds, operations inside that region that reference the old
-    // block arguments become stale.
 
     /// Pattern that reconstructs a region with fresh BlockIds.
-    /// This simulates what can happen in lowering passes.
-    /// Uses a marker attribute to avoid infinite loops.
     struct RegionReconstructPattern;
 
     impl<'db> RewritePattern<'db> for RegionReconstructPattern {
@@ -1189,36 +1177,35 @@ mod tests {
             &self,
             db: &'db dyn salsa::Database,
             op: &Operation<'db>,
-            _adaptor: &OpAdaptor<'db, '_>,
-        ) -> RewriteResult<'db> {
+            rewriter: &mut PatternRewriter<'db, '_>,
+        ) -> bool {
             use crate::dialect::scf;
 
             // Match scf.if operations
             let Ok(if_op) = scf::If::from_operation(db, *op) else {
-                return RewriteResult::Unchanged;
+                return false;
             };
 
             // Check if already transformed (marker attribute)
             let marker = Symbol::new("_reconstructed");
             if op.attributes(db).contains_key(&marker) {
-                return RewriteResult::Unchanged;
+                return false;
             }
 
             // Get the then region
             let then_region = if_op.then(db);
             let then_blocks = then_region.blocks(db);
             if then_blocks.is_empty() {
-                return RewriteResult::Unchanged;
+                return false;
             }
 
             let then_block = &then_blocks[0];
 
             // Reconstruct the then block with a FRESH BlockId
-            // This is the problematic pattern!
             let fresh_block_id = BlockId::fresh();
             let new_then_block = Block::new(
                 db,
-                fresh_block_id, // ← Fresh ID instead of preserving original
+                fresh_block_id,
                 then_block.location(db),
                 then_block.args(db).clone(),
                 then_block.operations(db).clone(),
@@ -1245,7 +1232,8 @@ mod tests {
                 .attr(marker, Attribute::Bool(true))
                 .build();
 
-            RewriteResult::Replace(new_if_op)
+            rewriter.replace_op(new_if_op);
+            true
         }
     }
 
@@ -1264,9 +1252,6 @@ mod tests {
         (result.reached_fixpoint, result.module)
     }
 
-    /// This test demonstrates the problem: when a region is reconstructed
-    /// with a fresh BlockId, operations inside that reference the outer
-    /// block argument become stale (pointing to an old BlockId).
     #[salsa_test]
     fn test_region_reconstruction_stale_block_arg_reference(db: &salsa::DatabaseImpl) {
         let module = make_module_with_nested_block_args(db);
@@ -1306,10 +1291,6 @@ mod tests {
         let result_first_operand = result_add_operands[0];
         match result_first_operand.def(db) {
             ValueDef::BlockArg(block_id) => {
-                // This is the key test: the add operation should still reference
-                // the outer block's argument, which has the original block ID.
-                // If the pattern incorrectly reconstructed the region, this might
-                // be pointing to a stale BlockId.
                 assert_eq!(
                     block_id, original_outer_block_id,
                     "Add operation should still reference the outer block arg. \
@@ -1324,8 +1305,6 @@ mod tests {
     // === Successor Remap Tests ===
 
     /// Create a module with cf.br and cf.cond_br ops that have successor references.
-    /// Tests that PatternApplicator correctly remaps successor block references
-    /// when blocks are rewritten (getting new Block entities).
     #[salsa::tracked]
     fn make_module_with_successors(db: &dyn salsa::Database) -> Module<'_> {
         use crate::dialect::cf;
@@ -1399,18 +1378,19 @@ mod tests {
                 &self,
                 db: &'db dyn salsa::Database,
                 op: &Operation<'db>,
-                _adaptor: &OpAdaptor<'db, '_>,
-            ) -> RewriteResult<'db> {
+                rewriter: &mut PatternRewriter<'db, '_>,
+            ) -> bool {
                 let Ok(const_op) = arith::Const::from_operation(db, *op) else {
-                    return RewriteResult::Unchanged;
+                    return false;
                 };
                 if const_op.value(db) != Attribute::IntBits(99) {
-                    return RewriteResult::Unchanged;
+                    return false;
                 }
                 let location = op.location(db);
                 let result_ty = op.results(db)[0];
                 let new_op = arith::r#const(db, location, result_ty, Attribute::IntBits(100));
-                RewriteResult::Replace(new_op.as_operation())
+                rewriter.replace_op(new_op.as_operation());
+                true
             }
         }
 
@@ -1420,10 +1400,6 @@ mod tests {
     }
 
     // === Block Arg Type Conversion Order Test ===
-    // Regression test: block arg types must be converted BEFORE operations
-    // are rewritten. Previously, type conversion happened after op rewrite,
-    // causing the legal-op fast path to see stale (unconverted) types and
-    // insert unnecessary unrealized_conversion_cast operations.
 
     /// Create a module with func containing i32 block arg used by arith.add.
     #[salsa::tracked]
@@ -1481,8 +1457,6 @@ mod tests {
         );
 
         // Legal ops (arith.add) should NOT have unnecessary unrealized_conversion_cast
-        // before them. If block arg conversion happened AFTER op rewrite, the legal-op
-        // fast path would see stale i32 types and insert casts.
         let ops = body_block.operations(db);
         let cast_count = ops
             .iter()

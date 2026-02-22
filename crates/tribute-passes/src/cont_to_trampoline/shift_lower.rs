@@ -4,7 +4,7 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::func::{self, Func};
 use trunk_ir::dialect::{adt, cont, trampoline};
-use trunk_ir::rewrite::{OpAdaptor, RewritePattern, RewriteResult};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::{DialectOp, DialectType, IdVec, Operation, Span, Symbol, Type, Value};
 
 use super::{ResumeCounter, ResumeFuncSpec, ResumeSpecs, ShiftAnalysis, compute_op_idx};
@@ -103,14 +103,14 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         &self,
         db: &'db dyn salsa::Database,
         op: &Operation<'db>,
-        adaptor: &OpAdaptor<'db, '_>,
-    ) -> RewriteResult<'db> {
+        rewriter: &mut PatternRewriter<'db, '_>,
+    ) -> bool {
         // Match cont.shift with tag as first operand
         let Ok(shift_op) = cont::Shift::from_operation(db, *op) else {
-            return RewriteResult::Unchanged;
+            return false;
         };
 
-        let operands: Vec<_> = adaptor.operands().iter().copied().collect();
+        let operands: Vec<_> = rewriter.operands().iter().copied().collect();
         let tag_operand = *operands.first().expect("cont.shift requires a tag operand");
         let value_operands: Vec<Value<'db>> = operands.into_iter().skip(1).collect(); // Rest are values
 
@@ -229,7 +229,12 @@ impl<'db> RewritePattern<'db> for LowerShiftPattern<'db> {
         let step_op = trampoline::step_shift(db, location, tag_operand, cont_val, step_ty, op_idx);
         ops.push(step_op.as_operation());
 
-        RewriteResult::expand(ops)
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
 
