@@ -7,11 +7,92 @@
 //! - Evidence-based ability dispatch (`__tribute_evidence_*`)
 //! - RC-safe continuation wrapping (`__tribute_cont_wrap_*`, `__tribute_resume`, etc.)
 
+#![cfg_attr(panic = "abort", no_std)]
 #![allow(private_interfaces)]
 
-use std::cell::Cell;
-use std::collections::HashMap;
-use std::ptr::NonNull;
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::ffi::c_void;
+use core::ptr::NonNull;
+
+use smallvec::SmallVec;
+
+// =============================================================================
+// Global allocator and panic handler (no_std)
+//
+// Wraps libc malloc/free for Rust's alloc crate, and aborts on panic.
+// Only compiled when panic="abort" (i.e., the `runtime` profile).
+// In dev/test builds, std provides these via the test harness.
+// =============================================================================
+
+#[cfg(all(not(test), panic = "abort"))]
+mod no_std_runtime {
+    use core::alloc::{GlobalAlloc, Layout};
+    use core::ffi::c_void;
+
+    struct CAllocator;
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn posix_memalign(
+            memptr: *mut *mut c_void,
+            alignment: usize,
+            size: usize,
+        ) -> core::ffi::c_int;
+        fn free(ptr: *mut c_void);
+    }
+
+    #[cfg(windows)]
+    unsafe extern "system" {
+        fn _aligned_malloc(size: usize, alignment: usize) -> *mut c_void;
+        fn _aligned_free(ptr: *mut c_void);
+    }
+
+    #[cfg(unix)]
+    unsafe impl GlobalAlloc for CAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            let mut ptr: *mut c_void = core::ptr::null_mut();
+            let align = layout.align().max(core::mem::size_of::<*mut c_void>());
+            let ret = unsafe { posix_memalign(&mut ptr, align, layout.size()) };
+            if ret == 0 {
+                ptr as *mut u8
+            } else {
+                core::ptr::null_mut()
+            }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            unsafe { free(ptr as *mut c_void) }
+        }
+    }
+
+    #[cfg(windows)]
+    unsafe impl GlobalAlloc for CAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            unsafe { _aligned_malloc(layout.size(), layout.align()) as *mut u8 }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+            unsafe { _aligned_free(ptr as *mut c_void) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: CAllocator = CAllocator;
+
+    #[panic_handler]
+    fn panic(_: &core::panic::PanicInfo) -> ! {
+        unsafe extern "C" {
+            fn abort() -> !;
+        }
+        unsafe { abort() }
+    }
+
+    // Pre-compiled alloc/core reference this symbol even with panic="abort".
+    // Provide a dummy stub so the staticlib links cleanly.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn rust_eh_personality() {}
+}
 
 // =============================================================================
 // libmprompt FFI bindings
@@ -36,40 +117,16 @@ type MpStartFun = unsafe extern "C" fn(*mut MpPrompt, *mut u8) -> *mut u8;
 type MpYieldFun = unsafe extern "C" fn(*mut MpResume, *mut u8) -> *mut u8;
 
 unsafe extern "C" {
-    fn mp_init(config: *const std::ffi::c_void);
+    fn mp_init(config: *const c_void);
     fn mp_prompt(fun: MpStartFun, arg: *mut u8) -> *mut u8;
     fn mp_yield(p: *mut MpPrompt, fun: MpYieldFun, arg: *mut u8) -> *mut u8;
     fn mp_resume(r: *mut MpResume, result: *mut u8) -> *mut u8;
     fn mp_resume_drop(r: *mut MpResume);
 }
 
-// =============================================================================
-// TLS-based yield state
-// =============================================================================
+mod tls;
 
-thread_local! {
-    /// Whether a yield is active (handler dispatch should enter the loop).
-    static YIELD_ACTIVE: Cell<bool> = const { Cell::new(false) };
-    /// The resume object captured by the yield handler callback.
-    static YIELD_RESUME: Cell<*mut u8> = const { Cell::new(std::ptr::null_mut()) };
-    /// The operation index passed by the yielding code.
-    static YIELD_OP_IDX: Cell<i32> = const { Cell::new(0) };
-    /// The shift value (argument) passed by the yielding code.
-    static YIELD_SHIFT_VALUE: Cell<*mut u8> = const { Cell::new(std::ptr::null_mut()) };
-}
-
-// =============================================================================
-// Prompt tag registry
-//
-// Maps integer tags to their active prompt pointers. When `__tribute_prompt`
-// establishes a prompt, the callback receives the prompt pointer from
-// libmprompt, and we register it here so `__tribute_yield` can look it up.
-// =============================================================================
-
-thread_local! {
-    static PROMPT_REGISTRY: std::cell::RefCell<HashMap<i32, Vec<*mut MpPrompt>>> =
-        std::cell::RefCell::new(HashMap::new());
-}
+use tls::{thread_state, tls_init};
 
 // =============================================================================
 // Initialization
@@ -81,7 +138,10 @@ thread_local! {
 /// thread-local storage, gstack pools, etc.).
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_init() {
-    unsafe { mp_init(std::ptr::null()) };
+    unsafe {
+        tls_init();
+        mp_init(core::ptr::null());
+    }
 }
 
 // =============================================================================
@@ -95,15 +155,15 @@ pub extern "C" fn __tribute_init() {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     if size == 0 {
-        return std::ptr::null_mut();
+        return core::ptr::null_mut();
     }
     let Ok(size) = usize::try_from(size) else {
-        return std::ptr::null_mut();
+        return core::ptr::null_mut();
     };
-    let Ok(layout) = std::alloc::Layout::from_size_align(size, 8) else {
-        return std::ptr::null_mut();
+    let Ok(layout) = core::alloc::Layout::from_size_align(size, 8) else {
+        return core::ptr::null_mut();
     };
-    unsafe { std::alloc::alloc(layout) }
+    unsafe { alloc::alloc::alloc(layout) }
 }
 
 /// # Safety
@@ -118,10 +178,10 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
     let Ok(size) = usize::try_from(size) else {
         return;
     };
-    let Ok(layout) = std::alloc::Layout::from_size_align(size, 8) else {
+    let Ok(layout) = core::alloc::Layout::from_size_align(size, 8) else {
         return;
     };
-    unsafe { std::alloc::dealloc(ptr, layout) };
+    unsafe { alloc::alloc::dealloc(ptr, layout) };
 }
 
 // =============================================================================
@@ -146,25 +206,19 @@ struct PromptContext {
 /// valid across yield/resume boundaries.
 unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u8 {
     let ctx = unsafe { Box::from_raw(arg as *mut PromptContext) };
+    let ts = unsafe { thread_state() };
+
+    // Convert to NonNull (libmprompt guarantees non-null prompt pointers)
+    let prompt_nn = NonNull::new(prompt).expect("ICE: libmprompt returned null prompt");
 
     // Register the prompt pointer for this tag (stack for nested prompts)
-    PROMPT_REGISTRY.with(|reg| {
-        reg.borrow_mut().entry(ctx.tag).or_default().push(prompt);
-    });
+    ts.prompt_registry.borrow_mut().push(ctx.tag, prompt_nn);
 
     // Call the user's body function
     let result = unsafe { (ctx.body_fn)(ctx.env) };
 
     // Unregister (pop from stack; remove key when empty)
-    PROMPT_REGISTRY.with(|reg| {
-        let mut reg = reg.borrow_mut();
-        if let Some(stack) = reg.get_mut(&ctx.tag) {
-            stack.pop();
-            if stack.is_empty() {
-                reg.remove(&ctx.tag);
-            }
-        }
-    });
+    ts.prompt_registry.borrow_mut().pop(ctx.tag);
 
     // ctx is dropped here (Box ownership)
     result
@@ -191,8 +245,9 @@ pub unsafe extern "C" fn __tribute_prompt(
 /// The `mp_yield` callback: captures the resume pointer into TLS
 /// and signals that a yield is active.
 unsafe extern "C" fn yield_handler(resume: *mut MpResume, arg: *mut u8) -> *mut u8 {
-    YIELD_RESUME.set(resume as *mut u8);
-    YIELD_ACTIVE.set(true);
+    let ts = unsafe { thread_state() };
+    ts.yield_resume.set(resume as *mut u8);
+    ts.yield_active.set(true);
     // Return `arg` as the result of `mp_prompt` (which returns to the handler dispatch loop)
     arg
 }
@@ -210,21 +265,22 @@ unsafe extern "C" fn yield_handler(resume: *mut MpResume, arg: *mut u8) -> *mut 
 /// passed through opaquely and must remain valid until the handler processes it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_yield(tag: i32, op_idx: i32, shift_value: *mut u8) -> *mut u8 {
+    let ts = unsafe { thread_state() };
+
     // Store yield metadata in TLS before yielding
-    YIELD_OP_IDX.set(op_idx);
-    YIELD_SHIFT_VALUE.set(shift_value);
+    ts.yield_op_idx.set(op_idx);
+    ts.yield_shift_value.set(shift_value);
 
     // Look up the innermost prompt pointer for this tag
-    let prompt = PROMPT_REGISTRY.with(|reg| {
-        reg.borrow()
-            .get(&tag)
-            .and_then(|stack| stack.last().copied())
-            .expect("ICE: __tribute_yield called with unregistered tag")
-    });
+    let prompt = ts
+        .prompt_registry
+        .borrow()
+        .lookup(tag)
+        .expect("ICE: __tribute_yield called with unregistered tag");
 
     // Yield to the prompt; the yield_handler callback captures the resume
     // and returns shift_value as the result of mp_prompt
-    unsafe { mp_yield(prompt, yield_handler, shift_value) }
+    unsafe { mp_yield(prompt.as_ptr(), yield_handler, shift_value) }
 }
 
 /// Resume a wrapped continuation with a value.
@@ -294,7 +350,7 @@ pub unsafe extern "C" fn __tribute_resume_drop(wrapped: *mut u8) {
 /// Signature: `() -> i1`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_yield_active() -> i8 {
-    YIELD_ACTIVE.get() as i8
+    unsafe { thread_state() }.yield_active.get() as i8
 }
 
 /// Get the operation index of the current yield.
@@ -302,7 +358,7 @@ pub extern "C" fn __tribute_yield_active() -> i8 {
 /// Signature: `() -> i32`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_get_yield_op_idx() -> i32 {
-    YIELD_OP_IDX.get()
+    unsafe { thread_state() }.yield_op_idx.get()
 }
 
 /// Get the captured continuation (resume object) from the current yield.
@@ -310,7 +366,7 @@ pub extern "C" fn __tribute_get_yield_op_idx() -> i32 {
 /// Signature: `() -> ptr`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_get_yield_continuation() -> *mut u8 {
-    YIELD_RESUME.get()
+    unsafe { thread_state() }.yield_resume.get()
 }
 
 /// Get the shift value (argument) from the current yield.
@@ -318,7 +374,7 @@ pub extern "C" fn __tribute_get_yield_continuation() -> *mut u8 {
 /// Signature: `() -> ptr`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_get_yield_shift_value() -> *mut u8 {
-    YIELD_SHIFT_VALUE.get()
+    unsafe { thread_state() }.yield_shift_value.get()
 }
 
 /// Reset all TLS yield state to default values.
@@ -328,10 +384,11 @@ pub extern "C" fn __tribute_get_yield_shift_value() -> *mut u8 {
 /// Signature: `() -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_reset_yield_state() {
-    YIELD_ACTIVE.set(false);
-    YIELD_RESUME.set(std::ptr::null_mut());
-    YIELD_OP_IDX.set(0);
-    YIELD_SHIFT_VALUE.set(std::ptr::null_mut());
+    let ts = unsafe { thread_state() };
+    ts.yield_active.set(false);
+    ts.yield_resume.set(core::ptr::null_mut());
+    ts.yield_op_idx.set(0);
+    ts.yield_shift_value.set(core::ptr::null_mut());
 }
 
 // =============================================================================
@@ -392,14 +449,6 @@ struct TributeContinuation {
     rc_roots: Box<[RcRoot]>,
 }
 
-thread_local! {
-    /// RC roots set by the compiler before yielding.
-    ///
-    /// `__tribute_yield_set_rc_roots` stores the roots here, and
-    /// `__tribute_cont_wrap_from_tls` consumes them.
-    static YIELD_RC_ROOTS: Cell<(*mut u8, usize)> = const { Cell::new((std::ptr::null_mut(), 0)) };
-}
-
 /// Store RC root entries in TLS before yielding.
 ///
 /// The compiler calls this just before `__tribute_yield` to pass
@@ -416,7 +465,9 @@ thread_local! {
 /// runtime: `__tribute_cont_wrap_from_tls` will free it after copying.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_yield_set_rc_roots(roots: *mut u8, count: i32) {
-    YIELD_RC_ROOTS.set((roots, count as usize));
+    unsafe { thread_state() }
+        .yield_rc_roots
+        .set((roots, count as usize));
 }
 
 /// Wrap a raw resume pointer into a `TributeContinuation`.
@@ -440,8 +491,9 @@ pub unsafe extern "C" fn __tribute_yield_set_rc_roots(roots: *mut u8, count: i32
 /// `resume` must be a valid `MpResume` pointer from `__tribute_get_yield_continuation`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u8 {
-    let (roots_ptr, count) = YIELD_RC_ROOTS.get();
-    YIELD_RC_ROOTS.set((std::ptr::null_mut(), 0));
+    let ts = unsafe { thread_state() };
+    let (roots_ptr, count) = ts.yield_rc_roots.get();
+    ts.yield_rc_roots.set((core::ptr::null_mut(), 0));
 
     let rc_roots = if roots_ptr.is_null() || count == 0 {
         Box::new([]) as Box<[RcRoot]>
@@ -477,8 +529,6 @@ pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u
 // =============================================================================
 // Evidence-based ability dispatch
 // =============================================================================
-
-use smallvec::SmallVec;
 
 /// Marker for a single ability handler in the evidence.
 ///
@@ -521,7 +571,7 @@ impl Evidence {
             // SAFETY: The compiler guarantees that every ability_id passed here
             // has been previously inserted via __tribute_evidence_extend.
             // Reaching this branch means a compiler bug.
-            Err(_) => unsafe { std::hint::unreachable_unchecked() },
+            Err(_) => unsafe { core::hint::unreachable_unchecked() },
         }
     }
 
@@ -612,6 +662,7 @@ mod tests {
 
     #[test]
     fn test_yield_state_defaults() {
+        __tribute_init();
         assert_eq!(__tribute_yield_active(), 0);
         assert_eq!(__tribute_get_yield_op_idx(), 0);
         assert!(__tribute_get_yield_continuation().is_null());
@@ -620,8 +671,10 @@ mod tests {
 
     #[test]
     fn test_yield_state_reset() {
-        YIELD_ACTIVE.set(true);
-        YIELD_OP_IDX.set(42);
+        __tribute_init();
+        let ts = unsafe { thread_state() };
+        ts.yield_active.set(true);
+        ts.yield_op_idx.set(42);
         __tribute_reset_yield_state();
         assert_eq!(__tribute_yield_active(), 0);
         assert_eq!(__tribute_get_yield_op_idx(), 0);
@@ -641,26 +694,28 @@ mod tests {
     fn test_dealloc_invalid_is_noop() {
         // Should not panic on null pointer or invalid size
         unsafe {
-            __tribute_dealloc(std::ptr::null_mut(), 64);
-            __tribute_dealloc(std::ptr::null_mut(), 0);
+            __tribute_dealloc(core::ptr::null_mut(), 64);
+            __tribute_dealloc(core::ptr::null_mut(), 0);
         }
     }
 
     #[test]
     fn test_prompt_simple() {
+        __tribute_init();
         // Test a simple prompt that doesn't yield: body returns immediately.
         unsafe extern "C" fn body(_env: *mut u8) -> *mut u8 {
             42usize as *mut u8
         }
 
         unsafe {
-            let result = __tribute_prompt(1, body, std::ptr::null_mut());
+            let result = __tribute_prompt(1, body, core::ptr::null_mut());
             assert_eq!(result as usize, 42);
         }
     }
 
     #[test]
     fn test_prompt_with_yield() {
+        __tribute_init();
         // Test that PromptContext survives across yield/resume (heap-allocated).
         // Body yields a value, handler resumes with a different value.
         unsafe extern "C" fn body(_env: *mut u8) -> *mut u8 {
@@ -671,7 +726,7 @@ mod tests {
         }
 
         unsafe {
-            let result = __tribute_prompt(10, body, std::ptr::null_mut());
+            let result = __tribute_prompt(10, body, core::ptr::null_mut());
             // After yield, mp_prompt returns the yield handler's return value (shift_value=100)
             assert_eq!(result as usize, 100);
 
@@ -693,6 +748,7 @@ mod tests {
 
     #[test]
     fn test_prompt_nested_same_tag() {
+        __tribute_init();
         // Test that nested prompts with the same tag work correctly (stack-based registry).
         unsafe extern "C" fn inner_body(_env: *mut u8) -> *mut u8 {
             77usize as *mut u8
@@ -700,20 +756,23 @@ mod tests {
 
         unsafe extern "C" fn outer_body(_env: *mut u8) -> *mut u8 {
             // Nest another prompt with the same tag
-            let inner_result = unsafe { __tribute_prompt(5, inner_body, std::ptr::null_mut()) };
+            let inner_result = unsafe { __tribute_prompt(5, inner_body, core::ptr::null_mut()) };
             // Return inner result + 10
             (inner_result as usize + 10) as *mut u8
         }
 
         unsafe {
-            let result = __tribute_prompt(5, outer_body, std::ptr::null_mut());
+            let result = __tribute_prompt(5, outer_body, core::ptr::null_mut());
             assert_eq!(result as usize, 87); // 77 + 10
         }
 
         // Verify registry is clean after both prompts complete
-        PROMPT_REGISTRY.with(|reg| {
-            assert!(reg.borrow().is_empty());
-        });
+        assert!(
+            unsafe { thread_state() }
+                .prompt_registry
+                .borrow()
+                .is_empty()
+        );
     }
 
     // =========================================================================
@@ -792,39 +851,42 @@ mod tests {
 
     #[test]
     fn test_yield_rc_roots_tls_defaults() {
-        let (ptr, count) = YIELD_RC_ROOTS.get();
+        __tribute_init();
+        let (ptr, count) = unsafe { thread_state() }.yield_rc_roots.get();
         assert!(ptr.is_null());
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_yield_set_rc_roots_stores_and_clears() {
+        __tribute_init();
         // Set roots
         let mut roots: [*mut u8; 2] = [
-            std::ptr::dangling_mut::<u8>(),
-            std::ptr::without_provenance_mut(2),
+            core::ptr::dangling_mut::<u8>(),
+            core::ptr::without_provenance_mut(2),
         ];
         unsafe {
             __tribute_yield_set_rc_roots(roots.as_mut_ptr() as *mut u8, 2);
         }
-        let (ptr, count) = YIELD_RC_ROOTS.get();
+        let (ptr, count) = unsafe { thread_state() }.yield_rc_roots.get();
         assert!(!ptr.is_null());
         assert_eq!(count, 2);
 
         // Clear by setting to null
         unsafe {
-            __tribute_yield_set_rc_roots(std::ptr::null_mut(), 0);
+            __tribute_yield_set_rc_roots(core::ptr::null_mut(), 0);
         }
-        let (ptr, count) = YIELD_RC_ROOTS.get();
+        let (ptr, count) = unsafe { thread_state() }.yield_rc_roots.get();
         assert!(ptr.is_null());
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_cont_wrap_from_tls_null_roots() {
+        __tribute_init();
         // With no roots set, wrapping should succeed with empty rc_roots
         unsafe {
-            __tribute_yield_set_rc_roots(std::ptr::null_mut(), 0);
+            __tribute_yield_set_rc_roots(core::ptr::null_mut(), 0);
         }
 
         // We can't create a real MpResume, so just test the wrapping logic
@@ -840,13 +902,14 @@ mod tests {
         // cont is dropped here
 
         // TLS should have been cleared
-        let (ptr, count) = YIELD_RC_ROOTS.get();
+        let (ptr, count) = unsafe { thread_state() }.yield_rc_roots.get();
         assert!(ptr.is_null());
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_cont_wrap_from_tls_with_roots() {
+        __tribute_init();
         // Allocate a fake RC object (header + payload)
         let alloc_size = (RC_HEADER_SIZE + 8) as u64;
         let raw = unsafe { __tribute_alloc(alloc_size) };

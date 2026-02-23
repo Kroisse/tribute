@@ -1082,15 +1082,11 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(obj_file.path());
 
-    // Link tribute-runtime (staticlib containing both Rust runtime and libmprompt).
-    // The library directories are set at build time by build.rs via the `links` metadata.
+    // Link tribute-runtime staticlib (bundles both Rust runtime and libmprompt).
+    // The library directory is set at build time by build.rs.
     if let Some(static_lib_dir) = option_env!("TRIBUTE_RUNTIME_STATIC_LIB_DIR") {
         cmd.arg("-L").arg(static_lib_dir);
         cmd.arg("-ltribute_runtime");
-    }
-    if let Some(lib_dir) = option_env!("TRIBUTE_RUNTIME_LIB_DIR") {
-        cmd.arg("-L").arg(lib_dir);
-        cmd.arg("-lmprompt");
     }
     if !cfg!(windows) {
         cmd.arg("-lpthread");
