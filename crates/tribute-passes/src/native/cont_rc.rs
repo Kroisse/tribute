@@ -14,8 +14,9 @@
 //! `resolve_unrealized_casts` (Phase 3). At this point all calls are
 //! `clif.call` operations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
 
@@ -84,13 +85,20 @@ pub fn rewrite_cont_rc<'db>(
 }
 
 /// Rewrite a region, processing all blocks.
+///
+/// The `value_remap` and `cont_values` are shared across all blocks in the
+/// region so that a continuation wrapped in one block is correctly remapped
+/// when used in a different block (cross-block SSA references).
 fn rewrite_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Region<'db> {
+    let mut value_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
+    let mut cont_values: HashSet<Value<'db>> = HashSet::new();
     let mut changed = false;
+
     let new_blocks: IdVec<Block<'db>> = region
         .blocks(db)
         .iter()
         .map(|block| {
-            let new_block = rewrite_block(db, block);
+            let new_block = rewrite_block(db, block, &mut value_remap, &mut cont_values);
             if new_block != *block {
                 changed = true;
             }
@@ -109,20 +117,34 @@ fn rewrite_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> Re
 ///
 /// Scans for `__tribute_get_yield_continuation` calls and inserts
 /// `__tribute_cont_wrap_from_tls` to wrap the raw resume pointer.
-fn rewrite_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Block<'db> {
+///
+/// Also removes `tribute_rt.retain` / `tribute_rt.release` operations
+/// that target wrapped continuation pointers, since those pointers are
+/// `Box`-allocated by the runtime and do **not** have an RC header.
+///
+/// `value_remap` and `cont_values` are shared across all blocks in the
+/// parent region, so remaps from earlier blocks apply to later ones.
+fn rewrite_block<'db>(
+    db: &'db dyn salsa::Database,
+    block: &Block<'db>,
+    value_remap: &mut HashMap<Value<'db>, Value<'db>>,
+    cont_values: &mut HashSet<Value<'db>>,
+) -> Block<'db> {
     let ops = block.operations(db);
     let mut new_ops: Vec<Operation<'db>> = Vec::with_capacity(ops.len() + 4);
-    let mut value_remap: HashMap<Value<'db>, Value<'db>> = HashMap::new();
     let mut changed = false;
 
     let ptr_ty = core::Ptr::new(db).as_type();
 
     for op in ops.iter() {
         // First, remap operands of any operation if needed
-        let op = remap_op_operands(db, op, &value_remap);
+        let remapped = remap_op_operands(db, op, value_remap);
+        if remapped != *op {
+            changed = true;
+        }
 
         // Also rewrite nested regions (e.g., inside scf.if that survived lowering)
-        let op = rewrite_nested_regions(db, &op);
+        let op = rewrite_nested_regions(db, &remapped);
 
         if let Ok(call_op) = clif::Call::from_operation(db, op) {
             let callee = call_op.callee(db);
@@ -142,7 +164,29 @@ fn rewrite_block<'db>(db: &'db dyn salsa::Database, block: &Block<'db>) -> Block
                 );
                 let wrapped_k = wrap_call.as_operation().result(db, 0);
                 value_remap.insert(raw_k, wrapped_k);
+                cont_values.insert(wrapped_k);
                 new_ops.push(wrap_call.as_operation());
+                changed = true;
+                continue;
+            }
+        }
+
+        // Remove retain/release on wrapped continuation pointers.
+        // These pointers are Box-allocated by the runtime (no RC header).
+        if let Ok(retain_op) = tribute_rt::Retain::from_operation(db, op) {
+            let ptr = retain_op.ptr(db);
+            if cont_values.contains(&ptr) {
+                // Retain returns the same pointer — remap result to input
+                let result = op.result(db, 0);
+                value_remap.insert(result, ptr);
+                changed = true;
+                continue;
+            }
+        }
+        if let Ok(release_op) = tribute_rt::Release::from_operation(db, op) {
+            let ptr = release_op.ptr(db);
+            if cont_values.contains(&ptr) {
+                // Simply drop the release — no cleanup needed for Box ptrs
                 changed = true;
                 continue;
             }

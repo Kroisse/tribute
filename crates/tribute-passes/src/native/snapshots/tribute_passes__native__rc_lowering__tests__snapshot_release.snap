@@ -1,24 +1,29 @@
 ---
 source: crates/tribute-passes/src/native/rc_lowering.rs
+assertion_line: 1309
 expression: ir
 ---
 core.module @test {
   clif.func {sym_name = @release_only, type = core.func(core.nil, core.ptr)} {
   ^bb1(%p: core.ptr):
-    %0 = clif.iconst {value = 8} : core.i64
-    %1 = clif.isub %p, %0 : core.ptr
-    %2 = clif.load %1 {offset = 0} : core.i32
-    %3 = clif.iconst {value = 1} : core.i32
-    %4 = clif.isub %2, %3 : core.i32
-    clif.store %4, %1 {offset = 0}
-    %5 = clif.iconst {value = 0} : core.i32
-    %6 = clif.icmp %4, %5 {cond = @eq} : core.i8
-    clif.brif %6
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = clif.icmp %p, %0 {cond = @eq} : core.i8
+    clif.brif %1
   ^bb2:
-    %7 = clif.iconst {value = 12} : core.i64
-    %8 = clif.call %p, %7 {callee = @__tribute_deep_release} : core.nil
-    clif.jump
+    %2 = clif.iconst {value = 8} : core.i64
+    %3 = clif.isub %p, %2 : core.ptr
+    %4 = clif.load %3 {offset = 0} : core.i32
+    %5 = clif.iconst {value = 1} : core.i32
+    %6 = clif.isub %4, %5 : core.i32
+    clif.store %6, %3 {offset = 0}
+    %7 = clif.iconst {value = 0} : core.i32
+    %8 = clif.icmp %6, %7 {cond = @eq} : core.i8
+    clif.brif %8
   ^bb3:
+    %9 = clif.iconst {value = 12} : core.i64
+    %10 = clif.call %p, %9 {callee = @__tribute_deep_release} : core.nil
+    clif.jump
+  ^bb4:
     clif.return
   }
 }

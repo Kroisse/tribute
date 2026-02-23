@@ -260,6 +260,7 @@ fn compute_use_def_sets<'db>(
     db: &'db dyn salsa::Database,
     body: &Region<'db>,
     ptr_values: &HashSet<Value<'db>>,
+    ptr_alias_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> (
     HashMap<BlockId, HashSet<Value<'db>>>,
     HashMap<BlockId, HashSet<Value<'db>>>,
@@ -287,13 +288,19 @@ fn compute_use_def_sets<'db>(
                 if ptr_values.contains(operand) && !defs.contains(operand) {
                     uses.insert(*operand);
                 }
+                // If operand is an alias of a ptr value, record the aliased ptr as used
+                if let Some(&aliased) = ptr_alias_map.get(operand)
+                    && !defs.contains(&aliased)
+                {
+                    uses.insert(aliased);
+                }
             }
 
-            // Results are definitions
+            // Results are definitions (only for ptr values NOT in the alias map)
             for (idx, ty) in op.results(db).iter().enumerate() {
                 if is_ptr_type(db, *ty) {
                     let val = op.result(db, idx);
-                    if !is_static_ptr(db, val) {
+                    if !is_static_ptr(db, val) && ptr_values.contains(&val) {
                         defs.insert(val);
                     }
                 }
@@ -316,8 +323,9 @@ fn compute_liveness<'db>(
     db: &'db dyn salsa::Database,
     body: &Region<'db>,
     ptr_values: &HashSet<Value<'db>>,
+    ptr_alias_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> LivenessInfo<'db> {
-    let (use_sets, def_sets) = compute_use_def_sets(db, body, ptr_values);
+    let (use_sets, def_sets) = compute_use_def_sets(db, body, ptr_values, ptr_alias_map);
     let successor_map = build_successor_map(db, body);
 
     let block_ids: Vec<BlockId> = body.blocks(db).iter().map(|b| b.id(db)).collect();
@@ -390,16 +398,75 @@ struct InsertionPlan<'db> {
     at_start: Vec<Operation<'db>>,
 }
 
+/// Build a map from `unrealized_conversion_cast` output → ptr root.
+///
+/// When a `core.unrealized_conversion_cast` converts a `core.ptr` value to
+/// another type (e.g., `adt.struct`), the output aliases the same memory as the
+/// input. The RC pass must treat uses of the output as uses of the original ptr
+/// to avoid releasing the ptr before all aliased accesses are complete.
+///
+/// This also handles **transitive aliases**: if `%a` (ptr) → `%b` (struct) →
+/// `%c` (ptr), then `%c` is an alias of `%a`. Without transitive tracking,
+/// `%c` would be treated as an independent ptr and get its own release,
+/// corrupting refcounts.
+fn build_ptr_alias_map<'db>(
+    db: &'db dyn salsa::Database,
+    body: &Region<'db>,
+    ptr_values: &mut HashSet<Value<'db>>,
+) -> HashMap<Value<'db>, Value<'db>> {
+    let mut aliases = HashMap::new();
+    for block in body.blocks(db).iter() {
+        for op in block.operations(db).iter() {
+            if core::UnrealizedConversionCast::from_operation(db, *op).is_ok() {
+                let operands = op.operands(db);
+                if let Some(&input) = operands.first() {
+                    // Find the root ptr value: either directly in ptr_values,
+                    // or transitively through the alias map.
+                    let root = if ptr_values.contains(&input) {
+                        Some(input)
+                    } else {
+                        aliases.get(&input).copied()
+                    };
+
+                    if let Some(root) = root {
+                        let output = op.result(db, 0);
+                        // Skip aliasing when the cast output is an integer type
+                        // (e.g., core.i64). Opaque i64 handles (such as evidence)
+                        // are intentionally non-pointer and must not be aliased
+                        // back to a ptr root — doing so would reintroduce RC
+                        // tracking for values that have no RC header.
+                        let output_ty = op.results(db).first().copied();
+                        let is_integer_output = output_ty.is_some_and(|ty| {
+                            core::I64::from_type(db, ty).is_some()
+                                || core::I32::from_type(db, ty).is_some()
+                        });
+                        if !is_integer_output {
+                            aliases.insert(output, root);
+                            // Remove cast output from ptr_values — it should not
+                            // be independently tracked for RC. The cast is a
+                            // no-op alias; all uses of the output extend the
+                            // root's lifetime via the alias map.
+                            ptr_values.remove(&output);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    aliases
+}
+
 /// Insert RC operations in a function body.
 fn insert_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) -> Region<'db> {
     let block_arg_types = collect_block_arg_types(db, body);
-    let ptr_values = collect_ptr_values(db, body, &block_arg_types);
+    let mut ptr_values = collect_ptr_values(db, body, &block_arg_types);
 
     if ptr_values.is_empty() {
         return *body;
     }
 
-    let liveness = compute_liveness(db, body, &ptr_values);
+    let ptr_alias_map = build_ptr_alias_map(db, body, &mut ptr_values);
+    let liveness = compute_liveness(db, body, &ptr_values, &ptr_alias_map);
 
     let new_blocks: IdVec<Block<'db>> = body
         .blocks(db)
@@ -413,6 +480,7 @@ fn insert_rc_in_function<'db>(db: &'db dyn salsa::Database, body: &Region<'db>) 
                 &ptr_values,
                 &liveness,
                 &block_arg_types,
+                &ptr_alias_map,
             )
         })
         .collect();
@@ -527,6 +595,7 @@ fn insert_rc_in_block<'db>(
     ptr_values: &HashSet<Value<'db>>,
     liveness: &LivenessInfo<'db>,
     block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+    ptr_alias_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> Block<'db> {
     let block_id = block.id(db);
     let ops = block.operations(db);
@@ -547,6 +616,10 @@ fn insert_rc_in_block<'db>(
             if ptr_values.contains(operand) {
                 last_use_in_block.insert(*operand, op_idx);
             }
+            // If operand is an alias of a ptr value, record as use of the aliased ptr
+            if let Some(&aliased) = ptr_alias_map.get(operand) {
+                last_use_in_block.insert(aliased, op_idx);
+            }
         }
     }
 
@@ -558,6 +631,10 @@ fn insert_rc_in_block<'db>(
         for operand in last_op.operands(db).iter() {
             if ptr_values.contains(operand) {
                 returned_values.insert(*operand);
+            }
+            // If returned operand aliases a ptr, mark the aliased ptr as returned
+            if let Some(&aliased) = ptr_alias_map.get(operand) {
+                returned_values.insert(aliased);
             }
         }
     }
@@ -629,14 +706,14 @@ fn insert_rc_in_block<'db>(
             // live_in values that are still alive past the yield
             for v in &live_in {
                 // Must be used after yield or in live_out
-                if live_out.contains(v) || has_use_after(db, ops, op_idx, *v) {
+                if live_out.contains(v) || has_use_after(db, ops, op_idx, *v, ptr_alias_map) {
                     live.push(*v);
                 }
             }
 
             // Values defined before yield in this block
             for v in &defs_in_block {
-                if live_out.contains(v) || has_use_after(db, ops, op_idx, *v) {
+                if live_out.contains(v) || has_use_after(db, ops, op_idx, *v, ptr_alias_map) {
                     // Check it was defined before the yield
                     if is_defined_before(db, ops, op_idx, *v) {
                         // Skip if already added from live_in
@@ -857,15 +934,25 @@ fn is_yield_call(db: &dyn salsa::Database, op: &Operation<'_>) -> bool {
 }
 
 /// Check if a value has any use after the given operation index in the block.
+///
+/// Also checks for aliased uses: if an operand is in `ptr_alias_map` and maps
+/// to the given value, that counts as a use of the value.
 fn has_use_after<'db>(
     db: &'db dyn salsa::Database,
     ops: &IdVec<Operation<'db>>,
     after_idx: usize,
     value: Value<'db>,
+    ptr_alias_map: &HashMap<Value<'db>, Value<'db>>,
 ) -> bool {
     for op in ops.iter().skip(after_idx + 1) {
         for operand in op.operands(db).iter() {
             if *operand == value {
+                return true;
+            }
+            // Check if operand is an alias of the value
+            if let Some(&aliased) = ptr_alias_map.get(operand)
+                && aliased == value
+            {
                 return true;
             }
         }

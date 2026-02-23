@@ -544,20 +544,21 @@ pub extern "C" fn __tribute_evidence_empty() -> *mut Evidence {
     Box::into_raw(Box::new(Evidence::new()))
 }
 
-/// Look up a marker by ability ID. Aborts if not found (compiler bug).
+/// Look up a marker by ability ID in the `Evidence` and return its
+/// `prompt_tag` (an `i32`).
 ///
-/// Returns the `Marker` by value (`#[repr(C)]` struct, 3×i32).
+/// Aborts if no marker with the given `ability_id` exists (compiler bug).
 ///
-/// Signature: `(ev: ptr, ability_id: i32) -> Marker`
+/// Signature: `(ev: ptr, ability_id: i32) -> i32`
 ///
 /// # Safety
 ///
 /// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
 /// `__tribute_evidence_extend`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> Marker {
+pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_id: i32) -> i32 {
     let ev = unsafe { &*ev };
-    *ev.lookup(ability_id)
+    ev.lookup(ability_id).prompt_tag
 }
 
 /// Extend evidence with a new marker (persistent — returns a new evidence).
@@ -778,10 +779,8 @@ mod tests {
             let ev = __tribute_evidence_extend(ev, 10, 1, 0);
             let ev = __tribute_evidence_extend(ev, 20, 2, 5);
 
-            let marker = __tribute_evidence_lookup(ev, 20);
-            assert_eq!(marker.ability_id, 20);
-            assert_eq!(marker.prompt_tag, 2);
-            assert_eq!(marker.op_table_index, 5);
+            let prompt_tag = __tribute_evidence_lookup(ev, 20);
+            assert_eq!(prompt_tag, 2);
 
             let _ = Box::from_raw(ev);
         }
