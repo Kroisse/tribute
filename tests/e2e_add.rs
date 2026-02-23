@@ -287,13 +287,9 @@ fn main() { }
 /// Test generic instantiation in indirect function calls.
 /// When a closure with generic type is called, the type parameter
 /// should be properly instantiated at the call site.
-///
-/// Note: This test verifies typeck only. Full WASM execution requires
-/// closure support in the WASM backend (not yet implemented).
 #[test]
 fn test_generic_indirect_call() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -310,34 +306,25 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
 
-        // Run typecheck stage - this should succeed with generic instantiation
-        let _module = parse_and_lower_ast(db, source_file);
-
-        // Check for type errors
-        let diagnostics: Vec<_> =
-            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-
-        assert!(
-            diagnostics.is_empty(),
-            "Expected no type errors, got {} diagnostics",
-            diagnostics.len()
-        );
+        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
+            let diagnostics: Vec<_> =
+                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
+            for diag in &diagnostics {
+                eprintln!("Diagnostic: {:?}", diag);
+            }
+            panic!(
+                "Native compilation failed with {} diagnostics",
+                diagnostics.len()
+            );
+        });
     });
 }
 
 /// Test function type syntax in parameter annotations.
 /// Higher-order function with explicit function type: `fn(Int) -> Int`
-///
-/// Note: This test verifies typeck only. Full WASM execution requires
-/// closure support in the WASM backend (not yet implemented).
 #[test]
 fn test_function_type_parameter() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::parse_and_lower_ast;
 
     let source_code = Rope::from_str(
         r#"
@@ -360,22 +347,17 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
 
-        // Run typecheck stage
-        let _module = parse_and_lower_ast(db, source_file);
-
-        // Check for type errors
-        let diagnostics: Vec<_> =
-            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
-            eprintln!("Diagnostic: {:?}", diag);
-        }
-
-        assert!(
-            diagnostics.is_empty(),
-            "Expected no type errors, got {} diagnostics",
-            diagnostics.len()
-        );
+        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
+            let diagnostics: Vec<_> =
+                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
+            for diag in &diagnostics {
+                eprintln!("Diagnostic: {:?}", diag);
+            }
+            panic!(
+                "Native compilation failed with {} diagnostics",
+                diagnostics.len()
+            );
+        });
     });
 }
 

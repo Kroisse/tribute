@@ -723,7 +723,7 @@ fn main() { }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "WASM backend: ability runtime not yet functional"]
+#[ignore = "native backend: ability runtime not yet functional"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -762,7 +762,7 @@ fn main() { }
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "WASM backend: ability runtime not yet functional"]
+#[ignore = "native backend: ability runtime not yet functional"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
