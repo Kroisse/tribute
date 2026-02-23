@@ -464,7 +464,7 @@ fn main() { }
 }
 
 // =============================================================================
-// WASM Execution Tests
+// Native Execution Tests
 // =============================================================================
 
 /// Test ability_core.trb compiles and executes correctly.
