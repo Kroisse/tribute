@@ -23,8 +23,10 @@ use crate::MpPrompt;
 // active prompt tags is typically 1–4.
 // =============================================================================
 
+type PromptStack = SmallVec<[NonNull<MpPrompt>; 2]>;
+
 pub(crate) struct PromptRegistry {
-    entries: SmallVec<[(i32, SmallVec<[NonNull<MpPrompt>; 2]>); 4]>,
+    entries: SmallVec<[(i32, PromptStack); 4]>,
 }
 
 impl PromptRegistry {
