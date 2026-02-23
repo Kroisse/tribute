@@ -1,33 +1,65 @@
 //! Common test utilities for e2e tests.
 
-use std::io::Write;
-use std::process::Command;
-use std::str::FromStr;
-use tempfile::NamedTempFile;
+use std::process::{Command, Output};
 
-/// Run WASM binary with wasmtime CLI and parse the result
+use ropey::Rope;
+use salsa::Database;
+use tribute::TributeDatabaseImpl;
+use tribute::pipeline::{compile_to_native_binary, link_native_binary};
+use tribute_front::SourceCst;
+use tribute_passes::Diagnostic;
+
+/// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]
-pub fn run_wasm<T>(wasm_bytes: &[u8]) -> T
-where
-    T: FromStr,
-    T::Err: std::fmt::Debug,
-{
-    let mut temp_file = NamedTempFile::with_suffix(".wasm").expect("Failed to create temp file");
-    temp_file
-        .write_all(wasm_bytes)
-        .expect("Failed to write WASM");
+pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> Vec<u8> {
+    compile_to_native_binary(db, source_file).unwrap_or_else(|| {
+        let diagnostics: Vec<_> =
+            compile_to_native_binary::accumulated::<Diagnostic>(db, source_file);
+        for diag in &diagnostics {
+            eprintln!("Diagnostic: {:?}", diag);
+        }
+        panic!(
+            "Native compilation failed with {} diagnostics",
+            diagnostics.len()
+        );
+    })
+}
 
-    let output = Command::new("wasmtime")
-        .args(["run", "--wasm", "gc"])
-        .arg(temp_file.path())
-        .output()
-        .expect("Failed to execute wasmtime");
+/// Compile Tribute source code to a native binary, link it, and run it.
+///
+/// Returns the [`Output`] (status, stdout, stderr) of the executed binary.
+/// Panics if compilation, linking, or execution fails.
+#[allow(dead_code)]
+pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
+    use tribute::database::parse_with_thread_local;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!("wasmtime execution failed: {}", stderr);
-    }
+    let source_rope = Rope::from_str(source_code);
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.trim().parse().expect("Failed to parse result")
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_rope, None);
+        let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
+
+        let object_bytes = compile_native_or_panic(db, source_file);
+
+        // Link into executable
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let exec_path = temp_dir.path().join("tribute_test_bin");
+
+        link_native_binary(&object_bytes, &exec_path).unwrap_or_else(|e| {
+            panic!("Linking failed: {e}");
+        });
+
+        // Make executable on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(&exec_path, perms).expect("Failed to set permissions");
+        }
+
+        // Run the executable
+        Command::new(&exec_path)
+            .output()
+            .unwrap_or_else(|e| panic!("Failed to execute native binary: {e}"))
+    })
 }

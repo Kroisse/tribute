@@ -3,13 +3,13 @@
 //! These tests verify Float type functionality including:
 //! - Arithmetic operations (+, -, *, /)
 //! - Comparison operations (<, >, <=, >=, ==)
-//! - WASM compilation
+//! - Native compilation
 
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::SourceCst;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::compile_to_wasm_binary;
+use tribute::pipeline::compile_to_native_binary;
 
 /// Helper to create a source file from code.
 fn source_from_code(db: &TributeDatabaseImpl, name: &str, code: &str) -> SourceCst {
@@ -29,12 +29,12 @@ fn test_float_multiply(db: &TributeDatabaseImpl) {
         db,
         "float_multiply.trb",
         r#"
-fn main() ->{} Float {
-    3.0 * 2.0
+fn main() {
+    let _ = 3.0 * 2.0
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float subtraction operation.
@@ -45,12 +45,12 @@ fn test_float_subtraction(db: &TributeDatabaseImpl) {
         db,
         "float_subtraction.trb",
         r#"
-fn main() ->{} Float {
-    5.5 - 2.5
+fn main() {
+    let _ = 5.5 - 2.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float division operation.
@@ -61,12 +61,12 @@ fn test_float_division(db: &TributeDatabaseImpl) {
         db,
         "float_division.trb",
         r#"
-fn main() ->{} Float {
-    10.0 / 4.0
+fn main() {
+    let _ = 10.0 / 4.0
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float less-than comparison.
@@ -77,12 +77,12 @@ fn test_float_comparison_less_than(db: &TributeDatabaseImpl) {
         db,
         "float_less_than.trb",
         r#"
-fn main() ->{} Bool {
-    1.5 < 2.5
+fn main() {
+    let _ = 1.5 < 2.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float greater-than comparison.
@@ -93,12 +93,12 @@ fn test_float_comparison_greater_than(db: &TributeDatabaseImpl) {
         db,
         "float_greater_than.trb",
         r#"
-fn main() ->{} Bool {
-    2.5 > 1.5
+fn main() {
+    let _ = 2.5 > 1.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float equality comparison.
@@ -109,12 +109,12 @@ fn test_float_comparison_equality(db: &TributeDatabaseImpl) {
         db,
         "float_equality.trb",
         r#"
-fn main() ->{} Bool {
-    1.5 == 1.5
+fn main() {
+    let _ = 1.5 == 1.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float less-than-or-equal comparison.
@@ -124,12 +124,12 @@ fn test_float_comparison_lte(db: &TributeDatabaseImpl) {
         db,
         "float_lte.trb",
         r#"
-fn main() ->{} Bool {
-    1.5 <= 2.5
+fn main() {
+    let _ = 1.5 <= 2.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float greater-than-or-equal comparison.
@@ -139,12 +139,12 @@ fn test_float_comparison_gte(db: &TributeDatabaseImpl) {
         db,
         "float_gte.trb",
         r#"
-fn main() ->{} Bool {
-    2.5 >= 1.5
+fn main() {
+    let _ = 2.5 >= 1.5
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float combined arithmetic operations.
@@ -155,29 +155,29 @@ fn test_float_combined_arithmetic(db: &TributeDatabaseImpl) {
         db,
         "float_combined.trb",
         r#"
-fn main() ->{} Float {
+fn main() {
     let a = 3.0 * 2.0
     let b = 10.0 / 2.0
-    a + b - 1.0
+    let _ = a + b - 1.0
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
-/// Test Float literal WASM compilation.
+/// Test Float literal compilation.
 #[salsa_test]
 fn test_float_literal_compiles(db: &TributeDatabaseImpl) {
     let source = source_from_code(
         db,
         "float_literal.trb",
         r#"
-fn main() ->{} Float {
-    3.14159
+fn main() {
+    let _ = 3.14159
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test negative Float literal.
@@ -187,12 +187,12 @@ fn test_negative_float_literal(db: &TributeDatabaseImpl) {
         db,
         "negative_float.trb",
         r#"
-fn main() ->{} Float {
-    -3.14
+fn main() {
+    let _ = -3.14
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
 
 /// Test Float in function parameter and return.
@@ -206,10 +206,10 @@ fn double(x: Float) ->{} Float {
     x * 2.0
 }
 
-fn main() ->{} Float {
-    double(3.5)
+fn main() {
+    let _ = double(3.5)
 }
 "#,
     );
-    compile_to_wasm_binary(db, source).expect("WASM compilation failed");
+    compile_to_native_binary(db, source).expect("Native compilation failed");
 }
