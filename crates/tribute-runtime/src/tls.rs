@@ -104,7 +104,7 @@ impl ThreadState {
 #[cfg(unix)]
 mod posix {
     use super::*;
-    use core::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     // pthread_key_t type varies by platform:
     //   macOS (Darwin): unsigned long (c_ulong)
@@ -123,6 +123,7 @@ mod posix {
         fn pthread_setspecific(key: PthreadKey, value: *const c_void) -> core::ffi::c_int;
     }
 
+    static TLS_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static TLS_KEY: AtomicUsize = AtomicUsize::new(0);
 
     /// Destructor callback invoked by pthread when a thread exits.
@@ -132,13 +133,19 @@ mod posix {
         }
     }
 
-    /// Create the TLS key. Must be called exactly once before any `thread_state()` call.
+    /// Create the TLS key. Idempotent: only the first call performs initialization;
+    /// subsequent calls are no-ops.
     ///
     /// # Safety
     ///
-    /// Must be called exactly once. Calling `thread_state()` before `tls_init()` is
-    /// undefined behavior.
+    /// Calling `thread_state()` before `tls_init()` is undefined behavior.
     pub(crate) unsafe fn tls_init() {
+        if TLS_INITIALIZED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
         let mut key: PthreadKey = 0;
         let ret = unsafe { pthread_key_create(&mut key, Some(destroy_thread_state)) };
         assert!(ret == 0, "pthread_key_create failed");
@@ -172,7 +179,7 @@ mod posix {
 #[cfg(windows)]
 mod windows {
     use super::*;
-    use core::sync::atomic::{AtomicU32, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     const FLS_OUT_OF_INDEXES: u32 = 0xFFFFFFFF;
 
@@ -182,6 +189,7 @@ mod windows {
         fn FlsSetValue(index: u32, value: *mut c_void) -> i32;
     }
 
+    static TLS_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static FLS_INDEX: AtomicU32 = AtomicU32::new(FLS_OUT_OF_INDEXES);
 
     /// Destructor callback invoked by Windows FLS when a fiber/thread exits.
@@ -191,13 +199,19 @@ mod windows {
         }
     }
 
-    /// Create the FLS index. Must be called exactly once before any `thread_state()` call.
+    /// Create the FLS index. Idempotent: only the first call performs initialization;
+    /// subsequent calls are no-ops.
     ///
     /// # Safety
     ///
-    /// Must be called exactly once. Calling `thread_state()` before `tls_init()` is
-    /// undefined behavior.
+    /// Calling `thread_state()` before `tls_init()` is undefined behavior.
     pub(crate) unsafe fn tls_init() {
+        if TLS_INITIALIZED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
         let index = unsafe { FlsAlloc(Some(destroy_thread_state)) };
         assert!(index != FLS_OUT_OF_INDEXES, "FlsAlloc failed");
         FLS_INDEX.store(index, Ordering::Release);
