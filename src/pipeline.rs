@@ -81,6 +81,17 @@ use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
 use trunk_ir::{Block, BlockId, IdVec, Region};
 
+// =============================================================================
+// Compilation configuration
+// =============================================================================
+
+/// Compilation options threaded through the pipeline via Salsa.
+#[salsa::input]
+pub struct CompilationConfig {
+    /// Enable AddressSanitizer instrumentation.
+    pub sanitize_address: bool,
+}
+
 // AST-based pipeline imports
 use tribute_front::ast::ResolvedRef;
 use tribute_front::ast::SpanMap;
@@ -737,16 +748,16 @@ pub fn compile_to_wasm_binary<'db>(
 /// 2. Lowers `arith.*` operations to `clif.*`
 /// 3. Resolves unrealized conversion casts using native type converter
 /// 4. Validates and emits the native object file via Cranelift
-#[salsa::tracked]
 fn compile_module_to_native<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
+    sanitize: bool,
 ) -> NativeCompilationResult<Vec<u8>> {
     use tribute_passes::native_type_converter;
     use trunk_ir::transforms::lower_scf_to_cf;
 
     // Phase -1 - Generate native entrypoint (wrap user's main)
-    let module = generate_native_entrypoint(db, module);
+    let module = generate_native_entrypoint(db, module, sanitize);
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     let module = lower_scf_to_cf(db, module);
@@ -847,6 +858,7 @@ fn compile_module_to_native<'db>(
 pub fn compile_to_native_binary<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
+    config: CompilationConfig,
 ) -> Option<Vec<u8>> {
     let module = match run_native_pipeline(db, source) {
         Ok(m) => m,
@@ -862,7 +874,8 @@ pub fn compile_to_native_binary<'db>(
         }
     };
 
-    match compile_module_to_native(db, module) {
+    let sanitize = config.sanitize_address(db);
+    match compile_module_to_native(db, module, sanitize) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             Diagnostic {

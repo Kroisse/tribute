@@ -5,16 +5,17 @@ use std::process::{Command, Output};
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::{compile_to_native_binary, link_native_binary};
+use tribute::pipeline::{CompilationConfig, compile_to_native_binary, link_native_binary};
 use tribute_front::SourceCst;
 use tribute_passes::Diagnostic;
 
 /// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]
 pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> Vec<u8> {
-    compile_to_native_binary(db, source_file).unwrap_or_else(|| {
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source_file, config).unwrap_or_else(|| {
         let diagnostics: Vec<_> =
-            compile_to_native_binary::accumulated::<Diagnostic>(db, source_file);
+            compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config);
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }

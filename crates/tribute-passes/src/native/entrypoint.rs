@@ -21,6 +21,7 @@ use trunk_ir::{
 pub fn generate_native_entrypoint<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
+    sanitize: bool,
 ) -> core::Module<'db> {
     let body = module.body(db);
     let blocks = body.blocks(db);
@@ -101,8 +102,24 @@ pub fn generate_native_entrypoint<'db>(
         new_ops.insert(0, init_decl.as_operation());
     }
 
+    // Declare __asan_init when AddressSanitizer is enabled
+    if sanitize {
+        let nil_ty = core::Nil::new(db).as_type();
+        let asan_init_decl = func::Func::build_extern(
+            db,
+            location,
+            "__asan_init",
+            None,
+            [],
+            nil_ty,
+            None,
+            Some("C"),
+        );
+        new_ops.insert(0, asan_init_decl.as_operation());
+    }
+
     // Append the C ABI entrypoint
-    let entrypoint = build_entrypoint(db, location, tribute_main_return_ty, i32_ty);
+    let entrypoint = build_entrypoint(db, location, tribute_main_return_ty, i32_ty, sanitize);
     new_ops.push(entrypoint);
 
     // Rebuild module
@@ -252,10 +269,21 @@ fn build_entrypoint<'db>(
     location: Location<'db>,
     tribute_main_return_ty: trunk_ir::Type<'db>,
     i32_ty: trunk_ir::Type<'db>,
+    sanitize: bool,
 ) -> Operation<'db> {
     let nil_ty = core::Nil::new(db).as_type();
 
     func::Func::build(db, location, "main", IdVec::new(), i32_ty, |builder| {
+        // Initialize ASan before anything else (must precede libmprompt's SIGSEGV handler)
+        if sanitize {
+            builder.op(func::call(
+                db,
+                location,
+                vec![],
+                nil_ty,
+                Symbol::new("__asan_init"),
+            ));
+        }
         // Initialize libmprompt runtime before any ability use
         builder.op(func::call(
             db,
@@ -311,7 +339,7 @@ mod tests {
     #[salsa::tracked]
     fn apply_entrypoint_to_main(db: &dyn salsa::Database) -> core::Module<'_> {
         let module = make_main_module(db);
-        generate_native_entrypoint(db, module)
+        generate_native_entrypoint(db, module, false)
     }
 
     #[salsa_test]
@@ -372,7 +400,7 @@ mod tests {
     #[salsa::tracked]
     fn apply_entrypoint_no_main(db: &dyn salsa::Database) -> core::Module<'_> {
         let module = make_no_main_module(db);
-        generate_native_entrypoint(db, module)
+        generate_native_entrypoint(db, module, false)
     }
 
     #[salsa_test]
@@ -407,7 +435,7 @@ mod tests {
     #[salsa::tracked]
     fn apply_entrypoint_nil_main(db: &dyn salsa::Database) -> core::Module<'_> {
         let module = make_nil_main_module(db);
-        generate_native_entrypoint(db, module)
+        generate_native_entrypoint(db, module, false)
     }
 
     #[salsa_test]

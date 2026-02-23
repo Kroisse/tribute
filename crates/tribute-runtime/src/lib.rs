@@ -124,6 +124,7 @@ unsafe extern "C" {
     fn mp_resume_drop(r: *mut MpResume);
 }
 
+mod asan;
 mod tls;
 
 use tls::{thread_state, tls_init};
@@ -160,6 +161,9 @@ pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     let Ok(size) = usize::try_from(size) else {
         return core::ptr::null_mut();
     };
+    if asan::is_enabled() {
+        return unsafe { asan::alloc(size) };
+    }
     let Ok(layout) = core::alloc::Layout::from_size_align(size, 8) else {
         return core::ptr::null_mut();
     };
@@ -178,6 +182,9 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
     let Ok(size) = usize::try_from(size) else {
         return;
     };
+    if asan::is_enabled() {
+        return unsafe { asan::dealloc(ptr, size) };
+    }
     let Ok(layout) = core::alloc::Layout::from_size_align(size, 8) else {
         return;
     };

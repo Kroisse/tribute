@@ -37,6 +37,10 @@ pub enum Command {
         /// Dump the TrunkIR text representation after compilation
         #[arg(long)]
         dump_ir: bool,
+
+        /// Enable sanitizer instrumentation (e.g., "address")
+        #[arg(long)]
+        sanitize: Option<String>,
     },
 
     /// Debug compilation of a source file
