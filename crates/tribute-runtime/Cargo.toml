@@ -5,7 +5,7 @@ edition.workspace = true
 links = "tribute_runtime"
 
 [lib]
-crate-type = ["staticlib", "lib"]
+crate-type = ["lib"]
 
 [dependencies]
 smallvec.workspace = true

@@ -80,7 +80,6 @@ tree-sitter-tribute.workspace = true
 tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
-tribute-runtime.workspace = true
 trunk-ir.workspace = true
 tempfile.workspace = true
 trunk-ir-cranelift-backend.workspace = true
@@ -90,3 +89,9 @@ trunk-ir-wasm-backend.workspace = true
 insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
+
+# Profile for building tribute-runtime as a lean no_std staticlib.
+# Usage: cargo build -p tribute-runtime --profile runtime
+[profile.runtime]
+inherits = "release"
+panic = "abort"
