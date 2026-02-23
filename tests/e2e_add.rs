@@ -2,10 +2,10 @@
 
 mod common;
 
+use common::compile_native_or_panic;
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::compile_to_native_binary;
 use tribute_front::SourceCst;
 use tribute_ir::ModulePathExt as _;
 use trunk_ir::DialectOp;
@@ -23,8 +23,7 @@ fn test_add_compiles_and_runs() {
         let source_file = SourceCst::from_path(db, "add.trb", source_code.clone(), tree);
 
         // Run full compilation pipeline including native lowering
-        let _native_binary =
-            compile_to_native_binary(db, source_file).expect("Native compilation failed");
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -47,8 +46,7 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "int_identity.trb", source_code.clone(), tree);
 
-        let _native_binary =
-            compile_to_native_binary(db, source_file).expect("Native compilation failed");
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -74,8 +72,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "struct_construction.trb", source_code.clone(), tree);
 
-        let _native_binary =
-            compile_to_native_binary(db, source_file).expect("Native compilation failed");
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -101,17 +98,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "struct_accessor.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -134,8 +121,7 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "float_identity.trb", source_code.clone(), tree);
 
-        let _native_binary =
-            compile_to_native_binary(db, source_file).expect("Native compilation failed");
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -164,17 +150,7 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_struct.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -201,17 +177,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "generic_multiple.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -236,17 +202,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "generic_two_params.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -270,17 +226,7 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "generic_nested.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -306,17 +252,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "generic_indirect.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -347,17 +283,7 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "function_type.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -473,17 +399,7 @@ fn test_calc_eval() {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "calc.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
@@ -867,17 +783,7 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "closure_exec_simple.trb", source_code.clone(), tree);
 
-        let _native_binary = compile_to_native_binary(db, source_file).unwrap_or_else(|| {
-            let diagnostics: Vec<_> =
-                compile_to_native_binary::accumulated::<tribute::Diagnostic>(db, source_file);
-            for diag in &diagnostics {
-                eprintln!("Diagnostic: {:?}", diag);
-            }
-            panic!(
-                "Native compilation failed with {} diagnostics",
-                diagnostics.len()
-            );
-        });
+        let _native_binary = compile_native_or_panic(db, source_file);
     });
 }
 
