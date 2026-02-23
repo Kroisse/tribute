@@ -104,7 +104,7 @@ impl ThreadState {
 #[cfg(unix)]
 mod posix {
     use super::*;
-    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     // pthread_key_t type varies by platform:
     //   macOS (Darwin): unsigned long (c_ulong)
@@ -123,8 +123,12 @@ mod posix {
         fn pthread_setspecific(key: PthreadKey, value: *const c_void) -> core::ffi::c_int;
     }
 
-    static TLS_INITIALIZED: AtomicBool = AtomicBool::new(false);
-    static TLS_KEY: AtomicUsize = AtomicUsize::new(0);
+    /// Sentinel: no initialization attempted yet.
+    const KEY_UNSET: usize = usize::MAX;
+    /// Sentinel: initialization in progress by another thread.
+    const KEY_INITIALIZING: usize = usize::MAX - 1;
+
+    static TLS_KEY: AtomicUsize = AtomicUsize::new(KEY_UNSET);
 
     /// Destructor callback invoked by pthread when a thread exits.
     unsafe extern "C" fn destroy_thread_state(ptr: *mut c_void) {
@@ -134,22 +138,35 @@ mod posix {
     }
 
     /// Create the TLS key. Idempotent: only the first call performs initialization;
-    /// subsequent calls are no-ops.
+    /// concurrent callers spin-wait until the key is ready.
     ///
     /// # Safety
     ///
     /// Calling `thread_state()` before `tls_init()` is undefined behavior.
     pub(crate) unsafe fn tls_init() {
-        if TLS_INITIALIZED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
+        match TLS_KEY.compare_exchange(
+            KEY_UNSET,
+            KEY_INITIALIZING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                // Winner: perform the actual initialization.
+                let mut key: PthreadKey = 0;
+                let ret = unsafe { pthread_key_create(&mut key, Some(destroy_thread_state)) };
+                assert!(ret == 0, "pthread_key_create failed");
+                TLS_KEY.store(key as usize, Ordering::Release);
+            }
+            Err(KEY_INITIALIZING) => {
+                // Another thread is initializing; spin until the real key is published.
+                while TLS_KEY.load(Ordering::Acquire) == KEY_INITIALIZING {
+                    core::hint::spin_loop();
+                }
+            }
+            Err(_) => {
+                // Already initialized — nothing to do.
+            }
         }
-        let mut key: PthreadKey = 0;
-        let ret = unsafe { pthread_key_create(&mut key, Some(destroy_thread_state)) };
-        assert!(ret == 0, "pthread_key_create failed");
-        TLS_KEY.store(key as usize, Ordering::Release);
     }
 
     /// Get the current thread's `ThreadState`, lazily allocating on first access.
@@ -179,9 +196,12 @@ mod posix {
 #[cfg(windows)]
 mod windows {
     use super::*;
-    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use core::sync::atomic::{AtomicU32, Ordering};
 
+    /// Sentinel returned by `FlsAlloc` on failure; also used as "unset".
     const FLS_OUT_OF_INDEXES: u32 = 0xFFFFFFFF;
+    /// Sentinel: initialization in progress by another thread.
+    const FLS_INITIALIZING: u32 = 0xFFFFFFFE;
 
     unsafe extern "system" {
         fn FlsAlloc(callback: Option<unsafe extern "system" fn(*mut c_void)>) -> u32;
@@ -189,7 +209,6 @@ mod windows {
         fn FlsSetValue(index: u32, value: *mut c_void) -> i32;
     }
 
-    static TLS_INITIALIZED: AtomicBool = AtomicBool::new(false);
     static FLS_INDEX: AtomicU32 = AtomicU32::new(FLS_OUT_OF_INDEXES);
 
     /// Destructor callback invoked by Windows FLS when a fiber/thread exits.
@@ -200,21 +219,34 @@ mod windows {
     }
 
     /// Create the FLS index. Idempotent: only the first call performs initialization;
-    /// subsequent calls are no-ops.
+    /// concurrent callers spin-wait until the index is ready.
     ///
     /// # Safety
     ///
     /// Calling `thread_state()` before `tls_init()` is undefined behavior.
     pub(crate) unsafe fn tls_init() {
-        if TLS_INITIALIZED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            return;
+        match FLS_INDEX.compare_exchange(
+            FLS_OUT_OF_INDEXES,
+            FLS_INITIALIZING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => {
+                // Winner: perform the actual initialization.
+                let index = unsafe { FlsAlloc(Some(destroy_thread_state)) };
+                assert!(index != FLS_OUT_OF_INDEXES, "FlsAlloc failed");
+                FLS_INDEX.store(index, Ordering::Release);
+            }
+            Err(FLS_INITIALIZING) => {
+                // Another thread is initializing; spin until the real index is published.
+                while FLS_INDEX.load(Ordering::Acquire) == FLS_INITIALIZING {
+                    core::hint::spin_loop();
+                }
+            }
+            Err(_) => {
+                // Already initialized — nothing to do.
+            }
         }
-        let index = unsafe { FlsAlloc(Some(destroy_thread_state)) };
-        assert!(index != FLS_OUT_OF_INDEXES, "FlsAlloc failed");
-        FLS_INDEX.store(index, Ordering::Release);
     }
 
     /// Get the current thread's `ThreadState`, lazily allocating on first access.
