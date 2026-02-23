@@ -206,24 +206,19 @@ struct PromptContext {
 /// valid across yield/resume boundaries.
 unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u8 {
     let ctx = unsafe { Box::from_raw(arg as *mut PromptContext) };
+    let ts = unsafe { thread_state() };
 
     // Convert to NonNull (libmprompt guarantees non-null prompt pointers)
     let prompt_nn = NonNull::new(prompt).expect("ICE: libmprompt returned null prompt");
 
     // Register the prompt pointer for this tag (stack for nested prompts)
-    unsafe { thread_state() }
-        .prompt_registry
-        .borrow_mut()
-        .push(ctx.tag, prompt_nn);
+    ts.prompt_registry.borrow_mut().push(ctx.tag, prompt_nn);
 
     // Call the user's body function
     let result = unsafe { (ctx.body_fn)(ctx.env) };
 
     // Unregister (pop from stack; remove key when empty)
-    unsafe { thread_state() }
-        .prompt_registry
-        .borrow_mut()
-        .pop(ctx.tag);
+    ts.prompt_registry.borrow_mut().pop(ctx.tag);
 
     // ctx is dropped here (Box ownership)
     result
@@ -677,8 +672,9 @@ mod tests {
     #[test]
     fn test_yield_state_reset() {
         __tribute_init();
-        unsafe { thread_state() }.yield_active.set(true);
-        unsafe { thread_state() }.yield_op_idx.set(42);
+        let ts = unsafe { thread_state() };
+        ts.yield_active.set(true);
+        ts.yield_op_idx.set(42);
         __tribute_reset_yield_state();
         assert_eq!(__tribute_yield_active(), 0);
         assert_eq!(__tribute_get_yield_op_idx(), 0);
