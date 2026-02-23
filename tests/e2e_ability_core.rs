@@ -476,7 +476,6 @@ fn main() { }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "requires effectful call-site continuation support (#336)"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let output = compile_and_run_native("ability_core.trb", code);
@@ -490,7 +489,7 @@ fn test_ability_core_execution() {
 
 /// Test simple State::get handler that returns a constant.
 #[test]
-#[ignore = "native backend: ability handler codegen causes Cranelift verifier error"]
+#[ignore = "native backend: inline handler continuation call not yet supported"]
 fn test_state_get_simple() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -504,8 +503,8 @@ fn get_state() ->{State(Int)} Int {
 fn main() {
     let _ = handle get_state() {
         { result } -> result
-        { State::get() -> k } -> 42
-        { State::set(v) -> k } -> 0
+        { State::get() -> k } -> k(+42)
+        { State::set(v) -> k } -> k(Nil)
     }
 }
 "#;
@@ -520,7 +519,6 @@ fn main() {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "native backend: ability handler with closures causes linker error"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -555,19 +553,19 @@ fn main() {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "requires effectful call-site continuation support (#336)"]
+#[ignore = "native backend: effectful helper function return signature mismatch"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn increment() ->{State(Int)} Nil {
+fn increment() ->{State(Nat)} Nil {
     let n = State::get()
     State::set(n + 1)
 }
 
-fn double_increment() ->{State(Int)} Int {
+fn double_increment() ->{State(Nat)} Nat {
     increment()
     increment()
     State::get()
@@ -596,7 +594,6 @@ fn main() {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "native backend: ability handler with closures causes linker error"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -681,7 +678,6 @@ fn main() { }
 /// Test that State(Int) and State(Bool) are treated as distinct abilities.
 /// A function with State(Int) effect cannot be called where State(Bool) is expected.
 #[test]
-#[ignore = "Type validation: State(Int) vs State(Bool) not yet enforced"]
 fn test_parameterized_ability_distinct_types() {
     // This should produce a type error: State(Int) is not State(Bool)
     let code = r#"ability State(s) {
@@ -723,7 +719,6 @@ fn main() { }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "native backend: ability runtime not yet functional"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -762,7 +757,6 @@ fn main() { }
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "native backend: ability runtime not yet functional"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
@@ -802,7 +796,6 @@ fn main() { }
 
 /// Test arity mismatch: State(Int) vs State() should be an error.
 #[test]
-#[ignore = "Type validation: arity mismatch not yet enforced"]
 fn test_parameterized_ability_arity_mismatch() {
     // This is invalid: ability State(s) requires one type argument
     let code = r#"ability State(s) {
