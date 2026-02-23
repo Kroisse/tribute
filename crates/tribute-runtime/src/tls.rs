@@ -102,7 +102,7 @@ impl ThreadState {
 #[cfg(unix)]
 mod posix {
     use super::*;
-    use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     // pthread_key_t type varies by platform:
     //   macOS (Darwin): unsigned long (c_ulong)
@@ -121,9 +121,6 @@ mod posix {
         fn pthread_setspecific(key: PthreadKey, value: *const c_void) -> core::ffi::c_int;
     }
 
-    // State machine for one-time initialization:
-    //   0 = uninitialized, 1 = initializing, 2 = ready
-    static TLS_STATE: AtomicU8 = AtomicU8::new(0);
     static TLS_KEY: AtomicUsize = AtomicUsize::new(0);
 
     /// Destructor callback invoked by pthread when a thread exits.
@@ -133,36 +130,25 @@ mod posix {
         }
     }
 
-    /// Create the TLS key. Safe to call multiple times (idempotent).
-    pub(crate) fn tls_init() {
-        match TLS_STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                // We won the init race
-                let mut key: PthreadKey = 0;
-                let ret = unsafe { pthread_key_create(&mut key, Some(destroy_thread_state)) };
-                assert!(ret == 0, "pthread_key_create failed");
-                TLS_KEY.store(key as usize, Ordering::Release);
-                TLS_STATE.store(2, Ordering::Release);
-            }
-            Err(1) => {
-                // Another thread is initializing — spin until ready
-                while TLS_STATE.load(Ordering::Acquire) != 2 {
-                    core::hint::spin_loop();
-                }
-            }
-            Err(_) => {
-                // Already initialized (state == 2)
-            }
-        }
+    /// Create the TLS key. Must be called exactly once before any `thread_state()` call.
+    ///
+    /// # Safety
+    ///
+    /// Must be called exactly once. Calling `thread_state()` before `tls_init()` is
+    /// undefined behavior.
+    pub(crate) unsafe fn tls_init() {
+        let mut key: PthreadKey = 0;
+        let ret = unsafe { pthread_key_create(&mut key, Some(destroy_thread_state)) };
+        assert!(ret == 0, "pthread_key_create failed");
+        TLS_KEY.store(key as usize, Ordering::Release);
     }
 
     /// Get the current thread's `ThreadState`, lazily allocating on first access.
-    pub(crate) fn thread_state() -> &'static ThreadState {
-        // Ensure TLS key is initialized
-        if TLS_STATE.load(Ordering::Acquire) != 2 {
-            tls_init();
-        }
-
+    ///
+    /// # Safety
+    ///
+    /// `tls_init()` must have been called before this function.
+    pub(crate) unsafe fn thread_state() -> &'static ThreadState {
         let key = TLS_KEY.load(Ordering::Acquire) as PthreadKey;
         let ptr = unsafe { pthread_getspecific(key) };
         if ptr.is_null() {
@@ -184,7 +170,7 @@ mod posix {
 #[cfg(windows)]
 mod windows {
     use super::*;
-    use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
+    use core::sync::atomic::{AtomicU32, Ordering};
 
     const FLS_OUT_OF_INDEXES: u32 = 0xFFFFFFFF;
 
@@ -194,7 +180,6 @@ mod windows {
         fn FlsSetValue(index: u32, value: *mut c_void) -> i32;
     }
 
-    static TLS_STATE: AtomicU8 = AtomicU8::new(0);
     static FLS_INDEX: AtomicU32 = AtomicU32::new(FLS_OUT_OF_INDEXES);
 
     /// Destructor callback invoked by Windows FLS when a fiber/thread exits.
@@ -204,30 +189,24 @@ mod windows {
         }
     }
 
-    /// Create the FLS index. Safe to call multiple times (idempotent).
-    pub(crate) fn tls_init() {
-        match TLS_STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => {
-                let index = unsafe { FlsAlloc(Some(destroy_thread_state)) };
-                assert!(index != FLS_OUT_OF_INDEXES, "FlsAlloc failed");
-                FLS_INDEX.store(index, Ordering::Release);
-                TLS_STATE.store(2, Ordering::Release);
-            }
-            Err(1) => {
-                while TLS_STATE.load(Ordering::Acquire) != 2 {
-                    core::hint::spin_loop();
-                }
-            }
-            Err(_) => {}
-        }
+    /// Create the FLS index. Must be called exactly once before any `thread_state()` call.
+    ///
+    /// # Safety
+    ///
+    /// Must be called exactly once. Calling `thread_state()` before `tls_init()` is
+    /// undefined behavior.
+    pub(crate) unsafe fn tls_init() {
+        let index = unsafe { FlsAlloc(Some(destroy_thread_state)) };
+        assert!(index != FLS_OUT_OF_INDEXES, "FlsAlloc failed");
+        FLS_INDEX.store(index, Ordering::Release);
     }
 
     /// Get the current thread's `ThreadState`, lazily allocating on first access.
-    pub(crate) fn thread_state() -> &'static ThreadState {
-        if TLS_STATE.load(Ordering::Acquire) != 2 {
-            tls_init();
-        }
-
+    ///
+    /// # Safety
+    ///
+    /// `tls_init()` must have been called before this function.
+    pub(crate) unsafe fn thread_state() -> &'static ThreadState {
         let index = FLS_INDEX.load(Ordering::Acquire);
         let ptr = unsafe { FlsGetValue(index) };
         if ptr.is_null() {
