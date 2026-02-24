@@ -46,10 +46,13 @@ impl PromptRegistry {
         }
     }
 
-    pub(crate) fn pop(&mut self, tag: i32) {
+    pub(crate) fn pop(&mut self, tag: i32, prompt: NonNull<MpPrompt>) {
         if let Some(pos) = self.entries.iter().position(|(t, _)| *t == tag) {
-            self.entries[pos].1.pop();
-            if self.entries[pos].1.is_empty() {
+            let stack = &mut self.entries[pos].1;
+            if let Some(idx) = stack.iter().rposition(|p| *p == prompt) {
+                stack.remove(idx);
+            }
+            if stack.is_empty() {
                 self.entries.remove(pos);
             }
         }

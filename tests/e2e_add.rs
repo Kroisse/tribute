@@ -388,7 +388,6 @@ fn main() { }
 /// Note: Currently only tests compilation. WASM execution is disabled due to
 /// wasmtime invocation issues (see test infrastructure).
 #[test]
-#[ignore = "native backend: enum recursion needs investigation"]
 fn test_calc_eval() {
     use tribute::database::parse_with_thread_local;
 
@@ -764,7 +763,6 @@ fn check_for_lowered_closure_ops(
 
 /// Test simple lambda (no capture) compiles correctly.
 #[test]
-#[ignore = "native backend: closure codegen needs investigation"]
 fn test_closure_execution_simple() {
     use tribute::database::parse_with_thread_local;
 
