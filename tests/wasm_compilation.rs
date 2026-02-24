@@ -111,7 +111,6 @@ fn main() { test_ops() }
 // pattern matching (case) and algebraic effects.
 
 #[salsa_test]
-#[ignore = "requires string literal lowering for case branch return values"]
 fn test_compile_case_expression(db: &salsa::DatabaseImpl) {
     let code = r#"
 fn classify(n) {

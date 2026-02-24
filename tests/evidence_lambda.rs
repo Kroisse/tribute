@@ -260,7 +260,6 @@ fn main() { }
 ///
 /// These should be effectful if the effect row variable `e` is non-empty.
 #[test]
-#[ignore] // TODO: add assertions once expected effectfulness behavior is determined
 fn test_handler_arm_lambdas_in_run_state() {
     let code = r#"
 ability State(s) {
