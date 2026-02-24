@@ -14,19 +14,6 @@ fn main() {
         .define("MP_STATIC_LIB", None)
         .warnings(false);
 
-    // Workaround for LLVM setjmp/longjmp miscompilation on ARM64:
-    // LLVM incorrectly clobbers local variables across custom setjmp/longjmp
-    // calls despite the returns_twice attribute on mp_setjmp. At -O1 and above,
-    // the register allocator may place variables live across setjmp into registers
-    // that are not preserved by the custom longjmp, causing corruption.
-    // Compile libmprompt C code at -O0 to ensure correctness.
-    // The performance-critical fiber-switching code is in hand-written assembly
-    // (longjmp_arm64.S) and is unaffected by this setting.
-    // See: https://github.com/llvm/llvm-project/issues/21557
-    if target_arch == "aarch64" {
-        build.opt_level(0);
-    }
-
     // Select the platform-specific assembly file for longjmp/setjmp
     match (target_arch.as_str(), target_os.as_str()) {
         ("x86_64", "windows") => {
