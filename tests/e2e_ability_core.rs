@@ -477,7 +477,6 @@ fn main() { }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
     let output = compile_and_run_native("ability_core.trb", code);
@@ -521,7 +520,6 @@ fn main() {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -597,7 +595,6 @@ fn main() {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s
