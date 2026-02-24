@@ -6,9 +6,37 @@ use std::collections::HashMap;
 
 use trunk_ir::smallvec::SmallVec;
 
-use crate::ast::{EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
+use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
 
 use super::constraint::{Constraint, ConstraintSet};
+
+/// Apply a type-transforming function to all effect type arguments in an effect row.
+///
+/// This is the shared logic used by `apply_with_rows`, `replace_univars_with_bound`,
+/// and `apply_type_subst_to_row`: map each effect's type args through `f`, then
+/// rebuild the row only if something changed.
+fn map_effect_row_type_args<'db>(
+    db: &'db dyn salsa::Database,
+    row: EffectRow<'db>,
+    mut f: impl FnMut(Type<'db>) -> Type<'db>,
+) -> EffectRow<'db> {
+    let effects = row.effects(db);
+    let new_effects: Vec<_> = effects
+        .iter()
+        .map(|e| {
+            let new_args: Vec<_> = e.args.iter().map(|a| f(*a)).collect();
+            Effect {
+                ability_id: e.ability_id,
+                args: new_args,
+            }
+        })
+        .collect();
+    if new_effects != *effects {
+        EffectRow::new(db, new_effects, row.rest(db))
+    } else {
+        row
+    }
+}
 
 /// Error during constraint solving.
 #[derive(Clone, Debug)]
@@ -99,27 +127,9 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 let result = self.apply_with_rows(db, *result, row_subst);
                 let row_applied = row_subst.apply(db, *effect);
-                // Also apply type substitution to effect args (e.g., State(?a) → State(Int))
-                let effects = row_applied.effects(db);
-                let new_effects: Vec<_> = effects
-                    .iter()
-                    .map(|e| {
-                        let new_args: Vec<_> = e
-                            .args
-                            .iter()
-                            .map(|a| self.apply_with_rows(db, *a, row_subst))
-                            .collect();
-                        crate::ast::Effect {
-                            ability_id: e.ability_id,
-                            args: new_args,
-                        }
-                    })
-                    .collect();
-                let effect = if new_effects != *effects {
-                    EffectRow::new(db, new_effects, row_applied.rest(db))
-                } else {
-                    row_applied
-                };
+                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                    self.apply_with_rows(db, a, row_subst)
+                });
                 Type::new(
                     db,
                     TypeKind::Func {
@@ -151,28 +161,10 @@ impl<'db> TypeSubst<'db> {
             } => {
                 let arg = self.apply_with_rows(db, *arg, row_subst);
                 let result = self.apply_with_rows(db, *result, row_subst);
-                // Apply row substitution to the continuation's effect row
                 let row_applied = row_subst.apply(db, *effect);
-                let effects = row_applied.effects(db);
-                let new_effects: Vec<_> = effects
-                    .iter()
-                    .map(|e| {
-                        let new_args: Vec<_> = e
-                            .args
-                            .iter()
-                            .map(|a| self.apply_with_rows(db, *a, row_subst))
-                            .collect();
-                        crate::ast::Effect {
-                            ability_id: e.ability_id,
-                            args: new_args,
-                        }
-                    })
-                    .collect();
-                let effect = if new_effects != *effects {
-                    EffectRow::new(db, new_effects, row_applied.rest(db))
-                } else {
-                    row_applied
-                };
+                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                    self.apply_with_rows(db, a, row_subst)
+                });
                 Type::new(
                     db,
                     TypeKind::Continuation {
@@ -311,13 +303,7 @@ impl<'db> TypeSubst<'db> {
                     self.collect_unresolved_univars(db, *p, row_subst, out);
                 }
                 self.collect_unresolved_univars(db, *result, row_subst, out);
-                // Also collect from effect row type arguments
-                let applied = row_subst.apply(db, *effect);
-                for e in applied.effects(db) {
-                    for a in &e.args {
-                        self.collect_unresolved_univars(db, *a, row_subst, out);
-                    }
-                }
+                self.collect_univars_from_effect_row(db, *effect, row_subst, out);
             }
             TypeKind::Named { args, .. } => {
                 for a in args {
@@ -342,15 +328,25 @@ impl<'db> TypeSubst<'db> {
             } => {
                 self.collect_unresolved_univars(db, *arg, row_subst, out);
                 self.collect_unresolved_univars(db, *result, row_subst, out);
-                // Also collect from effect row type arguments
-                let applied = row_subst.apply(db, *effect);
-                for e in applied.effects(db) {
-                    for a in &e.args {
-                        self.collect_unresolved_univars(db, *a, row_subst, out);
-                    }
-                }
+                self.collect_univars_from_effect_row(db, *effect, row_subst, out);
             }
             _ => {}
+        }
+    }
+
+    /// Collect unresolved UniVarIds from an effect row's type arguments.
+    fn collect_univars_from_effect_row(
+        &self,
+        db: &'db dyn salsa::Database,
+        effect: EffectRow<'db>,
+        row_subst: &RowSubst<'db>,
+        out: &mut Vec<UniVarId<'db>>,
+    ) {
+        let applied = row_subst.apply(db, effect);
+        for e in applied.effects(db) {
+            for a in &e.args {
+                self.collect_unresolved_univars(db, *a, row_subst, out);
+            }
         }
     }
 
@@ -400,30 +396,10 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 let new_result =
                     self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
-                // Apply row substitution and generalize effect type args
                 let applied_row = row_subst.apply(db, *effect);
-                let new_effects: Vec<_> = applied_row
-                    .effects(db)
-                    .iter()
-                    .map(|e| {
-                        let new_args: Vec<_> = e
-                            .args
-                            .iter()
-                            .map(|a| {
-                                self.replace_univars_with_bound(db, *a, row_subst, var_to_index)
-                            })
-                            .collect();
-                        crate::ast::Effect {
-                            ability_id: e.ability_id,
-                            args: new_args,
-                        }
-                    })
-                    .collect();
-                let new_effect = if new_effects != *applied_row.effects(db) {
-                    EffectRow::new(db, new_effects, applied_row.rest(db))
-                } else {
-                    applied_row
-                };
+                let new_effect = map_effect_row_type_args(db, applied_row, |a| {
+                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
+                });
                 Type::new(
                     db,
                     TypeKind::Func {
@@ -462,30 +438,10 @@ impl<'db> TypeSubst<'db> {
                 let new_arg = self.replace_univars_with_bound(db, *arg, row_subst, var_to_index);
                 let new_result =
                     self.replace_univars_with_bound(db, *result, row_subst, var_to_index);
-                // Apply row substitution and generalize effect type args
                 let applied_row = row_subst.apply(db, *effect);
-                let new_effects: Vec<_> = applied_row
-                    .effects(db)
-                    .iter()
-                    .map(|e| {
-                        let new_args: Vec<_> = e
-                            .args
-                            .iter()
-                            .map(|a| {
-                                self.replace_univars_with_bound(db, *a, row_subst, var_to_index)
-                            })
-                            .collect();
-                        crate::ast::Effect {
-                            ability_id: e.ability_id,
-                            args: new_args,
-                        }
-                    })
-                    .collect();
-                let new_effect = if new_effects != *applied_row.effects(db) {
-                    EffectRow::new(db, new_effects, applied_row.rest(db))
-                } else {
-                    applied_row
-                };
+                let new_effect = map_effect_row_type_args(db, applied_row, |a| {
+                    self.replace_univars_with_bound(db, a, row_subst, var_to_index)
+                });
                 Type::new(
                     db,
                     TypeKind::Continuation {
@@ -597,27 +553,7 @@ impl<'db> TypeSolver<'db> {
     /// are resolved before row comparison. Without this, two rows with the same ability
     /// but different (unresolved vs resolved) args would fail to unify.
     fn apply_type_subst_to_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
-        let effects = row.effects(self.db);
-        let new_effects: Vec<_> = effects
-            .iter()
-            .map(|e| {
-                let new_args: Vec<_> = e
-                    .args
-                    .iter()
-                    .map(|a| self.type_subst.apply(self.db, *a))
-                    .collect();
-                crate::ast::Effect {
-                    ability_id: e.ability_id,
-                    args: new_args,
-                }
-            })
-            .collect();
-
-        if new_effects != *effects {
-            EffectRow::new(self.db, new_effects, row.rest(self.db))
-        } else {
-            row
-        }
+        map_effect_row_type_args(self.db, row, |a| self.type_subst.apply(self.db, a))
     }
 
     /// Solve a set of constraints.
