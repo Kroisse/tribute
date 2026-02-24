@@ -13,8 +13,8 @@ use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
-    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, link_native_binary,
-    run_native_pipeline, run_wasm_pipeline,
+    CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
+    link_native_binary, run_native_pipeline, run_wasm_pipeline,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
@@ -37,9 +37,11 @@ fn main() {
             output,
             target,
             dump_ir,
+            sanitize,
         } => {
             init_tracing(&cli.log);
-            compile_file(file, output, &target, dump_ir);
+            let sanitize_address = sanitize.as_deref() == Some("address");
+            compile_file(file, output, &target, dump_ir, sanitize_address);
         }
         Command::Debug { file, show_env } => {
             init_tracing(&cli.log);
@@ -60,7 +62,13 @@ fn init_tracing(log_filter: &str) {
         .init();
 }
 
-fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str, dump_ir: bool) {
+fn compile_file(
+    input_path: PathBuf,
+    output_path: Option<PathBuf>,
+    target: &str,
+    dump_ir: bool,
+    sanitize_address: bool,
+) {
     let source_code = {
         match std::fs::File::open(&input_path).and_then(Rope::from_reader) {
             Ok(content) => content,
@@ -76,6 +84,9 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str,
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         if dump_ir {
+            if sanitize_address {
+                eprintln!("warning: --sanitize has no effect with --dump-ir (sanitizer ops are added during backend lowering)");
+            }
             let result = match target {
                 "native" => run_native_pipeline(db, source),
                 _ => run_wasm_pipeline(db, source),
@@ -121,7 +132,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str,
             "native" => {
                 println!("Compiling {} to native executable...", input_path.display());
 
-                if let Some(object_bytes) = compile_to_native_binary(db, source) {
+                let config = CompilationConfig::new(db, sanitize_address);
+                if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
                     if let Err(e) = link_native_binary(&object_bytes, &output) {
                         eprintln!("Linking failed: {e}");
@@ -133,7 +145,8 @@ fn compile_file(input_path: PathBuf, output_path: Option<PathBuf>, target: &str,
                     );
                 } else {
                     let file_path = input_path.display().to_string();
-                    let diags = compile_to_native_binary::accumulated::<Diagnostic>(db, source);
+                    let diags =
+                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
                     report_diagnostics(db, source, &file_path, diags);
                     std::process::exit(1);
                 }

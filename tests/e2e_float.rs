@@ -9,7 +9,7 @@ use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::SourceCst;
 use tribute::TributeDatabaseImpl;
-use tribute::pipeline::compile_to_native_binary;
+use tribute::pipeline::{CompilationConfig, compile_to_native_binary};
 
 /// Helper to create a source file from code.
 fn source_from_code(db: &TributeDatabaseImpl, name: &str, code: &str) -> SourceCst {
@@ -34,7 +34,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float subtraction operation.
@@ -50,7 +51,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float division operation.
@@ -66,7 +68,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float less-than comparison.
@@ -82,7 +85,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float greater-than comparison.
@@ -98,7 +102,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float equality comparison.
@@ -114,7 +119,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float less-than-or-equal comparison.
@@ -129,7 +135,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float greater-than-or-equal comparison.
@@ -144,7 +151,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float combined arithmetic operations.
@@ -162,7 +170,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float literal compilation.
@@ -177,7 +186,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test negative Float literal.
@@ -192,7 +202,8 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
 
 /// Test Float in function parameter and return.
@@ -211,5 +222,6 @@ fn main() {
 }
 "#,
     );
-    compile_to_native_binary(db, source).expect("Native compilation failed");
+    let config = CompilationConfig::new(db, false);
+    compile_to_native_binary(db, source, config).expect("Native compilation failed");
 }
