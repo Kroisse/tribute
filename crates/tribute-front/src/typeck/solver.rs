@@ -127,10 +127,9 @@ impl<'db> TypeSubst<'db> {
                     .collect();
                 let result = self.apply_with_rows(db, *result, row_subst);
                 let row_applied = row_subst.apply(db, *effect);
-                let effect =
-                    map_effect_row_type_args(db, row_applied, |a| {
-                        self.apply_with_rows(db, a, row_subst)
-                    });
+                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                    self.apply_with_rows(db, a, row_subst)
+                });
                 Type::new(
                     db,
                     TypeKind::Func {
@@ -163,10 +162,9 @@ impl<'db> TypeSubst<'db> {
                 let arg = self.apply_with_rows(db, *arg, row_subst);
                 let result = self.apply_with_rows(db, *result, row_subst);
                 let row_applied = row_subst.apply(db, *effect);
-                let effect =
-                    map_effect_row_type_args(db, row_applied, |a| {
-                        self.apply_with_rows(db, a, row_subst)
-                    });
+                let effect = map_effect_row_type_args(db, row_applied, |a| {
+                    self.apply_with_rows(db, a, row_subst)
+                });
                 Type::new(
                     db,
                     TypeKind::Continuation {
