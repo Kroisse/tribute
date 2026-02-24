@@ -208,7 +208,12 @@ pub extern "C" fn __asan_init() {
 ///
 /// Same preconditions as `__tribute_alloc`.
 pub unsafe fn alloc(size: usize) -> *mut u8 {
-    let total = REDZONE_SIZE + size + REDZONE_SIZE;
+    let Some(total) = REDZONE_SIZE
+        .checked_add(size)
+        .and_then(|s| s.checked_add(REDZONE_SIZE))
+    else {
+        return core::ptr::null_mut();
+    };
     let Ok(layout) = Layout::from_size_align(total, ALLOC_ALIGN) else {
         return core::ptr::null_mut();
     };
@@ -237,6 +242,18 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
 ///
 /// `ptr` must have been returned by `asan::alloc` with the same `size`.
 pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
+    let Some(total) = REDZONE_SIZE
+        .checked_add(size)
+        .and_then(|s| s.checked_add(REDZONE_SIZE))
+    else {
+        // Corrupted size — abort rather than silently ignoring
+        write_stderr(b"==ERROR: TributeASan: dealloc called with overflowing size\n");
+        unsafe extern "C" {
+            fn abort() -> !;
+        }
+        unsafe { abort() }
+    };
+
     let base = unsafe { ptr.sub(REDZONE_SIZE) };
 
     // Check red zone integrity
@@ -244,7 +261,6 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
     unsafe { check_redzone(ptr.add(size), REDZONE_SIZE, "right") };
 
     // Poison the entire region (red zones + payload) with MAGIC_FREED
-    let total = REDZONE_SIZE + size + REDZONE_SIZE;
     unsafe { core::ptr::write_bytes(base, MAGIC_FREED, total) };
 
     // Move to quarantine instead of immediately freeing
@@ -259,6 +275,13 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 mod tests {
     use super::*;
 
+    /// Mutex to serialize tests that mutate global ASan state.
+    ///
+    /// Tests modify `ASAN_ENABLED`, `QUARANTINE`, and `QUARANTINE_TOTAL` which
+    /// are process-wide globals. Without serialization, parallel test execution
+    /// causes data races.
+    static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Reset quarantine state for test isolation.
     unsafe fn reset_quarantine() {
         unsafe { *QUARANTINE.queue.get() = Some(VecDeque::new()) };
@@ -267,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_asan_alloc_dealloc() {
-        // Manually enable ASan for this test
+        let _lock = TEST_MUTEX.lock().unwrap();
         ASAN_ENABLED.store(true, Ordering::SeqCst);
         unsafe { reset_quarantine() };
 
@@ -287,6 +310,7 @@ mod tests {
 
     #[test]
     fn test_asan_redzone_intact() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         ASAN_ENABLED.store(true, Ordering::SeqCst);
         unsafe { reset_quarantine() };
 
@@ -313,6 +337,7 @@ mod tests {
 
     #[test]
     fn test_asan_freed_memory_poisoned() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         ASAN_ENABLED.store(true, Ordering::SeqCst);
         unsafe { reset_quarantine() };
 
@@ -343,6 +368,7 @@ mod tests {
 
     #[test]
     fn test_asan_quarantine_eviction() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         ASAN_ENABLED.store(true, Ordering::SeqCst);
         unsafe { reset_quarantine() };
 

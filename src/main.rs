@@ -84,6 +84,9 @@ fn compile_file(
         let source = SourceCst::from_path(db, &input_path, source_code, tree);
 
         if dump_ir {
+            if sanitize_address {
+                eprintln!("warning: --sanitize has no effect with --dump-ir (sanitizer ops are added during backend lowering)");
+            }
             let result = match target {
                 "native" => run_native_pipeline(db, source),
                 _ => run_wasm_pipeline(db, source),

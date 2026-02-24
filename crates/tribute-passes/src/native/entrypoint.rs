@@ -66,12 +66,17 @@ pub fn generate_native_entrypoint<'db>(
     // Rebuild module: rename main -> _tribute_main, rewrite call sites, then append new entrypoint
     let mut new_ops: Vec<Operation<'db>> = Vec::new();
     let mut has_tribute_init = false;
+    let mut has_asan_init = false;
     let init_sym = Symbol::new("__tribute_init");
+    let asan_init_sym = Symbol::new("__asan_init");
 
     for op in entry_block.operations(db).iter() {
         if let Ok(func_op) = func::Func::from_operation(db, *op) {
             if func_op.sym_name(db) == init_sym {
                 has_tribute_init = true;
+            }
+            if func_op.sym_name(db) == asan_init_sym {
+                has_asan_init = true;
             }
             if func_op.sym_name(db) == main_sym {
                 let renamed = rebuild_func_with_name(db, &func_op, tribute_main_sym);
@@ -103,7 +108,7 @@ pub fn generate_native_entrypoint<'db>(
     }
 
     // Declare __asan_init when AddressSanitizer is enabled
-    if sanitize {
+    if sanitize && !has_asan_init {
         let nil_ty = core::Nil::new(db).as_type();
         let asan_init_decl = func::Func::build_extern(
             db,
