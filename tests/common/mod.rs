@@ -12,7 +12,17 @@ use tribute_passes::Diagnostic;
 /// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]
 pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> Vec<u8> {
-    let config = CompilationConfig::new(db, false);
+    compile_native_or_panic_with(db, source_file, false)
+}
+
+/// Compile source to a native object file with optional ASan, panicking with diagnostics on failure.
+#[allow(dead_code)]
+pub fn compile_native_or_panic_with(
+    db: &dyn salsa::Database,
+    source_file: SourceCst,
+    sanitize_address: bool,
+) -> Vec<u8> {
+    let config = CompilationConfig::new(db, sanitize_address);
     compile_to_native_binary(db, source_file, config).unwrap_or_else(|| {
         let diagnostics: Vec<_> =
             compile_to_native_binary::accumulated::<Diagnostic>(db, source_file, config);
@@ -32,6 +42,23 @@ pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst)
 /// Panics if compilation, linking, or execution fails.
 #[allow(dead_code)]
 pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
+    compile_and_run_native_impl(source_name, source_code, false)
+}
+
+/// Compile Tribute source code to a native binary with ASan enabled, link it, and run it.
+///
+/// Returns the [`Output`] (status, stdout, stderr) of the executed binary.
+/// Panics if compilation, linking, or execution fails.
+#[allow(dead_code)]
+pub fn compile_and_run_native_asan(source_name: &str, source_code: &str) -> Output {
+    compile_and_run_native_impl(source_name, source_code, true)
+}
+
+fn compile_and_run_native_impl(
+    source_name: &str,
+    source_code: &str,
+    sanitize_address: bool,
+) -> Output {
     use tribute::database::parse_with_thread_local;
 
     let source_rope = Rope::from_str(source_code);
@@ -40,7 +67,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
         let tree = parse_with_thread_local(&source_rope, None);
         let source_file = SourceCst::from_path(db, source_name, source_rope.clone(), tree);
 
-        let object_bytes = compile_native_or_panic(db, source_file);
+        let object_bytes = compile_native_or_panic_with(db, source_file, sanitize_address);
 
         // Link into executable
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");

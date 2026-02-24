@@ -27,7 +27,7 @@
 
 mod common;
 
-use common::compile_and_run_native;
+use common::{compile_and_run_native, compile_and_run_native_asan};
 
 use ropey::Rope;
 use salsa::Database;
@@ -477,15 +477,15 @@ fn main() { }
 ///
 /// The final return value is 2 (the last counter() call's return).
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_ability_core_execution() {
     let code = include_str!("../lang-examples/ability_core.trb");
-    let output = compile_and_run_native("ability_core.trb", code);
+    let output = compile_and_run_native_asan("ability_core.trb", code);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
         "Native binary exited with non-zero status: {:?}\nstderr: {}",
         output.status,
-        String::from_utf8_lossy(&output.stderr)
+        stderr
     );
 }
 
@@ -521,7 +521,6 @@ fn main() {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -545,12 +544,13 @@ fn main() {
     let _ = run_state(fn() { set_then_get() }, 0)
 }
 "#;
-    let output = compile_and_run_native("state_set_then_get.trb", code);
+    let output = compile_and_run_native_asan("state_set_then_get.trb", code);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
         "Native binary exited with non-zero status: {:?}\nstderr: {}",
         output.status,
-        String::from_utf8_lossy(&output.stderr)
+        stderr
     );
 }
 
@@ -597,7 +597,6 @@ fn main() {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "native backend: latent memory bug (munmap_chunk invalid pointer under coverage); needs valgrind/ASan investigation"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -620,12 +619,13 @@ fn main() {
     let _ = run_state(fn() { no_effects() }, 0)
 }
 "#;
-    let output = compile_and_run_native("handler_direct_result.trb", code);
+    let output = compile_and_run_native_asan("handler_direct_result.trb", code);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
         "Native binary exited with non-zero status: {:?}\nstderr: {}",
         output.status,
-        String::from_utf8_lossy(&output.stderr)
+        stderr
     );
 }
 

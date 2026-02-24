@@ -1,13 +1,37 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Recursively emit `cargo:rerun-if-changed` for every file under `dir`.
+fn watch_dir_recursive(dir: &str) {
+    fn visit(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path);
+            } else {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    visit(Path::new(dir));
+}
 
 fn main() {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
     let mut build = cc::Build::new();
-    println!("cargo:rerun-if-changed=libmprompt/src");
-    println!("cargo:rerun-if-changed=libmprompt/include");
+
+    // Watch individual source files and headers so that changes in
+    // subdirectories (e.g. libmprompt/src/mprompt/mprompt.c) correctly
+    // trigger a rebuild.  Watching only the top-level directory does NOT
+    // detect file-content changes inside nested subdirectories on
+    // macOS/Unix (the parent directory's mtime is unchanged).
+    watch_dir_recursive("libmprompt/src");
+    watch_dir_recursive("libmprompt/include");
     build
         .file("libmprompt/src/mprompt/main.c")
         .include("libmprompt/include")

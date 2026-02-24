@@ -225,7 +225,7 @@ unsafe extern "C" fn prompt_start(prompt: *mut MpPrompt, arg: *mut u8) -> *mut u
     let result = unsafe { (ctx.body_fn)(ctx.env) };
 
     // Unregister (pop from stack; remove key when empty)
-    ts.prompt_registry.borrow_mut().pop(ctx.tag);
+    ts.prompt_registry.borrow_mut().pop(ctx.tag, prompt_nn);
 
     // ctx is dropped here (Box ownership)
     result
