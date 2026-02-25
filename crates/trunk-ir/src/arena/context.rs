@@ -211,7 +211,7 @@ impl IrContext {
         let results: SmallVec<[ValueRef; 4]> =
             self.result_values[op].as_slice(&self.value_pool).into();
         for &val in &results {
-            debug_assert!(
+            assert!(
                 self.uses[val].is_empty(),
                 "remove_op: result value {val} still has {} use(s); \
                  replace all uses before removing the operation",
@@ -289,15 +289,34 @@ impl IrContext {
     }
 
     /// Append an operation to the end of a block.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operation already belongs to a block.
     pub fn push_op(&mut self, block: BlockRef, op: OpRef) {
+        assert!(
+            self.ops[op].parent_block.is_none(),
+            "push_op: operation {op} already belongs to block {:?}; \
+             remove it from the old block first",
+            self.ops[op].parent_block.unwrap(),
+        );
         self.ops[op].parent_block = Some(block);
         self.blocks[block].ops.push(op);
     }
 
     /// Insert an operation before `before` in the given block.
     ///
-    /// Panics if `before` is not found in the block.
+    /// # Panics
+    ///
+    /// Panics if the operation already belongs to a block, or if `before`
+    /// is not found in the block.
     pub fn insert_op_before(&mut self, block: BlockRef, before: OpRef, op: OpRef) {
+        assert!(
+            self.ops[op].parent_block.is_none(),
+            "insert_op_before: operation {op} already belongs to block {:?}; \
+             remove it from the old block first",
+            self.ops[op].parent_block.unwrap(),
+        );
         self.ops[op].parent_block = Some(block);
         let ops = &mut self.blocks[block].ops;
         let pos = ops
@@ -308,9 +327,13 @@ impl IrContext {
     }
 
     /// Remove an operation from a block (does not destroy the operation).
+    ///
+    /// Only clears the operation's `parent_block` if it matches the given block.
     pub fn remove_op_from_block(&mut self, block: BlockRef, op: OpRef) {
         self.blocks[block].ops.retain(|o| *o != op);
-        self.ops[op].parent_block = None;
+        if self.ops[op].parent_block == Some(block) {
+            self.ops[op].parent_block = None;
+        }
     }
 
     // ========================================================================

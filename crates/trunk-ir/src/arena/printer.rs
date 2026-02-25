@@ -423,7 +423,7 @@ fn print_module_op(state: &mut PrintState<'_>, f: &mut impl Write, op: OpRef) ->
         // Print each top-level op with reset numbering
         let region_data = state.ctx.region(region);
         let blocks: Vec<_> = region_data.blocks.iter().copied().collect();
-        if let Some(&block) = blocks.first() {
+        for &block in &blocks {
             let block_data = state.ctx.block(block);
             let ops: Vec<_> = block_data.ops.iter().copied().collect();
             for &child_op in &ops {

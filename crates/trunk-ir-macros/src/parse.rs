@@ -215,13 +215,20 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
         Ident::parser(&mut inner).map_err(|e| format!("expected attribute name: {e}"))?;
 
     match ident.to_string().as_str() {
-        "doc" => Ok(OuterAttr::Doc),
+        "doc" => {
+            // doc attributes may have `= "..."` content; skip remaining tokens
+            Ok(OuterAttr::Doc)
+        }
         "attr" => {
             let paren = expect_group(&mut inner, Delimiter::Parenthesis)?;
+            expect_consumed(&inner, "#[attr(...)]")?;
             let attrs = parse_attr_list(paren.stream())?;
             Ok(OuterAttr::OpAttrs(attrs))
         }
-        "rest_results" => Ok(OuterAttr::RestResults),
+        "rest_results" => {
+            expect_consumed(&inner, "#[rest_results]")?;
+            Ok(OuterAttr::RestResults)
+        }
         other => Err(format!(
             "unexpected attribute `{other}`, expected `doc`, `attr`, or `rest_results`"
         )),
@@ -232,10 +239,16 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
 fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, String> {
     let mut iter = stream.to_token_iter();
     let mut attrs = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
 
     while has_remaining(&iter) {
         let name_ident: Ident =
             Ident::parser(&mut iter).map_err(|e| format!("expected attribute name: {e}"))?;
+
+        let name = ident_str(&name_ident);
+        if !seen_names.insert(name.clone()) {
+            return Err(format!("duplicate attribute name: `{name}`"));
+        }
 
         // Check for optional marker '?'
         let optional = peek_punct(&iter, '?');
@@ -250,7 +263,7 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
         let ty = parse_attr_type(&ty_ident)?;
 
         attrs.push(AttrDef {
-            name: ident_str(&name_ident),
+            name,
             raw_ident: name_ident,
             ty,
             optional,
@@ -348,6 +361,7 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
             if kw != "rest" {
                 return Err(format!("expected `rest`, got `{kw}`"));
             }
+            expect_consumed(&inner, "#[rest]")?;
             if seen_variadic {
                 return Err("at most one #[rest] operand is allowed".into());
             }
@@ -427,10 +441,12 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
             .map_err(|e| format!("expected `region` or `successor`: {e}"))?;
 
         let paren = expect_group(&mut inner, Delimiter::Parenthesis)?;
+        expect_consumed(&inner, "#[region/successor(...)]")?;
         let mut name_iter = paren.stream().to_token_iter();
         let name_ident: Ident = Ident::parser(&mut name_iter)
             .map_err(|e| format!("expected region/successor name: {e}"))?;
         let name = ident_str(&name_ident);
+        expect_consumed(&name_iter, "region/successor name")?;
 
         match kw.to_string().as_str() {
             "region" => {
@@ -519,6 +535,15 @@ fn consume_punct(iter: &mut TokenIter) -> Result<(), String> {
     match tt {
         TokenTree::Punct(_) => Ok(()),
         other => Err(format!("expected punct, got `{other}`")),
+    }
+}
+
+/// Ensure a token iterator is fully consumed. Returns an error if any tokens remain.
+fn expect_consumed(iter: &TokenIter, context: &str) -> Result<(), String> {
+    if let Some(tt) = iter.clone().next() {
+        Err(format!("unexpected trailing token `{tt}` in {context}"))
+    } else {
+        Ok(())
     }
 }
 
@@ -873,6 +898,45 @@ mod tests {
             }
         });
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_duplicate_attr_name_in_single_list_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[attr(name: Symbol, name: Type)]
+                fn op() {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate attribute name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_rest_with_trailing_tokens_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op(#[rest(extra)] a: ()) {}
+            }
+        });
+        assert!(result.is_err(), "should reject trailing tokens in #[rest]");
+    }
+
+    #[test]
+    fn test_rest_results_with_trailing_tokens_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[rest_results(foo)]
+                fn op() -> results {}
+            }
+        });
+        assert!(
+            result.is_err(),
+            "should reject trailing tokens in #[rest_results]"
+        );
     }
 
     #[test]
