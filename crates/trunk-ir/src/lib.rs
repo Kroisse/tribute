@@ -8,6 +8,9 @@
 // === ADT layout computation ===
 pub mod adt_layout;
 
+// === Arena-based IR ===
+pub mod arena;
+
 // === Dialect modules ===
 pub mod dialect;
 
@@ -26,7 +29,10 @@ pub mod types;
 pub mod validation;
 pub mod walk;
 
-// Re-export paste for use in macros
+// Re-export proc macro for arena dialect definitions
+pub use trunk_ir_macros::arena_dialect;
+
+// Re-export paste for use in macros (still used by Salsa dialect! macro)
 #[doc(hidden)]
 pub use paste;
 

@@ -7,6 +7,7 @@ license.workspace = true
 description = "TrunkIR: A multi-level dialect IR system"
 
 [dependencies]
+cranelift-entity.workspace = true
 inventory.workspace = true
 lasso.workspace = true
 parking_lot.workspace = true
@@ -15,6 +16,7 @@ salsa.workspace = true
 serde.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
+trunk-ir-macros.workspace = true
 winnow.workspace = true
 
 [dev-dependencies]

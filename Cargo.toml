@@ -12,6 +12,7 @@ ariadne = "0.6"
 cc = "1"
 clap = { version = "4.5", features = ["derive"] }
 cranelift-codegen = "0.128.3"
+cranelift-entity = "0.128.3"
 cranelift-frontend = "0.128.3"
 cranelift-module = "0.128.3"
 cranelift-object = "0.128.3"
@@ -28,6 +29,8 @@ object = { version = "0.38", features = ["write_core"] }
 parking_lot = "0.12"
 paste = "1.0"
 proptest = "1.10"
+heck = "0.5"
+proc-macro2 = "1.0"
 quote = "1.0"
 ropey = "1.6"
 rustc-hash = "2.1"
@@ -47,6 +50,7 @@ tribute-front = { path = "crates/tribute-front" }
 tribute-ir = { path = "crates/tribute-ir" }
 tribute-passes = { path = "crates/tribute-passes" }
 trunk-ir = { path = "crates/trunk-ir" }
+trunk-ir-macros = { path = "crates/trunk-ir-macros" }
 tribute-runtime = { path = "crates/tribute-runtime" }
 trunk-ir-cranelift-backend = { path = "crates/trunk-ir-cranelift-backend" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
