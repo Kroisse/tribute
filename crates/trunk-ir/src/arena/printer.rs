@@ -190,11 +190,9 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
         }
         Attribute::Location(loc) => {
             let path_str = ctx.paths.get(loc.path);
-            write!(
-                f,
-                "loc(\"{}\" {}:{})",
-                path_str, loc.span.start, loc.span.end
-            )
+            f.write_str("loc(\"")?;
+            write_escaped_string(f, path_str)?;
+            write!(f, "\" {}:{})", loc.span.start, loc.span.end)
         }
     }
 }
@@ -397,6 +395,7 @@ fn print_region(
         }
         if i + 1 < blocks.len() {
             // Add blank line between blocks for readability
+            f.write_char('\n')?;
         }
     }
 

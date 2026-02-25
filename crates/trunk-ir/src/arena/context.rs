@@ -134,7 +134,14 @@ impl IrContext {
 
         let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
 
+        let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
+
         let op = self.ops.push(data);
+
+        // Back-link owned regions to this operation
+        for &r in &regions {
+            self.regions[r].parent_op = Some(op);
+        }
 
         // Register operand uses
         for (idx, &val) in operand_slice.iter().enumerate() {
@@ -194,7 +201,24 @@ impl IrContext {
     /// Remove an operation, clearing its use-chain entries.
     ///
     /// Does NOT remove it from its parent block. Use `remove_op_from_block` first.
+    ///
+    /// # Panics
+    ///
+    /// In debug builds, panics if any result value of the operation still has uses,
+    /// as that would leave dangling references.
     pub fn remove_op(&mut self, op: OpRef) {
+        // Check that result values have no remaining uses
+        let results: SmallVec<[ValueRef; 4]> =
+            self.result_values[op].as_slice(&self.value_pool).into();
+        for &val in &results {
+            debug_assert!(
+                self.uses[val].is_empty(),
+                "remove_op: result value {val} still has {} use(s); \
+                 replace all uses before removing the operation",
+                self.uses[val].len()
+            );
+        }
+
         let operands: SmallVec<[ValueRef; 8]> =
             self.ops[op].operands.as_slice(&self.value_pool).into();
         for (idx, &val) in operands.iter().enumerate() {
