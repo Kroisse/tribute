@@ -8,6 +8,9 @@
 // === ADT layout computation ===
 pub mod adt_layout;
 
+// === Arena-based IR ===
+pub mod arena;
+
 // === Dialect modules ===
 pub mod dialect;
 

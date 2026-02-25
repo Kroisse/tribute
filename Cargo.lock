@@ -1533,6 +1533,7 @@ dependencies = [
 name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
+ "cranelift-entity",
  "insta",
  "inventory",
  "lasso",
