@@ -156,10 +156,10 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
     let mut seen_names = std::collections::HashSet::new();
     while has_remaining(&body_iter) {
         let item = parse_item(&mut body_iter)?;
-        if let DialectItem::Operation(ref op) = item {
-            if !seen_names.insert(op.name.clone()) {
-                return Err(format!("duplicate operation name: `{}`", op.name));
-            }
+        if let DialectItem::Operation(ref op) = item
+            && !seen_names.insert(op.name.clone())
+        {
+            return Err(format!("duplicate operation name: `{}`", op.name));
         }
         items.push(item);
     }
