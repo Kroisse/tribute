@@ -153,8 +153,15 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
     let mut body_iter = body.stream().to_token_iter();
 
     let mut items = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
     while has_remaining(&body_iter) {
-        items.push(parse_item(&mut body_iter)?);
+        let item = parse_item(&mut body_iter)?;
+        if let DialectItem::Operation(ref op) = item {
+            if !seen_names.insert(op.name.clone()) {
+                return Err(format!("duplicate operation name: `{}`", op.name));
+            }
+        }
+        items.push(item);
     }
 
     Ok(DialectModule { name, items })
@@ -346,10 +353,9 @@ fn parse_operation(
         } else {
             r
         }
+    } else if rest_results {
+        return Err("#[rest_results] requires a result definition (e.g., `-> results`)".into());
     } else {
-        if rest_results {
-            return Err("#[rest_results] requires a result definition (e.g., `-> results`)".into());
-        }
         ResultDef::None
     };
 
@@ -1200,7 +1206,7 @@ mod tests {
     fn test_duplicate_result_name_rejected() {
         let result = parse_test_module(quote! {
             mod test {
-                fn op() -> (a, a);
+                fn op() -> (a, a) {}
             }
         });
         let err = result.err().expect("should fail");
@@ -1236,6 +1242,21 @@ mod tests {
         let err = result.err().expect("should fail");
         assert!(
             err.contains("#[rest_results] is not allowed on type items"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_operation_name_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn add(lhs: (), rhs: ()) -> result {}
+                fn add(a: ()) -> result {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate operation name"),
             "unexpected error: {err}"
         );
     }
