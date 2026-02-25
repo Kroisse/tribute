@@ -276,8 +276,11 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
             optional,
         });
 
-        // Consume optional comma
-        if peek_punct(&iter, ',') {
+        // Require comma between elements (trailing comma is allowed)
+        if has_remaining(&iter) {
+            if !peek_punct(&iter, ',') {
+                return Err("expected `,` between attributes".into());
+            }
             consume_punct(&mut iter)?;
         }
     }
@@ -327,7 +330,12 @@ fn parse_operation(
         if rest_results {
             match r {
                 ResultDef::Single(name) => ResultDef::Variadic(name),
-                other => other,
+                _ => {
+                    return Err(
+                        "#[rest_results] is only valid on single-name result forms (e.g., `-> results`)"
+                            .into(),
+                    );
+                }
             }
         } else {
             r
@@ -403,8 +411,11 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
             variadic,
         });
 
-        // Consume optional comma
-        if peek_punct(&iter, ',') {
+        // Require comma between elements (trailing comma is allowed)
+        if has_remaining(&iter) {
+            if !peek_punct(&iter, ',') {
+                return Err("expected `,` between operands".into());
+            }
             consume_punct(&mut iter)?;
         }
     }
@@ -425,6 +436,12 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
     if peek_group(iter, Delimiter::Parenthesis) {
         let paren = expect_group(iter, Delimiter::Parenthesis)?;
         let mut inner = paren.stream().to_token_iter();
+
+        // Empty `-> ()` is canonicalized to no results
+        if !has_remaining(&inner) {
+            return Ok(ResultDef::None);
+        }
+
         let mut names = Vec::new();
         while has_remaining(&inner) {
             let ident: Ident =
@@ -1047,5 +1064,98 @@ mod tests {
         });
         let err = result.err().expect("should fail");
         assert!(err.contains(","), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_rest_results_with_multi_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[rest_results]
+                fn op() -> (a, b) {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("only valid on single-name result forms"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_empty_paren_result_is_none() {
+        let module = parse_test_module(quote! {
+            mod test {
+                fn op() -> () {}
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert!(matches!(op.results, ResultDef::None));
+    }
+
+    #[test]
+    fn test_attr_list_missing_comma_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[attr(a: u32 b: u32)]
+                fn op() {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("expected `,` between attributes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_operand_list_missing_comma_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op(a: () b: ()) {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("expected `,` between operands"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_trailing_comma_accepted_in_attrs() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[attr(a: u32, b: u32,)]
+                fn op() {}
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert_eq!(op.attrs.len(), 2);
+    }
+
+    #[test]
+    fn test_trailing_comma_accepted_in_operands() {
+        let module = parse_test_module(quote! {
+            mod test {
+                fn op(a: (), b: (),) {}
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert_eq!(op.operands.len(), 2);
     }
 }

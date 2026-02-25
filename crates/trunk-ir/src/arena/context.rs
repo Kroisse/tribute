@@ -125,9 +125,20 @@ impl IrContext {
     /// Create a new operation and allocate result values for it.
     ///
     /// The operation's operands are registered in the use-chain.
-    /// If `parent_block` is set, the operation is NOT automatically appended
-    /// to that block — use `push_op` for that.
+    /// The operation must not have a `parent_block` set — use `push_op` to
+    /// attach it to a block after creation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `data.parent_block` is `Some`, or if any region in
+    /// `data.regions` already belongs to another operation.
     pub fn create_op(&mut self, data: OperationData) -> OpRef {
+        assert!(
+            data.parent_block.is_none(),
+            "create_op: operation must not have parent_block set; \
+             use push_op to attach to a block after creation",
+        );
+
         // Register uses for operands
         let operand_slice: SmallVec<[ValueRef; 8]> =
             data.operands.as_slice(&self.value_pool).into();
@@ -140,6 +151,12 @@ impl IrContext {
 
         // Back-link owned regions to this operation
         for &r in &regions {
+            if let Some(existing) = self.regions[r].parent_op {
+                panic!(
+                    "create_op: region {r} already belongs to operation {existing}; \
+                     cannot reassign to {op}",
+                );
+            }
             self.regions[r].parent_op = Some(op);
         }
 
@@ -349,12 +366,22 @@ impl IrContext {
     // ========================================================================
 
     /// Create a new region.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any block in `data.blocks` already belongs to another region.
     pub fn create_region(&mut self, data: RegionData) -> RegionRef {
         let region = self.regions.push(data);
 
         // Set parent_region on all blocks in this region
         let blocks: SmallVec<[BlockRef; 4]> = self.regions[region].blocks.clone();
         for &b in &blocks {
+            if let Some(existing) = self.blocks[b].parent_region {
+                panic!(
+                    "create_region: block {b} already belongs to region {existing}; \
+                     cannot reassign to {region}",
+                );
+            }
             self.blocks[b].parent_region = Some(region);
         }
 
@@ -887,5 +914,90 @@ mod tests {
 
         // Now the region should be back-linked to the op
         assert_eq!(ctx.region(region).parent_op, Some(op));
+    }
+
+    #[test]
+    #[should_panic(expected = "must not have parent_block set")]
+    fn create_op_panics_when_parent_block_preset() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        // Manually construct OperationData with parent_block set
+        let mut data = OperationData::new(loc, Symbol::new("test"), Symbol::new("x"));
+        data.results.push(i32_ty, &mut ctx.type_pool);
+        data.parent_block = Some(block);
+
+        // Should panic
+        ctx.create_op(data);
+    }
+
+    #[test]
+    #[should_panic(expected = "already belongs to operation")]
+    fn create_op_panics_when_region_already_owned() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+
+        // First op takes ownership of the region
+        let data1 = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .result(i32_ty)
+            .region(region)
+            .build(&mut ctx);
+        let _op1 = ctx.create_op(data1);
+
+        // Second op tries to take the same region — should panic
+        let data2 = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .result(i32_ty)
+            .region(region)
+            .build(&mut ctx);
+        ctx.create_op(data2);
+    }
+
+    #[test]
+    #[should_panic(expected = "already belongs to region")]
+    fn create_region_panics_when_block_already_owned() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        // First region takes ownership of the block
+        let _r1 = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+
+        // Second region tries to take the same block — should panic
+        ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
     }
 }

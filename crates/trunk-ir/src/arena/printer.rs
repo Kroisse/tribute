@@ -419,6 +419,11 @@ fn print_module_op(state: &mut PrintState<'_>, f: &mut impl Write, op: OpRef) ->
     }
 
     let regions = &data.regions;
+    assert!(
+        regions.len() <= 1,
+        "print_module_op: expected at most one region, found {}",
+        regions.len(),
+    );
     if let Some(&region) = regions.first() {
         f.write_str(" {\n")?;
 
@@ -466,6 +471,11 @@ fn print_func_op(
     state.reset_numbering();
 
     let regions = &data.regions;
+    assert!(
+        regions.len() <= 1,
+        "print_func_op: expected at most one region, found {}",
+        regions.len(),
+    );
     if let Some(&region) = regions.first() {
         let region_data = state.ctx.region(region);
         let blocks: Vec<_> = region_data.blocks.iter().copied().collect();
