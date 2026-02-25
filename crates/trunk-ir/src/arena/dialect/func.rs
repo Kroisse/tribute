@@ -1,8 +1,6 @@
 //! Arena-based func dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod func {
         #[attr(sym_name: Symbol, r#type: Type)]
         fn func() {

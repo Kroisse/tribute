@@ -29,7 +29,22 @@ pub mod types;
 pub mod validation;
 pub mod walk;
 
-// Re-export paste for use in macros
+// Re-export proc macro for arena dialect definitions
+pub use trunk_ir_macros::arena_dialect;
+
+/// Internal macro for defining arena dialects within the trunk-ir crate.
+#[doc(hidden)]
+macro_rules! arena_dialect_internal {
+    ($($tt:tt)*) => {
+        crate::arena_dialect! {
+            #[crate = crate]
+            $($tt)*
+        }
+    };
+}
+pub(crate) use arena_dialect_internal;
+
+// Re-export paste for use in macros (still used by Salsa dialect! macro)
 #[doc(hidden)]
 pub use paste;
 

@@ -1,8 +1,6 @@
 //! Arena-based scf dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod scf {
         fn r#if(cond) -> result {
             #[region(then_region)] {}

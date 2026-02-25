@@ -1,8 +1,6 @@
 //! Arena-based wasm dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod wasm {
         // Control flow
         fn block() -> result {

@@ -1545,6 +1545,7 @@ dependencies = [
  "serde",
  "smallvec",
  "tracing",
+ "trunk-ir-macros",
  "winnow",
 ]
 
@@ -1564,6 +1565,16 @@ dependencies = [
  "target-lexicon",
  "tracing",
  "trunk-ir",
+]
+
+[[package]]
+name = "trunk-ir-macros"
+version = "0.1.0"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "unsynn",
 ]
 
 [[package]]

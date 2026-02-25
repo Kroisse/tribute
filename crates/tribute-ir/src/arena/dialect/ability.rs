@@ -1,8 +1,6 @@
 //! Arena-based ability dialect.
 
-use trunk_ir::arena_dialect;
-
-arena_dialect! {
+trunk_ir::arena_dialect! {
     mod ability {
         #[attr(ability_ref: Type)]
         fn evidence_lookup(evidence) -> result;

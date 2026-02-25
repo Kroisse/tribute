@@ -1,8 +1,6 @@
 //! Arena-based trampoline dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod trampoline {
         fn check_yield() -> result;
 

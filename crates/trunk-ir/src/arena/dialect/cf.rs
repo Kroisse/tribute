@@ -1,8 +1,6 @@
 //! Arena-based cf dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod cf {
         fn br(#[rest] args) {
             #[successor(dest)]

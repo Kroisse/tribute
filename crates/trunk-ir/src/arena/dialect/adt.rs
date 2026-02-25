@@ -1,8 +1,6 @@
 //! Arena-based adt dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod adt {
         #[attr(r#type: Type)]
         fn struct_new(#[rest] fields) -> result;

@@ -1,8 +1,6 @@
 //! Arena-based mem dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod mem {
         #[attr(bytes: any)]
         fn data() -> result;

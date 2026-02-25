@@ -1,8 +1,6 @@
 //! Arena-based tribute_rt dialect.
 
-use trunk_ir::arena_dialect;
-
-arena_dialect! {
+trunk_ir::arena_dialect! {
     mod tribute_rt {
         fn box_int(value) -> result;
         fn unbox_int(value) -> result;

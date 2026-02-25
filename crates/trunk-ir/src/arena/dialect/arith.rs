@@ -1,8 +1,6 @@
 //! Arena-based arith dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod arith {
         #[attr(value: any)]
         fn r#const() -> result;

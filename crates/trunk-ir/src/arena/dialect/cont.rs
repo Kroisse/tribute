@@ -1,8 +1,6 @@
 //! Arena-based cont dialect.
 
-use crate::arena_dialect;
-
-arena_dialect! {
+crate::arena_dialect_internal! {
     mod cont {
         #[attr(tag: any)]
         fn push_prompt(#[rest] args) -> result {
