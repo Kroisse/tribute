@@ -199,6 +199,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             Ok(DialectItem::Operation(op))
         }
         "type" => {
+            if !op_attrs.is_empty() {
+                return Err("#[attr(...)] is not allowed on type items".into());
+            }
+            if rest_results {
+                return Err("#[rest_results] is not allowed on type items".into());
+            }
             parse_type_def(iter)?;
             Ok(DialectItem::TypeDef)
         }
@@ -1200,6 +1206,36 @@ mod tests {
         let err = result.err().expect("should fail");
         assert!(
             err.contains("duplicate result name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_attr_on_type_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[attr(foo: Symbol)]
+                type i32 = ();
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("#[attr(...)] is not allowed on type items"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_rest_results_on_type_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[rest_results]
+                type i32 = ();
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("#[rest_results] is not allowed on type items"),
             "unexpected error: {err}"
         );
     }
