@@ -42,10 +42,7 @@ mod parse;
 pub fn arena_dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match arena_dialect_impl(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
-        Err(msg) => {
-            let msg_str = msg.to_string();
-            quote::quote!(compile_error!(#msg_str);).into()
-        }
+        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }
 }
 

@@ -171,7 +171,14 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
         let attr = parse_outer_attr(iter)?;
         match attr {
             OuterAttr::Doc => { /* skip doc comments */ }
-            OuterAttr::OpAttrs(attrs) => op_attrs = attrs,
+            OuterAttr::OpAttrs(attrs) => {
+                if !op_attrs.is_empty() {
+                    return Err(
+                        "duplicate #[attr(...)] on the same operation; merge into a single #[attr(...)]".into(),
+                    );
+                }
+                op_attrs = attrs;
+            }
             OuterAttr::RestResults => rest_results = true,
         }
     }
@@ -328,6 +335,8 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
     let mut iter = stream.to_token_iter();
     let mut operands = Vec::new();
 
+    let mut seen_variadic = false;
+
     while has_remaining(&iter) {
         // Check for #[rest] marker
         let variadic = if peek_punct(&iter, '#') {
@@ -339,8 +348,15 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
             if kw != "rest" {
                 return Err(format!("expected `rest`, got `{kw}`"));
             }
+            if seen_variadic {
+                return Err("at most one #[rest] operand is allowed".into());
+            }
+            seen_variadic = true;
             true
         } else {
+            if seen_variadic {
+                return Err("#[rest] operand must be the last operand".into());
+            }
             false
         };
 
@@ -820,6 +836,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(module.items.len(), 3);
+    }
+
+    #[test]
+    fn test_duplicate_attr_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[attr(a: u32)]
+                #[attr(b: u32)]
+                fn op() {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(err.contains("duplicate #[attr("), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_rest_must_be_last_operand() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op(#[rest] a: (), b: ()) {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("must be the last operand"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_multiple_rest_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op(#[rest] a: (), #[rest] b: ()) {}
+            }
+        });
+        assert!(result.is_err());
     }
 
     #[test]
