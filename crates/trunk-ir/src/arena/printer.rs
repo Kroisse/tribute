@@ -744,8 +744,8 @@ mod tests {
 
         // Float
         out.clear();
-        write_attribute(&ctx, &mut out, &Attribute::FloatBits(3.14f64.to_bits())).unwrap();
-        assert_eq!(out, "3.14");
+        write_attribute(&ctx, &mut out, &Attribute::FloatBits(2.78f64.to_bits())).unwrap();
+        assert_eq!(out, "2.78");
 
         // Float whole number
         out.clear();
