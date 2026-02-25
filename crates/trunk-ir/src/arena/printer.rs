@@ -64,7 +64,8 @@ impl<'a> PrintState<'a> {
             .unwrap_or("^bb?")
     }
 
-    fn save_numbering(&self) -> (usize, usize) {
+    /// Save only counters (not maps). Use with `restore_counters`.
+    fn save_counters(&self) -> (usize, usize) {
         (self.next_value_num, self.next_block_num)
     }
 
@@ -75,7 +76,8 @@ impl<'a> PrintState<'a> {
         self.block_labels.clear();
     }
 
-    fn restore_numbering(&mut self, state: (usize, usize)) {
+    /// Restore only counters saved by `save_counters`.
+    fn restore_counters(&mut self, state: (usize, usize)) {
         self.next_value_num = state.0;
         self.next_block_num = state.1;
     }
@@ -155,8 +157,8 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
             let v = f64::from_bits(*bits);
             let s = format!("{v}");
             f.write_str(&s)?;
-            // Ensure decimal point for whole numbers
-            if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+            // Ensure decimal point for finite whole numbers (don't corrupt inf/NaN)
+            if v.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
                 f.write_str(".0")?;
             }
             Ok(())
@@ -215,7 +217,7 @@ fn write_escaped_string(f: &mut impl Write, s: &str) -> fmt::Result {
 
 fn write_symbol(f: &mut impl Write, sym: crate::ir::Symbol) -> fmt::Result {
     sym.with_str(|s| {
-        let needs_quoting = !s.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_');
         if needs_quoting {
             f.write_str("@\"")?;
             write_escaped_string(f, s)?;
@@ -427,11 +429,11 @@ fn print_module_op(state: &mut PrintState<'_>, f: &mut impl Write, op: OpRef) ->
             let block_data = state.ctx.block(block);
             let ops: Vec<_> = block_data.ops.iter().copied().collect();
             for &child_op in &ops {
-                let saved = state.save_numbering();
+                let saved = state.save_counters();
                 state.reset_numbering();
                 print_operation(state, f, child_op, 2)?;
                 state.reset_numbering();
-                state.restore_numbering(saved);
+                state.restore_counters(saved);
             }
         }
 
@@ -775,6 +777,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);
+
+        // Empty symbol (should quote)
+        out.clear();
+        write_symbol(&mut out, Symbol::from_dynamic("")).unwrap();
+        assert_eq!(out, r#"@"""#);
+
+        // Float infinity (should not append .0)
+        out.clear();
+        write_attribute(
+            &ctx,
+            &mut out,
+            &Attribute::FloatBits(f64::INFINITY.to_bits()),
+        )
+        .unwrap();
+        assert_eq!(out, "inf");
+
+        // Float NaN (should not append .0)
+        out.clear();
+        write_attribute(&ctx, &mut out, &Attribute::FloatBits(f64::NAN.to_bits())).unwrap();
+        assert_eq!(out, "NaN");
+
+        // Float negative infinity
+        out.clear();
+        write_attribute(
+            &ctx,
+            &mut out,
+            &Attribute::FloatBits(f64::NEG_INFINITY.to_bits()),
+        )
+        .unwrap();
+        assert_eq!(out, "-inf");
     }
 
     #[test]

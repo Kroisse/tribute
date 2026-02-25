@@ -126,7 +126,9 @@ fn parse_crate_attr(stream: proc_macro2::TokenStream) -> Result<proc_macro2::Tok
 /// Parse `mod name { ... }` from the item token stream.
 fn parse_module(stream: proc_macro2::TokenStream) -> Result<DialectModule, String> {
     let mut iter = stream.to_token_iter();
-    parse_module_inner(&mut iter)
+    let module = parse_module_inner(&mut iter)?;
+    expect_consumed(&iter, "module")?;
+    Ok(module)
 }
 
 // ============================================================================
@@ -179,7 +181,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 op_attrs = attrs;
             }
-            OuterAttr::RestResults => rest_results = true,
+            OuterAttr::RestResults => {
+                if rest_results {
+                    return Err("duplicate #[rest_results] on the same operation".into());
+                }
+                rest_results = true;
+            }
         }
     }
 
@@ -326,6 +333,9 @@ fn parse_operation(
             r
         }
     } else {
+        if rest_results {
+            return Err("#[rest_results] requires a result definition (e.g., `-> results`)".into());
+        }
         ResultDef::None
     };
 
@@ -349,6 +359,7 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
     let mut operands = Vec::new();
 
     let mut seen_variadic = false;
+    let mut seen_names = std::collections::HashSet::new();
 
     while has_remaining(&iter) {
         // Check for #[rest] marker
@@ -377,12 +388,17 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
         let name_ident: Ident =
             Ident::parser(&mut iter).map_err(|e| format!("expected operand name: {e}"))?;
 
+        let name = ident_str(&name_ident);
+        if !seen_names.insert(name.clone()) {
+            return Err(format!("duplicate operand name `{name}`"));
+        }
+
         // Consume `: type` annotation (type is ignored, only name matters)
         expect_punct(&mut iter, ':')?;
         skip_type(&mut iter)?;
 
         operands.push(Operand {
-            name: ident_str(&name_ident),
+            name,
             raw_ident: name_ident,
             variadic,
         });
@@ -414,8 +430,12 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
             let ident: Ident =
                 Ident::parser(&mut inner).map_err(|e| format!("expected result name: {e}"))?;
             names.push(ident_str(&ident));
-            if peek_punct(&inner, ',') {
-                consume_punct(&mut inner)?;
+            if has_remaining(&inner) {
+                if peek_punct(&inner, ',') {
+                    consume_punct(&mut inner)?;
+                } else {
+                    return Err("expected `,` between result names".into());
+                }
             }
         }
         return Ok(ResultDef::Multi(names));
@@ -897,7 +917,11 @@ mod tests {
                 fn op(#[rest] a: (), #[rest] b: ()) {}
             }
         });
-        assert!(result.is_err());
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("rest") && err.contains("one"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -958,5 +982,70 @@ mod tests {
         assert_eq!(op.name, "if");
         assert!(matches!(&op.results, ResultDef::Single(s) if s == "result"));
         assert_eq!(op.regions.len(), 2);
+    }
+
+    #[test]
+    fn test_trailing_tokens_rejected() {
+        let result = parse_module(quote! {
+            mod test {
+                fn op() {}
+            }
+            garbage
+        });
+        let err = result.err().expect("should fail on trailing tokens");
+        assert!(err.contains("trailing"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_duplicate_operand_name_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op(a: (), a: ()) {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate operand name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_rest_results_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[rest_results]
+                #[rest_results]
+                fn op() -> results {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate #[rest_results]"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_rest_results_without_arrow_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                #[rest_results]
+                fn op() {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(err.contains("#[rest_results]"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_multi_result_missing_comma_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op() -> (a b) {}
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(err.contains(","), "unexpected error: {err}");
     }
 }

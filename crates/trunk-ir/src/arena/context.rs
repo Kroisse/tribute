@@ -204,7 +204,7 @@ impl IrContext {
     ///
     /// # Panics
     ///
-    /// In debug builds, panics if any result value of the operation still has uses,
+    /// Panics if any result value of the operation still has uses,
     /// as that would leave dangling references.
     pub fn remove_op(&mut self, op: OpRef) {
         // Check that result values have no remaining uses
@@ -385,6 +385,9 @@ impl IrContext {
     ///
     /// Updates both operand lists and the use-chain.
     pub fn replace_all_uses(&mut self, old: ValueRef, new: ValueRef) {
+        if old == new {
+            return;
+        }
         // Take the old use list
         let old_uses = std::mem::take(&mut self.uses[old]);
 
@@ -818,5 +821,63 @@ mod tests {
 
         let p = PathRef::new(0);
         assert_eq!(format!("{p}"), "path0");
+    }
+
+    #[test]
+    #[should_panic(expected = "still has")]
+    fn remove_op_panics_when_result_has_uses() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create op1 with a result
+        let data1 = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("a"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op1 = ctx.create_op(data1);
+        let v1 = ctx.op_result(op1, 0);
+
+        // Create op2 that uses op1's result
+        let data2 = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("b"))
+            .operand(v1)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let _op2 = ctx.create_op(data2);
+
+        // This should panic because v1 still has uses
+        ctx.remove_op(op1);
+    }
+
+    #[test]
+    fn create_op_sets_region_parent() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create a block and region first
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+
+        // Region has no parent yet
+        assert_eq!(ctx.region(region).parent_op, None);
+
+        // Create an op that owns the region
+        let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .result(i32_ty)
+            .region(region)
+            .build(&mut ctx);
+        let op = ctx.create_op(data);
+
+        // Now the region should be back-linked to the op
+        assert_eq!(ctx.region(region).parent_op, Some(op));
     }
 }
