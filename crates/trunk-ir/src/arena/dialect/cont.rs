@@ -21,7 +21,7 @@ mod cont {
     fn drop(continuation: ()) {}
 
     #[attr(tag: u32, result_type: Type)]
-    fn handler_dispatch(result: ()) -> output {
+    fn handler_dispatch(value: ()) -> result {
         #[region(body)]
         {}
     }
