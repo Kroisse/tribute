@@ -468,6 +468,7 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
 fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccessor>, String> {
     let mut iter = stream.to_token_iter();
     let mut items = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
 
     while has_remaining(&iter) {
         expect_punct(&mut iter, '#')?;
@@ -484,6 +485,10 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
             .map_err(|e| format!("expected region/successor name: {e}"))?;
         let name = ident_str(&name_ident);
         expect_consumed(&name_iter, "region/successor name")?;
+
+        if !seen_names.insert(name.clone()) {
+            return Err(format!("duplicate region/successor name: `{name}`"));
+        }
 
         match kw.to_string().as_str() {
             "region" => {
@@ -533,11 +538,18 @@ fn parse_type_def(iter: &mut TokenIter) -> Result<(), String> {
 // Helper functions
 // ============================================================================
 
-/// Skip a single type token tree (e.g., `()`, `Ident`, or path).
+/// Skip a single type token tree in an operand's `: Type` annotation.
+///
+/// Only accepts single-token forms: an `Ident` (e.g., `Type`, `Symbol`) or a
+/// `Group` (e.g., `()`). Multi-token type expressions are not supported in the
+/// dialect macro DSL and will be rejected.
 fn skip_type(iter: &mut TokenIter) -> Result<(), String> {
-    let _: TokenTree =
+    let tt: TokenTree =
         TokenTree::parser(iter).map_err(|e| format!("expected type annotation: {e}"))?;
-    Ok(())
+    match tt {
+        TokenTree::Ident(_) | TokenTree::Group(_) => Ok(()),
+        _ => Err(format!("expected a type name (Ident or Group), got `{tt}`")),
+    }
 }
 
 /// Strip `r#` prefix from an ident.
@@ -1157,5 +1169,19 @@ mod tests {
             _ => panic!("expected operation"),
         };
         assert_eq!(op.operands.len(), 2);
+    }
+
+    #[test]
+    fn test_duplicate_region_name_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op() { #[region(body)] {} #[region(body)] {} };
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate region/successor name"),
+            "unexpected error: {err}"
+        );
     }
 }

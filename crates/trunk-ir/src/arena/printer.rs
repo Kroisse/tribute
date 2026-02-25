@@ -576,6 +576,8 @@ mod tests {
         })
     }
 
+    /// Create a `func.fn` type. Parameters are laid out as `[ret, ...params]`
+    /// in `TypeData.params`, matching the convention used by `func::Fn`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
         let mut p = smallvec::SmallVec::new();
         p.push(ret);
@@ -820,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rauw_reflected_in_print() {
+    fn test_rauw_updates_operands() {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
