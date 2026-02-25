@@ -207,6 +207,14 @@ impl IrContext {
     /// Panics if any result value of the operation still has uses,
     /// as that would leave dangling references.
     pub fn remove_op(&mut self, op: OpRef) {
+        // Refuse to remove an op that is still attached to a block
+        assert!(
+            self.ops[op].parent_block.is_none(),
+            "remove_op: operation {op} is still attached to block {:?}; \
+             call remove_op_from_block first",
+            self.ops[op].parent_block.unwrap(),
+        );
+
         // Check that result values have no remaining uses
         let results: SmallVec<[ValueRef; 4]> =
             self.result_values[op].as_slice(&self.value_pool).into();
@@ -317,13 +325,13 @@ impl IrContext {
              remove it from the old block first",
             self.ops[op].parent_block.unwrap(),
         );
-        self.ops[op].parent_block = Some(block);
         let ops = &mut self.blocks[block].ops;
         let pos = ops
             .iter()
             .position(|&o| o == before)
             .expect("insert_op_before: `before` op not found in block");
         ops.insert(pos, op);
+        self.ops[op].parent_block = Some(block);
     }
 
     /// Remove an operation from a block (does not destroy the operation).
