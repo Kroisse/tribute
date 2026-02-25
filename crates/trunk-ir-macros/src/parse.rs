@@ -443,10 +443,15 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
         }
 
         let mut names = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
         while has_remaining(&inner) {
             let ident: Ident =
                 Ident::parser(&mut inner).map_err(|e| format!("expected result name: {e}"))?;
-            names.push(ident_str(&ident));
+            let name = ident_str(&ident);
+            if !seen_names.insert(name.clone()) {
+                return Err(format!("duplicate result name: `{name}`"));
+            }
+            names.push(name);
             if has_remaining(&inner) {
                 if peek_punct(&inner, ',') {
                     consume_punct(&mut inner)?;
@@ -1181,6 +1186,20 @@ mod tests {
         let err = result.err().expect("should fail");
         assert!(
             err.contains("duplicate region/successor name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_result_name_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn op() -> (a, a);
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate result name"),
             "unexpected error: {err}"
         );
     }
