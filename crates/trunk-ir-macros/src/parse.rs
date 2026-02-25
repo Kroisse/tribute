@@ -81,42 +81,38 @@ pub enum RegionOrSuccessor {
 // Top-level input parsing
 // ============================================================================
 
-/// Parse the full macro input: optional `#[crate = path]` then `mod name { ... }`.
+/// Parse attribute macro input: `attr` contains optional `crate = path`,
+/// `item` contains `mod name { ... }`.
 pub fn parse_input(
-    stream: proc_macro2::TokenStream,
+    attr: proc_macro2::TokenStream,
+    item: proc_macro2::TokenStream,
 ) -> Result<(proc_macro2::TokenStream, DialectModule), String> {
-    let mut iter = stream.to_token_iter();
-
-    // Check for optional `#[crate = path]` attribute
-    let crate_path = if peek_punct(&iter, '#') {
-        parse_crate_attr(&mut iter)?
-    } else {
-        quote::quote!(trunk_ir)
-    };
-
-    let module = parse_module_inner(&mut iter)?;
+    let crate_path = parse_crate_attr(attr)?;
+    let module = parse_module(item)?;
     Ok((crate_path, module))
 }
 
-/// Parse `#[crate = path]` — the crate path attribute.
-fn parse_crate_attr(iter: &mut TokenIter) -> Result<proc_macro2::TokenStream, String> {
-    expect_punct(iter, '#')?;
-    let bracket = expect_group(iter, Delimiter::Bracket)?;
-    let mut inner = bracket.stream().to_token_iter();
+/// Parse optional `crate = path` from the attribute arguments.
+fn parse_crate_attr(stream: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream, String> {
+    let mut iter = stream.to_token_iter();
+
+    if !has_remaining(&iter) {
+        return Ok(quote::quote!(trunk_ir));
+    }
 
     let kw: Ident =
-        Ident::parser(&mut inner).map_err(|e| format!("expected `crate` keyword: {e}"))?;
+        Ident::parser(&mut iter).map_err(|e| format!("expected `crate` keyword: {e}"))?;
     if kw != "crate" {
         return Err(format!("expected `crate`, got `{kw}`"));
     }
 
-    expect_punct(&mut inner, '=')?;
+    expect_punct(&mut iter, '=')?;
 
     // Collect the remaining tokens as the crate path
     let mut path_tokens = proc_macro2::TokenStream::new();
-    while has_remaining(&inner) {
+    while has_remaining(&iter) {
         let tt: TokenTree =
-            TokenTree::parser(&mut inner).map_err(|e| format!("error parsing crate path: {e}"))?;
+            TokenTree::parser(&mut iter).map_err(|e| format!("error parsing crate path: {e}"))?;
         path_tokens.extend(std::iter::once(tt));
     }
 
@@ -125,6 +121,12 @@ fn parse_crate_attr(iter: &mut TokenIter) -> Result<proc_macro2::TokenStream, St
     }
 
     Ok(path_tokens)
+}
+
+/// Parse `mod name { ... }` from the item token stream.
+fn parse_module(stream: proc_macro2::TokenStream) -> Result<DialectModule, String> {
+    let mut iter = stream.to_token_iter();
+    parse_module_inner(&mut iter)
 }
 
 // ============================================================================
@@ -162,13 +164,15 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
 
 fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut op_attrs = Vec::new();
+    let mut rest_results = false;
 
-    // Collect outer attributes: #[doc = "..."] (skip) and #[attr(...)]
+    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)], #[rest_results]
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
             OuterAttr::Doc => { /* skip doc comments */ }
             OuterAttr::OpAttrs(attrs) => op_attrs = attrs,
+            OuterAttr::RestResults => rest_results = true,
         }
     }
 
@@ -177,7 +181,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 
     match kw.to_string().as_str() {
         "fn" => {
-            let op = parse_operation(iter, op_attrs)?;
+            let op = parse_operation(iter, op_attrs, rest_results)?;
             Ok(DialectItem::Operation(op))
         }
         "type" => {
@@ -191,9 +195,10 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 enum OuterAttr {
     Doc,
     OpAttrs(Vec<AttrDef>),
+    RestResults,
 }
 
-/// Parse `#[...]` — either `#[doc = "..."]` or `#[attr(...)]`.
+/// Parse `#[...]` — either `#[doc = "..."]`, `#[attr(...)]`, or `#[rest_results]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -209,8 +214,9 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             let attrs = parse_attr_list(paren.stream())?;
             Ok(OuterAttr::OpAttrs(attrs))
         }
+        "rest_results" => Ok(OuterAttr::RestResults),
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc` or `attr`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, or `rest_results`"
         )),
     }
 }
@@ -274,32 +280,38 @@ fn parse_attr_type(ident: &Ident) -> Result<AttrType, String> {
 // Operation parsing
 // ============================================================================
 
-fn parse_operation(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<OperationDef, String> {
+fn parse_operation(
+    iter: &mut TokenIter,
+    attrs: Vec<AttrDef>,
+    rest_results: bool,
+) -> Result<OperationDef, String> {
     // Parse operation name
     let name_ident: Ident =
         Ident::parser(iter).map_err(|e| format!("expected operation name: {e}"))?;
 
-    // Parse operands
+    // Parse operands (with `: type` annotations)
     let paren = expect_group(iter, Delimiter::Parenthesis)?;
     let operands = parse_operands(paren.stream())?;
 
-    // Parse optional result: `-> result` or `-> (a, b)` or `-> #[rest] results`
+    // Parse optional result: `-> result` or `-> (a, b)`
     let results = if peek_punct(iter, '-') {
-        parse_results(iter)?
+        let r = parse_results(iter)?;
+        // Convert single result to variadic if #[rest_results] was present
+        if rest_results {
+            match r {
+                ResultDef::Single(name) => ResultDef::Variadic(name),
+                other => other,
+            }
+        } else {
+            r
+        }
     } else {
         ResultDef::None
     };
 
-    // Parse optional body with regions/successors: `{ #[region(body)] {} ... }`
-    let regions = if peek_group(iter, Delimiter::Brace) {
-        let body = expect_group(iter, Delimiter::Brace)?;
-        parse_regions(body.stream())?
-    } else {
-        Vec::new()
-    };
-
-    // Consume trailing semicolon
-    expect_punct(iter, ';')?;
+    // Parse body `{ ... }` — always present, may contain regions/successors
+    let body = expect_group(iter, Delimiter::Brace)?;
+    let regions = parse_regions(body.stream())?;
 
     Ok(OperationDef {
         name: ident_str(&name_ident),
@@ -311,7 +323,7 @@ fn parse_operation(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<Operatio
     })
 }
 
-/// Parse operand list: `a, b, #[rest] c`.
+/// Parse operand list: `a: (), b: (), #[rest] c: ()`.
 fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, String> {
     let mut iter = stream.to_token_iter();
     let mut operands = Vec::new();
@@ -335,6 +347,10 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
         let name_ident: Ident =
             Ident::parser(&mut iter).map_err(|e| format!("expected operand name: {e}"))?;
 
+        // Consume `: type` annotation (type is ignored, only name matters)
+        expect_punct(&mut iter, ':')?;
+        skip_type(&mut iter)?;
+
         operands.push(Operand {
             name: ident_str(&name_ident),
             raw_ident: name_ident,
@@ -350,25 +366,14 @@ fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, Stri
     Ok(operands)
 }
 
-/// Parse result definition after `->`.
+/// Parse result definition after `->`: single `result`, multi `(a, b)`.
+///
+/// Variadic results are indicated by the `#[rest_results]` outer attribute
+/// on the function, not by `-> #[rest] results` (which is not valid Rust).
 fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
     // Consume `->`
     expect_punct(iter, '-')?;
     expect_punct(iter, '>')?;
-
-    // Check for `#[rest] results` (variadic)
-    if peek_punct(iter, '#') {
-        consume_punct(iter)?;
-        let bracket = expect_group(iter, Delimiter::Bracket)?;
-        let mut inner = bracket.stream().to_token_iter();
-        let kw: Ident = Ident::parser(&mut inner).map_err(|e| format!("expected `rest`: {e}"))?;
-        if kw != "rest" {
-            return Err(format!("expected `rest`, got `{kw}`"));
-        }
-        let name_ident: Ident =
-            Ident::parser(iter).map_err(|e| format!("expected result name: {e}"))?;
-        return Ok(ResultDef::Variadic(ident_str(&name_ident)));
-    }
 
     // Check for `(a, b)` (multi)
     if peek_group(iter, Delimiter::Parenthesis) {
@@ -392,7 +397,7 @@ fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
     Ok(ResultDef::Single(ident_str(&name_ident)))
 }
 
-/// Parse body content: `#[region(name)] {}` and `#[successor(name)]`.
+/// Parse body content: `#[region(name)] {}` and `#[successor(name)] {}`.
 fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccessor>, String> {
     let mut iter = stream.to_token_iter();
     let mut items = Vec::new();
@@ -413,11 +418,12 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
 
         match kw.to_string().as_str() {
             "region" => {
-                // Consume the `{}` after the attribute
                 let _body = expect_group(&mut iter, Delimiter::Brace)?;
                 items.push(RegionOrSuccessor::Region(name));
             }
             "successor" => {
+                // Consume `{}` after the attribute (required for valid Rust syntax)
+                let _body = expect_group(&mut iter, Delimiter::Brace)?;
                 items.push(RegionOrSuccessor::Successor(name));
             }
             other => return Err(format!("expected `region` or `successor`, got `{other}`")),
@@ -443,7 +449,7 @@ fn parse_type_def(iter: &mut TokenIter) -> Result<(), String> {
     // Optional `with #[attr(...)]` - consume until semicolon
     // For simplicity, skip any remaining tokens until `;`
     while !peek_punct(iter, ';') {
-        if !has_remaining(&iter) {
+        if !has_remaining(iter) {
             return Err("expected `;` after type definition".into());
         }
         let _: TokenTree =
@@ -457,6 +463,13 @@ fn parse_type_def(iter: &mut TokenIter) -> Result<(), String> {
 // ============================================================================
 // Helper functions
 // ============================================================================
+
+/// Skip a single type token tree (e.g., `()`, `Ident`, or path).
+fn skip_type(iter: &mut TokenIter) -> Result<(), String> {
+    let _: TokenTree =
+        TokenTree::parser(iter).map_err(|e| format!("expected type annotation: {e}"))?;
+    Ok(())
+}
 
 /// Strip `r#` prefix from an ident.
 fn ident_str(ident: &Ident) -> String {
@@ -511,18 +524,21 @@ mod tests {
     use super::*;
     use quote::quote;
 
-    fn parse_module(stream: proc_macro2::TokenStream) -> Result<DialectModule, String> {
-        let (_, module) = parse_input(stream)?;
+    fn parse_test_module(item: proc_macro2::TokenStream) -> Result<DialectModule, String> {
+        let (_, module) = parse_input(quote! {}, item)?;
         Ok(module)
     }
 
     #[test]
     fn test_parse_default_crate_path() {
-        let (path, module) = parse_input(quote! {
-            mod arith {
-                fn add(lhs, rhs) -> result;
-            }
-        })
+        let (path, module) = parse_input(
+            quote! {},
+            quote! {
+                mod arith {
+                    fn add(lhs: (), rhs: ()) -> result {}
+                }
+            },
+        )
         .unwrap();
 
         assert_eq!(path.to_string(), "trunk_ir");
@@ -531,12 +547,14 @@ mod tests {
 
     #[test]
     fn test_parse_crate_path_crate() {
-        let (path, _) = parse_input(quote! {
-            #[crate = crate]
-            mod arith {
-                fn add(lhs, rhs) -> result;
-            }
-        })
+        let (path, _) = parse_input(
+            quote! { crate = crate },
+            quote! {
+                mod arith {
+                    fn add(lhs: (), rhs: ()) -> result {}
+                }
+            },
+        )
         .unwrap();
 
         assert_eq!(path.to_string(), "crate");
@@ -544,12 +562,14 @@ mod tests {
 
     #[test]
     fn test_parse_crate_path_custom() {
-        let (path, _) = parse_input(quote! {
-            #[crate = my_crate::ir]
-            mod arith {
-                fn add(lhs, rhs) -> result;
-            }
-        })
+        let (path, _) = parse_input(
+            quote! { crate = my_crate::ir },
+            quote! {
+                mod arith {
+                    fn add(lhs: (), rhs: ()) -> result {}
+                }
+            },
+        )
         .unwrap();
 
         assert_eq!(path.to_string(), "my_crate :: ir");
@@ -557,9 +577,9 @@ mod tests {
 
     #[test]
     fn test_parse_simple_module() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod arith {
-                fn add(lhs, rhs) -> result;
+                fn add(lhs: (), rhs: ()) -> result {}
             }
         })
         .unwrap();
@@ -580,9 +600,9 @@ mod tests {
 
     #[test]
     fn test_parse_variadic_operands() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod func {
-                fn call(#[rest] args) -> result;
+                fn call(#[rest] args: ()) -> result {}
             }
         })
         .unwrap();
@@ -598,9 +618,9 @@ mod tests {
 
     #[test]
     fn test_parse_mixed_operands() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod func {
-                fn call_indirect(callee, #[rest] args) -> result;
+                fn call_indirect(callee: (), #[rest] args: ()) -> result {}
             }
         })
         .unwrap();
@@ -618,10 +638,10 @@ mod tests {
 
     #[test]
     fn test_parse_attributes() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod adt {
                 #[attr(r#type: Type, field: u32)]
-                fn struct_get(r#ref) -> result;
+                fn struct_get(r#ref: ()) -> result {}
             }
         })
         .unwrap();
@@ -640,10 +660,10 @@ mod tests {
 
     #[test]
     fn test_parse_optional_attributes() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod wasm {
                 #[attr(reftype: Symbol, min: u32, max?: u32)]
-                fn table();
+                fn table() {}
             }
         })
         .unwrap();
@@ -661,12 +681,12 @@ mod tests {
 
     #[test]
     fn test_parse_regions() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod func {
                 #[attr(sym_name: Symbol)]
                 fn func() {
                     #[region(body)] {}
-                };
+                }
             }
         })
         .unwrap();
@@ -681,12 +701,12 @@ mod tests {
 
     #[test]
     fn test_parse_successors() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod cf {
-                fn cond_br(cond) {
-                    #[successor(then_dest)]
-                    #[successor(else_dest)]
-                };
+                fn cond_br(cond: ()) {
+                    #[successor(then_dest)] {}
+                    #[successor(else_dest)] {}
+                }
             }
         })
         .unwrap();
@@ -702,9 +722,9 @@ mod tests {
 
     #[test]
     fn test_parse_raw_identifiers() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod scf {
-                fn r#return(#[rest] values);
+                fn r#return(#[rest] values: ()) {}
             }
         })
         .unwrap();
@@ -718,9 +738,9 @@ mod tests {
 
     #[test]
     fn test_parse_no_result_no_operands() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod func {
-                fn unreachable();
+                fn unreachable() {}
             }
         })
         .unwrap();
@@ -737,9 +757,10 @@ mod tests {
 
     #[test]
     fn test_parse_variadic_results() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod wasm {
-                fn call(#[rest] args) -> #[rest] results;
+                #[rest_results]
+                fn call(#[rest] args: ()) -> results {}
             }
         })
         .unwrap();
@@ -753,9 +774,9 @@ mod tests {
 
     #[test]
     fn test_parse_multi_results() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod test {
-                fn multi() -> (a, b);
+                fn multi() -> (a, b) {}
             }
         })
         .unwrap();
@@ -774,10 +795,10 @@ mod tests {
 
     #[test]
     fn test_parse_type_def_skipped() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod core {
-                type i32;
-                fn add(lhs, rhs) -> result;
+                type i32 = ();
+                fn add(lhs: (), rhs: ()) -> result {}
             }
         })
         .unwrap();
@@ -789,11 +810,11 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_operations() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod arith {
-                fn add(lhs, rhs) -> result;
-                fn sub(lhs, rhs) -> result;
-                fn neg(operand) -> result;
+                fn add(lhs: (), rhs: ()) -> result {}
+                fn sub(lhs: (), rhs: ()) -> result {}
+                fn neg(operand: ()) -> result {}
             }
         })
         .unwrap();
@@ -803,12 +824,12 @@ mod tests {
 
     #[test]
     fn test_parse_region_with_result() {
-        let module = parse_module(quote! {
+        let module = parse_test_module(quote! {
             mod scf {
-                fn r#if(cond) -> result {
+                fn r#if(cond: ()) -> result {
                     #[region(then_region)] {}
                     #[region(else_region)] {}
-                };
+                }
             }
         })
         .unwrap();

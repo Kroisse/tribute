@@ -3,12 +3,12 @@
 crate::arena_dialect_internal! {
     mod mem {
         #[attr(bytes: any)]
-        fn data() -> result;
+        fn data() -> result {}
 
         #[attr(offset: u32)]
-        fn load(ptr) -> result;
+        fn load(ptr: ()) -> result {}
 
         #[attr(offset: u32)]
-        fn store(ptr, value);
+        fn store(ptr: (), value: ()) {}
     }
 }

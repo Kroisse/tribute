@@ -36,10 +36,8 @@ pub use trunk_ir_macros::arena_dialect;
 #[doc(hidden)]
 macro_rules! arena_dialect_internal {
     ($($tt:tt)*) => {
-        crate::arena_dialect! {
-            #[crate = crate]
-            $($tt)*
-        }
+        #[crate::arena_dialect(crate = crate)]
+        $($tt)*
     };
 }
 pub(crate) use arena_dialect_internal;

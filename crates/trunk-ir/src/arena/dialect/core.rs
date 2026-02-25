@@ -5,8 +5,8 @@ crate::arena_dialect_internal! {
         #[attr(sym_name: Symbol)]
         fn module() {
             #[region(body)] {}
-        };
+        }
 
-        fn unrealized_conversion_cast(value) -> result;
+        fn unrealized_conversion_cast(value: ()) -> result {}
     }
 }
