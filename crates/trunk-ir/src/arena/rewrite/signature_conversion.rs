@@ -95,24 +95,29 @@ fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
 }
 
 /// Update entry block argument types in-place to match converted params.
-fn update_entry_block_args(ctx: &mut IrContext, op: OpRef, new_params: &[TypeRef]) {
+///
+/// Returns `false` if there is an arity mismatch between the entry block args
+/// and the new params, leaving the IR unchanged to avoid partial updates.
+fn update_entry_block_args(ctx: &mut IrContext, op: OpRef, new_params: &[TypeRef]) -> bool {
     let regions = &ctx.op(op).regions;
     if regions.is_empty() {
-        return;
+        return new_params.is_empty();
     }
     let body = regions[0];
     let blocks = &ctx.region(body).blocks;
     if blocks.is_empty() {
-        return;
+        return new_params.is_empty();
     }
     let entry_block = blocks[0];
 
     let num_args = ctx.block(entry_block).args.len();
-    for (i, &new_ty) in new_params.iter().enumerate() {
-        if i < num_args {
-            ctx.set_block_arg_type(entry_block, i as u32, new_ty);
-        }
+    if num_args != new_params.len() {
+        return false;
     }
+    for (i, &new_ty) in new_params.iter().enumerate() {
+        ctx.set_block_arg_type(entry_block, i as u32, new_ty);
+    }
+    true
 }
 
 /// Pattern that converts `func.func` operation signatures using an `ArenaTypeConverter`.
@@ -143,8 +148,8 @@ impl ArenaRewritePattern for FuncSignatureConversionPattern {
         };
 
         // Update entry block args in-place
-        if sig.params_changed {
-            update_entry_block_args(ctx, op, &sig.new_params);
+        if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
+            return false;
         }
 
         // Build new func type
@@ -192,8 +197,8 @@ impl ArenaRewritePattern for WasmFuncSignatureConversionPattern {
         };
 
         // Update entry block args in-place
-        if sig.params_changed {
-            update_entry_block_args(ctx, op, &sig.new_params);
+        if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
+            return false;
         }
 
         // Build new func type
@@ -518,5 +523,30 @@ mod tests {
         let td = ctx.types.get(new_func.r#type(&ctx));
         assert_eq!(td.params[0], i64_ty, "return stays i64");
         assert_eq!(td.params[1], i64_ty, "param converted to i64");
+    }
+
+    #[test]
+    fn arity_mismatch_returns_unchanged() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+
+        // Signature has 2 params, but entry block has only 1 arg (arity mismatch)
+        let func_ty = make_func_type(&mut ctx, &[i32_ty, i32_ty], i32_ty);
+        let func_op = make_func_op(&mut ctx, loc, "mismatched", func_ty, &[i32_ty]);
+        let module = make_module(&mut ctx, loc, vec![func_op]);
+
+        let tc = i32_to_i64_converter(i32_ty, i64_ty);
+        let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
+        let target = ArenaConversionTarget::new();
+
+        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        // Pattern should not match due to arity mismatch
+        assert_eq!(result.total_changes, 0);
+
+        // Verify original type is preserved
+        let ops = module.ops(&ctx);
+        let original_func = func::Func::from_op(&ctx, ops[0]).unwrap();
+        assert_eq!(original_func.r#type(&ctx), func_ty);
     }
 }
