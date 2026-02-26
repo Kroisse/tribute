@@ -24,8 +24,7 @@ pub fn walk_region<B>(
     region: RegionRef,
     f: &mut dyn FnMut(OpRef) -> ControlFlow<B, WalkAction>,
 ) -> ControlFlow<B, ()> {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
+    for &block in &ctx.region(region).blocks {
         walk_block(ctx, block, f)?;
     }
     ControlFlow::Continue(())
@@ -37,8 +36,7 @@ pub fn walk_block<B>(
     block: BlockRef,
     f: &mut dyn FnMut(OpRef) -> ControlFlow<B, WalkAction>,
 ) -> ControlFlow<B, ()> {
-    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-    for op in ops {
+    for &op in &ctx.block(block).ops {
         walk_op(ctx, op, f)?;
     }
     ControlFlow::Continue(())
@@ -55,8 +53,7 @@ pub fn walk_op<B>(
         ControlFlow::Continue(WalkAction::Skip) => return ControlFlow::Continue(()),
         ControlFlow::Continue(WalkAction::Advance) => {}
     }
-    let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-    for region in regions {
+    for &region in &ctx.op(op).regions {
         walk_region(ctx, region, f)?;
     }
     ControlFlow::Continue(())

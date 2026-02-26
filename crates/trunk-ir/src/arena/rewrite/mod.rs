@@ -22,7 +22,7 @@ use super::refs::OpRef;
 ///
 /// Provides convenience methods for accessing module body and operations.
 #[derive(Clone, Copy, Debug)]
-pub struct ArenaModule(pub OpRef);
+pub struct ArenaModule(OpRef);
 
 impl ArenaModule {
     /// Create an `ArenaModule` wrapper, verifying it points to a `core.module` op.
@@ -43,13 +43,16 @@ impl ArenaModule {
     }
 
     /// Get the module's body region.
-    pub fn body(self, ctx: &IrContext) -> super::refs::RegionRef {
-        ctx.op(self.0).regions[0]
+    pub fn body(self, ctx: &IrContext) -> Option<super::refs::RegionRef> {
+        ctx.op(self.0).regions.first().copied()
     }
 
     /// Get all top-level operations in the module's first block.
     pub fn ops(self, ctx: &IrContext) -> Vec<OpRef> {
-        let region = self.body(ctx);
+        let region = match self.body(ctx) {
+            Some(r) => r,
+            None => return vec![],
+        };
         let blocks = &ctx.region(region).blocks;
         if blocks.is_empty() {
             return vec![];
@@ -70,7 +73,73 @@ impl ArenaModule {
 
     /// Get the first block of the module body.
     pub fn first_block(self, ctx: &IrContext) -> Option<super::refs::BlockRef> {
-        let region = self.body(ctx);
+        let region = self.body(ctx)?;
         ctx.region(region).blocks.first().copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arena::*;
+    use crate::ir::Symbol;
+    use crate::location::Span;
+    use smallvec::smallvec;
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    #[test]
+    fn arena_module_new_rejects_non_module_op() {
+        let (mut ctx, loc) = test_ctx();
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+
+        assert!(ArenaModule::new(&ctx, op).is_none());
+    }
+
+    #[test]
+    fn arena_module_body_returns_none_without_regions() {
+        let (mut ctx, loc) = test_ctx();
+        // Create a core.module op without any regions.
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("empty")))
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+
+        let module = ArenaModule::new(&ctx, op).expect("should accept core.module");
+        assert!(module.body(&ctx).is_none());
+        assert!(module.first_block(&ctx).is_none());
+        assert!(module.ops(&ctx).is_empty());
+    }
+
+    #[test]
+    fn arena_module_body_returns_region() {
+        let (mut ctx, loc) = test_ctx();
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("m")))
+            .region(region)
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+
+        let module = ArenaModule::new(&ctx, op).unwrap();
+        assert_eq!(module.body(&ctx), Some(region));
+        assert_eq!(module.first_block(&ctx), Some(block));
     }
 }

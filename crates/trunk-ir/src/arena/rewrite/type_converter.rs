@@ -84,14 +84,98 @@ impl ArenaTypeConverter {
         self.materializer.as_ref()?(ctx, location, value, from_ty, to_ty)
     }
 
-    /// Check if this converter has any conversion functions.
+    /// Check if this converter has any conversions or materializer.
     pub fn is_empty(&self) -> bool {
-        self.conversions.is_empty()
+        self.conversions.is_empty() && self.materializer.is_none()
     }
 }
 
 impl Default for ArenaTypeConverter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arena::*;
+    use crate::ir::Symbol;
+    use crate::location::Span;
+    use smallvec::smallvec;
+    use std::collections::BTreeMap;
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn i32_type(ctx: &mut IrContext) -> TypeRef {
+        ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new("i32"),
+            params: smallvec![],
+            attrs: BTreeMap::new(),
+        })
+    }
+
+    fn i64_type(ctx: &mut IrContext) -> TypeRef {
+        ctx.types.intern(TypeData {
+            dialect: Symbol::new("core"),
+            name: Symbol::new("i64"),
+            params: smallvec![],
+            attrs: BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn is_empty_true_when_no_conversions_or_materializer() {
+        let tc = ArenaTypeConverter::new();
+        assert!(tc.is_empty());
+    }
+
+    #[test]
+    fn is_empty_false_with_conversion() {
+        let mut tc = ArenaTypeConverter::new();
+        tc.add_conversion(|_, _| None);
+        assert!(!tc.is_empty());
+    }
+
+    #[test]
+    fn is_empty_false_with_materializer_only() {
+        let mut tc = ArenaTypeConverter::new();
+        tc.set_materializer(|_, _, _, _, _| None);
+        assert!(!tc.is_empty());
+    }
+
+    #[test]
+    fn convert_type_returns_none_when_empty() {
+        let (mut ctx, _) = test_ctx();
+        let ty = i32_type(&mut ctx);
+        let tc = ArenaTypeConverter::new();
+        assert!(tc.convert_type(&ctx, ty).is_none());
+    }
+
+    #[test]
+    fn convert_type_applies_first_match() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+
+        let target = i64_ty;
+        let mut tc = ArenaTypeConverter::new();
+        tc.add_conversion(move |_, _| Some(target));
+
+        assert_eq!(tc.convert_type(&ctx, i32_ty), Some(i64_ty));
+    }
+
+    #[test]
+    fn convert_type_or_identity_falls_back() {
+        let (mut ctx, _) = test_ctx();
+        let ty = i32_type(&mut ctx);
+        let tc = ArenaTypeConverter::new();
+        assert_eq!(tc.convert_type_or_identity(&ctx, ty), ty);
     }
 }

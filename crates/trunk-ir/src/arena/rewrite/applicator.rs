@@ -30,7 +30,11 @@ impl ApplyResult {
         module: ArenaModule,
         target: &ArenaConversionTarget,
     ) -> Result<(), Vec<IllegalOp>> {
-        let illegal = target.verify(ctx, module.body(ctx));
+        let body = match module.body(ctx) {
+            Some(r) => r,
+            None => return Ok(()),
+        };
+        let illegal = target.verify(ctx, body);
         if illegal.is_empty() {
             Ok(())
         } else {
@@ -116,7 +120,10 @@ impl PatternApplicator {
         let module_first_block = module.first_block(ctx);
 
         // Walk the module body region
-        let body = module.body(ctx);
+        let body = match module.body(ctx) {
+            Some(r) => r,
+            None => return 0,
+        };
         changes += self.visit_region(ctx, body, module_first_block);
 
         changes
@@ -228,7 +235,7 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule(module_op)
+        ArenaModule::new(ctx, module_op).expect("test module should be valid")
     }
 
     /// Pattern: rename test.source → test.target
