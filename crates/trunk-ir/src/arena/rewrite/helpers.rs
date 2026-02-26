@@ -82,6 +82,10 @@ pub fn inline_region_blocks(
     dest_region: RegionRef,
     insert_before: Option<BlockRef>,
 ) -> Vec<BlockRef> {
+    if src_region == dest_region {
+        return Vec::new();
+    }
+
     // Take blocks from src
     let src_blocks: SmallVec<[BlockRef; 4]> =
         std::mem::take(&mut ctx.region_mut(src_region).blocks);
@@ -310,6 +314,40 @@ mod tests {
             ctx.region(dest_region).blocks.as_slice(),
             &[block_b, block_c, block_a]
         );
+    }
+
+    #[test]
+    fn inline_region_blocks_same_region_is_noop() {
+        let (mut ctx, loc) = test_ctx();
+
+        let block_a = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let block_b = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block_a, block_b],
+            parent_op: None,
+        });
+
+        // Inlining a region into itself should be a no-op
+        let moved = inline_region_blocks(&mut ctx, region, region, None);
+        assert!(moved.is_empty());
+        assert_eq!(ctx.region(region).blocks.as_slice(), &[block_a, block_b]);
+
+        // Also with insert_before
+        let moved = inline_region_blocks(&mut ctx, region, region, Some(block_b));
+        assert!(moved.is_empty());
+        assert_eq!(ctx.region(region).blocks.as_slice(), &[block_a, block_b]);
     }
 
     #[test]

@@ -260,8 +260,10 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         }
     }
 
-    // Find result type from yielded values (if any)
-    let result_ty = find_yield_type(ctx, cases.first().map(|(_, r)| *r))
+    // Find result type from yielded values (if any), scanning all case regions
+    let result_ty = cases
+        .iter()
+        .find_map(|(_, r)| find_yield_type(ctx, Some(*r)))
         .or_else(|| find_yield_type(ctx, default_region));
 
     // Split block at scf op: ops after go to merge block
@@ -926,6 +928,110 @@ mod tests {
             names.iter().any(|n| n == "arith.cmp_eq"),
             "missing arith.cmp_eq: {names:?}"
         );
+    }
+
+    #[test]
+    fn lower_scf_switch_yield_in_later_case() {
+        // The first case has no yield, but the second case yields a value.
+        // result_ty must be inferred from the second case.
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let fn_ty = fn_type(&mut ctx);
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        ctx.push_op(entry, disc.op_ref());
+
+        // Case 0: void yield (no values)
+        let case0_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let case0_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(case0_block, case0_yield.op_ref());
+        let case0_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![case0_block],
+            parent_op: None,
+        });
+        let case0_op = scf::case(&mut ctx, loc, Attribute::IntBits(0), case0_region);
+
+        // Case 1: yield 42 (non-void)
+        let case1_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let case1_v = case1_val.result(&ctx);
+        ctx.push_op(case1_block, case1_val.op_ref());
+        let case1_yield = scf::r#yield(&mut ctx, loc, [case1_v]);
+        ctx.push_op(case1_block, case1_yield.op_ref());
+        let case1_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![case1_block],
+            parent_op: None,
+        });
+        let case1_op = scf::case(&mut ctx, loc, Attribute::IntBits(1), case1_region);
+
+        // Switch body
+        let switch_body_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(switch_body_block, case0_op.op_ref());
+        ctx.push_op(switch_body_block, case1_op.op_ref());
+        let switch_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![switch_body_block],
+            parent_op: None,
+        });
+
+        let disc_v = disc.result(&ctx);
+        let switch = scf::switch(&mut ctx, loc, disc_v, switch_body);
+        ctx.push_op(entry, switch.op_ref());
+
+        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+
+        let func_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
+
+        lower_scf_to_cf(&mut ctx, module);
+
+        let body = func_op.body(&ctx);
+        let names = collect_op_names(&ctx, body);
+        assert!(
+            !names.iter().any(|n| n.starts_with("scf.")),
+            "scf ops remain: {names:?}"
+        );
+
+        // The merge block should have 1 arg (inferred from case 1's yield)
+        let blocks = ctx.region(body).blocks.to_vec();
+        let merge = blocks.last().unwrap();
+        let merge_args = ctx.block_args(*merge);
+        assert_eq!(
+            merge_args.len(),
+            1,
+            "merge block should have 1 arg inferred from later case"
+        );
+        assert_eq!(ctx.value_ty(merge_args[0]), i32_ty);
     }
 
     #[test]
