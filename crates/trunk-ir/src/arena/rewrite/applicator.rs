@@ -173,7 +173,7 @@ impl PatternApplicator {
 
             // Try each pattern
             for pattern in &self.patterns {
-                let mut rw = PatternRewriter::new();
+                let mut rw = PatternRewriter::new(&self.type_converter);
                 let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
                 if matched && rw.has_mutations() {
                     let mutations = rw.take_mutations();
@@ -241,7 +241,7 @@ mod tests {
             &self,
             ctx: &mut IrContext,
             op: OpRef,
-            rewriter: &mut PatternRewriter,
+            rewriter: &mut PatternRewriter<'_>,
         ) -> bool {
             let data = ctx.op(op);
             if data.dialect != Symbol::new("test") || data.name != Symbol::new("source") {
