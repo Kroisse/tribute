@@ -6,6 +6,7 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use crate::arena::{IrContext, OpRef};
 use crate::{Operation, Symbol};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
@@ -89,6 +90,17 @@ impl PureOps {
     /// the operation's results are unused before removing it.
     pub fn is_removable<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
         Self::is_pure(db, op)
+    }
+
+    /// Check if an arena operation is pure (no side effects, safe to remove if unused).
+    pub fn is_pure_arena(ctx: &IrContext, op: OpRef) -> bool {
+        let data = ctx.op(op);
+        REGISTRY.lookup(data.dialect, data.name)
+    }
+
+    /// Check if an arena operation is pure and eligible for DCE removal.
+    pub fn is_removable_arena(ctx: &IrContext, op: OpRef) -> bool {
+        Self::is_pure_arena(ctx, op)
     }
 }
 
@@ -234,6 +246,12 @@ impl IsolatedFromAboveOps {
         let dialect = op.dialect(db);
         let op_name = op.name(db);
         ISOLATED_REGISTRY.lookup(dialect, op_name)
+    }
+
+    /// Check if an arena operation's regions are isolated from above.
+    pub fn is_isolated_arena(ctx: &IrContext, op: OpRef) -> bool {
+        let data = ctx.op(op);
+        ISOLATED_REGISTRY.lookup(data.dialect, data.name)
     }
 
     /// Verify that an isolated operation doesn't have references to outer values.

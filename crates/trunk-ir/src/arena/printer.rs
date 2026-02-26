@@ -559,7 +559,7 @@ mod tests {
     use super::*;
     use crate::Symbol;
     use crate::arena::dialect::{arith, core, func};
-    use crate::arena::{BlockArgData, BlockData, RegionData};
+    use crate::arena::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
@@ -568,26 +568,19 @@ mod tests {
     }
 
     fn make_i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     /// Create a `func.fn` type. Parameters are laid out as `[ret, ...params]`
     /// in `TypeData.params`, matching the convention used by `func::Fn`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        let mut p = smallvec::SmallVec::new();
-        p.push(ret);
-        p.extend_from_slice(params);
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("func"),
-            name: Symbol::new("fn"),
-            params: p,
-            attrs: Default::default(),
-        })
+        ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+                .param(ret)
+                .params(params.iter().copied())
+                .build(),
+        )
     }
 
     #[test]
@@ -601,12 +594,12 @@ mod tests {
     fn test_print_type_with_params() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let tuple_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("tuple"),
-            params: smallvec::smallvec![i32_ty, i32_ty],
-            attrs: Default::default(),
-        });
+        let tuple_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("tuple"))
+                .param(i32_ty)
+                .param(i32_ty)
+                .build(),
+        );
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
     }
 

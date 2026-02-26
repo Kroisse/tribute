@@ -113,6 +113,51 @@ pub struct TypeData {
     pub attrs: BTreeMap<Symbol, Attribute>,
 }
 
+/// Builder for constructing `TypeData` with a fluent API.
+///
+/// Defaults to empty params and empty attrs, matching the most common usage.
+pub struct TypeDataBuilder {
+    dialect: Symbol,
+    name: Symbol,
+    params: SmallVec<[TypeRef; 4]>,
+    attrs: BTreeMap<Symbol, Attribute>,
+}
+
+impl TypeDataBuilder {
+    pub fn new(dialect: Symbol, name: Symbol) -> Self {
+        Self {
+            dialect,
+            name,
+            params: SmallVec::new(),
+            attrs: BTreeMap::new(),
+        }
+    }
+
+    pub fn param(mut self, ty: TypeRef) -> Self {
+        self.params.push(ty);
+        self
+    }
+
+    pub fn params(mut self, tys: impl IntoIterator<Item = TypeRef>) -> Self {
+        self.params.extend(tys);
+        self
+    }
+
+    pub fn attr(mut self, key: impl Into<Symbol>, val: Attribute) -> Self {
+        self.attrs.insert(key.into(), val);
+        self
+    }
+
+    pub fn build(self) -> TypeData {
+        TypeData {
+            dialect: self.dialect,
+            name: self.name,
+            params: self.params,
+            attrs: self.attrs,
+        }
+    }
+}
+
 // ============================================================================
 // TypeInterner
 // ============================================================================
@@ -203,17 +248,11 @@ impl Default for PathInterner {
 mod tests {
     use super::*;
     use crate::ir::Symbol;
-    use smallvec::smallvec;
 
     #[test]
     fn type_interner_dedup() {
         let mut interner = TypeInterner::new();
-        let data = TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        };
+        let data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build();
         let r1 = interner.intern(data.clone());
         let r2 = interner.intern(data);
         assert_eq!(r1, r2, "same TypeData must yield same TypeRef");
@@ -222,18 +261,8 @@ mod tests {
     #[test]
     fn type_interner_distinct() {
         let mut interner = TypeInterner::new();
-        let i32_data = TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        };
-        let i64_data = TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i64"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        };
+        let i32_data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build();
+        let i64_data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build();
         let r1 = interner.intern(i32_data);
         let r2 = interner.intern(i64_data);
         assert_ne!(r1, r2, "different TypeData must yield different TypeRef");
@@ -242,18 +271,12 @@ mod tests {
     #[test]
     fn type_interner_with_params() {
         let mut interner = TypeInterner::new();
-        let i32_ref = interner.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        });
-        let tuple_data = TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("tuple"),
-            params: smallvec![i32_ref, i32_ref],
-            attrs: BTreeMap::new(),
-        };
+        let i32_ref =
+            interner.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let tuple_data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("tuple"))
+            .param(i32_ref)
+            .param(i32_ref)
+            .build();
         let r1 = interner.intern(tuple_data.clone());
         let r2 = interner.intern(tuple_data);
         assert_eq!(r1, r2);

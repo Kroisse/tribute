@@ -12,11 +12,15 @@ pub mod dialect;
 pub mod ops;
 pub mod printer;
 pub mod refs;
+pub mod rewrite;
 pub mod types;
+pub mod walk;
 
 pub use context::{
     BlockArgData, BlockData, IrContext, OperationData, OperationDataBuilder, RegionData, Use,
     ValueData,
 };
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
-pub use types::{Attribute, Location, PathInterner, TypeData, TypeInterner};
+pub use rewrite::ArenaModule;
+pub use types::{Attribute, Location, PathInterner, TypeData, TypeDataBuilder, TypeInterner};
+pub use walk::WalkAction;
