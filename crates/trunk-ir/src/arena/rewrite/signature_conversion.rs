@@ -9,7 +9,7 @@
 use crate::arena::context::IrContext;
 use crate::arena::dialect::{func, wasm};
 use crate::arena::ops::ArenaDialectOp;
-use crate::arena::refs::{OpRef, TypeRef};
+use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::ArenaRewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::ArenaTypeConverter;
@@ -120,6 +120,44 @@ fn update_entry_block_args(ctx: &mut IrContext, op: OpRef, new_params: &[TypeRef
     true
 }
 
+/// Shared implementation for function signature conversion.
+///
+/// Converts parameter and result types using the type converter, updates
+/// entry block argument types, rebuilds the function type, and replaces
+/// the operation. Accepts a constructor closure to create the replacement op,
+/// allowing reuse across `func.func` and `wasm.func` patterns.
+fn rewrite_function_signature(
+    ctx: &mut IrContext,
+    op: OpRef,
+    rewriter: &mut PatternRewriter<'_>,
+    func_type: TypeRef,
+    body: RegionRef,
+    make_op: impl FnOnce(&mut IrContext, TypeRef) -> OpRef,
+) -> bool {
+    let converter = rewriter.type_converter();
+
+    let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
+        return false;
+    };
+
+    // Update entry block args in-place
+    if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
+        return false;
+    }
+
+    // Build new func type
+    let new_func_type = rebuild_func_type(ctx, &sig);
+
+    // Detach body region so it can be reused in the new op
+    ctx.detach_region(body);
+
+    // Create replacement op with new type
+    let new_op = make_op(ctx, new_func_type);
+
+    rewriter.replace_op(new_op);
+    true
+}
+
 /// Pattern that converts `func.func` operation signatures using an `ArenaTypeConverter`.
 ///
 /// This pattern:
@@ -141,31 +179,13 @@ impl ArenaRewritePattern for FuncSignatureConversionPattern {
         };
 
         let func_type = func_op.r#type(ctx);
-        let converter = rewriter.type_converter();
-
-        let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
-            return false;
-        };
-
-        // Update entry block args in-place
-        if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
-            return false;
-        }
-
-        // Build new func type
-        let new_func_type = rebuild_func_type(ctx, &sig);
-
-        // Detach body region so it can be reused in the new op
         let body = func_op.body(ctx);
-        ctx.detach_region(body);
-
-        // Create replacement op with new type
-        let loc = ctx.op(op).location;
         let sym_name = func_op.sym_name(ctx);
-        let new_op = func::func(ctx, loc, sym_name, new_func_type, body);
+        let loc = ctx.op(op).location;
 
-        rewriter.replace_op(new_op.op_ref());
-        true
+        rewrite_function_signature(ctx, op, rewriter, func_type, body, |ctx, ty| {
+            func::func(ctx, loc, sym_name, ty, body).op_ref()
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -190,31 +210,13 @@ impl ArenaRewritePattern for WasmFuncSignatureConversionPattern {
         };
 
         let func_type = wasm_func_op.r#type(ctx);
-        let converter = rewriter.type_converter();
-
-        let Some(sig) = convert_func_signature(ctx, func_type, converter) else {
-            return false;
-        };
-
-        // Update entry block args in-place
-        if sig.params_changed && !update_entry_block_args(ctx, op, &sig.new_params) {
-            return false;
-        }
-
-        // Build new func type
-        let new_func_type = rebuild_func_type(ctx, &sig);
-
-        // Detach body region so it can be reused in the new op
         let body = wasm_func_op.body(ctx);
-        ctx.detach_region(body);
-
-        // Create replacement op with new type
-        let loc = ctx.op(op).location;
         let sym_name = wasm_func_op.sym_name(ctx);
-        let new_op = wasm::func(ctx, loc, sym_name, new_func_type, body);
+        let loc = ctx.op(op).location;
 
-        rewriter.replace_op(new_op.op_ref());
-        true
+        rewrite_function_signature(ctx, op, rewriter, func_type, body, |ctx, ty| {
+            wasm::func(ctx, loc, sym_name, ty, body).op_ref()
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -523,6 +525,31 @@ mod tests {
         let td = ctx.types.get(new_func.r#type(&ctx));
         assert_eq!(td.params[0], i64_ty, "return stays i64");
         assert_eq!(td.params[1], i64_ty, "param converted to i64");
+    }
+
+    #[test]
+    fn arity_mismatch_returns_unchanged_for_wasm() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let i64_ty = i64_type(&mut ctx);
+
+        // Signature has 2 params, but entry block has only 1 arg (arity mismatch)
+        let func_ty = make_func_type(&mut ctx, &[i32_ty, i32_ty], i32_ty);
+        let func_op = make_wasm_func_op(&mut ctx, loc, "mismatched_wasm", func_ty, &[i32_ty]);
+        let module = make_module(&mut ctx, loc, vec![func_op]);
+
+        let tc = i32_to_i64_converter(i32_ty, i64_ty);
+        let applicator = PatternApplicator::new(tc).add_pattern(WasmFuncSignatureConversionPattern);
+        let target = ArenaConversionTarget::new();
+
+        let result = applicator.apply(&mut ctx, module, &target).unwrap();
+        // Pattern should not match due to arity mismatch
+        assert_eq!(result.total_changes, 0);
+
+        // Verify original type is preserved
+        let ops = module.ops(&ctx);
+        let original_func = wasm::Func::from_op(&ctx, ops[0]).unwrap();
+        assert_eq!(original_func.r#type(&ctx), func_ty);
     }
 
     #[test]
