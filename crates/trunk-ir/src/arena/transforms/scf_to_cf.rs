@@ -36,7 +36,7 @@ use smallvec::SmallVec;
 use crate::arena::context::{BlockArgData, BlockData, IrContext};
 use crate::arena::dialect::{arith, cf, scf};
 use crate::arena::ops::ArenaDialectOp;
-use crate::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
+use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 use crate::arena::rewrite::ArenaModule;
 use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::arena::types::{Attribute, Location};
@@ -138,9 +138,6 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
 
     // Split block at the scf op: ops after scf_op go to merge block
     let merge_block = split_block(ctx, block, scf_op);
-
-    // Remove the scf op from the original block
-    ctx.remove_op_from_block(block, scf_op);
 
     // Add merge block argument for the result (if any)
     if let Some(ty) = result_ty {
@@ -260,11 +257,20 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         }
     }
 
-    // Find result type from yielded values (if any), scanning all case regions
-    let result_ty = cases
-        .iter()
-        .find_map(|(_, r)| find_yield_type(ctx, Some(*r)))
-        .or_else(|| find_yield_type(ctx, default_region));
+    // Determine result type from the switch op's own results (like scf.if).
+    // scf.switch currently has no `-> result`, so this will be None.
+    let results = ctx.op_results(scf_op);
+    let result_ty = if results.is_empty() {
+        None
+    } else {
+        let ty = ctx.value_ty(results[0]);
+        let ty_data = ctx.types.get(ty);
+        if ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("nil") {
+            None
+        } else {
+            Some(ty)
+        }
+    };
 
     // Split block at scf op: ops after go to merge block
     let merge_block = split_block(ctx, block, scf_op);
@@ -411,18 +417,27 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
 }
 
 /// Replace `scf.yield` ops in the given blocks with `cf.br` to the target block.
+///
+/// Only passes as many yield values as the target block expects arguments,
+/// ensuring branch arg counts always match the target block's block args.
 fn replace_yield_with_br(
     ctx: &mut IrContext,
     blocks: &[BlockRef],
     target: BlockRef,
     loc: Location,
 ) {
+    let target_arg_count = ctx.block_args(target).len();
     for &block in blocks {
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
         for op in ops {
             if scf::Yield::matches(ctx, op) {
                 let yield_op = scf::Yield::from_op(ctx, op).unwrap();
-                let values: Vec<_> = yield_op.values(ctx).to_vec();
+                let values: Vec<_> = yield_op
+                    .values(ctx)
+                    .iter()
+                    .copied()
+                    .take(target_arg_count)
+                    .collect();
                 let br = cf::br(ctx, loc, values, target);
 
                 // Replace yield with br in-place
@@ -473,23 +488,6 @@ fn replace_continue_break(
             }
         }
     }
-}
-
-/// Find the type of values yielded from a region.
-fn find_yield_type(ctx: &IrContext, region: Option<RegionRef>) -> Option<TypeRef> {
-    let region = region?;
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops {
-            if scf::Yield::matches(ctx, op) {
-                let yield_op = scf::Yield::from_op(ctx, op).unwrap();
-                let values = yield_op.values(ctx);
-                if !values.is_empty() {
-                    return Some(ctx.value_ty(values[0]));
-                }
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -931,9 +929,9 @@ mod tests {
     }
 
     #[test]
-    fn lower_scf_switch_yield_in_later_case() {
-        // The first case has no yield, but the second case yields a value.
-        // result_ty must be inferred from the second case.
+    fn lower_scf_switch_no_result() {
+        // scf.switch doesn't produce a result, so merge block should have no args.
+        // Yield values from case regions are dropped (truncated to match merge block's 0 args).
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let fn_ty = fn_type(&mut ctx);
@@ -964,7 +962,7 @@ mod tests {
         });
         let case0_op = scf::case(&mut ctx, loc, Attribute::IntBits(0), case0_region);
 
-        // Case 1: yield 42 (non-void)
+        // Case 1: yield 42 (values are dropped since switch has no result)
         let case1_block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -1022,16 +1020,15 @@ mod tests {
             "scf ops remain: {names:?}"
         );
 
-        // The merge block should have 1 arg (inferred from case 1's yield)
+        // scf.switch has no result, so merge block should have 0 args
         let blocks = ctx.region(body).blocks.to_vec();
         let merge = blocks.last().unwrap();
         let merge_args = ctx.block_args(*merge);
         assert_eq!(
             merge_args.len(),
-            1,
-            "merge block should have 1 arg inferred from later case"
+            0,
+            "merge block should have 0 args since scf.switch has no result"
         );
-        assert_eq!(ctx.value_ty(merge_args[0]), i32_ty);
     }
 
     #[test]
