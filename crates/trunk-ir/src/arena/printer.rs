@@ -496,10 +496,31 @@ fn print_func_op(
             f.write_char(')')?;
         }
 
-        // Return type from func type attribute
+        // Return type and effects from func type attribute
         if let Some(Attribute::Type(func_ty)) = data.attributes.get(&crate::Symbol::new("type")) {
-            f.write_str(" -> ")?;
-            write_type(state.ctx, f, *func_ty)?;
+            let ty_data = state.ctx.types.get(*func_ty);
+            let is_core_func = ty_data.dialect == crate::Symbol::new("core")
+                && ty_data.name == crate::Symbol::new("func");
+            if is_core_func && !ty_data.params.is_empty() {
+                // Decompose core.func: params[0] = return type, attrs["effect"] = effect
+                let result_ty = ty_data.params[0];
+                let effect_ty = ty_data
+                    .attrs
+                    .get(&crate::Symbol::new("effect"))
+                    .and_then(|a| match a {
+                        Attribute::Type(t) => Some(*t),
+                        _ => None,
+                    });
+                f.write_str(" -> ")?;
+                write_type(state.ctx, f, result_ty)?;
+                if let Some(eff) = effect_ty {
+                    f.write_str(" effects ")?;
+                    write_type(state.ctx, f, eff)?;
+                }
+            } else {
+                f.write_str(" -> ")?;
+                write_type(state.ctx, f, *func_ty)?;
+            }
         }
 
         // Body

@@ -10,11 +10,13 @@
 pub mod context;
 pub mod dialect;
 pub mod ops;
+pub mod parser;
 pub mod printer;
 pub mod refs;
 pub mod rewrite;
 pub mod transforms;
 pub mod types;
+pub mod validation;
 pub mod walk;
 
 pub use context::{
