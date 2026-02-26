@@ -84,7 +84,6 @@ mod tests {
     use crate::ir::Symbol;
     use crate::location::Span;
     use smallvec::smallvec;
-    use std::collections::BTreeMap;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -94,12 +93,8 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        })
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     #[test]
@@ -205,12 +200,9 @@ mod tests {
         });
 
         // Outer func op containing inner region
-        let func_ty = ctx.types.intern(TypeData {
-            dialect: Symbol::new("func"),
-            name: Symbol::new("fn"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        });
+        let func_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build());
         let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .result(func_ty)
             .region(inner_region)

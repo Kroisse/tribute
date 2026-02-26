@@ -572,12 +572,8 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        })
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     #[test]

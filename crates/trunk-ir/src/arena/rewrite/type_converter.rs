@@ -102,8 +102,6 @@ mod tests {
     use crate::arena::*;
     use crate::ir::Symbol;
     use crate::location::Span;
-    use smallvec::smallvec;
-    use std::collections::BTreeMap;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -113,21 +111,13 @@ mod tests {
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        })
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     fn i64_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i64"),
-            params: smallvec![],
-            attrs: BTreeMap::new(),
-        })
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
     }
 
     #[test]

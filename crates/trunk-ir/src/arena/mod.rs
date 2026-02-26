@@ -22,5 +22,5 @@ pub use context::{
 };
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::ArenaModule;
-pub use types::{Attribute, Location, PathInterner, TypeData, TypeInterner};
+pub use types::{Attribute, Location, PathInterner, TypeData, TypeDataBuilder, TypeInterner};
 pub use walk::WalkAction;

@@ -22,7 +22,7 @@ mod tests {
     use crate::arena::refs::PathRef;
     use crate::arena::types::Location;
     use crate::arena::{
-        Attribute, BlockData, IrContext, RegionData, TypeData, TypeInterner, ValueDef,
+        Attribute, BlockData, IrContext, RegionData, TypeDataBuilder, TypeInterner, ValueDef,
     };
 
     fn dummy_location() -> Location {
@@ -30,21 +30,11 @@ mod tests {
     }
 
     fn make_i32_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
-        types.intern(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("i32"),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
+        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     fn make_func_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
-        types.intern(TypeData {
-            dialect: Symbol::new("func"),
-            name: Symbol::new("fn"),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
+        types.intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build())
     }
 
     // ================================================================
