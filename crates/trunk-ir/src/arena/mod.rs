@@ -13,6 +13,7 @@ pub mod ops;
 pub mod printer;
 pub mod refs;
 pub mod rewrite;
+pub mod transforms;
 pub mod types;
 pub mod walk;
 

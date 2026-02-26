@@ -5,12 +5,14 @@
 
 pub mod applicator;
 pub mod conversion_target;
+pub mod helpers;
 pub mod pattern;
 pub mod rewriter;
 pub mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
 pub use conversion_target::{ArenaConversionTarget, LegalityCheck};
+pub use helpers::{erase_op, inline_region_blocks, split_block};
 pub use pattern::ArenaRewritePattern;
 pub use rewriter::PatternRewriter;
 pub use type_converter::ArenaTypeConverter;
