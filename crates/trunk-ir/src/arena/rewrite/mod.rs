@@ -8,6 +8,7 @@ pub mod conversion_target;
 pub mod helpers;
 pub mod pattern;
 pub mod rewriter;
+pub mod signature_conversion;
 pub mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
@@ -15,6 +16,9 @@ pub use conversion_target::{ArenaConversionTarget, LegalityCheck};
 pub use helpers::{erase_op, inline_region_blocks, split_block};
 pub use pattern::ArenaRewritePattern;
 pub use rewriter::PatternRewriter;
+pub use signature_conversion::{
+    FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern,
+};
 pub use type_converter::ArenaTypeConverter;
 
 use super::context::IrContext;

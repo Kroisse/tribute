@@ -28,7 +28,7 @@ pub trait ArenaRewritePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut PatternRewriter,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool;
 
     /// Optional: return a human-readable name for debugging.

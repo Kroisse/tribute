@@ -326,6 +326,14 @@ impl IrContext {
         v
     }
 
+    /// Set the type of a block argument, updating both the `BlockArgData`
+    /// and the corresponding `ValueData` to keep them in sync.
+    pub fn set_block_arg_type(&mut self, block: BlockRef, index: u32, new_ty: TypeRef) {
+        self.blocks[block].args[index as usize].ty = new_ty;
+        let value_ref = self.block_arg_values[block].as_slice(&self.value_pool)[index as usize];
+        self.values[value_ref].ty = new_ty;
+    }
+
     /// Append an operation to the end of a block.
     ///
     /// # Panics
@@ -410,6 +418,17 @@ impl IrContext {
         }
 
         region
+    }
+
+    /// Detach a region from its parent operation.
+    ///
+    /// Clears both the region's `parent_op` back-link and removes the region
+    /// from the parent operation's region list. Does nothing if the region
+    /// has no parent.
+    pub fn detach_region(&mut self, region: RegionRef) {
+        if let Some(parent_op) = self.regions[region].parent_op.take() {
+            self.ops[parent_op].regions.retain(|r| *r != region);
+        }
     }
 
     /// Get immutable reference to region data.
