@@ -146,8 +146,8 @@ macro_rules! register_pure_op {
 
             ::inventory::submit! {
                 $crate::op_interface::PureOps::register(
-                    stringify!($dialect),
-                    stringify!($op_name)
+                    $crate::raw_ident_str!($dialect),
+                    $crate::raw_ident_str!($op_name)
                 )
             }
         }
@@ -382,8 +382,8 @@ macro_rules! register_isolated_op {
 
             ::inventory::submit! {
                 $crate::op_interface::IsolatedFromAboveOps::register(
-                    stringify!($dialect),
-                    stringify!($op_name)
+                    $crate::raw_ident_str!($dialect),
+                    $crate::raw_ident_str!($op_name)
                 )
             }
         }

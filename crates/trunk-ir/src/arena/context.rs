@@ -313,6 +313,19 @@ impl IrContext {
         self.block_arg_values[b].as_slice(&self.value_pool)
     }
 
+    /// Add a new argument to an existing block and return its `ValueRef`.
+    pub fn add_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
+        let index = self.blocks[block].args.len() as u32;
+        let ty = arg.ty;
+        self.blocks[block].args.push(arg);
+        let v = self.values.push(ValueData {
+            def: ValueDef::BlockArg(block, index),
+            ty,
+        });
+        self.block_arg_values[block].push(v, &mut self.value_pool);
+        v
+    }
+
     /// Append an operation to the end of a block.
     ///
     /// # Panics
@@ -358,6 +371,17 @@ impl IrContext {
         self.blocks[block].ops.retain(|o| *o != op);
         if self.ops[op].parent_block == Some(block) {
             self.ops[op].parent_block = None;
+        }
+    }
+
+    /// Detach an operation from its parent block.
+    ///
+    /// This is a convenience wrapper around `remove_op_from_block` that uses
+    /// the operation's own `parent_block` field. Does nothing if the operation
+    /// is not attached to any block.
+    pub fn detach_op(&mut self, op: OpRef) {
+        if let Some(block) = self.ops[op].parent_block {
+            self.remove_op_from_block(block, op);
         }
     }
 
