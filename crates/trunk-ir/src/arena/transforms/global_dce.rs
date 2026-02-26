@@ -1,10 +1,10 @@
 //! Global Dead Code Elimination (DCE) pass for arena IR.
 //!
-//! Removes function definitions that are not reachable from entry points.
-//! Entry points include:
+//! Removes function definitions that are not reachable from reachability roots.
+//! Reachability roots include:
 //! - Functions named "main" or "_start"
 //! - Functions referenced by `wasm.export_func`
-//! - Functions with `abi` attribute (extern declarations)
+//! - Functions with `abi` attribute (externally callable)
 //! - Custom entry points from configuration
 //!
 //! Builds a call graph by analyzing `func.call`, `func.tail_call`, and
@@ -113,8 +113,8 @@ struct GlobalDcePass {
     functions: HashMap<Symbol, OpRef>,
     /// Call graph: caller → set of callees
     call_graph: HashMap<Symbol, HashSet<Symbol>>,
-    /// Entry points (roots for reachability analysis)
-    entry_points: HashSet<Symbol>,
+    /// Roots for reachability analysis (main, exports, abi functions, etc.)
+    reachability_roots: HashSet<Symbol>,
 }
 
 impl GlobalDcePass {
@@ -124,24 +124,24 @@ impl GlobalDcePass {
             syms: Syms::new(),
             functions: HashMap::new(),
             call_graph: HashMap::new(),
-            entry_points: HashSet::new(),
+            reachability_roots: HashSet::new(),
         }
     }
 
     fn run(&mut self, ctx: &mut IrContext, module: ArenaModule) -> GlobalDceResult {
-        // Phase 1: Analyze — collect functions, call graph, entry points
+        // Phase 1: Analyze — collect functions, call graph, reachability roots
         if let Some(body) = module.body(ctx) {
             self.analyze_module_region(ctx, body, &[]);
         }
 
-        // Phase 2: Compute reachable functions from entry points
+        // Phase 2: Compute reachable functions from roots
         let reachable = self.compute_reachable();
 
         // Phase 3: Remove unreachable functions
         self.remove_dead_functions(ctx, module, &reachable)
     }
 
-    /// Analyze a module's body region to collect functions, call edges, and entry points.
+    /// Analyze a module's body region to collect functions, call edges, and reachability roots.
     fn analyze_module_region(
         &mut self,
         ctx: &IrContext,
@@ -178,7 +178,13 @@ impl GlobalDcePass {
                         .extract_symbol_attr(ctx, op, &self.syms.sym_name)
                         .unwrap_or(func_name);
                     if base_name == self.syms.main || base_name == self.syms.start {
-                        self.entry_points.insert(func_name);
+                        self.reachability_roots.insert(func_name);
+                    }
+
+                    // Treat abi functions as entry points so their callees
+                    // are also considered reachable.
+                    if ctx.op(op).attributes.contains_key(&self.syms.abi) {
+                        self.reachability_roots.insert(func_name);
                     }
 
                     // Check extra entry points (match against both qualified and base name)
@@ -197,7 +203,7 @@ impl GlobalDcePass {
                             });
                         }
                         if matched {
-                            self.entry_points.insert(func_name);
+                            self.reachability_roots.insert(func_name);
                         }
                     }
 
@@ -210,7 +216,7 @@ impl GlobalDcePass {
                     && name == self.syms.export_func
                     && let Some(func_ref) = self.extract_symbol_attr(ctx, op, &self.syms.func_attr)
                 {
-                    self.entry_points.insert(func_ref);
+                    self.reachability_roots.insert(func_ref);
                 }
             }
         }
@@ -300,10 +306,10 @@ impl GlobalDcePass {
         }
     }
 
-    /// Compute reachable functions from entry points via BFS.
+    /// Compute reachable functions from reachability roots via BFS.
     fn compute_reachable(&self) -> HashSet<Symbol> {
         let mut reachable = HashSet::new();
-        let mut worklist: VecDeque<Symbol> = self.entry_points.iter().copied().collect();
+        let mut worklist: VecDeque<Symbol> = self.reachability_roots.iter().copied().collect();
 
         while let Some(func) = worklist.pop_front() {
             if !reachable.insert(func) {
@@ -374,10 +380,6 @@ impl GlobalDcePass {
                     && let Some(func_name) = self.extract_func_name(ctx, op, module_path)
                     && !reachable.contains(&func_name)
                 {
-                    // Preserve extern declarations (abi attribute)
-                    if ctx.op(op).attributes.contains_key(&self.syms.abi) {
-                        continue;
-                    }
                     removed.push(func_name);
                     ctx.remove_op_from_block(block, op);
                     // Note: we don't call ctx.remove_op because the func
@@ -644,6 +646,56 @@ mod tests {
 
         assert_eq!(result.removed_count, 0);
         assert_eq!(count_funcs(&ctx, module), 2);
+    }
+
+    #[test]
+    fn abi_function_callees_are_reachable() {
+        let (mut ctx, loc) = test_ctx();
+        let fn_ty = fn_type(&mut ctx);
+
+        let main = build_simple_func(&mut ctx, loc, "main");
+
+        // helper is only called by extern_fn
+        let helper = build_simple_func(&mut ctx, loc, "helper");
+
+        // extern_fn (abi) calls helper
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let i32_ty = i32_type(&mut ctx);
+        let call = func::call(
+            &mut ctx,
+            loc,
+            std::iter::empty(),
+            i32_ty,
+            Symbol::new("helper"),
+        );
+        ctx.push_op(entry, call.op_ref());
+        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        ctx.push_op(entry, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
+            .attr("type", Attribute::Type(fn_ty))
+            .attr("abi", Attribute::String("C".to_owned()))
+            .region(body)
+            .build(&mut ctx);
+        let extern_op = ctx.create_op(extern_data);
+
+        let module = build_module(&mut ctx, loc, vec![main, helper, extern_op]);
+
+        let result = eliminate_dead_functions(&mut ctx, module);
+
+        // extern_fn is preserved (abi) and helper is reachable from extern_fn
+        assert_eq!(result.removed_count, 0);
+        assert_eq!(count_funcs(&ctx, module), 3);
     }
 
     #[test]
