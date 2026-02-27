@@ -194,7 +194,7 @@ fn check_operands_in_block(
     }
 }
 
-/// Validate value integrity for all `func.func` operations in a module.
+/// Validate value integrity for all `func.func` and `wasm.func` operations in a module.
 ///
 /// For each function, checks that every operand references a value defined
 /// within that function's region tree.
@@ -234,7 +234,7 @@ fn validate_functions_in_region(
             let is_function = (data.dialect == func_dialect || data.dialect == wasm_dialect)
                 && data.name == func_name_sym;
             if is_function {
-                // This is a func.func
+                // This is a func.func or wasm.func
                 let fn_name = data
                     .attributes
                     .get(&Symbol::new("sym_name"))
