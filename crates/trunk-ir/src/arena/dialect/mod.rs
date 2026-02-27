@@ -34,7 +34,7 @@ mod tests {
     }
 
     fn make_func_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build())
+        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
     }
 
     // ================================================================

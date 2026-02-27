@@ -418,7 +418,7 @@ mod tests {
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
         ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(ret)
                 .params(params.iter().copied())
                 .build(),
@@ -825,7 +825,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
         let wasm_func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(i32_ty)
                 .build(),
         );

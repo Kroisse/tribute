@@ -409,7 +409,7 @@ mod tests {
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
         ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build())
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {

@@ -593,11 +593,11 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    /// Create a `func.fn` type. Parameters are laid out as `[ret, ...params]`
-    /// in `TypeData.params`, matching the convention used by `func::Fn`.
+    /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
+    /// in `TypeData.params`, matching the convention used by `core::Func`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
         ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(ret)
                 .params(params.iter().copied())
                 .build(),

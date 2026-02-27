@@ -174,7 +174,7 @@ mod tests {
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
         ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build())
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
     }
 
     /// Build a minimal module wrapping the given function ops.
@@ -365,7 +365,7 @@ mod tests {
             // Outer op that owns the inner region (use func.func as container)
             let fn_ty = ctx
                 .types
-                .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build());
+                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
             let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
             ctx.push_op(entry, nested_func.op_ref());
 
@@ -430,7 +430,7 @@ mod tests {
 
             let fn_ty = ctx
                 .types
-                .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build());
+                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
             let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
             ctx.push_op(entry, nested_func.op_ref());
 
