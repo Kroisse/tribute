@@ -127,6 +127,7 @@ impl<'a> ArenaIrBuilder<'a> {
         extra_entry_args: &[(&str, RawType<'_>)],
     ) -> Result<RegionRef, ParseError> {
         let saved = self.save_scopes();
+        self.block_map.clear(); // isolate block scope per region
         let result = self.build_region_inner(raw, extra_entry_args);
         self.restore_scopes(saved);
         result
@@ -192,8 +193,14 @@ impl<'a> ArenaIrBuilder<'a> {
 
             self.block_map.insert(label, block_ref);
 
-            // Register arg values
+            // Register arg values, rejecting cross-block duplicates
             for (j, name) in arg_names.iter().enumerate() {
+                if self.value_map.contains_key(name) {
+                    return Err(ParseError {
+                        message: format!("duplicate SSA name '%{}' in block argument", name),
+                        offset: 0,
+                    });
+                }
                 let value = self.ctx.block_arg(block_ref, j as u32);
                 self.value_map.insert(name.clone(), value);
             }
@@ -1010,5 +1017,56 @@ mod tests {
         let func_data = ctx.op(ops[0]);
         assert_eq!(func_data.dialect, Symbol::new("func"));
         assert_eq!(func_data.name, Symbol::new("func"));
+    }
+
+    // ================================================================
+    // Scoping error tests
+    // ================================================================
+
+    #[test]
+    fn test_parse_cross_block_duplicate_arg_name() {
+        // Two blocks both define %x as a block argument — should error
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    ^entry:
+      %cond = arith.const {value = 1} : core.i1
+      scf.br [^left]
+    ^left(%x: core.i32):
+      scf.br [^right]
+    ^right(%x: core.i32):
+      func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let err = parse_module(&mut ctx, input).unwrap_err();
+        assert!(
+            err.message.contains("duplicate SSA name '%x'"),
+            "Expected duplicate SSA name error, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_parse_nested_region_block_isolation() {
+        // Inner region must not resolve outer block labels as successors
+        let input = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+    ^entry:
+      %cond = arith.const {value = 1} : core.i1
+      %r = scf.if %cond : core.i32 {
+        scf.br [^entry]
+      } {
+        scf.yield %0
+      }
+      func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let err = parse_module(&mut ctx, input).unwrap_err();
+        assert!(
+            err.message.contains("undefined block '^entry'"),
+            "Expected undefined block error for outer label in nested region, got: {}",
+            err.message
+        );
     }
 }

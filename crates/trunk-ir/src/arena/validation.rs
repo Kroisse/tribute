@@ -225,12 +225,15 @@ fn validate_functions_in_region(
     errors: &mut Vec<StaleValueError>,
 ) {
     let func_dialect = Symbol::new("func");
+    let wasm_dialect = Symbol::new("wasm");
     let func_name_sym = Symbol::new("func");
 
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             let data = ctx.op(op);
-            if data.dialect == func_dialect && data.name == func_name_sym {
+            let is_function = (data.dialect == func_dialect || data.dialect == wasm_dialect)
+                && data.name == func_name_sym;
+            if is_function {
                 // This is a func.func
                 let fn_name = data
                     .attributes
@@ -814,6 +817,83 @@ mod tests {
         for err in &result.stale_errors {
             assert_eq!(err.function_name, "func_b");
         }
+    }
+
+    #[test]
+    fn wasm_func_stale_ref_detected() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let wasm_func_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+                .param(i32_ty)
+                .build(),
+        );
+
+        // func_a (func.func) with a constant
+        let entry_a = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(99));
+        ctx.push_op(entry_a, const_a.op_ref());
+        let stale_value = const_a.result(&ctx);
+        let ret_a = func::r#return(&mut ctx, loc, [stale_value]);
+        ctx.push_op(entry_a, ret_a.op_ref());
+        let body_a = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry_a],
+            parent_op: None,
+        });
+        let func_ty = make_func_type(&mut ctx, &[], i32_ty);
+        let func_a = func::func(&mut ctx, loc, Symbol::new("func_a"), func_ty, body_a);
+
+        // func_b (wasm.func) uses stale_value from func_a
+        let entry_b = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let ret_b = func::r#return(&mut ctx, loc, [stale_value]);
+        ctx.push_op(entry_b, ret_b.op_ref());
+        let body_b = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry_b],
+            parent_op: None,
+        });
+        // Build wasm.func manually
+        let wasm_func_data =
+            OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("func_b")))
+                .attr("type", Attribute::Type(wasm_func_ty))
+                .region(body_b)
+                .build(&mut ctx);
+        let wasm_func_op = ctx.create_op(wasm_func_data);
+
+        // module
+        let mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(mod_block, func_a.op_ref());
+        ctx.push_op(mod_block, wasm_func_op);
+        let mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![mod_block],
+            parent_op: None,
+        });
+        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+
+        let result = validate_value_integrity(&ctx, module);
+        assert!(!result.is_ok(), "Should detect stale ref in wasm.func body");
+        assert_eq!(result.stale_errors.len(), 1);
+        assert_eq!(result.stale_errors[0].function_name, "func_b");
     }
 
     #[test]
