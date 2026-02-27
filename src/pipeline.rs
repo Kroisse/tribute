@@ -342,7 +342,7 @@ pub fn stage_evidence_params<'db>(
 
     // Bridge to arena, run arena pass, bridge back
     let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    evidence::arena::arena_add_evidence_params(&mut ctx, arena_module);
+    evidence::add_evidence_params(&mut ctx, arena_module);
     let exported = export_to_salsa(db, &ctx, arena_module);
     Module::from_operation(db, exported).unwrap()
 }
@@ -367,7 +367,7 @@ pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'d
 
     // Bridge to arena, run arena pass, bridge back
     let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    evidence::arena::arena_transform_evidence_calls(&mut ctx, arena_module);
+    evidence::transform_evidence_calls(&mut ctx, arena_module);
     let exported = export_to_salsa(db, &ctx, arena_module);
     Module::from_operation(db, exported).unwrap()
 }
