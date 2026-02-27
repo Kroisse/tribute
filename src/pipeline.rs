@@ -372,23 +372,6 @@ pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'d
     Module::from_operation(db, exported).unwrap()
 }
 
-/// Evidence Insertion (Combined).
-///
-/// This pass transforms effectful functions for ability system support:
-/// - Adds evidence parameter as first argument to effectful functions
-/// - Passes evidence through call chains
-///
-/// Evidence is a runtime structure for dynamic handler dispatch.
-/// Pure functions (with empty effect row) are unchanged.
-///
-/// NOTE: This is the legacy combined pass. For the new pipeline, use
-/// `stage_evidence_params` before lambda_lift and `stage_evidence_calls` after closure_lower.
-#[salsa::tracked]
-pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let module = stage_evidence_params(db, module);
-    stage_evidence_calls(db, module)
-}
-
 /// Resolve Evidence-based Dispatch.
 ///
 /// This pass transforms `cont.shift` with placeholder tags into
