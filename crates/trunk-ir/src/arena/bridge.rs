@@ -664,11 +664,9 @@ mod tests {
         let path = PathId::new(db, "file:///test.trb".to_owned());
         let location = Location::new(path, Span::new(0, 0));
         let i32_ty = core::I32::new(db).as_type();
-        let bool_ty = core::I1::new(db).as_type();
 
         let main_func = func::Func::build(db, location, "nested", idvec![], i32_ty, |entry| {
             let cond = entry.op(arith::Const::u64(db, location, 1));
-            let _ = bool_ty;
 
             let then_region = {
                 let mut bb = BlockBuilder::new(db, location);
@@ -776,7 +774,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod proptest_fuzz {
+mod seed_corpus {
     use super::*;
     use crate::arena::printer as arena_printer;
     use crate::printer;
