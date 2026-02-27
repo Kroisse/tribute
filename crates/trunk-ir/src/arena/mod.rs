@@ -7,6 +7,7 @@
 //! The arena IR coexists with the existing Salsa-based IR during the
 //! transition period.
 
+pub mod bridge;
 pub mod context;
 pub mod dialect;
 pub mod ops;
@@ -19,6 +20,7 @@ pub mod types;
 pub mod validation;
 pub mod walk;
 
+pub use bridge::{export_to_salsa, import_salsa_module};
 pub use context::{
     BlockArgData, BlockData, IrContext, OperationData, OperationDataBuilder, RegionData, Use,
     ValueData,
