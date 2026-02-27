@@ -43,78 +43,11 @@
 use std::collections::HashSet;
 
 use tribute_ir::dialect::ability;
-use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::dialect::{core, func};
 use trunk_ir::{DialectOp, DialectType, Symbol, Type};
 
-/// Phase 1: Add evidence parameters to effectful function signatures.
-///
-/// This pass adds an evidence pointer parameter as the first argument to all
-/// effectful functions. This must run BEFORE lambda lifting so that:
-/// 1. Lambdas can capture the evidence parameter from their enclosing function
-/// 2. Lifted lambdas will have evidence in scope
-///
-/// Transformation:
-/// ```text
-/// fn foo(x: Int) ->{State(Int)} Int
-///   =>
-/// fn foo(ev: Evidence, x: Int) -> Int
-/// ```
-#[salsa::tracked]
-pub fn add_evidence_params<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> core::Module<'db> {
-    // Early exit: check on Salsa side before paying bridge cost
-    let effectful_fns = collect_effectful_functions(db, &module);
-    if effectful_fns.is_empty() {
-        return module;
-    }
-
-    // Bridge to arena, run arena pass, bridge back
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    arena::arena_add_evidence_params(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    core::Module::from_operation(db, exported).unwrap()
-}
-
-/// Phase 2: Transform calls to pass evidence through.
-///
-/// This pass transforms call sites to pass evidence:
-/// - Calls inside effectful functions pass the evidence parameter
-///
-/// This must run AFTER lambda lifting and closure lowering so that:
-/// 1. Lifted lambdas already have evidence parameters
-/// 2. Closure calls can also receive evidence
-///
-/// Transformation:
-/// ```text
-/// func.call @effectful_fn(%arg)
-///   =>
-/// func.call @effectful_fn(%ev, %arg)
-/// ```
-#[salsa::tracked]
-pub fn transform_evidence_calls<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> core::Module<'db> {
-    // Early exit: check on Salsa side before paying bridge cost
-    let effectful_fns = collect_effectful_functions(db, &module);
-    let fns_with_evidence = collect_functions_with_evidence_param(db, &module);
-
-    if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
-        return module;
-    }
-
-    // Bridge to arena, run arena pass, bridge back
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    arena::arena_transform_evidence_calls(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    core::Module::from_operation(db, exported).unwrap()
-}
-
 /// Collect all function names that have `ability.evidence_ptr` as their first parameter.
-fn collect_functions_with_evidence_param<'db>(
+pub fn collect_functions_with_evidence_param<'db>(
     db: &'db dyn salsa::Database,
     module: &core::Module<'db>,
 ) -> HashSet<Symbol> {
@@ -136,24 +69,6 @@ fn collect_functions_with_evidence_param<'db>(
     }
 
     fns_with_evidence
-}
-
-/// Insert evidence parameters for effectful functions.
-///
-/// This is the combined entry point that runs both phases sequentially.
-/// For the new pipeline that separates lambda lifting, use `add_evidence_params`
-/// and `transform_evidence_calls` separately.
-///
-/// The pass works in two phases:
-/// 1. Add evidence parameter to effectful function signatures
-/// 2. Transform calls inside effectful functions to pass evidence
-#[salsa::tracked]
-pub fn insert_evidence<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> core::Module<'db> {
-    let module = add_evidence_params(db, module);
-    transform_evidence_calls(db, module)
 }
 
 /// Collect all function names that are effectful.
