@@ -63,7 +63,6 @@ use std::path::Path;
 use tree_sitter::Parser;
 use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
-use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
 use tribute_passes::generate_native_entrypoint;
@@ -71,7 +70,6 @@ use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_libmprompt;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_evidence_to_native;
-use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
@@ -319,7 +317,10 @@ pub struct CompilationResult<'db> {
 /// - Passes env as first argument to the call
 #[salsa::tracked]
 pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    lower_closures(db, module)
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Evidence Parameters (Phase 1).
@@ -386,7 +387,10 @@ pub fn stage_resolve_evidence<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Module<'db> {
-    resolve_evidence_dispatch(db, module)
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Continuation to Trampoline Lowering.

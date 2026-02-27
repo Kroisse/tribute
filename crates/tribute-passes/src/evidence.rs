@@ -295,7 +295,7 @@ pub fn add_evidence_params(ctx: &mut IrContext, module: ArenaModule) {
 ///
 /// Walks up the parent chain from the given op to find the containing
 /// `func.func`, then returns its first block argument if it is an evidence type.
-fn find_enclosing_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+pub fn find_enclosing_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
     let mut current = op;
     loop {
         let block = ctx.op(current).parent_block?;
