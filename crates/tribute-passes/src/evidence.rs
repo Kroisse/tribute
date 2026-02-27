@@ -42,13 +42,10 @@
 
 use std::collections::HashSet;
 
-use crate::type_converter::generic_type_converter;
 use tribute_ir::dialect::ability;
+use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::dialect::{core, func};
-use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
-use trunk_ir::{
-    Block, BlockArg, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
-};
+use trunk_ir::{DialectOp, DialectType, Symbol, Type};
 
 /// Phase 1: Add evidence parameters to effectful function signatures.
 ///
@@ -68,18 +65,17 @@ pub fn add_evidence_params<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
+    // Early exit: check on Salsa side before paying bridge cost
     let effectful_fns = collect_effectful_functions(db, &module);
-
     if effectful_fns.is_empty() {
         return module;
     }
 
-    let converter = generic_type_converter();
-    let target = ConversionTarget::new();
-    PatternApplicator::new(converter)
-        .add_pattern(AddEvidenceParamPattern::new(effectful_fns))
-        .apply_partial(db, module, target)
-        .module
+    // Bridge to arena, run arena pass, bridge back
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    arena::arena_add_evidence_params(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    core::Module::from_operation(db, exported).unwrap()
 }
 
 /// Phase 2: Transform calls to pass evidence through.
@@ -102,26 +98,19 @@ pub fn transform_evidence_calls<'db>(
     db: &'db dyn salsa::Database,
     module: core::Module<'db>,
 ) -> core::Module<'db> {
-    // Collect functions that are explicitly effectful (have effect row with abilities)
+    // Early exit: check on Salsa side before paying bridge cost
     let effectful_fns = collect_effectful_functions(db, &module);
-
-    // Also collect functions that have evidence parameter (added by add_evidence_params or lambda_lift)
-    // These functions need their internal calls transformed even if their type no longer shows effects
     let fns_with_evidence = collect_functions_with_evidence_param(db, &module);
 
     if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
         return module;
     }
 
-    // Combine both sets for the callee check - we need to pass evidence to calls to either type
-    let all_effectful: HashSet<Symbol> = effectful_fns.union(&fns_with_evidence).copied().collect();
-
-    let converter = generic_type_converter();
-    let target = ConversionTarget::new();
-    PatternApplicator::new(converter)
-        .add_pattern(TransformCallsPattern::new(all_effectful))
-        .apply_partial(db, module, target)
-        .module
+    // Bridge to arena, run arena pass, bridge back
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    arena::arena_transform_evidence_calls(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    core::Module::from_operation(db, exported).unwrap()
 }
 
 /// Collect all function names that have `ability.evidence_ptr` as their first parameter.
@@ -155,9 +144,9 @@ fn collect_functions_with_evidence_param<'db>(
 /// For the new pipeline that separates lambda lifting, use `add_evidence_params`
 /// and `transform_evidence_calls` separately.
 ///
-/// The pass works in two phases via `PatternApplicator`:
-/// 1. `AddEvidenceParamPattern`: Add evidence parameter to effectful function signatures
-/// 2. `TransformCallsPattern`: Transform calls inside effectful functions to pass evidence
+/// The pass works in two phases:
+/// 1. Add evidence parameter to effectful function signatures
+/// 2. Transform calls inside effectful functions to pass evidence
 #[salsa::tracked]
 pub fn insert_evidence<'db>(
     db: &'db dyn salsa::Database,
@@ -165,166 +154,6 @@ pub fn insert_evidence<'db>(
 ) -> core::Module<'db> {
     let module = add_evidence_params(db, module);
     transform_evidence_calls(db, module)
-}
-
-/// Transform calls in a block, returning the new block and whether any changes were made.
-fn transform_calls_in_block<'db>(
-    db: &'db dyn salsa::Database,
-    block: &Block<'db>,
-    ev_value: Value<'db>,
-    effectful_fns: &HashSet<Symbol>,
-) -> (Block<'db>, bool) {
-    use std::collections::HashMap;
-
-    let mut new_ops = Vec::new();
-    let mut changed = false;
-    let mut value_map: HashMap<Value<'db>, Value<'db>> = HashMap::new();
-
-    for op in block.operations(db).iter() {
-        // First, remap operands using the value map
-        let remapped_operands: Vec<Value<'db>> = op
-            .operands(db)
-            .iter()
-            .map(|v| *value_map.get(v).unwrap_or(v))
-            .collect();
-
-        // Check if this is a call to an effectful function
-        if let Ok(call_op) = func::Call::from_operation(db, *op) {
-            let callee = call_op.callee(db);
-            if effectful_fns.contains(&callee) {
-                // Check if evidence is already the first argument (to prevent re-adding)
-                let first_arg = remapped_operands.first().copied();
-                let new_args = if first_arg == Some(ev_value) {
-                    // Already has evidence as first arg, just use remapped operands
-                    remapped_operands.clone()
-                } else {
-                    // Add evidence as first argument
-                    let mut args: Vec<Value<'db>> = vec![ev_value];
-                    args.extend(remapped_operands.iter().copied());
-                    args
-                };
-
-                let location = op.location(db);
-                let result_ty = op
-                    .results(db)
-                    .first()
-                    .copied()
-                    .unwrap_or_else(|| *core::Nil::new(db));
-
-                let new_call = func::call(db, location, new_args, result_ty, callee);
-                let new_call_op = new_call.as_operation();
-
-                // Map old result to new result
-                if !op.results(db).is_empty() {
-                    let old_result = op.result(db, 0);
-                    let new_result = new_call_op.result(db, 0);
-                    value_map.insert(old_result, new_result);
-                }
-
-                new_ops.push(new_call_op);
-                changed = true;
-                continue;
-            }
-        }
-
-        // NOTE: Indirect calls (closure calls) are handled by closure_lower pass,
-        // which has access to closure type information before lowering.
-        // We don't handle them here because closure types have already been lowered
-        // to adt.struct by the time this pass runs.
-
-        // Recursively transform nested regions (e.g., in scf.if)
-        let regions = op.regions(db);
-        if !regions.is_empty() {
-            let mut region_changed = false;
-            let new_regions: IdVec<Region<'db>> = regions
-                .iter()
-                .map(|region| {
-                    let (new_region, r_changed) =
-                        transform_calls_in_region(db, region, ev_value, effectful_fns);
-                    if r_changed {
-                        region_changed = true;
-                    }
-                    new_region
-                })
-                .collect();
-
-            if region_changed {
-                changed = true;
-                // Rebuild op with new regions and remapped operands
-                let new_op = op
-                    .modify(db)
-                    .operands(IdVec::from(remapped_operands))
-                    .regions(new_regions)
-                    .build();
-                // Map old results to new results
-                for i in 0..op.results(db).len() {
-                    let old_result = op.result(db, i);
-                    let new_result = new_op.result(db, i);
-                    value_map.insert(old_result, new_result);
-                }
-                new_ops.push(new_op);
-                continue;
-            }
-        }
-
-        // If operands were remapped or we have changes, rebuild the operation
-        let operands_changed = op
-            .operands(db)
-            .iter()
-            .zip(remapped_operands.iter())
-            .any(|(old, new)| old != new);
-
-        if operands_changed {
-            let new_op = op
-                .modify(db)
-                .operands(IdVec::from(remapped_operands))
-                .build();
-            // Map old results to new results
-            for i in 0..op.results(db).len() {
-                let old_result = op.result(db, i);
-                let new_result = new_op.result(db, i);
-                value_map.insert(old_result, new_result);
-            }
-            new_ops.push(new_op);
-        } else {
-            new_ops.push(*op);
-        }
-    }
-
-    let new_block = Block::new(
-        db,
-        block.id(db),
-        block.location(db),
-        block.args(db).clone(),
-        new_ops.into_iter().collect(),
-    );
-
-    (new_block, changed)
-}
-
-/// Transform calls in a region, returning the new region and whether any changes were made.
-fn transform_calls_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    ev_value: Value<'db>,
-    effectful_fns: &HashSet<Symbol>,
-) -> (Region<'db>, bool) {
-    let mut changed = false;
-    let new_blocks: IdVec<Block<'db>> = region
-        .blocks(db)
-        .iter()
-        .map(|block| {
-            let (new_block, block_changed) =
-                transform_calls_in_block(db, block, ev_value, effectful_fns);
-            if block_changed {
-                changed = true;
-            }
-            new_block
-        })
-        .collect();
-
-    let new_region = Region::new(db, region.location(db), new_blocks);
-    (new_region, changed)
 }
 
 /// Collect all function names that are effectful.
@@ -372,180 +201,301 @@ pub fn is_effectful_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bo
     !row.abilities(db).is_empty()
 }
 
-/// Pattern: Add evidence parameter to effectful function signatures.
-struct AddEvidenceParamPattern {
-    effectful_fns: HashSet<Symbol>,
-}
+// ============================================================================
+// Arena-based evidence pass implementation
+// ============================================================================
 
-impl AddEvidenceParamPattern {
-    fn new(effectful_fns: HashSet<Symbol>) -> Self {
-        Self { effectful_fns }
-    }
-}
+pub mod arena {
+    use std::collections::HashSet;
 
-impl<'db> RewritePattern<'db> for AddEvidenceParamPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _rewriter: &mut PatternRewriter<'db, '_>,
-    ) -> bool {
-        // Match: func.func
-        let func_op = match func::Func::from_operation(db, *op) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
+    use tribute_ir::arena::dialect::ability as arena_ability;
+    use trunk_ir::arena::context::{BlockArgData, IrContext};
+    use trunk_ir::arena::dialect::func as arena_func;
+    use trunk_ir::arena::ops::ArenaDialectOp;
+    use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+    use trunk_ir::ir::Symbol;
 
-        let func_name = func_op.sym_name(db);
+    use std::collections::BTreeMap;
 
-        // Check if this function is effectful
-        if !self.effectful_fns.contains(&func_name) {
+    /// Check if an arena `core.func` type has concrete abilities in its effect row.
+    pub fn is_effectful_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
+        let data = ctx.types.get(ty);
+        if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
             return false;
         }
 
-        // Already has evidence parameter? (check for re-application)
-        let func_ty = func_op.r#type(db);
-        let Some(core_func) = core::Func::from_type(db, func_ty) else {
-            return false;
+        let effect_ty = match data.attrs.get(&Symbol::new("effect")) {
+            Some(Attribute::Type(ty)) => *ty,
+            _ => return false,
         };
 
-        let params = core_func.params(db);
-        if !params.is_empty() {
-            // Check if first param is already evidence type
-            if ability::is_evidence_type(db, params[0]) {
-                return false;
+        let effect_data = ctx.types.get(effect_ty);
+        if effect_data.dialect != Symbol::new("core")
+            || effect_data.name != Symbol::new("effect_row")
+        {
+            return false;
+        }
+
+        // Effect row params are the concrete abilities; non-empty means effectful
+        !effect_data.params.is_empty()
+    }
+
+    /// Check if a `core.func` type has evidence as its first parameter.
+    fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
+        let data = ctx.types.get(func_ty);
+        if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+            return false;
+        }
+        // params[0] = return, params[1..] = param types
+        if data.params.len() < 2 {
+            return false;
+        }
+        arena_ability::is_evidence_type_ref(ctx, data.params[1])
+    }
+
+    /// Collect names of all effectful functions in the module.
+    pub fn collect_effectful_functions_arena(
+        ctx: &IrContext,
+        module: ArenaModule,
+    ) -> HashSet<Symbol> {
+        let mut effectful = HashSet::new();
+        for op in module.ops(ctx) {
+            if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+                let func_ty = func_op.r#type(ctx);
+                if is_effectful_type_arena(ctx, func_ty) {
+                    effectful.insert(func_op.sym_name(ctx));
+                }
             }
         }
-
-        // Create evidence type
-        let ev_ty = ability::evidence_adt_type(db);
-
-        // Create new function type with evidence as first parameter
-        let mut new_params = IdVec::with_capacity(params.len() + 1);
-        new_params.push(ev_ty);
-        new_params.extend(params.iter().copied());
-
-        let result_ty = core_func.result(db);
-        // Preserve effect annotation - cont_to_trampoline needs it to identify effectful functions
-        let effect = core_func.effect(db);
-        let new_func_ty = core::Func::with_effect(db, new_params.clone(), result_ty, effect);
-
-        // Rebuild body region with evidence as first block argument
-        let old_body = func_op.body(db);
-        let old_blocks = old_body.blocks(db);
-
-        let new_blocks: IdVec<Block<'db>> = old_blocks
-            .iter()
-            .enumerate()
-            .map(|(i, block)| {
-                if i == 0 {
-                    // Entry block: prepend evidence arg and remap existing block arg references
-                    let ev_arg = BlockArg::of_type(db, ev_ty);
-                    let (new_block, _ev_value) = block.prepend_arg(db, ev_arg);
-                    new_block
-                } else {
-                    *block
-                }
-            })
-            .collect();
-
-        let new_body = Region::new(db, old_body.location(db), new_blocks);
-        let location = op.location(db);
-
-        // Build new func.func operation
-        let new_func = func::func(db, location, func_name, *new_func_ty, new_body);
-
-        _rewriter.replace_op(new_func.as_operation());
-        true
+        effectful
     }
-}
 
-/// Pattern: Transform calls to effectful functions inside effectful function bodies.
-///
-/// This pattern matches `func.func` operations for effectful functions and
-/// transforms all calls to effectful functions within their bodies to pass
-/// the evidence parameter.
-struct TransformCallsPattern {
-    effectful_fns: HashSet<Symbol>,
-}
-
-impl TransformCallsPattern {
-    fn new(effectful_fns: HashSet<Symbol>) -> Self {
-        Self { effectful_fns }
-    }
-}
-
-impl<'db> RewritePattern<'db> for TransformCallsPattern {
-    fn match_and_rewrite(
-        &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
-    ) -> bool {
-        // Match: func.func
-        let func_op = match func::Func::from_operation(db, *op) {
-            Ok(f) => f,
-            Err(_) => return false,
-        };
-
-        let func_name = func_op.sym_name(db);
-
-        // Get evidence value from first block's first argument
-        let body = func_op.body(db);
-        let blocks = body.blocks(db);
-        let Some(entry_block) = blocks.first() else {
-            return false;
-        };
-
-        let args = entry_block.args(db);
-        if args.is_empty() {
-            return false;
-        }
-
-        // Check if this function has an evidence parameter.
-        // Process if:
-        // 1. It's in effectful_fns (explicitly effectful), OR
-        // 2. Its first parameter is ability.evidence_ptr (e.g., lifted lambdas)
-        let func_ty = func_op.r#type(db);
-        let first_param_type =
-            core::Func::from_type(db, func_ty).and_then(|ft| ft.params(db).first().copied());
-        let has_evidence_param =
-            first_param_type.is_some_and(|ty| ability::is_evidence_type(db, ty));
-
-        if !self.effectful_fns.contains(&func_name) && !has_evidence_param {
-            return false;
-        }
-
-        // First arg should be evidence_ptr after Phase 1 transformation
-        let ev_value = entry_block.arg(db, 0);
-
-        // Transform calls in all blocks
-        let mut changed = false;
-        let new_blocks: IdVec<Block<'db>> = blocks
-            .iter()
-            .map(|block| {
-                let (new_block, block_changed) =
-                    transform_calls_in_block(db, block, ev_value, &self.effectful_fns);
-                if block_changed {
-                    changed = true;
+    /// Collect names of functions whose first parameter is evidence type.
+    fn collect_functions_with_evidence_param_arena(
+        ctx: &IrContext,
+        module: ArenaModule,
+    ) -> HashSet<Symbol> {
+        let mut fns_with_evidence = HashSet::new();
+        for op in module.ops(ctx) {
+            if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+                let func_ty = func_op.r#type(ctx);
+                if has_evidence_first_param(ctx, func_ty) {
+                    fns_with_evidence.insert(func_op.sym_name(ctx));
                 }
-                new_block
-            })
-            .collect();
+            }
+        }
+        fns_with_evidence
+    }
 
-        if !changed {
-            return false;
+    /// Build a new `core.func` TypeRef with evidence prepended to params.
+    fn build_func_type_with_evidence(
+        ctx: &mut IrContext,
+        old_func_ty: TypeRef,
+        ev_ty: TypeRef,
+    ) -> TypeRef {
+        let data = ctx.types.get(old_func_ty);
+        // params[0] = return, params[1..] = param types
+        let result_ty = data.params[0];
+        let old_params = &data.params[1..];
+
+        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+            .param(result_ty)
+            .param(ev_ty)
+            .params(old_params.iter().copied());
+
+        // Preserve effect attribute
+        if let Some(eff) = data.attrs.get(&Symbol::new("effect")) {
+            builder = builder.attr("effect", eff.clone());
         }
 
-        // Rebuild function with transformed body
-        let location = op.location(db);
-        let new_body = Region::new(db, location, new_blocks);
-        let func_ty = func_op.r#type(db);
+        ctx.types.intern(builder.build())
+    }
 
-        let new_func = func::func(db, location, func_name, func_ty, new_body);
+    /// Phase 1 (arena): Add evidence parameters to effectful function signatures.
+    pub fn arena_add_evidence_params(ctx: &mut IrContext, module: ArenaModule) {
+        let effectful_fns = collect_effectful_functions_arena(ctx, module);
+        if effectful_fns.is_empty() {
+            return;
+        }
 
-        rewriter.replace_op(new_func.as_operation());
-        true
+        let ev_ty = arena_ability::evidence_adt_type_ref(ctx);
+
+        // Snapshot the module ops before mutating
+        let ops: Vec<OpRef> = module.ops(ctx);
+
+        for op in ops {
+            let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+                continue;
+            };
+
+            let func_name = func_op.sym_name(ctx);
+            if !effectful_fns.contains(&func_name) {
+                continue;
+            }
+
+            let func_ty = func_op.r#type(ctx);
+
+            // Skip if first param is already evidence type
+            if has_evidence_first_param(ctx, func_ty) {
+                continue;
+            }
+
+            // Build new function type with evidence prepended
+            let new_func_ty = build_func_type_with_evidence(ctx, func_ty, ev_ty);
+
+            // Prepend evidence arg to entry block
+            let body = func_op.body(ctx);
+            let blocks = &ctx.region(body).blocks;
+            if blocks.is_empty() {
+                continue;
+            }
+            let entry_block = blocks[0];
+
+            ctx.prepend_block_arg(
+                entry_block,
+                BlockArgData {
+                    ty: ev_ty,
+                    attrs: BTreeMap::new(),
+                },
+            );
+
+            // Update the func type attribute in-place
+            ctx.op_mut(op)
+                .attributes
+                .insert(Symbol::new("type"), Attribute::Type(new_func_ty));
+        }
+    }
+
+    /// Phase 2 (arena): Transform calls to pass evidence through call sites.
+    pub fn arena_transform_evidence_calls(ctx: &mut IrContext, module: ArenaModule) {
+        let effectful_fns = collect_effectful_functions_arena(ctx, module);
+        let fns_with_evidence = collect_functions_with_evidence_param_arena(ctx, module);
+
+        if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
+            return;
+        }
+
+        // All functions that are callee targets requiring evidence
+        let all_effectful: HashSet<Symbol> =
+            effectful_fns.union(&fns_with_evidence).copied().collect();
+
+        let ops: Vec<OpRef> = module.ops(ctx);
+
+        for op in ops {
+            let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+                continue;
+            };
+
+            let func_name = func_op.sym_name(ctx);
+            let func_ty = func_op.r#type(ctx);
+
+            // Only process functions that have evidence as first parameter
+            let is_explicitly_effectful = all_effectful.contains(&func_name);
+            let has_ev_param = has_evidence_first_param(ctx, func_ty);
+
+            if !is_explicitly_effectful && !has_ev_param {
+                continue;
+            }
+
+            // Get the evidence value from first block arg
+            let body = func_op.body(ctx);
+            let blocks = &ctx.region(body).blocks;
+            if blocks.is_empty() {
+                continue;
+            }
+            let entry_block = blocks[0];
+            let block_args = ctx.block_args(entry_block);
+            if block_args.is_empty() {
+                continue;
+            }
+            let ev_value = ctx.block_arg(entry_block, 0);
+
+            // Transform calls in all blocks of this function's body
+            transform_calls_in_region(ctx, body, ev_value, &all_effectful);
+        }
+    }
+
+    /// Recursively transform calls in a region.
+    fn transform_calls_in_region(
+        ctx: &mut IrContext,
+        region: RegionRef,
+        ev_value: ValueRef,
+        effectful_fns: &HashSet<Symbol>,
+    ) {
+        let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+        for block in blocks {
+            transform_calls_in_block(ctx, block, ev_value, effectful_fns);
+        }
+    }
+
+    /// Transform calls in a single block, adding evidence to calls to effectful functions.
+    fn transform_calls_in_block(
+        ctx: &mut IrContext,
+        block: BlockRef,
+        ev_value: ValueRef,
+        effectful_fns: &HashSet<Symbol>,
+    ) {
+        // Snapshot ops before mutation
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+
+        for op in ops {
+            // First, recurse into nested regions (e.g., scf.if bodies)
+            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            for region in regions {
+                transform_calls_in_region(ctx, region, ev_value, effectful_fns);
+            }
+
+            // Check if this is a call to an effectful function
+            let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+                continue;
+            };
+
+            let callee = call_op.callee(ctx);
+            if !effectful_fns.contains(&callee) {
+                continue;
+            }
+
+            // Check if evidence is already the first argument
+            let operands = ctx.op_operands(op);
+            if !operands.is_empty() && operands[0] == ev_value {
+                continue;
+            }
+
+            // Build new call with evidence prepended to args
+            let old_args: Vec<ValueRef> = operands.to_vec();
+            let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+            let loc = ctx.op(op).location;
+
+            let mut new_args = vec![ev_value];
+            new_args.extend(old_args.iter().copied());
+
+            let result_ty = result_types.first().copied().unwrap_or_else(|| {
+                ctx.types
+                    .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+            });
+
+            // Create new call op
+            let new_call = arena_func::call(ctx, loc, new_args, result_ty, callee);
+            let new_op = new_call.op_ref();
+
+            // Insert new call before old one
+            ctx.insert_op_before(block, op, new_op);
+
+            // RAUW: replace all uses of old result with new result
+            let old_results = ctx.op_results(op);
+            let new_results = ctx.op_results(new_op);
+            if !old_results.is_empty() && !new_results.is_empty() {
+                let old_result = old_results[0];
+                let new_result = new_results[0];
+                ctx.replace_all_uses(old_result, new_result);
+            }
+
+            // Remove old call
+            ctx.remove_op_from_block(block, op);
+            ctx.remove_op(op);
+        }
     }
 }
 
@@ -584,5 +534,404 @@ mod tests {
                 core::Func::with_effect(db, idvec![], *core::I32::new(db), Some(*empty_row));
             assert!(!is_effectful_type(db, *empty_effect_ty));
         });
+    }
+}
+
+#[cfg(test)]
+mod arena_tests {
+    use super::arena::*;
+    use std::collections::BTreeMap;
+    use tribute_ir::arena::dialect::ability as arena_ability;
+    use trunk_ir::arena::context::{
+        BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
+    };
+    use trunk_ir::arena::dialect::func as arena_func;
+    use trunk_ir::arena::ops::ArenaDialectOp;
+    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+    use trunk_ir::ir::Symbol;
+    use trunk_ir::location::Span;
+    use trunk_ir::smallvec::smallvec;
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn i32_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    }
+
+    fn make_func_type(
+        ctx: &mut IrContext,
+        params: &[trunk_ir::arena::refs::TypeRef],
+        ret: trunk_ir::arena::refs::TypeRef,
+    ) -> trunk_ir::arena::refs::TypeRef {
+        ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(ret)
+                .params(params.iter().copied())
+                .build(),
+        )
+    }
+
+    fn make_effectful_func_type(
+        ctx: &mut IrContext,
+        params: &[trunk_ir::arena::refs::TypeRef],
+        ret: trunk_ir::arena::refs::TypeRef,
+    ) -> trunk_ir::arena::refs::TypeRef {
+        // Create an effect row with a concrete ability
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let state_ability = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                .param(i32_ty)
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .build(),
+        );
+        let effect_row = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row"))
+                .param(state_ability)
+                .build(),
+        );
+        ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(ret)
+                .params(params.iter().copied())
+                .attr("effect", Attribute::Type(effect_row))
+                .build(),
+        )
+    }
+
+    fn make_func_op(
+        ctx: &mut IrContext,
+        loc: Location,
+        name: &'static str,
+        func_type: trunk_ir::arena::refs::TypeRef,
+        param_types: &[trunk_ir::arena::refs::TypeRef],
+    ) -> trunk_ir::arena::refs::OpRef {
+        let entry_block = ctx.create_block(BlockData {
+            location: loc,
+            args: param_types
+                .iter()
+                .map(|&ty| BlockArgData {
+                    ty,
+                    attrs: BTreeMap::new(),
+                })
+                .collect(),
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry_block],
+            parent_op: None,
+        });
+        let f = arena_func::func(ctx, loc, Symbol::new(name), func_type, body);
+        f.op_ref()
+    }
+
+    fn make_module(
+        ctx: &mut IrContext,
+        loc: Location,
+        ops: Vec<trunk_ir::arena::refs::OpRef>,
+    ) -> ArenaModule {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in ops {
+            ctx.push_op(block, op);
+        }
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .region(region)
+                .build(ctx);
+        let module_op = ctx.create_op(module_data);
+        ArenaModule::new(ctx, module_op).expect("test module should be valid")
+    }
+
+    // === is_effectful_type_arena tests ===
+
+    #[test]
+    fn test_is_effectful_type_arena_pure() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let pure_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        assert!(!is_effectful_type_arena(&ctx, pure_ty));
+    }
+
+    #[test]
+    fn test_is_effectful_type_arena_effectful() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let effectful_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
+        assert!(is_effectful_type_arena(&ctx, effectful_ty));
+    }
+
+    #[test]
+    fn test_is_effectful_type_arena_empty_effect_row() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        // Empty effect row (no abilities)
+        let empty_row = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
+        let ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(i32_ty)
+                .attr("effect", Attribute::Type(empty_row))
+                .build(),
+        );
+        assert!(!is_effectful_type_arena(&ctx, ty));
+    }
+
+    #[test]
+    fn test_is_effectful_type_arena_non_func() {
+        let (mut ctx, _) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        assert!(!is_effectful_type_arena(&ctx, i32_ty));
+    }
+
+    // === arena_add_evidence_params tests ===
+
+    #[test]
+    fn test_arena_add_evidence_params() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create an effectful function: fn foo(x: i32) ->{State(i32)} i32
+        let effectful_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let func_op = make_func_op(&mut ctx, loc, "foo", effectful_ty, &[i32_ty]);
+
+        // Create a pure function: fn bar(x: i32) -> i32
+        let pure_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let pure_op = make_func_op(&mut ctx, loc, "bar", pure_ty, &[i32_ty]);
+
+        let module = make_module(&mut ctx, loc, vec![func_op, pure_op]);
+
+        // Run add_evidence_params
+        arena_add_evidence_params(&mut ctx, module);
+
+        // Verify: effectful function should now have evidence as first param
+        let ops = module.ops(&ctx);
+        assert_eq!(ops.len(), 2);
+
+        let foo = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        let foo_ty = foo.r#type(&ctx);
+        let foo_data = ctx.types.get(foo_ty);
+        // params[0] = return(i32), params[1] = evidence, params[2] = i32
+        assert_eq!(foo_data.params.len(), 3);
+        assert!(arena_ability::is_evidence_type_ref(
+            &ctx,
+            foo_data.params[1]
+        ));
+        assert_eq!(foo_data.params[2], i32_ty);
+
+        // Verify entry block has 2 args now (evidence + i32)
+        let foo_body = foo.body(&ctx);
+        let foo_entry = ctx.region(foo_body).blocks[0];
+        assert_eq!(ctx.block_args(foo_entry).len(), 2);
+        let ev_arg = ctx.block_arg(foo_entry, 0);
+        assert!(arena_ability::is_evidence_type_ref(
+            &ctx,
+            ctx.value_ty(ev_arg)
+        ));
+
+        // Verify: pure function should be unchanged
+        let bar = arena_func::Func::from_op(&ctx, ops[1]).unwrap();
+        let bar_ty = bar.r#type(&ctx);
+        assert_eq!(bar_ty, pure_ty);
+    }
+
+    #[test]
+    fn test_arena_add_evidence_params_idempotent() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let effectful_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let func_op = make_func_op(&mut ctx, loc, "foo", effectful_ty, &[i32_ty]);
+        let module = make_module(&mut ctx, loc, vec![func_op]);
+
+        // Run twice
+        arena_add_evidence_params(&mut ctx, module);
+        arena_add_evidence_params(&mut ctx, module);
+
+        // Should still have only one evidence param
+        let ops = module.ops(&ctx);
+        let foo = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        let foo_ty = foo.r#type(&ctx);
+        let foo_data = ctx.types.get(foo_ty);
+        // params[0] = return, params[1] = evidence, params[2] = i32
+        assert_eq!(foo_data.params.len(), 3);
+    }
+
+    #[test]
+    fn test_arena_add_evidence_params_no_effectful() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+        let pure_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let func_op = make_func_op(&mut ctx, loc, "bar", pure_ty, &[i32_ty]);
+        let module = make_module(&mut ctx, loc, vec![func_op]);
+
+        arena_add_evidence_params(&mut ctx, module);
+
+        // Pure function should be unchanged
+        let ops = module.ops(&ctx);
+        let bar = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        assert_eq!(bar.r#type(&ctx), pure_ty);
+    }
+
+    // === arena_transform_evidence_calls tests ===
+
+    #[test]
+    fn test_arena_transform_evidence_calls() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create effectful callee: fn callee(x: i32) ->{State} i32
+        let callee_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let callee_op = make_func_op(&mut ctx, loc, "callee", callee_ty, &[i32_ty]);
+
+        // Create caller with evidence param that calls callee:
+        // fn caller(ev: Evidence, x: i32) ->{State} i32
+        let ev_ty = arena_ability::evidence_adt_type_ref(&mut ctx);
+        let caller_ty = make_effectful_func_type(&mut ctx, &[ev_ty, i32_ty], i32_ty);
+
+        // Build caller body with a call to callee
+        let entry_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: ev_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+            ],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let x_arg = ctx.block_arg(entry_block, 1);
+        // func.call @callee(%x) : i32
+        let call = arena_func::call(&mut ctx, loc, vec![x_arg], i32_ty, Symbol::new("callee"));
+        ctx.push_op(entry_block, call.op_ref());
+        // func.return %call_result
+        let call_result = ctx.op_result(call.op_ref(), 0);
+        let ret = arena_func::r#return(&mut ctx, loc, vec![call_result]);
+        ctx.push_op(entry_block, ret.op_ref());
+
+        let caller_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry_block],
+            parent_op: None,
+        });
+        let caller_func =
+            arena_func::func(&mut ctx, loc, Symbol::new("caller"), caller_ty, caller_body);
+
+        let module = make_module(&mut ctx, loc, vec![callee_op, caller_func.op_ref()]);
+
+        // Run phase 1 first to add evidence to callee
+        arena_add_evidence_params(&mut ctx, module);
+        // Run phase 2
+        arena_transform_evidence_calls(&mut ctx, module);
+
+        // Verify: the call inside caller should now have evidence as first arg
+        let ops = module.ops(&ctx);
+        // Find caller function
+        let caller = arena_func::Func::from_op(&ctx, ops[1]).unwrap();
+        let body = caller.body(&ctx);
+        let entry = ctx.region(body).blocks[0];
+        let block_ops = ctx.block(entry).ops.to_vec();
+
+        // First op should be the transformed call
+        let first_op = block_ops[0];
+        let transformed_call = arena_func::Call::from_op(&ctx, first_op).unwrap();
+        let call_args = ctx.op_operands(first_op);
+
+        // Should have 2 args: evidence + x
+        assert_eq!(call_args.len(), 2);
+        // First arg should be the evidence value (block arg 0 of caller)
+        let ev_val = ctx.block_arg(entry, 0);
+        assert_eq!(call_args[0], ev_val);
+        assert_eq!(transformed_call.callee(&ctx), Symbol::new("callee"));
+    }
+
+    #[test]
+    fn test_arena_evidence_no_calls_to_transform() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        // Pure caller calling pure function — nothing to transform
+        let pure_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let func_op = make_func_op(&mut ctx, loc, "pure_fn", pure_ty, &[i32_ty]);
+        let module = make_module(&mut ctx, loc, vec![func_op]);
+
+        // Should be no-op
+        arena_transform_evidence_calls(&mut ctx, module);
+
+        let ops = module.ops(&ctx);
+        let f = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        assert_eq!(f.r#type(&ctx), pure_ty);
+    }
+
+    // === Integration: both phases ===
+
+    #[test]
+    fn test_arena_evidence_full_pipeline() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create effectful function with a return op
+        let effectful_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
+        let entry_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: BTreeMap::new(),
+            }],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let x_arg = ctx.block_arg(entry_block, 0);
+        let ret = arena_func::r#return(&mut ctx, loc, vec![x_arg]);
+        ctx.push_op(entry_block, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry_block],
+            parent_op: None,
+        });
+        let func_op = arena_func::func(&mut ctx, loc, Symbol::new("id"), effectful_ty, body);
+
+        let module = make_module(&mut ctx, loc, vec![func_op.op_ref()]);
+
+        // Run both phases
+        arena_add_evidence_params(&mut ctx, module);
+        arena_transform_evidence_calls(&mut ctx, module);
+
+        // Verify function signature has evidence param
+        let ops = module.ops(&ctx);
+        let f = arena_func::Func::from_op(&ctx, ops[0]).unwrap();
+        let f_ty = f.r#type(&ctx);
+        let f_data = ctx.types.get(f_ty);
+        assert_eq!(f_data.params.len(), 3); // return + evidence + i32
+
+        // Verify entry block has 2 args
+        let body = f.body(&ctx);
+        let entry = ctx.region(body).blocks[0];
+        assert_eq!(ctx.block_args(entry).len(), 2);
     }
 }
