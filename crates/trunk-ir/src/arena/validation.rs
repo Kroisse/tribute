@@ -111,27 +111,20 @@ impl fmt::Display for ValidationResult {
 // Scope validation (value integrity)
 // ============================================================================
 
-/// Recursively collect all values defined in a region (block args + op results),
-/// including those in nested sub-regions.
-fn collect_defined_in_region(ctx: &IrContext, region: RegionRef, defined: &mut HashSet<ValueRef>) {
+/// Collect values defined directly in a region (block args + op results).
+///
+/// This is a **shallow** collection: it does NOT recurse into nested
+/// sub-regions of operations. Values defined inside sub-regions are not
+/// visible to the parent or sibling scopes.
+fn collect_region_top_level(ctx: &IrContext, region: RegionRef, defined: &mut HashSet<ValueRef>) {
     for &block in &ctx.region(region).blocks {
-        collect_defined_in_block(ctx, block, defined);
-    }
-}
-
-fn collect_defined_in_block(ctx: &IrContext, block: BlockRef, defined: &mut HashSet<ValueRef>) {
-    // Block arguments
-    for &arg in ctx.block_args(block) {
-        defined.insert(arg);
-    }
-
-    // Operation results + recurse into nested regions
-    for &op in &ctx.block(block).ops {
-        for &result in ctx.op_results(op) {
-            defined.insert(result);
+        for &arg in ctx.block_args(block) {
+            defined.insert(arg);
         }
-        for &nested_region in &ctx.op(op).regions {
-            collect_defined_in_region(ctx, nested_region, defined);
+        for &op in &ctx.block(block).ops {
+            for &result in ctx.op_results(op) {
+                defined.insert(result);
+            }
         }
     }
 }
@@ -155,41 +148,42 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
     }
 }
 
-/// Check that all operands in a region reference values in `defined_set`.
+/// Check that all operands in a region reference visible values.
+///
+/// `outer_visible` contains every value visible from ancestor scopes.
+/// Values defined at this region level are added to the visible set before
+/// checking operands, and the extended set is propagated into nested
+/// sub-regions. Values defined inside sub-regions are **never** added back
+/// to the outer set, enforcing directional visibility across region
+/// boundaries.
 fn check_operands_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    defined_set: &HashSet<ValueRef>,
+    outer_visible: &HashSet<ValueRef>,
     function_name: &str,
     errors: &mut Vec<StaleValueError>,
 ) {
-    for &block in &ctx.region(region).blocks {
-        check_operands_in_block(ctx, block, defined_set, function_name, errors);
-    }
-}
+    // Extend with values defined at this region level (shallow – no sub-regions).
+    let mut visible = outer_visible.clone();
+    collect_region_top_level(ctx, region, &mut visible);
 
-fn check_operands_in_block(
-    ctx: &IrContext,
-    block: BlockRef,
-    defined_set: &HashSet<ValueRef>,
-    function_name: &str,
-    errors: &mut Vec<StaleValueError>,
-) {
-    for &op in &ctx.block(block).ops {
-        for (i, &operand) in ctx.op_operands(op).iter().enumerate() {
-            if !defined_set.contains(&operand) {
-                let data = ctx.op(op);
-                errors.push(StaleValueError {
-                    function_name: function_name.to_string(),
-                    consumer_op: format!("{}.{}", data.dialect, data.name),
-                    operand_index: i,
-                    stale_value_description: describe_value(ctx, operand),
-                });
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            for (i, &operand) in ctx.op_operands(op).iter().enumerate() {
+                if !visible.contains(&operand) {
+                    let data = ctx.op(op);
+                    errors.push(StaleValueError {
+                        function_name: function_name.to_string(),
+                        consumer_op: format!("{}.{}", data.dialect, data.name),
+                        operand_index: i,
+                        stale_value_description: describe_value(ctx, operand),
+                    });
+                }
             }
-        }
-        // Check nested regions
-        for &nested_region in &ctx.op(op).regions {
-            check_operands_in_region(ctx, nested_region, defined_set, function_name, errors);
+            // Propagate the extended visible set into nested regions.
+            for &nested_region in &ctx.op(op).regions {
+                check_operands_in_region(ctx, nested_region, &visible, function_name, errors);
+            }
         }
     }
 }
@@ -244,14 +238,10 @@ fn validate_functions_in_region(
                     })
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
-                // Collect defined values from all function regions
-                let mut defined = HashSet::new();
+                // Check operands with visibility-based scoping.
+                // No values from outside the function body are visible.
                 for &func_region in &data.regions {
-                    collect_defined_in_region(ctx, func_region, &mut defined);
-                }
-                // Check operands
-                for &func_region in &data.regions {
-                    check_operands_in_region(ctx, func_region, &defined, &fn_name, errors);
+                    check_operands_in_region(ctx, func_region, &HashSet::new(), &fn_name, errors);
                 }
             }
 
@@ -894,6 +884,119 @@ mod tests {
         assert!(!result.is_ok(), "Should detect stale ref in wasm.func body");
         assert_eq!(result.stale_errors.len(), 1);
         assert_eq!(result.stale_errors[0].function_name, "func_b");
+    }
+
+    /// A value defined inside a nested region must not be visible in the outer
+    /// scope. The old flat-set approach would silently accept such references;
+    /// the new visibility-based checker must reject them.
+    #[test]
+    fn inner_value_not_visible_in_outer_scope() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let i1_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        // then region: defines %inner_val
+        let then_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let inner_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        ctx.push_op(then_block, inner_const.op_ref());
+        let inner_val = inner_const.result(&ctx);
+        let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+            .operand(inner_val)
+            .build(&mut ctx);
+        let yield_then_op = ctx.create_op(yield_then);
+        ctx.push_op(then_block, yield_then_op);
+        let then_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![then_block],
+            parent_op: None,
+        });
+
+        // else region: trivial
+        let else_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let else_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        ctx.push_op(else_block, else_const.op_ref());
+        let else_val = else_const.result(&ctx);
+        let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
+            .operand(else_val)
+            .build(&mut ctx);
+        let yield_else_op = ctx.create_op(yield_else);
+        ctx.push_op(else_block, yield_else_op);
+        let else_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![else_block],
+            parent_op: None,
+        });
+
+        // Condition
+        let cond_op = arith::r#const(&mut ctx, loc, i1_ty, Attribute::IntBits(1));
+        ctx.push_op(entry, cond_op.op_ref());
+        let cond = cond_op.result(&ctx);
+
+        // scf.if
+        let if_data = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
+            .operand(cond)
+            .result(i32_ty)
+            .region(then_region)
+            .region(else_region)
+            .build(&mut ctx);
+        let if_op = ctx.create_op(if_data);
+        ctx.push_op(entry, if_op);
+
+        // BUG: outer block uses %inner_val which is defined only inside the then region
+        let ret = func::r#return(&mut ctx, loc, [inner_val]);
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_ty = make_func_type(&mut ctx, &[], i32_ty);
+        let func_op = func::func(&mut ctx, loc, Symbol::new("bad_scope"), func_ty, body);
+
+        let mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(mod_block, func_op.op_ref());
+        let mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![mod_block],
+            parent_op: None,
+        });
+        let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
+        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+
+        let result = validate_value_integrity(&ctx, module);
+        assert!(
+            !result.is_ok(),
+            "Value defined only in inner region must not be visible in outer scope"
+        );
+        assert_eq!(result.stale_errors.len(), 1);
+        assert_eq!(result.stale_errors[0].function_name, "bad_scope");
+        assert!(result.stale_errors[0].consumer_op.contains("return"));
     }
 
     #[test]
