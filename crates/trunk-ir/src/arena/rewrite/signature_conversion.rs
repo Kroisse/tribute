@@ -16,7 +16,7 @@ use crate::arena::rewrite::type_converter::ArenaTypeConverter;
 use crate::arena::types::{Attribute, TypeDataBuilder};
 use crate::ir::Symbol;
 
-/// Result of converting a `func.fn` type's params and result.
+/// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
     new_params: Vec<TypeRef>,
     new_result: TypeRef,
@@ -24,9 +24,9 @@ struct ConvertedSignature {
     params_changed: bool,
 }
 
-/// Analyze a `func.fn` TypeRef and convert params/result via the type converter.
+/// Analyze a `core.func` TypeRef and convert params/result via the type converter.
 ///
-/// `func.fn` type layout: `params[0]` = return type, `params[1..]` = param types,
+/// `core.func` type layout: `params[0]` = return type, `params[1..]` = param types,
 /// `attrs["effect"]` = optional effect type.
 ///
 /// Returns `None` if no types changed.
@@ -37,8 +37,8 @@ fn convert_func_signature(
 ) -> Option<ConvertedSignature> {
     let type_data = ctx.types.get(func_type);
 
-    // Verify this is a func.fn type
-    if type_data.dialect != Symbol::new("func") || type_data.name != Symbol::new("fn") {
+    // Verify this is a core.func type
+    if type_data.dialect != Symbol::new("core") || type_data.name != Symbol::new("func") {
         return None;
     }
 
@@ -81,9 +81,9 @@ fn convert_func_signature(
     })
 }
 
-/// Build a new `func.fn` TypeRef from converted params/result/effect.
+/// Build a new `core.func` TypeRef from converted params/result/effect.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    let mut builder = TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
         .param(sig.new_result)
         .params(sig.new_params.iter().copied());
 
@@ -256,7 +256,7 @@ mod tests {
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
         ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(ret)
                 .params(params.iter().copied())
                 .build(),
@@ -270,7 +270,7 @@ mod tests {
         effect: TypeRef,
     ) -> TypeRef {
         ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn"))
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(ret)
                 .params(params.iter().copied())
                 .attr("effect", Attribute::Type(effect))
@@ -405,8 +405,8 @@ mod tests {
         let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
         let new_type = new_func.r#type(&ctx);
         let td = ctx.types.get(new_type);
-        assert_eq!(td.dialect, Symbol::new("func"));
-        assert_eq!(td.name, Symbol::new("fn"));
+        assert_eq!(td.dialect, Symbol::new("core"));
+        assert_eq!(td.name, Symbol::new("func"));
         // params[0] = return type, params[1..] = param types
         assert_eq!(td.params[0], i64_ty, "return type should be i64");
         assert_eq!(td.params[1], i64_ty, "param type should be i64");

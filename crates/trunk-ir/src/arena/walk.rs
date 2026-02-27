@@ -202,7 +202,7 @@ mod tests {
         // Outer func op containing inner region
         let func_ty = ctx
             .types
-            .intern(TypeDataBuilder::new(Symbol::new("func"), Symbol::new("fn")).build());
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
         let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .result(func_ty)
             .region(inner_region)
