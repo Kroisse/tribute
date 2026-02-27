@@ -32,8 +32,7 @@ pub use cont_to_libmprompt::lower_cont_to_libmprompt;
 pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use evidence::{
-    add_evidence_params, collect_effectful_functions, insert_evidence, is_effectful_type,
-    transform_evidence_calls,
+    collect_effectful_functions, collect_functions_with_evidence_param, is_effectful_type,
 };
 pub use native::entrypoint::generate_native_entrypoint;
 pub use native::evidence::lower_evidence_to_native;

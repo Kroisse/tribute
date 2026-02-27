@@ -65,7 +65,7 @@ use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::closure_lower::lower_closures;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_passes::evidence::{add_evidence_params, insert_evidence, transform_evidence_calls};
+use tribute_passes::evidence;
 use tribute_passes::generate_native_entrypoint;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_libmprompt;
@@ -75,11 +75,12 @@ use tribute_passes::resolve_evidence::resolve_evidence_dispatch;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
+use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
-use trunk_ir::{Block, BlockId, IdVec, Region};
+use trunk_ir::{Block, BlockId, DialectOp, IdVec, Region};
 
 // =============================================================================
 // Compilation configuration
@@ -333,7 +334,17 @@ pub fn stage_evidence_params<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Module<'db> {
-    add_evidence_params(db, module)
+    // Early exit: check on Salsa side before paying bridge cost
+    let effectful_fns = evidence::collect_effectful_functions(db, &module);
+    if effectful_fns.is_empty() {
+        return module;
+    }
+
+    // Bridge to arena, run arena pass, bridge back
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    evidence::add_evidence_params(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Evidence Call Transformation (Phase 2).
@@ -347,23 +358,18 @@ pub fn stage_evidence_params<'db>(
 /// - Closure calls can also receive evidence
 #[salsa::tracked]
 pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    transform_evidence_calls(db, module)
-}
+    // Early exit: check on Salsa side before paying bridge cost
+    let effectful_fns = evidence::collect_effectful_functions(db, &module);
+    let fns_with_evidence = evidence::collect_functions_with_evidence_param(db, &module);
+    if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
+        return module;
+    }
 
-/// Evidence Insertion (Combined).
-///
-/// This pass transforms effectful functions for ability system support:
-/// - Adds evidence parameter as first argument to effectful functions
-/// - Passes evidence through call chains
-///
-/// Evidence is a runtime structure for dynamic handler dispatch.
-/// Pure functions (with empty effect row) are unchanged.
-///
-/// NOTE: This is the legacy combined pass. For the new pipeline, use
-/// `stage_evidence_params` before lambda_lift and `stage_evidence_calls` after closure_lower.
-#[salsa::tracked]
-pub fn stage_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    insert_evidence(db, module)
+    // Bridge to arena, run arena pass, bridge back
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    evidence::transform_evidence_calls(&mut ctx, arena_module);
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Resolve Evidence-based Dispatch.

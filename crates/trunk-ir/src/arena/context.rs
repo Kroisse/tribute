@@ -326,6 +326,45 @@ impl IrContext {
         v
     }
 
+    /// Prepend a new argument at position 0 of an existing block.
+    ///
+    /// Shifts existing block arg `ValueDef` indices by +1, inserts the new
+    /// `BlockArgData` at position 0, and returns the `ValueRef` for the new
+    /// argument. Existing `ValueRef`s remain valid — only their `ValueDef`
+    /// indices are updated.
+    pub fn prepend_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
+        let ty = arg.ty;
+
+        // Shift existing block arg ValueDef indices by +1
+        let existing_args = self.block_arg_values[block].as_slice(&self.value_pool);
+        let existing_refs: SmallVec<[ValueRef; 8]> = existing_args.into();
+        for &v in &existing_refs {
+            if let ValueDef::BlockArg(b, idx) = self.values[v].def {
+                debug_assert_eq!(b, block);
+                self.values[v].def = ValueDef::BlockArg(b, idx + 1);
+            }
+        }
+
+        // Insert new BlockArgData at position 0
+        self.blocks[block].args.insert(0, arg);
+
+        // Create new value for the prepended arg
+        let new_value = self.values.push(ValueData {
+            def: ValueDef::BlockArg(block, 0),
+            ty,
+        });
+
+        // Rebuild block_arg_values EntityList with new value prepended
+        let mut new_list = EntityList::new();
+        new_list.push(new_value, &mut self.value_pool);
+        for &v in &existing_refs {
+            new_list.push(v, &mut self.value_pool);
+        }
+        self.block_arg_values[block] = new_list;
+
+        new_value
+    }
+
     /// Set the type of a block argument, updating both the `BlockArgData`
     /// and the corresponding `ValueData` to keep them in sync.
     pub fn set_block_arg_type(&mut self, block: BlockRef, index: u32, new_ty: TypeRef) {
@@ -872,6 +911,92 @@ mod tests {
         ctx.remove_op_from_block(block, op);
         assert!(ctx.block(block).ops.is_empty());
         assert_eq!(ctx.op(op).parent_block, None);
+    }
+
+    #[test]
+    fn prepend_block_arg() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+        // Create a block with 2 args of type i32
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+            ],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        let old_a0 = ctx.block_arg(block, 0);
+        let old_a1 = ctx.block_arg(block, 1);
+
+        // Prepend an f64 arg
+        let new_arg = ctx.prepend_block_arg(
+            block,
+            BlockArgData {
+                ty: f64_ty,
+                attrs: BTreeMap::new(),
+            },
+        );
+
+        // New arg should be at index 0
+        assert_eq!(ctx.block_args(block).len(), 3);
+        assert_eq!(ctx.block_arg(block, 0), new_arg);
+        assert_eq!(ctx.value_ty(new_arg), f64_ty);
+        assert_eq!(ctx.value_def(new_arg), ValueDef::BlockArg(block, 0));
+
+        // Old args should now have shifted indices
+        assert_eq!(ctx.block_arg(block, 1), old_a0);
+        assert_eq!(ctx.block_arg(block, 2), old_a1);
+        assert_eq!(ctx.value_def(old_a0), ValueDef::BlockArg(block, 1));
+        assert_eq!(ctx.value_def(old_a1), ValueDef::BlockArg(block, 2));
+
+        // Types should be preserved
+        assert_eq!(ctx.value_ty(old_a0), i32_ty);
+        assert_eq!(ctx.value_ty(old_a1), i32_ty);
+
+        // BlockArgData should also match
+        assert_eq!(ctx.block(block).args[0].ty, f64_ty);
+        assert_eq!(ctx.block(block).args[1].ty, i32_ty);
+        assert_eq!(ctx.block(block).args[2].ty, i32_ty);
+    }
+
+    #[test]
+    fn prepend_block_arg_empty_block() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        let new_arg = ctx.prepend_block_arg(
+            block,
+            BlockArgData {
+                ty: i32_ty,
+                attrs: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(ctx.block_args(block).len(), 1);
+        assert_eq!(ctx.block_arg(block, 0), new_arg);
+        assert_eq!(ctx.value_def(new_arg), ValueDef::BlockArg(block, 0));
     }
 
     #[test]
