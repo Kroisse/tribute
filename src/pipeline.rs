@@ -160,7 +160,7 @@ fn resolve_prelude(
 /// This properly handles case expressions, tuple patterns, and other features
 /// that tirgen doesn't support.
 #[salsa::tracked]
-pub fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
+fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
     let (resolved, span_map, prelude_source) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext
@@ -203,7 +203,7 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 /// This parses the prelude to AST and builds its module environment.
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
-pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
+fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     Some(ast_resolve::build_env(db, &prelude_ast))
@@ -218,7 +218,7 @@ pub fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> 
 ///
 /// Cached by Salsa - computed once and reused.
 #[salsa::tracked]
-pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
+fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
     let (resolved, span_map, _) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext (all UniVars resolved)
@@ -232,10 +232,7 @@ pub fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExpor
 ///
 /// This prepends all prelude operations (type definitions, etc.) to the
 /// user module's body, making prelude types available for name resolution.
-pub fn merge_with_prelude<'db>(
-    db: &'db dyn salsa::Database,
-    user_module: Module<'db>,
-) -> Module<'db> {
+fn merge_with_prelude<'db>(db: &'db dyn salsa::Database, user_module: Module<'db>) -> Module<'db> {
     let Some(prelude) = prelude_module(db) else {
         return user_module;
     };
@@ -316,7 +313,7 @@ pub struct CompilationResult<'db> {
 /// - Extracts env via `closure.env`
 /// - Passes env as first argument to the call
 #[salsa::tracked]
-pub fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
     tribute_passes::closure_lower::lower_closures_arena(&mut ctx, arena_module);
     let exported = export_to_salsa(db, &ctx, arena_module);
@@ -358,7 +355,7 @@ pub fn stage_evidence_params<'db>(
 /// - Lifted lambdas already have evidence parameters
 /// - Closure calls can also receive evidence
 #[salsa::tracked]
-pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     // Early exit: check on Salsa side before paying bridge cost
     let effectful_fns = evidence::collect_effectful_functions(db, &module);
     let fns_with_evidence = evidence::collect_functions_with_evidence_param(db, &module);
@@ -383,10 +380,7 @@ pub fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'d
 ///
 /// Must run AFTER evidence_calls (Phase 2) so functions have evidence params.
 #[salsa::tracked]
-pub fn stage_resolve_evidence<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
+fn stage_resolve_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
     tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(&mut ctx, arena_module);
     let exported = export_to_salsa(db, &ctx, arena_module);
@@ -405,7 +399,7 @@ pub fn stage_resolve_evidence<'db>(
 ///
 /// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
 #[salsa::tracked]
-pub fn stage_cont_to_trampoline<'db>(
+fn stage_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Result<Module<'db>, ConversionError> {
@@ -423,7 +417,7 @@ pub fn stage_cont_to_trampoline<'db>(
 ///
 /// Returns an error if any `cont.*` operations remain after conversion.
 #[salsa::tracked]
-pub fn stage_cont_to_libmprompt<'db>(
+fn stage_cont_to_libmprompt<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Result<Module<'db>, ConversionError> {
@@ -435,10 +429,7 @@ pub fn stage_cont_to_libmprompt<'db>(
 /// Replaces evidence runtime function stubs with extern declarations for
 /// the native runtime, rewrites empty evidence creation and extend call sites.
 #[salsa::tracked]
-pub fn stage_evidence_to_native<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
+fn stage_evidence_to_native<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     lower_evidence_to_native(db, module)
 }
 
@@ -449,7 +440,7 @@ pub fn stage_evidence_to_native<'db>(
 /// - Functions named "main" or "_start"
 /// - Functions referenced by `wasm.export_func` (for wasm target)
 #[salsa::tracked]
-pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let result = eliminate_dead_functions(db, module);
     if result.removed_count > 0 {
         tracing::debug!(
@@ -471,7 +462,7 @@ pub fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Modu
 /// Casts that cannot be resolved with the generic converter will be left for
 /// backend-specific converters to handle.
 #[salsa::tracked]
-pub fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     let type_converter = generic_type_converter();
     let result = resolve_unrealized_casts(db, module, &type_converter);
     // Always use the partially-resolved module; unresolved casts are left for
@@ -518,7 +509,7 @@ fn compile_to_wasm<'db>(
 /// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
 /// Returns None if compilation fails, with error message accumulated.
 #[salsa::tracked]
-pub fn stage_lower_to_wasm<'db>(
+fn stage_lower_to_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Option<WasmBinary<'db>> {
@@ -575,7 +566,7 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 /// and evidence-based dispatch resolution. This produces a module with
 /// `cont.*` operations that backend-specific pipelines then lower.
 #[salsa::tracked]
-pub fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
     // Frontend + closure processing
     let module = run_closure_lower(db, source);
 
@@ -714,7 +705,7 @@ pub fn run_native_pipeline<'db>(
 /// Delegates to `run_wasm_pipeline`. Prefer using the backend-specific
 /// `run_wasm_pipeline` or `run_native_pipeline` directly.
 #[salsa::tracked]
-pub fn run_full_pipeline<'db>(
+fn run_full_pipeline<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
