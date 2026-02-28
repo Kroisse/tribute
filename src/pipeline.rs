@@ -32,14 +32,13 @@
 //!     ▼ tdnr
 //! Module (UFCS resolved)
 //!     │
-//!     ├─────────────── Evidence & Closure Processing ─┤
+//!     ├─── Shared Pipeline (single arena session) ────┤
 //!     ▼ evidence_params (Phase 1)
 //! Module (evidence params added to signatures)
 //!     │
 //!     ▼ closure_lower
 //! Module (closure.* lowered)
 //!     │
-//!     ├─── Shared Pipeline (run_shared_pipeline) ─────┤
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
 //!     │
@@ -74,6 +73,7 @@ use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
 use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
+use trunk_ir::arena::{ArenaModule, IrContext};
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
@@ -304,18 +304,17 @@ pub struct CompilationResult<'db> {
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
 
-/// Lambda Lifting.
+/// Bridge a Salsa `Module` into an arena session, run passes, and bridge back.
 ///
-/// Closure Lowering.
-///
-/// This pass transforms `func.call_indirect` operations on closures:
-/// - Extracts funcref via `closure.func`
-/// - Extracts env via `closure.env`
-/// - Passes env as first argument to the call
-#[salsa::tracked]
-fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+/// This avoids repeated Salsa↔Arena round-trips when multiple arena passes
+/// need to run in sequence.
+fn with_arena_session<'db>(
+    db: &'db dyn salsa::Database,
+    module: Module<'db>,
+    f: impl FnOnce(&mut IrContext, ArenaModule),
+) -> Module<'db> {
     let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, arena_module);
+    f(&mut ctx, arena_module);
     let exported = export_to_salsa(db, &ctx, arena_module);
     Module::from_operation(db, exported).unwrap()
 }
@@ -323,10 +322,10 @@ fn stage_closure_lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -
 /// Evidence Parameters (Phase 1).
 ///
 /// Adds evidence parameter as first argument to effectful functions.
-/// This must run BEFORE lambda lifting so that lambdas can capture evidence.
-///
 /// Evidence is a runtime structure for dynamic handler dispatch.
 /// Pure functions (with empty effect row) are unchanged.
+///
+/// Used by tests that need to inspect state after evidence params insertion.
 #[salsa::tracked]
 pub fn stage_evidence_params<'db>(
     db: &'db dyn salsa::Database,
@@ -338,53 +337,9 @@ pub fn stage_evidence_params<'db>(
         return module;
     }
 
-    // Bridge to arena, run arena pass, bridge back
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    evidence::add_evidence_params(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    Module::from_operation(db, exported).unwrap()
-}
-
-/// Evidence Call Transformation (Phase 2).
-///
-/// Transforms call sites to pass evidence through:
-/// - Calls inside effectful functions pass the evidence parameter
-/// - Calls inside tribute.handle bodies pass null evidence
-///
-/// This must run AFTER lambda lifting and closure lowering so that:
-/// - Lifted lambdas already have evidence parameters
-/// - Closure calls can also receive evidence
-#[salsa::tracked]
-fn stage_evidence_calls<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Early exit: check on Salsa side before paying bridge cost
-    let effectful_fns = evidence::collect_effectful_functions(db, &module);
-    let fns_with_evidence = evidence::collect_functions_with_evidence_param(db, &module);
-    if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
-        return module;
-    }
-
-    // Bridge to arena, run arena pass, bridge back
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    evidence::transform_evidence_calls(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    Module::from_operation(db, exported).unwrap()
-}
-
-/// Resolve Evidence-based Dispatch.
-///
-/// This pass transforms `cont.shift` with placeholder tags into
-/// evidence-based dispatch using runtime function calls:
-/// - Looks up markers from evidence
-/// - Extracts prompt tags from markers
-/// - Replaces placeholder tags with dynamically resolved tags
-///
-/// Must run AFTER evidence_calls (Phase 2) so functions have evidence params.
-#[salsa::tracked]
-fn stage_resolve_evidence<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    Module::from_operation(db, exported).unwrap()
+    with_arena_session(db, module, |ctx, m| {
+        evidence::add_evidence_params(ctx, m);
+    })
 }
 
 /// Continuation to Trampoline Lowering.
@@ -541,19 +496,34 @@ pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     parse_and_lower_ast(db, source)
 }
 
-/// Run pipeline up to evidence params stage (lambdas are now lowered directly in ast_to_ir).
+/// Run pipeline through evidence params (for testing).
+///
+/// Runs `parse_and_lower_ast` then `add_evidence_params` in a single arena session.
 #[salsa::tracked]
-pub fn run_lambda_lift<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+pub fn run_through_evidence_params<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Module<'db> {
     let module = parse_and_lower_ast(db, source);
-    // Boxing removed - now handled via unrealized_conversion_cast in ast_to_ir
-    stage_evidence_params(db, module)
+    with_arena_session(db, module, |ctx, m| {
+        evidence::add_evidence_params(ctx, m);
+    })
 }
 
-/// Run pipeline up to closure lower stage.
+/// Run pipeline through closure lower (for testing).
+///
+/// Runs `parse_and_lower_ast` then `add_evidence_params` + `lower_closures_arena`
+/// in a single arena session.
 #[salsa::tracked]
-pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = run_lambda_lift(db, source);
-    stage_closure_lower(db, module)
+pub fn run_through_closure_lower<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Module<'db> {
+    let module = parse_and_lower_ast(db, source);
+    with_arena_session(db, module, |ctx, m| {
+        evidence::add_evidence_params(ctx, m);
+        tribute_passes::closure_lower::lower_closures_arena(ctx, m);
+    })
 }
 
 // =============================================================================
@@ -562,64 +532,22 @@ pub fn run_closure_lower<'db>(db: &'db dyn salsa::Database, source: SourceCst) -
 
 /// Run the shared middle-end pipeline (backend-independent).
 ///
-/// Runs frontend + closure processing, evidence call transformation,
-/// and evidence-based dispatch resolution. This produces a module with
-/// `cont.*` operations that backend-specific pipelines then lower.
+/// Runs all four arena passes (evidence_params, closure_lower, evidence_calls,
+/// resolve_evidence) in a **single arena session**, avoiding 4 separate
+/// Salsa↔Arena round-trips.
+///
+/// This produces a module with `cont.*` operations that backend-specific
+/// pipelines then lower.
 #[salsa::tracked]
 fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    // Frontend + closure processing
-    let module = run_closure_lower(db, source);
+    let module = parse_and_lower_ast(db, source);
 
-    // DEBUG: List all operations and nested modules after closure lower
-    {
-        use trunk_ir::DialectOp;
-        use trunk_ir::dialect::func;
-        let body = module.body(db);
-        let mut func_names = Vec::new();
-        let mut op_summary = Vec::new();
-        for block in body.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                let d = op.dialect(db);
-                let n = op.name(db);
-                op_summary.push(format!("{}.{}", d, n));
-                if let Ok(f) = func::Func::from_operation(db, *op) {
-                    func_names.push(format!("{}", f.sym_name(db)));
-                }
-                // Check nested core.module
-                if d == "core" && n == "module" {
-                    for region in op.regions(db).iter() {
-                        for nested_block in region.blocks(db).iter() {
-                            for nested_op in nested_block.operations(db).iter() {
-                                let nd = nested_op.dialect(db);
-                                let nn = nested_op.name(db);
-                                if let Ok(f) = func::Func::from_operation(db, *nested_op) {
-                                    func_names.push(format!("  nested: {}", f.sym_name(db)));
-                                } else {
-                                    op_summary.push(format!("  nested: {}.{}", nd, nn));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        tracing::debug!(
-            "After closure_lower: {} top ops, {} funcs",
-            op_summary.len(),
-            func_names.len()
-        );
-        tracing::debug!(
-            "  Operations: {:?}",
-            &op_summary[..op_summary.len().min(40)]
-        );
-        tracing::debug!("  Functions: {:?}", func_names);
-    }
-
-    // Evidence call transformation (Phase 2) - AFTER lambda/closure lowering
-    let module = stage_evidence_calls(db, module);
-
-    // Evidence-based dispatch resolution - transforms cont.shift to use dynamic tags
-    stage_resolve_evidence(db, module)
+    with_arena_session(db, module, |ctx, m| {
+        evidence::add_evidence_params(ctx, m);
+        tribute_passes::closure_lower::lower_closures_arena(ctx, m);
+        evidence::transform_evidence_calls(ctx, m);
+        tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(ctx, m);
+    })
 }
 
 /// Run the WASM pipeline: shared passes + cont_to_trampoline + DCE + resolve_casts.

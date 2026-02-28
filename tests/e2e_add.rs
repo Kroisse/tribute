@@ -410,7 +410,7 @@ fn test_calc_eval() {
 #[test]
 fn test_lambda_identity() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_lambda_lift;
+    use tribute::pipeline::run_through_evidence_params;
 
     let source_code = Rope::from_str(
         r#"
@@ -428,11 +428,11 @@ fn main() { }
             SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = run_lambda_lift(db, source_file);
+        let module = run_through_evidence_params(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -470,7 +470,7 @@ fn main() { }
 #[test]
 fn test_lambda_with_capture() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_lambda_lift;
+    use tribute::pipeline::run_through_evidence_params;
 
     let source_code = Rope::from_str(
         r#"
@@ -489,11 +489,11 @@ fn main() { }
         let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
 
         // Run lambda lifting stage
-        let module = run_lambda_lift(db, source_file);
+        let module = run_through_evidence_params(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             diagnostics.is_empty(),
@@ -540,7 +540,7 @@ fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>
 #[test]
 fn test_indirect_call_ir_generation() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_lambda_lift;
+    use tribute::pipeline::run_through_evidence_params;
 
     let source_code = Rope::from_str(
         r#"
@@ -556,11 +556,11 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
 
-        let module = run_lambda_lift(db, source_file);
+        let module = run_through_evidence_params(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
 
         assert!(
             diagnostics.is_empty(),
@@ -583,7 +583,7 @@ fn main() { }
 #[test]
 fn test_higher_order_function_ir() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_lambda_lift;
+    use tribute::pipeline::run_through_evidence_params;
 
     let source_code = Rope::from_str(
         r#"
@@ -602,11 +602,11 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
 
-        let module = run_lambda_lift(db, source_file);
+        let module = run_through_evidence_params(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            run_lambda_lift::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
@@ -658,7 +658,7 @@ fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'
 #[test]
 fn test_closure_lowering() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_closure_lower;
+    use tribute::pipeline::run_through_closure_lower;
 
     let source_code = Rope::from_str(
         r#"
@@ -677,11 +677,11 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
 
-        let module = run_closure_lower(db, source_file);
+        let module = run_through_closure_lower(db, source_file);
 
         // Verify no diagnostics
         let diagnostics: Vec<_> =
-            run_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
+            run_through_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
 
         for diag in &diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
