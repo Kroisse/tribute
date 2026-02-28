@@ -1460,39 +1460,28 @@ fn hash_type(db: &dyn salsa::Database, ty: Type<'_>) -> u32 {
 // Arena-based resolve_evidence implementation
 // ============================================================================
 
-/// Arena version of `OpTableEntry`.
-#[derive(Debug, Clone)]
-struct ArenaOpTableEntry {
-    abilities: Vec<TypeRef>,
-    operations: Vec<(TypeRef, Symbol)>,
-    location: ArenaLocation,
-}
-
 /// Arena version of `OpTableRegistry`.
+///
+/// Only tracks handler count for index assignment; entry data is not retained
+/// because the arena pipeline does not need to look up entries after registration.
 #[derive(Debug, Default)]
 struct ArenaOpTableRegistry {
-    entries: Vec<ArenaOpTableEntry>,
+    next_index: u32,
 }
 
 impl ArenaOpTableRegistry {
     fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
+        Self { next_index: 0 }
     }
 
     fn register(
         &mut self,
-        abilities: Vec<TypeRef>,
-        operations: Vec<(TypeRef, Symbol)>,
-        location: ArenaLocation,
+        _abilities: Vec<TypeRef>,
+        _operations: Vec<(TypeRef, Symbol)>,
+        _location: ArenaLocation,
     ) -> u32 {
-        let index = self.entries.len() as u32;
-        self.entries.push(ArenaOpTableEntry {
-            abilities,
-            operations,
-            location,
-        });
+        let index = self.next_index;
+        self.next_index += 1;
         index
     }
 }
@@ -1873,23 +1862,20 @@ fn validate_no_unresolved_shifts_arena(ctx: &IrContext, module: ArenaModule) {
 fn validate_no_unresolved_shifts_in_region_arena(ctx: &IrContext, region: RegionRef) {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
-            if let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) {
-                let tag = shift_op.tag(ctx);
-                if let trunk_ir::arena::refs::ValueDef::OpResult(def_op, 0) = ctx.value_def(tag) {
-                    if let Ok(const_op) = arena_arith::Const::from_op(ctx, def_op) {
-                        if let ArenaAttribute::IntBits(value) = const_op.value(ctx) {
-                            if value == UNRESOLVED_SHIFT_TAG as u64 {
-                                let ability_ref = shift_op.ability_ref(ctx);
-                                let op_name = shift_op.op_name(ctx);
-                                panic!(
-                                    "ICE: Unresolved cont.shift found after evidence pass (arena).\n\
-                                     Ability: {:?}, Op: {:?}",
-                                    ability_ref, op_name
-                                );
-                            }
-                        }
-                    }
-                }
+            if let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op)
+                && let trunk_ir::arena::refs::ValueDef::OpResult(def_op, 0) =
+                    ctx.value_def(shift_op.tag(ctx))
+                && let Ok(const_op) = arena_arith::Const::from_op(ctx, def_op)
+                && let ArenaAttribute::IntBits(value) = const_op.value(ctx)
+                && value == UNRESOLVED_SHIFT_TAG as u64
+            {
+                let ability_ref = shift_op.ability_ref(ctx);
+                let op_name = shift_op.op_name(ctx);
+                panic!(
+                    "ICE: Unresolved cont.shift found after evidence pass (arena).\n\
+                     Ability: {:?}, Op: {:?}",
+                    ability_ref, op_name
+                );
             }
             for &nested in ctx.op(op).regions.iter() {
                 validate_no_unresolved_shifts_in_region_arena(ctx, nested);

@@ -1129,10 +1129,10 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
     let ty = arena_value_type(ctx, value);
 
     // Direct check for closure.new result
-    if let ArenaValueDef::OpResult(op, _) = ctx.value_def(value) {
-        if arena_closure::New::from_op(ctx, op).is_ok() {
-            return true;
-        }
+    if let ArenaValueDef::OpResult(op, _) = ctx.value_def(value)
+        && arena_closure::New::from_op(ctx, op).is_ok()
+    {
+        return true;
     }
 
     // Check type
@@ -1187,11 +1187,11 @@ fn collect_closure_calls_in_op_arena(
     // Check if this is a call_indirect with a closure callee
     if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
         let operands = ctx.op_operands(op);
-        if let Some(&callee) = operands.first() {
-            if is_any_closure_value_arena(ctx, callee) {
-                let loc = ctx.op(op).location;
-                closure_calls.insert((loc.span.start, loc.span.end));
-            }
+        if let Some(&callee) = operands.first()
+            && is_any_closure_value_arena(ctx, callee)
+        {
+            let loc = ctx.op(op).location;
+            closure_calls.insert((loc.span.start, loc.span.end));
         }
     }
 
@@ -1258,8 +1258,8 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
         }
 
         // Build new func type preserving effect attribute
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .params(new_params.into_iter());
+        let mut builder =
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).params(new_params);
         if let Some(eff) = effect_attr {
             builder = builder.attr("effect", eff);
         }
