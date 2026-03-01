@@ -375,7 +375,7 @@ fn rewrite_evidence_ops_in_block<'db>(
         // After:  evidence_lookup returns prompt_tag directly as i32.
         //         The struct_get is eliminated; its uses are remapped to
         //         the lookup result.
-        if let Ok(_struct_get) = adt::StructGet::from_operation(db, *op) {
+        if let Ok(struct_get) = adt::StructGet::from_operation(db, *op) {
             let operands = op.operands(db);
             if !operands.is_empty() {
                 let base_val = remap_value(operands[0], &value_remap);
@@ -386,6 +386,12 @@ fn rewrite_evidence_ops_in_block<'db>(
                 if evidence_lookup_results.contains_key(&operands[0])
                     || evidence_lookup_results.values().any(|v| *v == base_val)
                 {
+                    // Only eliminate struct_get for the prompt_tag field (index 1).
+                    let field_idx = struct_get.field(db);
+                    assert_eq!(
+                        field_idx, 1,
+                        "expected struct_get on evidence_lookup result to access prompt_tag (field 1), got field {field_idx}"
+                    );
                     // The struct_get's result is now the lookup's i32 result.
                     let old_result = op.result(db, 0);
                     value_remap.insert(old_result, base_val);
@@ -528,7 +534,7 @@ fn remap_value<'db>(
 
 use std::collections::{HashMap, HashSet};
 
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -537,7 +543,6 @@ use trunk_ir::arena::rewrite::helpers::erase_op;
 use trunk_ir::arena::types::{
     Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
 };
-use trunk_ir::smallvec::smallvec;
 
 /// Lower evidence operations for the native backend (arena version).
 ///
@@ -667,44 +672,7 @@ fn build_extern_func_evidence(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    let func_ty = ctx.types.intern({
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result);
-        for &p in params {
-            builder = builder.param(p);
-        }
-        builder.build()
-    });
-
-    let args: Vec<BlockArgData> = params
-        .iter()
-        .map(|&ty| BlockArgData {
-            ty,
-            attrs: std::collections::BTreeMap::new(),
-        })
-        .collect();
-
-    let unreachable_op = arena_func::unreachable(ctx, loc);
-    let entry = ctx.create_block(BlockData {
-        location: loc,
-        args,
-        ops: smallvec![],
-        parent_region: None,
-    });
-    ctx.push_op(entry, unreachable_op.op_ref());
-
-    let body = ctx.create_region(RegionData {
-        location: loc,
-        blocks: smallvec![entry],
-        parent_op: None,
-    });
-
-    let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
-    ctx.op_mut(func_op.op_ref())
-        .attributes
-        .insert(Symbol::new("abi"), ArenaAttribute::String("C".to_string()));
-
-    func_op.op_ref()
+    super::build_extern_func(ctx, loc, name, params, result)
 }
 
 // =============================================================================
@@ -867,6 +835,18 @@ fn rewrite_evidence_ops_in_block_arena(ctx: &mut IrContext, block: BlockRef) {
             if !operands.is_empty() {
                 let base_val = operands[0];
                 if evidence_lookup_results.contains(&base_val) {
+                    // Only eliminate struct_get for the prompt_tag field (index 1).
+                    let field_attr = ctx.op(op).attributes.get(&Symbol::new("field"));
+                    let field_idx = match field_attr {
+                        Some(ArenaAttribute::IntBits(bits)) => *bits,
+                        other => panic!(
+                            "expected IntBits field attribute on adt.struct_get, got {other:?}"
+                        ),
+                    };
+                    assert_eq!(
+                        field_idx, 1,
+                        "expected struct_get on evidence_lookup result to access prompt_tag (field 1), got field {field_idx}"
+                    );
                     let old_result = ctx.op_result(op, 0);
                     ctx.replace_all_uses(old_result, base_val);
                     evidence_lookup_results.insert(old_result);

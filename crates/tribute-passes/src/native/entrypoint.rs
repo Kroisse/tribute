@@ -316,9 +316,7 @@ fn build_entrypoint<'db>(
 // Arena-based implementation
 // ============================================================================
 
-use std::collections::BTreeMap;
-
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
@@ -487,49 +485,7 @@ fn build_extern_func_arena(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    // Build func type: core.func layout is params[0]=result, params[1..]=params
-    let func_ty = ctx.types.intern({
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result);
-        for &p in params {
-            builder = builder.param(p);
-        }
-        builder.build()
-    });
-
-    // Build entry block with params and unreachable
-    let args: Vec<BlockArgData> = params
-        .iter()
-        .map(|&ty| BlockArgData {
-            ty,
-            attrs: BTreeMap::new(),
-        })
-        .collect();
-
-    let unreachable_op = arena_func::unreachable(ctx, loc);
-
-    let entry_block = ctx.create_block(BlockData {
-        location: loc,
-        args,
-        ops: smallvec![],
-        parent_region: None,
-    });
-    ctx.push_op(entry_block, unreachable_op.op_ref());
-
-    let body = ctx.create_region(RegionData {
-        location: loc,
-        blocks: smallvec![entry_block],
-        parent_op: None,
-    });
-
-    let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
-
-    // Add abi attribute
-    ctx.op_mut(func_op.op_ref())
-        .attributes
-        .insert(Symbol::new("abi"), ArenaAttribute::String("C".to_string()));
-
-    func_op.op_ref()
+    super::build_extern_func(ctx, loc, name, params, result)
 }
 
 /// Build the C ABI entrypoint function (arena version):
