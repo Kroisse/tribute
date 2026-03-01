@@ -532,9 +532,8 @@ fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
                 "f32"
             } else if name == Symbol::new("f64") {
                 "f64"
-            } else if name == Symbol::new("i1") {
-                "i32"
-            } else if name == Symbol::new("int")
+            } else if name == Symbol::new("i1")
+                || name == Symbol::new("int")
                 || name == Symbol::new("nat")
                 || name == Symbol::new("bool")
             {

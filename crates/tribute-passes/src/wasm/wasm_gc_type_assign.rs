@@ -206,12 +206,12 @@ fn trace_value_to_type_idx(
     }
 
     // Trace through ref_cast operations
-    if let ValueDef::OpResult(op, _) = ctx.value_def(value) {
-        if arena_wasm::RefCast::matches(ctx, op) {
-            let operands = ctx.op_operands(op);
-            if let Some(&operand) = operands.first() {
-                return trace_value_to_type_idx(ctx, operand, registry);
-            }
+    if let ValueDef::OpResult(op, _) = ctx.value_def(value)
+        && arena_wasm::RefCast::matches(ctx, op)
+    {
+        let operands = ctx.op_operands(op);
+        if let Some(&operand) = operands.first() {
+            return trace_value_to_type_idx(ctx, operand, registry);
         }
     }
     None
@@ -259,10 +259,9 @@ impl ArenaRewritePattern for UpdateStructNewPattern {
         // Check if already has correct type_idx
         if let Some(ArenaAttribute::IntBits(existing_idx)) =
             ctx.op(op).attributes.get(&Symbol::new(ATTR_TYPE_IDX))
+            && *existing_idx as u32 == type_idx
         {
-            if *existing_idx as u32 == type_idx {
-                return false;
-            }
+            return false;
         }
 
         // Update the operation with the correct type_idx
@@ -421,8 +420,7 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
             if ctx
                 .op(op)
                 .attributes
-                .get(&Symbol::new(ATTR_FIELD_COUNT))
-                .is_some()
+                .contains_key(&Symbol::new(ATTR_FIELD_COUNT))
             {
                 let current_type_idx = ctx
                     .op(op)

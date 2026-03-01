@@ -108,17 +108,17 @@ impl ConstCollector {
                         self.next_string_offset = offset + len;
                     }
                 }
-            } else if data.name == Symbol::new("bytes_const") {
-                if let Some(ArenaAttribute::Bytes(b)) = data.attributes.get(&Symbol::new("value")) {
-                    let bytes: Vec<u8> = b.to_vec();
-                    if !self.bytes_seen.contains_key(&bytes) {
-                        let data_idx = self.next_bytes_idx;
-                        let len = bytes.len() as u32;
-                        self.bytes_seen
-                            .insert(bytes.clone(), self.bytes_allocations.len());
-                        self.bytes_allocations.push((bytes, data_idx, len));
-                        self.next_bytes_idx += 1;
-                    }
+            } else if data.name == Symbol::new("bytes_const")
+                && let Some(ArenaAttribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
+            {
+                let bytes: Vec<u8> = b.to_vec();
+                if !self.bytes_seen.contains_key(&bytes) {
+                    let data_idx = self.next_bytes_idx;
+                    let len = bytes.len() as u32;
+                    self.bytes_seen
+                        .insert(bytes.clone(), self.bytes_allocations.len());
+                    self.bytes_allocations.push((bytes, data_idx, len));
+                    self.next_bytes_idx += 1;
                 }
             }
         }

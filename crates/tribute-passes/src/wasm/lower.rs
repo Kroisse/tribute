@@ -190,26 +190,25 @@ fn debug_func_params(ctx: &IrContext, module: ArenaModule, phase: &str) {
                         .unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
-            } else if data.dialect == arena_wasm::DIALECT_NAME() && data.name == Symbol::new("func")
+            } else if data.dialect == arena_wasm::DIALECT_NAME()
+                && data.name == Symbol::new("func")
+                && let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
             {
-                if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
-                {
-                    let fn_data = ctx.types.get(*fn_ty);
-                    let params: Vec<_> = fn_data
-                        .params
-                        .iter()
-                        .map(|t| {
-                            let td = ctx.types.get(*t);
-                            format!("{}.{}", td.dialect, td.name)
-                        })
-                        .collect();
-                    let sym_name = data
-                        .attributes
-                        .get(&Symbol::new("sym_name"))
-                        .map(|a| format!("{a:?}"))
-                        .unwrap_or_default();
-                    tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
-                }
+                let fn_data = ctx.types.get(*fn_ty);
+                let params: Vec<_> = fn_data
+                    .params
+                    .iter()
+                    .map(|t| {
+                        let td = ctx.types.get(*t);
+                        format!("{}.{}", td.dialect, td.name)
+                    })
+                    .collect();
+                let sym_name = data
+                    .attributes
+                    .get(&Symbol::new("sym_name"))
+                    .map(|a| format!("{a:?}"))
+                    .unwrap_or_default();
+                tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
         }
     }
@@ -369,13 +368,12 @@ impl<'a> WasmLowerer<'a> {
                         self.memory_plan.has_memory = true;
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name == Symbol::new("export_func") {
-                        if let Some(ArenaAttribute::String(name)) =
+                    } else if data.name == Symbol::new("export_func")
+                        && let Some(ArenaAttribute::String(name)) =
                             data.attributes.get(&Symbol::new("name"))
-                        {
-                            if name == "main" {
-                                self.main_exports.main_exported = true;
-                            }
+                    {
+                        if name == "main" {
+                            self.main_exports.main_exported = true;
                         }
                     } else if data.name == Symbol::new("func") {
                         self.scan_wasm_func(ctx, op);

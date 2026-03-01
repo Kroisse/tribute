@@ -193,18 +193,18 @@ pub fn analyze_intrinsics(
             let callee = call.callee(ctx);
             if callee.last_segment() == Symbol::new("__print_line") {
                 let operands = ctx.op_operands(op);
-                if let Some(&arg) = operands.first() {
-                    if let Some((ptr, len)) = get_literal_info(ctx, arg) {
-                        *needs_fd_write = true;
+                if let Some(&arg) = operands.first()
+                    && let Some((ptr, len)) = get_literal_info(ctx, arg)
+                {
+                    *needs_fd_write = true;
 
-                        // Allocate iovec if not already done
-                        iovec_map.entry((ptr, len)).or_insert_with(|| {
-                            let offset = align_to(*next_offset, 4);
-                            iovec_allocations.push((ptr, len, offset));
-                            *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-                            offset
-                        });
-                    }
+                    // Allocate iovec if not already done
+                    iovec_map.entry((ptr, len)).or_insert_with(|| {
+                        let offset = align_to(*next_offset, 4);
+                        iovec_allocations.push((ptr, len, offset));
+                        *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
+                        offset
+                    });
                 }
             }
         }
