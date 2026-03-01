@@ -265,6 +265,11 @@ impl IrContext {
         self.values[v].ty
     }
 
+    /// Set the type of a value.
+    pub fn set_value_ty(&mut self, v: ValueRef, ty: TypeRef) {
+        self.values[v].ty = ty;
+    }
+
     /// Get the definition of a value.
     pub fn value_def(&self, v: ValueRef) -> ValueDef {
         self.values[v].def

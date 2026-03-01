@@ -25,14 +25,24 @@ pub(crate) mod push_prompt;
 mod tests;
 
 use trunk_ir::DialectType;
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaTypeConverter, PatternApplicator as ArenaPatternApplicator,
+};
+use trunk_ir::arena::types::TypeDataBuilder;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{cont, core};
 use trunk_ir::rewrite::{ConversionError, ConversionTarget, PatternApplicator, TypeConverter};
 
-use ffi::ensure_libmprompt_ffi;
-use handler_dispatch::LowerHandlerDispatchPattern;
-use patterns::{LowerDropPattern, LowerResumePattern, LowerShiftPattern};
-use push_prompt::LowerPushPromptPattern;
+use ffi::{ensure_libmprompt_ffi, ensure_libmprompt_ffi_arena};
+use handler_dispatch::{ArenaLowerHandlerDispatchPattern, LowerHandlerDispatchPattern};
+use patterns::{
+    ArenaLowerDropPattern, ArenaLowerResumePattern, ArenaLowerShiftPattern, LowerDropPattern,
+    LowerResumePattern, LowerShiftPattern,
+};
+use push_prompt::{ArenaLowerPushPromptPattern, LowerPushPromptPattern};
 
 /// Lower cont dialect operations to libmprompt-based FFI calls.
 ///
@@ -75,4 +85,81 @@ pub fn lower_cont_to_libmprompt<'db>(
 
     target.verify(db, &module)?;
     Ok(module)
+}
+
+/// Lower cont dialect operations to libmprompt-based FFI calls (arena version).
+///
+/// This is the arena-based entry point for native backend continuation lowering.
+pub fn lower_cont_to_libmprompt_arena(ctx: &mut IrContext, module: ArenaModule) {
+    // Step 1: Ensure FFI function declarations are present
+    ensure_libmprompt_ffi_arena(ctx, module);
+
+    // Step 2: Apply lowering patterns with type conversion
+    // Pre-intern types before the closure (closure receives &IrContext, not &mut)
+    let prompt_tag_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+
+    let mut type_converter = ArenaTypeConverter::new();
+    type_converter.add_conversion(move |_ctx, ty| {
+        if ty == prompt_tag_ty {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+
+    let applicator = ArenaPatternApplicator::new(type_converter)
+        .add_pattern(ArenaLowerShiftPattern)
+        .add_pattern(ArenaLowerResumePattern)
+        .add_pattern(ArenaLowerDropPattern)
+        .add_pattern(ArenaLowerHandlerDispatchPattern)
+        .add_pattern(ArenaLowerPushPromptPattern::new());
+
+    applicator.apply_partial(ctx, module);
+
+    // Step 3: Convert remaining cont.prompt_tag types to core.i32
+    //
+    // The arena PatternApplicator doesn't yet support automatic type conversion
+    // (the Salsa version does this via virtual type mapping in RewriteContext).
+    // As a workaround, we walk the module and convert types directly.
+    if let Some(body) = module.body(ctx) {
+        convert_types_in_region(ctx, body, prompt_tag_ty, i32_ty);
+    }
+}
+
+/// Recursively walk a region and convert all values with `from` type to `to` type.
+fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef, to: TypeRef) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    for block in blocks {
+        // Convert block argument types
+        let num_args = ctx.block(block).args.len();
+        for i in 0..num_args {
+            if ctx.block(block).args[i].ty == from {
+                ctx.block_mut(block).args[i].ty = to;
+                let arg_value = ctx.block_arg(block, i as u32);
+                ctx.set_value_ty(arg_value, to);
+            }
+        }
+
+        // Walk ops
+        let ops: Vec<_> = ctx.block(block).ops.to_vec();
+        for op in ops {
+            // Convert result types
+            let results: Vec<_> = ctx.op_results(op).to_vec();
+            for v in results {
+                if ctx.value_ty(v) == from {
+                    ctx.set_value_ty(v, to);
+                }
+            }
+            // Recurse into nested regions
+            let regions: Vec<_> = ctx.op(op).regions.to_vec();
+            for r in regions {
+                convert_types_in_region(ctx, r, from, to);
+            }
+        }
+    }
 }
