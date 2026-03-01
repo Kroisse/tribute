@@ -523,6 +523,363 @@ fn remap_value<'db>(
 }
 
 // =============================================================================
+// Arena-based implementation
+// =============================================================================
+
+use std::collections::{HashMap, HashSet};
+
+use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::helpers::erase_op;
+use trunk_ir::arena::types::{
+    Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
+};
+use trunk_ir::smallvec::smallvec;
+
+/// Lower evidence operations for the native backend (arena version).
+///
+/// Must run AFTER `cont_to_libmprompt` and BEFORE DCE.
+pub fn lower_evidence_to_native_arena(ctx: &mut IrContext, module: ArenaModule) {
+    replace_stubs_and_add_empty_arena(ctx, module);
+    rewrite_evidence_ops_in_module_arena(ctx, module);
+}
+
+// =============================================================================
+// Phase 1: Replace stubs + add __tribute_evidence_empty declaration
+// =============================================================================
+
+fn replace_stubs_and_add_empty_arena(ctx: &mut IrContext, module: ArenaModule) {
+    let first_block = match module.first_block(ctx) {
+        Some(b) => b,
+        None => return,
+    };
+
+    let loc = ctx.op(module.op()).location;
+    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+
+    let mut has_evidence_empty = false;
+    let mut stubs_to_replace: Vec<(OpRef, &'static str)> = Vec::new();
+
+    let lookup_sym = Symbol::new("__tribute_evidence_lookup");
+    let extend_sym = Symbol::new("__tribute_evidence_extend");
+    let empty_sym = Symbol::new("__tribute_evidence_empty");
+
+    for &op in &ops {
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let name = func_op.sym_name(ctx);
+            if name == lookup_sym {
+                stubs_to_replace.push((op, "__tribute_evidence_lookup"));
+            } else if name == extend_sym {
+                stubs_to_replace.push((op, "__tribute_evidence_extend"));
+            } else if name == empty_sym {
+                has_evidence_empty = true;
+            }
+        }
+    }
+
+    let i64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+
+    // Replace stubs with extern declarations
+    for (old_op, name) in stubs_to_replace {
+        let new_op = match name {
+            "__tribute_evidence_lookup" => {
+                make_evidence_lookup_extern_arena(ctx, loc, i64_ty, i32_ty)
+            }
+            "__tribute_evidence_extend" => {
+                make_evidence_extend_extern_arena(ctx, loc, i64_ty, i32_ty)
+            }
+            _ => unreachable!(),
+        };
+        // Insert new before old, then remove old
+        ctx.insert_op_before(first_block, old_op, new_op);
+        ctx.remove_op_from_block(first_block, old_op);
+        ctx.remove_op(old_op);
+    }
+
+    // Add __tribute_evidence_empty if missing
+    if !has_evidence_empty {
+        let empty_op = make_evidence_empty_extern_arena(ctx, loc, i64_ty);
+        // Insert at front of module block
+        let first_op = ctx.block(first_block).ops[0];
+        ctx.insert_op_before(first_block, first_op, empty_op);
+    }
+}
+
+/// Build extern `fn __tribute_evidence_empty() -> i64`
+fn make_evidence_empty_extern_arena(
+    ctx: &mut IrContext,
+    loc: ArenaLocation,
+    i64_ty: TypeRef,
+) -> OpRef {
+    build_extern_func_evidence(ctx, loc, "__tribute_evidence_empty", &[], i64_ty)
+}
+
+/// Build extern `fn __tribute_evidence_lookup(ev: i64, ability_id: i32) -> i32`
+fn make_evidence_lookup_extern_arena(
+    ctx: &mut IrContext,
+    loc: ArenaLocation,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+) -> OpRef {
+    build_extern_func_evidence(
+        ctx,
+        loc,
+        "__tribute_evidence_lookup",
+        &[i64_ty, i32_ty],
+        i32_ty,
+    )
+}
+
+/// Build extern `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> i64`
+fn make_evidence_extend_extern_arena(
+    ctx: &mut IrContext,
+    loc: ArenaLocation,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+) -> OpRef {
+    build_extern_func_evidence(
+        ctx,
+        loc,
+        "__tribute_evidence_extend",
+        &[i64_ty, i32_ty, i32_ty, i32_ty],
+        i64_ty,
+    )
+}
+
+/// Build an extern func.func for evidence runtime functions.
+fn build_extern_func_evidence(
+    ctx: &mut IrContext,
+    loc: ArenaLocation,
+    name: &str,
+    params: &[TypeRef],
+    result: TypeRef,
+) -> OpRef {
+    let func_ty = ctx.types.intern({
+        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
+        builder = builder.param(result);
+        for &p in params {
+            builder = builder.param(p);
+        }
+        builder.build()
+    });
+
+    let args: Vec<BlockArgData> = params
+        .iter()
+        .map(|&ty| BlockArgData {
+            ty,
+            attrs: std::collections::BTreeMap::new(),
+        })
+        .collect();
+
+    let unreachable_op = arena_func::unreachable(ctx, loc);
+    let entry = ctx.create_block(BlockData {
+        location: loc,
+        args,
+        ops: smallvec![],
+        parent_region: None,
+    });
+    ctx.push_op(entry, unreachable_op.op_ref());
+
+    let body = ctx.create_region(RegionData {
+        location: loc,
+        blocks: smallvec![entry],
+        parent_op: None,
+    });
+
+    let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
+    ctx.op_mut(func_op.op_ref())
+        .attributes
+        .insert(Symbol::new("abi"), ArenaAttribute::String("C".to_string()));
+
+    func_op.op_ref()
+}
+
+// =============================================================================
+// Phase 2: Rewrite evidence ops inside function bodies
+// =============================================================================
+
+fn rewrite_evidence_ops_in_module_arena(ctx: &mut IrContext, module: ArenaModule) {
+    let first_block = match module.first_block(ctx) {
+        Some(b) => b,
+        None => return,
+    };
+
+    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+
+    for op in ops {
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let name = func_op.sym_name(ctx);
+            if is_evidence_runtime_fn(name) {
+                continue;
+            }
+            let body = func_op.body(ctx);
+            rewrite_evidence_ops_in_region_arena(ctx, body);
+        }
+    }
+}
+
+fn rewrite_evidence_ops_in_region_arena(ctx: &mut IrContext, region: RegionRef) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    for block in blocks {
+        rewrite_evidence_ops_in_block_arena(ctx, block);
+    }
+}
+
+/// Check if a type is an evidence type in arena (adt.array<ability.evidence>).
+fn is_evidence_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
+    tribute_ir::arena::dialect::ability::is_evidence_type_ref(ctx, ty)
+}
+
+/// Check if a type is a Marker type in arena.
+fn is_marker_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("ability") && data.name == Symbol::new("marker")
+}
+
+fn rewrite_evidence_ops_in_block_arena(ctx: &mut IrContext, block: BlockRef) {
+    let i64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+
+    // Track Marker struct_new results → their operands
+    let mut marker_struct_operands: HashMap<ValueRef, Vec<ValueRef>> = HashMap::new();
+    // Track evidence_lookup results for struct_get elimination
+    let mut evidence_lookup_results: HashSet<ValueRef> = HashSet::new();
+    // Ops to erase after processing
+    let mut ops_to_erase: Vec<OpRef> = Vec::new();
+
+    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+
+    for op in ops {
+        let op_data = ctx.op(op);
+        let dialect = op_data.dialect;
+        let name = op_data.name;
+        let loc = op_data.location;
+
+        // --- adt.array_new with evidence type → func.call @__tribute_evidence_empty ---
+        if dialect == Symbol::new("adt") && name == Symbol::new("array_new") {
+            let result_types = ctx.op_result_types(op).to_vec();
+            if !result_types.is_empty() && is_evidence_type_arena(ctx, result_types[0]) {
+                let old_result = ctx.op_result(op, 0);
+                let call = arena_func::call(
+                    ctx,
+                    loc,
+                    [],
+                    i64_ty,
+                    Symbol::new("__tribute_evidence_empty"),
+                );
+                let new_result = call.result(ctx);
+                ctx.insert_op_before(block, op, call.op_ref());
+                ctx.replace_all_uses(old_result, new_result);
+                ops_to_erase.push(op);
+                continue;
+            }
+        }
+
+        // --- Track adt.struct_new that produces a Marker ---
+        if dialect == Symbol::new("adt") && name == Symbol::new("struct_new") {
+            let result_types = ctx.op_result_types(op).to_vec();
+            if !result_types.is_empty() && is_marker_type_arena(ctx, result_types[0]) {
+                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                let result_val = ctx.op_result(op, 0);
+                marker_struct_operands.insert(result_val, operands);
+                ops_to_erase.push(op);
+                continue;
+            }
+        }
+
+        // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 ---
+        if dialect == Symbol::new("func") && name == Symbol::new("call") {
+            if let Ok(call_op) = arena_func::Call::from_op(ctx, op) {
+                let callee = call_op.callee(ctx);
+
+                if callee == Symbol::new("__tribute_evidence_lookup") {
+                    let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                    let old_result = ctx.op_result(op, 0);
+                    let new_call = arena_func::call(
+                        ctx,
+                        loc,
+                        operands,
+                        i32_ty,
+                        Symbol::new("__tribute_evidence_lookup"),
+                    );
+                    let new_result = new_call.result(ctx);
+                    ctx.insert_op_before(block, op, new_call.op_ref());
+                    evidence_lookup_results.insert(new_result);
+                    ctx.replace_all_uses(old_result, new_result);
+                    ops_to_erase.push(op);
+                    continue;
+                }
+
+                // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → (ev, a, b, c) ---
+                if callee == Symbol::new("__tribute_evidence_extend") {
+                    let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                    if operands.len() == 2 {
+                        let ev_val = operands[0];
+                        let marker_val = operands[1];
+
+                        if let Some(fields) = marker_struct_operands.get(&marker_val) {
+                            let mut args = vec![ev_val];
+                            args.extend_from_slice(fields);
+                            let old_result = ctx.op_result(op, 0);
+                            let new_call = arena_func::call(
+                                ctx,
+                                loc,
+                                args,
+                                i64_ty,
+                                Symbol::new("__tribute_evidence_extend"),
+                            );
+                            let new_result = new_call.result(ctx);
+                            ctx.insert_op_before(block, op, new_call.op_ref());
+                            ctx.replace_all_uses(old_result, new_result);
+                            ops_to_erase.push(op);
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Eliminate adt.struct_get on evidence_lookup results ---
+        if dialect == Symbol::new("adt") && name == Symbol::new("struct_get") {
+            let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+            if !operands.is_empty() {
+                let base_val = operands[0];
+                if evidence_lookup_results.contains(&base_val) {
+                    let old_result = ctx.op_result(op, 0);
+                    ctx.replace_all_uses(old_result, base_val);
+                    evidence_lookup_results.insert(old_result);
+                    ops_to_erase.push(op);
+                    continue;
+                }
+            }
+        }
+
+        // --- Recurse into nested regions ---
+        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+        for region in regions {
+            rewrite_evidence_ops_in_region_arena(ctx, region);
+        }
+    }
+
+    // Erase dead ops (in reverse to handle dependencies)
+    for op in ops_to_erase.into_iter().rev() {
+        erase_op(ctx, op);
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 

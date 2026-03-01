@@ -386,6 +386,422 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
     }
 }
 
+// ============================================================================
+// Arena-based implementation
+// ============================================================================
+
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef};
+use trunk_ir::arena::rewrite::rewriter::PatternRewriter as ArenaPatternRewriter;
+use trunk_ir::arena::rewrite::type_converter::ArenaTypeConverter;
+use trunk_ir::arena::rewrite::{
+    ArenaConversionTarget, ArenaModule, ArenaRewritePattern,
+    PatternApplicator as ArenaPatternApplicator,
+};
+use trunk_ir::arena::types::{Location as ArenaLocation, TypeDataBuilder};
+
+/// Generate boxing operations (arena version): allocate + store RC header + store value.
+///
+/// Returns a list of OpRefs where the last op produces the payload pointer result.
+fn box_value_arena(
+    ctx: &mut IrContext,
+    loc: ArenaLocation,
+    value: trunk_ir::arena::refs::ValueRef,
+    payload_size: u64,
+    rtti_idx: u32,
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+) -> Vec<OpRef> {
+    let mut ops = Vec::new();
+
+    // 1. Allocation size (payload + RC header)
+    let alloc_size = payload_size
+        .checked_add(RC_HEADER_SIZE)
+        .expect("allocation size overflow: payload_size + RC_HEADER_SIZE exceeds u64::MAX");
+    let alloc_size_i64 = i64::try_from(alloc_size).expect("allocation size does not fit in i64");
+    let size_op = arena_clif::iconst(ctx, loc, i64_ty, alloc_size_i64);
+    let size_val = size_op.result(ctx);
+    ops.push(size_op.op_ref());
+
+    // 2. Allocate heap memory
+    let call_op = arena_clif::call(ctx, loc, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
+    let raw_ptr = call_op.result(ctx);
+    ops.push(call_op.op_ref());
+
+    // 3. Store refcount = 1 at raw_ptr + 0
+    let rc_one = arena_clif::iconst(ctx, loc, i32_ty, 1);
+    let rc_one_val = rc_one.result(ctx);
+    ops.push(rc_one.op_ref());
+    let store_rc = arena_clif::store(ctx, loc, rc_one_val, raw_ptr, 0);
+    ops.push(store_rc.op_ref());
+
+    // 4. Store rtti_idx at raw_ptr + 4
+    let rtti_val = arena_clif::iconst(ctx, loc, i32_ty, rtti_idx as i64);
+    let rtti_val_v = rtti_val.result(ctx);
+    ops.push(rtti_val.op_ref());
+    let store_rtti = arena_clif::store(ctx, loc, rtti_val_v, raw_ptr, 4);
+    ops.push(store_rtti.op_ref());
+
+    // 5. Compute payload pointer = raw_ptr + 8
+    let hdr_size = arena_clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size_val = hdr_size.result(ctx);
+    ops.push(hdr_size.op_ref());
+    let payload_ptr = arena_clif::iadd(ctx, loc, raw_ptr, hdr_size_val, ptr_ty);
+    let payload_ptr_val = payload_ptr.result(ctx);
+    ops.push(payload_ptr.op_ref());
+
+    // 6. Store value at payload offset 0
+    let store_val = arena_clif::store(ctx, loc, value, payload_ptr_val, 0);
+    ops.push(store_val.op_ref());
+
+    // 7. Identity pass-through so the last op produces the payload ptr result.
+    //    Cranelift will optimize away iadd(ptr, 0).
+    let zero_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+    let zero_val = zero_op.result(ctx);
+    ops.push(zero_op.op_ref());
+
+    let identity_op = arena_clif::iadd(ctx, loc, payload_ptr_val, zero_val, ptr_ty);
+    ops.push(identity_op.op_ref());
+
+    ops
+}
+
+/// Lower tribute_rt boxing/unboxing operations to clif dialect (arena version).
+///
+/// This is a partial lowering: only box/unbox operations are converted.
+/// `retain`/`release` ops pass through (handled by a future RC lowering pass).
+pub fn lower_arena(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+    // Pre-intern types for patterns
+    let ptr_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let i64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let f64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+    let applicator = ArenaPatternApplicator::new(type_converter)
+        .add_pattern(ArenaBoxIntPattern {
+            ptr_ty,
+            i64_ty,
+            i32_ty,
+        })
+        .add_pattern(ArenaUnboxIntPattern { i32_ty })
+        .add_pattern(ArenaBoxNatPattern {
+            ptr_ty,
+            i64_ty,
+            i32_ty,
+        })
+        .add_pattern(ArenaUnboxNatPattern { i32_ty })
+        .add_pattern(ArenaBoxFloatPattern {
+            ptr_ty,
+            i64_ty,
+            i32_ty,
+        })
+        .add_pattern(ArenaUnboxFloatPattern { f64_ty })
+        .add_pattern(ArenaBoxBoolPattern {
+            ptr_ty,
+            i64_ty,
+            i32_ty,
+        })
+        .add_pattern(ArenaUnboxBoolPattern { i32_ty });
+
+    applicator.apply_partial(ctx, module);
+
+    // Verify: tribute_rt.* ops (except retain/release) should be gone
+    let mut target = ArenaConversionTarget::new();
+    target.add_illegal_dialect("tribute_rt");
+    target.add_legal_op("tribute_rt", "retain");
+    target.add_legal_op("tribute_rt", "release");
+
+    if let Some(body) = module.body(ctx) {
+        let illegal = target.verify(ctx, body);
+        assert!(
+            illegal.is_empty(),
+            "lower_arena (tribute_rt_to_clif): unconverted tribute_rt.* ops remain: {:?}",
+            illegal,
+        );
+    }
+}
+
+// =============================================================================
+// Arena Boxing Patterns (primitive → heap pointer)
+// =============================================================================
+
+struct ArenaBoxIntPattern {
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaBoxIntPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(box_op) = arena_tribute_rt::BoxInt::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let mut ops = box_value_arena(
+            ctx,
+            loc,
+            value,
+            4,
+            super::rtti::RTTI_INT,
+            self.ptr_ty,
+            self.i64_ty,
+            self.i32_ty,
+        );
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
+    }
+}
+
+struct ArenaBoxNatPattern {
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaBoxNatPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(box_op) = arena_tribute_rt::BoxNat::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let mut ops = box_value_arena(
+            ctx,
+            loc,
+            value,
+            4,
+            super::rtti::RTTI_NAT,
+            self.ptr_ty,
+            self.i64_ty,
+            self.i32_ty,
+        );
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
+    }
+}
+
+struct ArenaBoxBoolPattern {
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaBoxBoolPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(box_op) = arena_tribute_rt::BoxBool::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let mut ops = box_value_arena(
+            ctx,
+            loc,
+            value,
+            4,
+            super::rtti::RTTI_BOOL,
+            self.ptr_ty,
+            self.i64_ty,
+            self.i32_ty,
+        );
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
+    }
+}
+
+struct ArenaBoxFloatPattern {
+    ptr_ty: TypeRef,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaBoxFloatPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(box_op) = arena_tribute_rt::BoxFloat::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let mut ops = box_value_arena(
+            ctx,
+            loc,
+            value,
+            8,
+            super::rtti::RTTI_FLOAT,
+            self.ptr_ty,
+            self.i64_ty,
+            self.i32_ty,
+        );
+        let last = ops.pop().unwrap();
+        for o in ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
+    }
+}
+
+// =============================================================================
+// Arena Unboxing Patterns (heap pointer → primitive)
+// =============================================================================
+
+struct ArenaUnboxIntPattern {
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaUnboxIntPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxInt::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = unbox_op.value(ctx);
+
+        // If the input is already i32, the unbox is a no-op (value was stored raw).
+        if ctx.value_ty(value) == self.i32_ty {
+            rewriter.erase_op(vec![value]);
+            return true;
+        }
+
+        let load_op = arena_clif::load(ctx, loc, value, self.i32_ty, 0);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
+struct ArenaUnboxNatPattern {
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaUnboxNatPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxNat::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = unbox_op.value(ctx);
+
+        if ctx.value_ty(value) == self.i32_ty {
+            rewriter.erase_op(vec![value]);
+            return true;
+        }
+
+        let load_op = arena_clif::load(ctx, loc, value, self.i32_ty, 0);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
+struct ArenaUnboxBoolPattern {
+    i32_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaUnboxBoolPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxBool::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = unbox_op.value(ctx);
+
+        if ctx.value_ty(value) == self.i32_ty {
+            rewriter.erase_op(vec![value]);
+            return true;
+        }
+
+        let load_op = arena_clif::load(ctx, loc, value, self.i32_ty, 0);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
+struct ArenaUnboxFloatPattern {
+    f64_ty: TypeRef,
+}
+
+impl ArenaRewritePattern for ArenaUnboxFloatPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxFloat::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let value = unbox_op.value(ctx);
+
+        if ctx.value_ty(value) == self.f64_ty {
+            rewriter.erase_op(vec![value]);
+            return true;
+        }
+
+        let load_op = arena_clif::load(ctx, loc, value, self.f64_ty, 0);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
