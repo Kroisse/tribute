@@ -800,52 +800,53 @@ fn rewrite_evidence_ops_in_block_arena(ctx: &mut IrContext, block: BlockRef) {
         }
 
         // --- Rewrite func.call @__tribute_evidence_lookup → returns i32 ---
-        if dialect == Symbol::new("func") && name == Symbol::new("call") {
-            if let Ok(call_op) = arena_func::Call::from_op(ctx, op) {
-                let callee = call_op.callee(ctx);
+        if dialect == Symbol::new("func")
+            && name == Symbol::new("call")
+            && let Ok(call_op) = arena_func::Call::from_op(ctx, op)
+        {
+            let callee = call_op.callee(ctx);
 
-                if callee == Symbol::new("__tribute_evidence_lookup") {
-                    let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                    let old_result = ctx.op_result(op, 0);
-                    let new_call = arena_func::call(
-                        ctx,
-                        loc,
-                        operands,
-                        i32_ty,
-                        Symbol::new("__tribute_evidence_lookup"),
-                    );
-                    let new_result = new_call.result(ctx);
-                    ctx.insert_op_before(block, op, new_call.op_ref());
-                    evidence_lookup_results.insert(new_result);
-                    ctx.replace_all_uses(old_result, new_result);
-                    ops_to_erase.push(op);
-                    continue;
-                }
+            if callee == Symbol::new("__tribute_evidence_lookup") {
+                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                let old_result = ctx.op_result(op, 0);
+                let new_call = arena_func::call(
+                    ctx,
+                    loc,
+                    operands,
+                    i32_ty,
+                    Symbol::new("__tribute_evidence_lookup"),
+                );
+                let new_result = new_call.result(ctx);
+                ctx.insert_op_before(block, op, new_call.op_ref());
+                evidence_lookup_results.insert(new_result);
+                ctx.replace_all_uses(old_result, new_result);
+                ops_to_erase.push(op);
+                continue;
+            }
 
-                // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → (ev, a, b, c) ---
-                if callee == Symbol::new("__tribute_evidence_extend") {
-                    let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-                    if operands.len() == 2 {
-                        let ev_val = operands[0];
-                        let marker_val = operands[1];
+            // --- Rewrite func.call @__tribute_evidence_extend(ev, marker) → (ev, a, b, c) ---
+            if callee == Symbol::new("__tribute_evidence_extend") {
+                let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                if operands.len() == 2 {
+                    let ev_val = operands[0];
+                    let marker_val = operands[1];
 
-                        if let Some(fields) = marker_struct_operands.get(&marker_val) {
-                            let mut args = vec![ev_val];
-                            args.extend_from_slice(fields);
-                            let old_result = ctx.op_result(op, 0);
-                            let new_call = arena_func::call(
-                                ctx,
-                                loc,
-                                args,
-                                i64_ty,
-                                Symbol::new("__tribute_evidence_extend"),
-                            );
-                            let new_result = new_call.result(ctx);
-                            ctx.insert_op_before(block, op, new_call.op_ref());
-                            ctx.replace_all_uses(old_result, new_result);
-                            ops_to_erase.push(op);
-                            continue;
-                        }
+                    if let Some(fields) = marker_struct_operands.get(&marker_val) {
+                        let mut args = vec![ev_val];
+                        args.extend_from_slice(fields);
+                        let old_result = ctx.op_result(op, 0);
+                        let new_call = arena_func::call(
+                            ctx,
+                            loc,
+                            args,
+                            i64_ty,
+                            Symbol::new("__tribute_evidence_extend"),
+                        );
+                        let new_result = new_call.result(ctx);
+                        ctx.insert_op_before(block, op, new_call.op_ref());
+                        ctx.replace_all_uses(old_result, new_result);
+                        ops_to_erase.push(op);
+                        continue;
                     }
                 }
             }

@@ -406,6 +406,7 @@ use trunk_ir::arena::types::{Location as ArenaLocation, TypeDataBuilder};
 /// Generate boxing operations (arena version): allocate + store RC header + store value.
 ///
 /// Returns a list of OpRefs where the last op produces the payload pointer result.
+#[allow(clippy::too_many_arguments)]
 fn box_value_arena(
     ctx: &mut IrContext,
     loc: ArenaLocation,

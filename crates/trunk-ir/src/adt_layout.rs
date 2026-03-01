@@ -245,11 +245,8 @@ pub fn type_size_align_arena(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
         (8, 8)
     } else if name == Symbol::new("f32") {
         (4, 4)
-    } else if name == Symbol::new("f64") {
-        (8, 8)
-    } else if name == Symbol::new("ptr") {
-        (8, 8)
     } else {
+        // f64, ptr, and any unknown types default to 8-byte size/align
         (8, 8)
     }
 }

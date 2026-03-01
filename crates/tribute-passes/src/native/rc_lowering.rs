@@ -995,6 +995,7 @@ fn gen_retain_rc_ops_arena(
 
 /// Arena: Generate release decrement ops in a block.
 /// Returns the `is_zero` value.
+#[allow(clippy::too_many_arguments)]
 fn gen_release_decrement_arena(
     ctx: &mut IrContext,
     loc: trunk_ir::arena::Location,
@@ -1042,6 +1043,7 @@ fn gen_release_decrement_arena(
 }
 
 /// Arena: Generate deep release call + jump in the free block.
+#[allow(clippy::too_many_arguments)]
 fn gen_deep_release_call_arena(
     ctx: &mut IrContext,
     loc: trunk_ir::arena::Location,

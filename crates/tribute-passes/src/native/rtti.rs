@@ -935,12 +935,13 @@ fn collect_types_arena(ctx: &IrContext, module: ArenaModule, rtti_map: &mut Rtti
                     rtti_map.get_or_insert(struct_ty);
                 }
             }
-        } else if dialect == Symbol::new("adt") && name == Symbol::new("variant_new") {
-            if let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op) {
-                let enum_ty = variant_new.r#type(ctx);
-                if get_enum_variants_arena(ctx, enum_ty).is_some() {
-                    rtti_map.get_or_insert(enum_ty);
-                }
+        } else if dialect == Symbol::new("adt")
+            && name == Symbol::new("variant_new")
+            && let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op)
+        {
+            let enum_ty = variant_new.r#type(ctx);
+            if get_enum_variants_arena(ctx, enum_ty).is_some() {
+                rtti_map.get_or_insert(enum_ty);
             }
         }
 
@@ -1125,6 +1126,7 @@ fn generate_release_function_for_struct_arena(
 }
 
 /// Arena: Emit dealloc + return ops into a block.
+#[allow(clippy::too_many_arguments)]
 fn gen_dealloc_and_return_arena(
     ctx: &mut IrContext,
     loc: ArenaLocation,

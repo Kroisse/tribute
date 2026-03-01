@@ -397,13 +397,13 @@ pub fn generate_native_entrypoint_arena(ctx: &mut IrContext, module: ArenaModule
 
     // Step 1: Rename main -> _tribute_main (in-place attribute mutation)
     for &op in &ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
-            if func_op.sym_name(ctx) == main_sym {
-                ctx.op_mut(op).attributes.insert(
-                    Symbol::new("sym_name"),
-                    ArenaAttribute::Symbol(tribute_main_sym),
-                );
-            }
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op)
+            && func_op.sym_name(ctx) == main_sym
+        {
+            ctx.op_mut(op).attributes.insert(
+                Symbol::new("sym_name"),
+                ArenaAttribute::Symbol(tribute_main_sym),
+            );
         }
     }
 
@@ -440,21 +440,21 @@ fn rewrite_symbol_refs_arena(ctx: &mut IrContext, op: OpRef, old_sym: Symbol, ne
     let callee_key = Symbol::new("callee");
     let func_ref_key = Symbol::new("func_ref");
 
-    if let Some(ArenaAttribute::Symbol(sym)) = ctx.op(op).attributes.get(&callee_key).cloned() {
-        if sym == old_sym {
-            ctx.op_mut(op)
-                .attributes
-                .insert(callee_key, ArenaAttribute::Symbol(new_sym));
-        }
+    if let Some(ArenaAttribute::Symbol(sym)) = ctx.op(op).attributes.get(&callee_key).cloned()
+        && sym == old_sym
+    {
+        ctx.op_mut(op)
+            .attributes
+            .insert(callee_key, ArenaAttribute::Symbol(new_sym));
     }
 
     // Rewrite func_ref attribute
-    if let Some(ArenaAttribute::Symbol(sym)) = ctx.op(op).attributes.get(&func_ref_key).cloned() {
-        if sym == old_sym {
-            ctx.op_mut(op)
-                .attributes
-                .insert(func_ref_key, ArenaAttribute::Symbol(new_sym));
-        }
+    if let Some(ArenaAttribute::Symbol(sym)) = ctx.op(op).attributes.get(&func_ref_key).cloned()
+        && sym == old_sym
+    {
+        ctx.op_mut(op)
+            .attributes
+            .insert(func_ref_key, ArenaAttribute::Symbol(new_sym));
     }
 
     // Recurse into regions

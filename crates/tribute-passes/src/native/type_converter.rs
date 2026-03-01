@@ -801,10 +801,9 @@ pub fn is_ptr_like_arena(
     }
 
     // core.array — but NOT evidence arrays
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("array") {
-        if ty != evidence_ty {
-            return true;
-        }
+    if data.dialect == Symbol::new("core") && data.name == Symbol::new("array") && ty != evidence_ty
+    {
+        return true;
     }
 
     // tribute_rt.any / tribute_rt.intref

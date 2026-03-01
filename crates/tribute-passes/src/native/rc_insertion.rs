@@ -1258,10 +1258,10 @@ fn compute_use_def_sets_arena(
                 if ptr_values.contains(&operand) && !defs.contains(&operand) {
                     uses.insert(operand);
                 }
-                if let Some(&aliased) = ptr_alias_map.get(&operand) {
-                    if !defs.contains(&aliased) {
-                        uses.insert(aliased);
-                    }
+                if let Some(&aliased) = ptr_alias_map.get(&operand)
+                    && !defs.contains(&aliased)
+                {
+                    uses.insert(aliased);
                 }
             }
             for &result_val in ctx.op_results(op) {
@@ -1361,10 +1361,10 @@ fn has_use_after_arena(
             if operand == value {
                 return true;
             }
-            if let Some(&aliased) = ptr_alias_map.get(&operand) {
-                if aliased == value {
-                    return true;
-                }
+            if let Some(&aliased) = ptr_alias_map.get(&operand)
+                && aliased == value
+            {
+                return true;
             }
         }
     }
@@ -1479,15 +1479,15 @@ fn insert_rc_in_block_arena(
 
     // Returned values
     let mut returned_values: HashSet<ValueRef> = HashSet::new();
-    if let Some(&last_op) = ops.last() {
-        if arena_clif::Return::matches(ctx, last_op) {
-            for &operand in ctx.op_operands(last_op) {
-                if ptr_values.contains(&operand) {
-                    returned_values.insert(operand);
-                }
-                if let Some(&aliased) = ptr_alias_map.get(&operand) {
-                    returned_values.insert(aliased);
-                }
+    if let Some(&last_op) = ops.last()
+        && arena_clif::Return::matches(ctx, last_op)
+    {
+        for &operand in ctx.op_operands(last_op) {
+            if ptr_values.contains(&operand) {
+                returned_values.insert(operand);
+            }
+            if let Some(&aliased) = ptr_alias_map.get(&operand) {
+                returned_values.insert(aliased);
             }
         }
     }
@@ -1511,15 +1511,16 @@ fn insert_rc_in_block_arena(
     for (op_idx, &op) in ops.iter().enumerate() {
         if let Ok(_store_op) = arena_clif::Store::from_op(ctx, op) {
             let operands = ctx.op_operands(op).to_vec();
-            if let Some(&stored_val) = operands.first() {
-                if is_ptr_value_arena(ctx, stored_val) && !is_static_ptr_arena(ctx, stored_val) {
-                    let op_loc = ctx.op(op).location;
-                    let retain_op = arena_tribute_rt::retain(ctx, op_loc, stored_val, ptr_ty);
-                    plan.before
-                        .entry(op_idx)
-                        .or_default()
-                        .push(retain_op.op_ref());
-                }
+            if let Some(&stored_val) = operands.first()
+                && is_ptr_value_arena(ctx, stored_val)
+                && !is_static_ptr_arena(ctx, stored_val)
+            {
+                let op_loc = ctx.op(op).location;
+                let retain_op = arena_tribute_rt::retain(ctx, op_loc, stored_val, ptr_ty);
+                plan.before
+                    .entry(op_idx)
+                    .or_default()
+                    .push(retain_op.op_ref());
             }
         }
 
@@ -1554,11 +1555,12 @@ fn insert_rc_in_block_arena(
                 }
             }
             for v in &defs_in_block {
-                if live_out.contains(v) || has_use_after_arena(ctx, &ops, op_idx, *v, ptr_alias_map)
+                if (live_out.contains(v)
+                    || has_use_after_arena(ctx, &ops, op_idx, *v, ptr_alias_map))
+                    && is_defined_before_arena(ctx, &ops, op_idx, *v)
+                    && !live.contains(v)
                 {
-                    if is_defined_before_arena(ctx, &ops, op_idx, *v) && !live.contains(v) {
-                        live.push(*v);
-                    }
+                    live.push(*v);
                 }
             }
             live.sort_by_key(|v| match ctx.value_def(*v) {
