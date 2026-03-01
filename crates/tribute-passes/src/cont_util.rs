@@ -5,6 +5,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::scf as arena_scf;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{RegionRef, ValueRef};
 use trunk_ir::dialect::cont;
 use trunk_ir::dialect::core::{self};
 use trunk_ir::dialect::scf;
@@ -142,6 +147,107 @@ pub fn get_done_region<'db>(
     for op in first_block.operations(db).iter() {
         if let Ok(done_op) = cont::Done::from_operation(db, *op) {
             return Some(done_op.body(db));
+        }
+    }
+
+    None
+}
+
+// ============================================================================
+// Arena Utilities
+// ============================================================================
+
+/// Extract the result value from the last operation of an arena region.
+///
+/// Returns the first operand of a trailing `scf.yield`, or
+/// the first result of the last operation otherwise.
+pub fn get_region_result_value_arena(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
+    let blocks = &ctx.region(region).blocks;
+    let &last_block = blocks.last()?;
+    let ops = &ctx.block(last_block).ops;
+    let &last_op = ops.last()?;
+
+    // If the last op is scf.yield, return its first operand (the yielded value)
+    if let Ok(yield_op) = arena_scf::Yield::from_op(ctx, last_op) {
+        return yield_op.values(ctx).first().copied();
+    }
+
+    // Otherwise, return the first result of the last op
+    let results = ctx.op_results(last_op);
+    if results.is_empty() {
+        None
+    } else {
+        Some(results[0])
+    }
+}
+
+/// Information about a suspend arm for dispatch (arena version).
+pub struct ArenaSuspendArm {
+    /// Expected op_idx for this arm
+    pub expected_op_idx: u32,
+    /// The body region containing the handler arm code
+    pub body: RegionRef,
+}
+
+/// Collect suspend arms from handler_dispatch's body region (arena version).
+///
+/// Uses hash-based dispatch: each arm's op_idx is computed from the ability
+/// name and operation name via `compute_op_idx`.
+pub fn collect_suspend_arms_arena(ctx: &IrContext, body: RegionRef) -> Vec<ArenaSuspendArm> {
+    let mut arms = Vec::new();
+    let mut seen_op_indices: HashSet<u32> = HashSet::new();
+
+    let blocks = &ctx.region(body).blocks;
+    let Some(&first_block) = blocks.first() else {
+        return arms;
+    };
+
+    for &op in &ctx.block(first_block).ops {
+        let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, op) else {
+            continue;
+        };
+
+        let ability_ref_ty = suspend_op.ability_ref(ctx);
+        let ability_data = ctx.types.get(ability_ref_ty);
+        let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
+            Some(trunk_ir::arena::types::Attribute::Symbol(s)) => Some(*s),
+            _ => panic!(
+                "collect_suspend_arms_arena: cont.suspend has invalid ability_ref type: {:?}",
+                ability_data,
+            ),
+        };
+
+        let op_name = suspend_op.op_name(ctx);
+
+        let expected_op_idx = compute_op_idx(ability_name, Some(op_name));
+        assert!(
+            seen_op_indices.insert(expected_op_idx),
+            "compute_op_idx collision in handler dispatch: op_idx {} appears twice \
+             (ability={:?}, op={}). This indicates a hash collision that would \
+             cause silent mis-dispatch at runtime.",
+            expected_op_idx,
+            ability_name,
+            op_name,
+        );
+        arms.push(ArenaSuspendArm {
+            expected_op_idx,
+            body: suspend_op.body(ctx),
+        });
+    }
+
+    arms
+}
+
+/// Get the done region from handler_dispatch's body (arena version).
+///
+/// Finds the first `cont.done` child op and returns its body region.
+pub fn get_done_region_arena(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
+    let blocks = &ctx.region(body).blocks;
+    let &first_block = blocks.first()?;
+
+    for &op in &ctx.block(first_block).ops {
+        if let Ok(done_op) = arena_cont::Done::from_op(ctx, op) {
+            return Some(done_op.body(ctx));
         }
     }
 
@@ -468,5 +574,250 @@ mod tests {
     #[salsa_test]
     fn get_done_region_returns_none_when_no_done(db: &salsa::DatabaseImpl) {
         assert!(run_get_done_region_empty(db));
+    }
+
+    // ====================================================================
+    // Arena tests
+    // ====================================================================
+
+    mod arena_tests {
+        use super::*;
+        use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
+        use trunk_ir::arena::dialect::{
+            arith as arena_arith, cont as arena_cont, scf as arena_scf,
+        };
+        use trunk_ir::arena::refs::RegionRef;
+        use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+        use trunk_ir::location::Span;
+        use trunk_ir::smallvec::smallvec;
+
+        fn test_ctx() -> (IrContext, Location) {
+            let mut ctx = IrContext::new();
+            let path = ctx.paths.intern("test.trb".to_owned());
+            let loc = Location::new(path, Span::new(0, 0));
+            (ctx, loc)
+        }
+
+        fn i32_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+            ctx.types
+                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+        }
+
+        fn ability_ref_type(ctx: &mut IrContext, name: Symbol) -> trunk_ir::arena::refs::TypeRef {
+            ctx.types.intern(
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
+                    .attr("name", ArenaAttribute::Symbol(name))
+                    .build(),
+            )
+        }
+
+        /// Helper: create a simple body region with a const + yield.
+        fn make_simple_body_arena(ctx: &mut IrContext, loc: Location) -> RegionRef {
+            let i32_ty = i32_type(ctx);
+            let c = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(0));
+            let c_result = c.result(ctx);
+            let y = arena_scf::r#yield(ctx, loc, [c_result]);
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, c.op_ref());
+            ctx.push_op(block, y.op_ref());
+            ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            })
+        }
+
+        // get_region_result_value_arena tests
+
+        #[test]
+        fn arena_get_region_result_value_returns_yield_operand() {
+            let (mut ctx, loc) = test_ctx();
+            let i32_ty = i32_type(&mut ctx);
+            let c = arena_arith::r#const(&mut ctx, loc, i32_ty, ArenaAttribute::IntBits(42));
+            let c_result = c.result(&ctx);
+            let y = arena_scf::r#yield(&mut ctx, loc, [c_result]);
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, c.op_ref());
+            ctx.push_op(block, y.op_ref());
+            let region = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            let result = get_region_result_value_arena(&ctx, region);
+            assert_eq!(result, Some(c_result));
+        }
+
+        #[test]
+        fn arena_get_region_result_value_returns_last_op_result() {
+            let (mut ctx, loc) = test_ctx();
+            let i32_ty = i32_type(&mut ctx);
+            let c = arena_arith::r#const(&mut ctx, loc, i32_ty, ArenaAttribute::IntBits(42));
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, c.op_ref());
+            let region = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            let result = get_region_result_value_arena(&ctx, region);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn arena_get_region_result_value_empty_region() {
+            let (mut ctx, loc) = test_ctx();
+            let region = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![],
+                parent_op: None,
+            });
+
+            assert!(get_region_result_value_arena(&ctx, region).is_none());
+        }
+
+        #[test]
+        fn arena_get_region_result_value_empty_block() {
+            let (mut ctx, loc) = test_ctx();
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            let region = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            assert!(get_region_result_value_arena(&ctx, region).is_none());
+        }
+
+        // collect_suspend_arms_arena tests
+
+        #[test]
+        fn arena_collect_suspend_arms_extracts_all() {
+            let (mut ctx, loc) = test_ctx();
+            let state_ref_ty = ability_ref_type(&mut ctx, Symbol::new("State"));
+
+            let done_body = make_simple_body_arena(&mut ctx, loc);
+            let get_body = make_simple_body_arena(&mut ctx, loc);
+            let set_body = make_simple_body_arena(&mut ctx, loc);
+
+            let done_op = arena_cont::done(&mut ctx, loc, done_body);
+            let get_op =
+                arena_cont::suspend(&mut ctx, loc, state_ref_ty, Symbol::new("get"), get_body);
+            let set_op =
+                arena_cont::suspend(&mut ctx, loc, state_ref_ty, Symbol::new("set"), set_body);
+
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, done_op.op_ref());
+            ctx.push_op(block, get_op.op_ref());
+            ctx.push_op(block, set_op.op_ref());
+
+            let body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            let arms = collect_suspend_arms_arena(&ctx, body);
+            assert_eq!(arms.len(), 2);
+
+            let expected_get = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("get")));
+            let expected_set = compute_op_idx(Some(Symbol::new("State")), Some(Symbol::new("set")));
+            assert_eq!(arms[0].expected_op_idx, expected_get);
+            assert_eq!(arms[1].expected_op_idx, expected_set);
+        }
+
+        #[test]
+        fn arena_collect_suspend_arms_done_only() {
+            let (mut ctx, loc) = test_ctx();
+            let done_body = make_simple_body_arena(&mut ctx, loc);
+            let done_op = arena_cont::done(&mut ctx, loc, done_body);
+
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, done_op.op_ref());
+
+            let body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            assert_eq!(collect_suspend_arms_arena(&ctx, body).len(), 0);
+        }
+
+        // get_done_region_arena tests
+
+        #[test]
+        fn arena_get_done_region_returns_region() {
+            let (mut ctx, loc) = test_ctx();
+            let done_body = make_simple_body_arena(&mut ctx, loc);
+            let done_op = arena_cont::done(&mut ctx, loc, done_body);
+
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            ctx.push_op(block, done_op.op_ref());
+
+            let body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            assert!(get_done_region_arena(&ctx, body).is_some());
+        }
+
+        #[test]
+        fn arena_get_done_region_returns_none_when_no_done() {
+            let (mut ctx, loc) = test_ctx();
+            let block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+
+            let body = ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![block],
+                parent_op: None,
+            });
+
+            assert!(get_done_region_arena(&ctx, body).is_none());
+        }
     }
 }

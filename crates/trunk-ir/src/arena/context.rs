@@ -42,9 +42,13 @@ pub struct OperationData {
 }
 
 /// Data for a single SSA value.
+///
+/// The value's type is not stored here — it is derived from the defining
+/// operation (`OperationData.results`) or block (`BlockArgData.ty`) via
+/// [`IrContext::value_ty`].  This eliminates the possibility of type
+/// information going out of sync between a value and its definition site.
 pub struct ValueData {
     pub def: ValueDef,
-    pub ty: TypeRef,
 }
 
 /// Data for a block argument (type + optional attributes).
@@ -143,7 +147,7 @@ impl IrContext {
         let operand_slice: SmallVec<[ValueRef; 8]> =
             data.operands.as_slice(&self.value_pool).into();
 
-        let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
+        let num_results = data.results.as_slice(&self.type_pool).len();
 
         let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
 
@@ -170,10 +174,9 @@ impl IrContext {
 
         // Allocate result values
         let mut result_value_list = EntityList::new();
-        for (idx, &ty) in result_types.iter().enumerate() {
+        for idx in 0..num_results {
             let v = self.values.push(ValueData {
                 def: ValueDef::OpResult(op, idx as u32),
-                ty,
             });
             result_value_list.push(v, &mut self.value_pool);
         }
@@ -203,6 +206,11 @@ impl IrContext {
     /// Get the result types of an operation as a slice.
     pub fn op_result_types(&self, op: OpRef) -> &[TypeRef] {
         self.ops[op].results.as_slice(&self.type_pool)
+    }
+
+    /// Set the type of the i-th result of an operation.
+    pub fn set_op_result_type(&mut self, op: OpRef, index: u32, new_ty: TypeRef) {
+        self.ops[op].results.as_mut_slice(&mut self.type_pool)[index as usize] = new_ty;
     }
 
     /// Get the i-th result value of an operation.
@@ -260,9 +268,17 @@ impl IrContext {
         &self.values[v]
     }
 
-    /// Get the type of a value.
+    /// Get the type of a value, derived from its definition site.
+    ///
+    /// For operation results, this reads from `OperationData.results`.
+    /// For block arguments, this reads from `BlockArgData.ty`.
     pub fn value_ty(&self, v: ValueRef) -> TypeRef {
-        self.values[v].ty
+        match self.values[v].def {
+            ValueDef::OpResult(op, idx) => {
+                self.ops[op].results.as_slice(&self.type_pool)[idx as usize]
+            }
+            ValueDef::BlockArg(block, idx) => self.blocks[block].args[idx as usize].ty,
+        }
     }
 
     /// Get the definition of a value.
@@ -276,15 +292,14 @@ impl IrContext {
 
     /// Create a new block and allocate argument values for it.
     pub fn create_block(&mut self, data: BlockData) -> BlockRef {
-        let arg_types: Vec<TypeRef> = data.args.iter().map(|a| a.ty).collect();
+        let num_args = data.args.len();
         let block = self.blocks.push(data);
 
         // Allocate block argument values
         let mut arg_value_list = EntityList::new();
-        for (idx, ty) in arg_types.into_iter().enumerate() {
+        for idx in 0..num_args {
             let v = self.values.push(ValueData {
                 def: ValueDef::BlockArg(block, idx as u32),
-                ty,
             });
             arg_value_list.push(v, &mut self.value_pool);
         }
@@ -316,11 +331,9 @@ impl IrContext {
     /// Add a new argument to an existing block and return its `ValueRef`.
     pub fn add_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
         let index = self.blocks[block].args.len() as u32;
-        let ty = arg.ty;
         self.blocks[block].args.push(arg);
         let v = self.values.push(ValueData {
             def: ValueDef::BlockArg(block, index),
-            ty,
         });
         self.block_arg_values[block].push(v, &mut self.value_pool);
         v
@@ -333,8 +346,6 @@ impl IrContext {
     /// argument. Existing `ValueRef`s remain valid — only their `ValueDef`
     /// indices are updated.
     pub fn prepend_block_arg(&mut self, block: BlockRef, arg: BlockArgData) -> ValueRef {
-        let ty = arg.ty;
-
         // Shift existing block arg ValueDef indices by +1
         let existing_args = self.block_arg_values[block].as_slice(&self.value_pool);
         let existing_refs: SmallVec<[ValueRef; 8]> = existing_args.into();
@@ -351,7 +362,6 @@ impl IrContext {
         // Create new value for the prepended arg
         let new_value = self.values.push(ValueData {
             def: ValueDef::BlockArg(block, 0),
-            ty,
         });
 
         // Rebuild block_arg_values EntityList with new value prepended
@@ -365,12 +375,9 @@ impl IrContext {
         new_value
     }
 
-    /// Set the type of a block argument, updating both the `BlockArgData`
-    /// and the corresponding `ValueData` to keep them in sync.
+    /// Set the type of a block argument.
     pub fn set_block_arg_type(&mut self, block: BlockRef, index: u32, new_ty: TypeRef) {
         self.blocks[block].args[index as usize].ty = new_ty;
-        let value_ref = self.block_arg_values[block].as_slice(&self.value_pool)[index as usize];
-        self.values[value_ref].ty = new_ty;
     }
 
     /// Append an operation to the end of a block.
@@ -997,6 +1004,75 @@ mod tests {
         assert_eq!(ctx.block_args(block).len(), 1);
         assert_eq!(ctx.block_arg(block, 0), new_arg);
         assert_eq!(ctx.value_def(new_arg), ValueDef::BlockArg(block, 0));
+    }
+
+    #[test]
+    fn set_op_result_type_updates_value_ty() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .result(i32_ty)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op = ctx.create_op(data);
+
+        let r0 = ctx.op_result(op, 0);
+        let r1 = ctx.op_result(op, 1);
+        assert_eq!(ctx.value_ty(r0), i32_ty);
+        assert_eq!(ctx.value_ty(r1), i32_ty);
+
+        // Mutate the second result type
+        ctx.set_op_result_type(op, 1, f64_ty);
+
+        // The existing ValueRef should now reflect the new type
+        assert_eq!(ctx.value_ty(r0), i32_ty); // unchanged
+        assert_eq!(ctx.value_ty(r1), f64_ty); // updated
+        assert_eq!(ctx.op_result_types(op), &[i32_ty, f64_ty]);
+    }
+
+    #[test]
+    fn set_block_arg_type_updates_value_ty() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+            ],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        let a0 = ctx.block_arg(block, 0);
+        let a1 = ctx.block_arg(block, 1);
+        assert_eq!(ctx.value_ty(a0), i32_ty);
+        assert_eq!(ctx.value_ty(a1), i32_ty);
+
+        // Mutate the first arg type
+        ctx.set_block_arg_type(block, 0, f64_ty);
+
+        // The existing ValueRef should now reflect the new type
+        assert_eq!(ctx.value_ty(a0), f64_ty); // updated
+        assert_eq!(ctx.value_ty(a1), i32_ty); // unchanged
+        assert_eq!(ctx.block(block).args[0].ty, f64_ty);
+        assert_eq!(ctx.block(block).args[1].ty, i32_ty);
     }
 
     #[test]

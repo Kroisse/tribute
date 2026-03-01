@@ -66,7 +66,6 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence;
 use tribute_passes::generate_native_entrypoint;
 use tribute_passes::generic_type_converter;
-use tribute_passes::lower_cont_to_libmprompt;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::lower_evidence_to_native;
 use tribute_passes::wasm::lower::lower_to_wasm;
@@ -371,12 +370,10 @@ fn stage_cont_to_trampoline<'db>(
 /// - `cont.drop` → `__tribute_resume_drop`
 ///
 /// Returns an error if any `cont.*` operations remain after conversion.
-#[salsa::tracked]
-fn stage_cont_to_libmprompt<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Result<Module<'db>, ConversionError> {
-    lower_cont_to_libmprompt(db, module)
+fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
+    with_arena_session(db, module, |ctx, m| {
+        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt_arena(ctx, m);
+    })
 }
 
 /// Evidence to Native Lowering.
@@ -618,7 +615,7 @@ pub fn run_native_pipeline<'db>(
 ) -> Result<Module<'db>, ConversionError> {
     let module = run_shared_pipeline(db, source);
 
-    let module = stage_cont_to_libmprompt(db, module)?;
+    let module = stage_cont_to_libmprompt(db, module);
     trunk_ir::validation::debug_assert_value_integrity(db, module, "cont_to_libmprompt");
 
     let module = stage_evidence_to_native(db, module);
