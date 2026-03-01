@@ -532,6 +532,14 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
+            // Skip ref_cast for safe upcasts to abstract types (e.g., struct -> anyref)
+            let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
+            let to_is_structref =
+                is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"));
+            if to_is_anyref || to_is_structref {
+                return Some(MaterializeResult { value, ops: vec![] });
+            }
+
             let cast_op =
                 arena_wasm::ref_cast(ctx, location, value, to_ty, Symbol::new("struct"), None);
             return Some(MaterializeResult {
@@ -878,6 +886,7 @@ pub mod salsa_converter {
     }
 
     /// Step ADT type (Salsa version).
+    /// Layout must match the canonical definition in gc_types.rs and the arena version.
     fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
         let i32_ty = core::I32::new(db).as_type();
         let anyref_ty = wasm::Anyref::new(db).as_type();
@@ -887,37 +896,22 @@ pub mod salsa_converter {
             vec![
                 (Symbol::new("tag"), i32_ty),
                 (Symbol::new("value"), anyref_ty),
+                (Symbol::new("prompt"), i32_ty),
+                (Symbol::new("op_idx"), i32_ty),
             ],
         )
     }
 
     /// Continuation ADT type (Salsa version).
+    /// Delegates to the canonical definition in gc_types.
     fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-        let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        adt::struct_type(
-            db,
-            Symbol::new("_Continuation"),
-            vec![
-                (Symbol::new("prompt_tag"), i32_ty),
-                (Symbol::new("handler_table_idx"), i32_ty),
-                (Symbol::new("env"), anyref_ty),
-            ],
-        )
+        trunk_ir_wasm_backend::gc_types::continuation_adt_type(db)
     }
 
     /// ResumeWrapper ADT type (Salsa version).
+    /// Delegates to the canonical definition in gc_types.
     fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-        let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        adt::struct_type(
-            db,
-            Symbol::new("_ResumeWrapper"),
-            vec![
-                (Symbol::new("resume_fn_idx"), i32_ty),
-                (Symbol::new("env"), anyref_ty),
-            ],
-        )
+        trunk_ir_wasm_backend::gc_types::resume_wrapper_adt_type(db)
     }
 
     /// Re-export Salsa marker_adt_type.

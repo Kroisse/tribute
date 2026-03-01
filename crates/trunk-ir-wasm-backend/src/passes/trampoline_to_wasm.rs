@@ -1172,45 +1172,7 @@ impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
 
         tracing::debug!("ConvertTrampolineResultTypePattern: converting result type");
 
-        // Update the result type in-place
-        ctx.set_op_result_type(op, 0, new_result_ty);
-
-        // We mutated the op directly but didn't replace it. We need to signal
-        // that a change happened. Use a trick: mark it as "changed" by inserting
-        // zero prefix ops and not replacing. But the rewriter expects a mutation...
-        // Actually, since we mutated the op in-place, we don't need to go through
-        // the rewriter. But we need to return true and have mutations.
-        // The simplest approach: the in-place mutation already happened, so we
-        // just need the applicator to know something changed.
-        // PatternRewriter requires has_mutations() to be true for the change to count.
-        // We'll create a no-op by inserting nothing - but that won't work either.
-        //
-        // The cleanest approach is to rebuild the op with updated result type.
-        // But for func.call with variadic results this would be complex.
-        // Instead, since we already mutated in-place, let's use erase_op with
-        // the same values to make the rewriter happy.
-        //
-        // Actually, the simplest: just return true without mutations.
-        // The applicator checks has_mutations() before applying... so we need a real mutation.
-        //
-        // Let's do the simplest thing: read out the results and erase_op mapping to themselves.
-        // Wait, that would remove the op. Let's use a different approach.
-        //
-        // The cleanest way: rebuild the op. For func.call, we need callee + args.
-        // Let's just update the result type directly and create a dummy mutation
-        // so the framework counts it.
-        //
-        // After re-reading the rewriter code: if matched=true but no mutations,
-        // changes won't be incremented. We already mutated in-place, so let's
-        // just return false to avoid double counting, but we still want fixpoint
-        // to detect the change...
-        //
-        // Actually the simplest correct approach: since we modified in-place already,
-        // we need to tell the applicator. The framework only counts changes when
-        // has_mutations() returns true. Since the actual IR is already correct,
-        // we should rebuild the op to go through the proper channel.
-
-        // Rebuild approach: create new op with same data but updated result types
+        // Rebuild the op with updated result types
         let data = ctx.op(op);
         let loc = data.location;
         let dialect = data.dialect;
@@ -1220,15 +1182,11 @@ impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
         let regions: Vec<_> = data.regions.to_vec();
         let successors: Vec<_> = data.successors.to_vec();
 
-        // Compute all result types with the conversion applied
         let new_result_types: Vec<TypeRef> = result_types
             .iter()
             .enumerate()
             .map(|(i, &ty)| if i == 0 { new_result_ty } else { ty })
             .collect();
-
-        // Revert the in-place mutation (we'll rebuild properly)
-        ctx.set_op_result_type(op, 0, result_ty);
 
         // Detach regions from the old op before building the new one
         for &r in &regions {

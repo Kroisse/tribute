@@ -189,10 +189,10 @@ impl ArenaRewritePattern for ScfContinuePattern {
 
         // Get loop-carried values (variadic operands)
         let values = ctx.op_operands(op).to_vec();
-        assert!(
-            values.len() <= 1,
-            "scf.continue with multiple loop-carried values not yet supported"
-        );
+        if values.len() > 1 {
+            // Multiple loop-carried values not yet supported; leave unlowered.
+            return false;
+        }
 
         if values.is_empty() {
             // No loop-carried values -- simple branch

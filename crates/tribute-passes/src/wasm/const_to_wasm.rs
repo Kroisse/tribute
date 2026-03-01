@@ -122,13 +122,6 @@ impl ConstCollector {
                 }
             }
         }
-
-        // Recurse into regions
-        for &region in data.regions.iter() {
-            walk_ops_in_region(ctx, region, &mut |ctx, nested_op| {
-                self.visit_op(ctx, nested_op);
-            });
-        }
     }
 }
 
@@ -152,13 +145,11 @@ fn walk_ops_in_region(
 pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
-    // Walk all operations in module body
+    // Walk all operations in module body (recursively into nested regions)
     if let Some(body) = module.body(ctx) {
-        for &block in ctx.region(body).blocks.iter() {
-            for &op in ctx.block(block).ops.iter() {
-                collector.visit_op(ctx, op);
-            }
-        }
+        walk_ops_in_region(ctx, body, &mut |ctx, op| {
+            collector.visit_op(ctx, op);
+        });
     }
 
     ConstAnalysis {

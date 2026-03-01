@@ -412,10 +412,9 @@ impl<'a> WasmLowerer<'a> {
 
         if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
             let fn_data = ctx.types.get(*fn_ty);
-            // The result type is stored as an attribute "result" on the func type
-            if let Some(ArenaAttribute::Type(result_ty)) = fn_data.attrs.get(&Symbol::new("result"))
-            {
-                self.main_exports.main_result_type = Some(*result_ty);
+            // In arena core.func type, params[0] is the return type
+            if let Some(&result_ty) = fn_data.params.first() {
+                self.main_exports.main_result_type = Some(result_ty);
             }
         }
 

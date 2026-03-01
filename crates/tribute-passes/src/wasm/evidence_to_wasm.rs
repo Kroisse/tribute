@@ -140,6 +140,7 @@ impl ArenaRewritePattern for EvidenceLookupPattern {
 
         let call_result = call_op.results(ctx)[0];
         rewriter.insert_op(id_const.op_ref());
+        rewriter.insert_op(call_op.op_ref());
         rewriter.erase_op(vec![call_result]);
         true
     }
@@ -229,6 +230,7 @@ impl ArenaRewritePattern for EvidenceExtendPattern {
         rewriter.insert_op(prompt_tag_const.op_ref());
         rewriter.insert_op(op_table_const.op_ref());
         rewriter.insert_op(marker_op.op_ref());
+        rewriter.insert_op(call_op.op_ref());
         rewriter.erase_op(vec![call_result]);
         true
     }

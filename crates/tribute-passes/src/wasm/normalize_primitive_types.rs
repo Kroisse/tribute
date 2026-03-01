@@ -114,26 +114,9 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
 }
 
 /// Create the canonical Closure ADT type in arena IR.
+/// Delegates to the shared constructor in type_converter to ensure identical TypeRef.
 fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
-    let i32_ty = ctx.types.intern(
-        trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-            .build(),
-    );
-    let anyref_ty = ctx.types.intern(
-        trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref"))
-            .build(),
-    );
-
-    ctx.types.intern(
-        trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .param(i32_ty)
-            .param(anyref_ty)
-            .attr(
-                "name",
-                trunk_ir::arena::types::Attribute::Symbol(Symbol::new("_closure")),
-            )
-            .build(),
-    )
+    crate::wasm::type_converter::closure_adt_type(ctx)
 }
 
 // ============================================================================
