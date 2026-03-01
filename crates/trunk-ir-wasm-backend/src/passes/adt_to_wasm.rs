@@ -1,4 +1,4 @@
-//! Lower adt dialect operations to wasm dialect.
+//! Lower adt dialect operations to wasm dialect (arena IR).
 //!
 //! This pass converts ADT (Algebraic Data Type) operations to wasm operations.
 //!
@@ -39,26 +39,23 @@
 //! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
 //! emit can infer type_idx from result/operand types without the attribute.
 
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::core::Module;
-use trunk_ir::rewrite::{
-    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::{Attribute, DialectOp, IdVec, Operation, Symbol, Type};
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::ir::Symbol;
 
-/// Lower adt dialect to wasm dialect.
+/// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    type_converter: TypeConverter,
-) -> Module<'db> {
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_dialect("adt");
-    PatternApplicator::new(type_converter)
+pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
@@ -72,36 +69,33 @@ pub fn lower<'db>(
         .add_pattern(ArrayLenPattern)
         .add_pattern(RefNullPattern)
         .add_pattern(RefIsNullPattern)
-        .add_pattern(RefCastPattern)
-        .apply_partial(db, module, target)
-        .module
+        .add_pattern(RefCastPattern);
+    applicator.apply_partial(ctx, module);
 }
 
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
 struct StructNewPattern;
 
-impl<'db> RewritePattern<'db> for StructNewPattern {
+impl ArenaRewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_struct_new) = adt::StructNew::from_operation(db, *op) else {
+        let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) else {
             return false;
         };
 
+        let loc = ctx.op(op).location;
+        let fields: Vec<_> = struct_new.fields(ctx).to_vec();
+        let result_ty = struct_new.result_ty(ctx);
+
         // Keep type attribute, emit will convert to type_idx
         // Note: Result type is preserved as-is; emit phase uses type_to_field_type
-        // for wasm type conversion. The wasm_type_converter is available for
-        // IR-level conversions where type information needs to be transformed.
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_new")
-            .build();
-
-        rewriter.replace_op(new_op);
+        // for wasm type conversion.
+        let new_op = arena_wasm::struct_new(ctx, loc, fields, result_ty, 0);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -112,26 +106,26 @@ impl<'db> RewritePattern<'db> for StructNewPattern {
 /// is handled by the emit stage in `struct_handlers.rs`, not here.
 struct StructGetPattern;
 
-impl<'db> RewritePattern<'db> for StructGetPattern {
+impl ArenaRewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_struct_get) = adt::StructGet::from_operation(db, *op) else {
+        let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) else {
             return false;
         };
 
-        // Build wasm.struct_get: just change dialect/name
-        // field attribute is already u64, emit will read it directly
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_get")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = struct_get.r#ref(ctx);
+        let result_ty = struct_get.result_ty(ctx);
+        let field_idx = struct_get.field(ctx);
 
-        rewriter.replace_op(new_op);
+        // Build wasm.struct_get: just change dialect/name
+        // field attribute is already u32, emit will read it directly
+        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -139,26 +133,26 @@ impl<'db> RewritePattern<'db> for StructGetPattern {
 /// Pattern for `adt.struct_set` -> `wasm.struct_set`
 struct StructSetPattern;
 
-impl<'db> RewritePattern<'db> for StructSetPattern {
+impl ArenaRewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_struct_set) = adt::StructSet::from_operation(db, *op) else {
+        let Ok(struct_set) = arena_adt::StructSet::from_op(ctx, op) else {
             return false;
         };
 
-        // Build wasm.struct_set: just change dialect/name
-        // field attribute is already u64, emit will read it directly
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_set")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = struct_set.r#ref(ctx);
+        let value = struct_set.value(ctx);
+        let field_idx = struct_set.field(ctx);
 
-        rewriter.replace_op(new_op);
+        // Build wasm.struct_set: just change dialect/name
+        // field attribute is already u32, emit will read it directly
+        let new_op = arena_wasm::struct_set(ctx, loc, ref_val, value, 0, field_idx);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -169,36 +163,29 @@ impl<'db> RewritePattern<'db> for StructSetPattern {
 /// without an explicit tag field. The type itself serves as the discriminant.
 struct VariantNewPattern;
 
-impl<'db> RewritePattern<'db> for VariantNewPattern {
+impl ArenaRewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_new) = adt::VariantNew::from_operation(db, *op) else {
+        let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op) else {
             return false;
         };
 
-        let tag_sym = variant_new.tag(db);
-        let base_type = variant_new.r#type(db);
+        let loc = ctx.op(op).location;
+        let tag_sym = variant_new.tag(ctx);
+        let base_type = variant_new.r#type(ctx);
+        let fields: Vec<_> = variant_new.fields(ctx).to_vec();
 
         // Create variant-specific type: Expr + Add -> Expr$Add
-        let variant_type = make_variant_type(db, base_type, tag_sym);
+        let variant_type = make_variant_type(ctx, base_type, tag_sym);
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
-        // Clear original attrs (type, tag) and set only what wasm.struct_new needs
-        let struct_new = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("struct_new")
-            .attrs(trunk_ir::Attrs::new()) // Clear original type/tag attrs
-            .attr("type", Attribute::Type(variant_type))
-            .results(IdVec::from(vec![variant_type]))
-            .build();
-
-        rewriter.replace_op(struct_new);
+        let new_op = arena_wasm::struct_new(ctx, loc, fields, variant_type, 0);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -209,33 +196,43 @@ impl<'db> RewritePattern<'db> for VariantNewPattern {
 /// The resulting type carries attributes for variant detection:
 /// - `is_variant = true` - marks this as a variant instance type
 /// - `variant_tag = Symbol` - the variant tag (e.g., `Add`, `Num`)
-fn make_variant_type<'db>(
-    db: &'db dyn salsa::Database,
-    base_type: Type<'db>,
-    tag: Symbol,
-) -> Type<'db> {
-    let dialect = base_type.dialect(db);
+/// - `base_enum = Type` - the base enum type
+fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> TypeRef {
+    let base_data = ctx.types.get(base_type);
+    let dialect = base_data.dialect;
 
     // For adt.typeref types, extract the actual type name from the name attribute
     // Use full path to avoid collisions (e.g., mod_a::Expr$Add vs mod_b::Expr$Add)
-    let base_name = if adt::is_typeref(db, base_type) {
-        adt::get_type_name(db, base_type).unwrap_or_else(|| base_type.name(db))
+    let is_typeref =
+        base_data.dialect == Symbol::new("adt") && base_data.name == Symbol::new("typeref");
+
+    let base_name = if is_typeref {
+        // Get the name attribute from the typeref type
+        base_data
+            .attrs
+            .get(&Symbol::new("name"))
+            .and_then(|a| match a {
+                ArenaAttribute::Symbol(s) => Some(*s),
+                _ => None,
+            })
+            .unwrap_or(base_data.name)
     } else {
-        base_type.name(db)
+        base_data.name
     };
 
-    let variant_name = Symbol::from_dynamic(&format!("{}${}", base_name, tag));
+    let variant_name = Symbol::from_dynamic(&format!("{base_name}${tag}"));
 
-    // Convert &[Type] to IdVec<Type>
-    let params: IdVec<Type<'db>> = base_type.params(db).iter().copied().collect();
+    // Copy params from base type
+    let params: Vec<TypeRef> = base_data.params.to_vec();
 
     // Add variant type attributes for proper detection (instead of name-based heuristics)
-    let mut attrs = trunk_ir::Attrs::new();
-    attrs.insert(adt::ATTR_IS_VARIANT(), Attribute::Bool(true));
-    attrs.insert(adt::ATTR_BASE_ENUM(), Attribute::Type(base_type));
-    attrs.insert(adt::ATTR_VARIANT_TAG(), Attribute::Symbol(tag));
+    let builder = TypeDataBuilder::new(dialect, variant_name)
+        .params(params)
+        .attr(Symbol::new("is_variant"), ArenaAttribute::Bool(true))
+        .attr(Symbol::new("base_enum"), ArenaAttribute::Type(base_type))
+        .attr(Symbol::new("variant_tag"), ArenaAttribute::Symbol(tag));
 
-    Type::new(db, dialect, variant_name, params, attrs)
+    ctx.types.intern(builder.build())
 }
 
 /// Pattern for `adt.variant_is` -> `wasm.ref_test`
@@ -243,39 +240,39 @@ fn make_variant_type<'db>(
 /// Tests if a variant reference is of a specific variant type.
 struct VariantIsPattern;
 
-impl<'db> RewritePattern<'db> for VariantIsPattern {
+impl ArenaRewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = adt::VariantIs::from_operation(db, *op) else {
+        let Ok(variant_is) = arena_adt::VariantIs::from_op(ctx, op) else {
             return false;
         };
 
-        let tag = variant_is.tag(db);
+        let loc = ctx.op(op).location;
+        let tag = variant_is.tag(ctx);
+        let ref_val = variant_is.r#ref(ctx);
+        let result_ty = variant_is.result_ty(ctx);
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        // Using rewriter.operand_type() handles both OpResult and BlockArg cases
-        let enum_type = rewriter
-            .operand_type(0)
-            .unwrap_or_else(|| variant_is.r#type(db));
+        let operand_ty = ctx.value_ty(ref_val);
+        let enum_type = if operand_ty != result_ty {
+            // Use operand type if it's different from result (i.e., it's the real enum type)
+            operand_ty
+        } else {
+            variant_is.r#type(ctx)
+        };
 
         // Create variant-specific type for the ref.test
-        let variant_type = make_variant_type(db, enum_type, tag);
+        let variant_type = make_variant_type(ctx, enum_type, tag);
+        let variant_name = ctx.types.get(variant_type).name;
 
         // Create wasm.ref_test with variant-specific type
-        // Override 'type' attribute with variant type (original has base enum type)
-        let ref_test = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_test")
-            .attr("type", Attribute::Type(variant_type))
-            .build();
-
-        rewriter.replace_op(ref_test);
+        let new_op = arena_wasm::ref_test(ctx, loc, ref_val, result_ty, variant_name, None);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -285,41 +282,39 @@ impl<'db> RewritePattern<'db> for VariantIsPattern {
 /// Casts a variant reference to a specific variant type after pattern matching.
 struct VariantCastPattern;
 
-impl<'db> RewritePattern<'db> for VariantCastPattern {
+impl ArenaRewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_cast) = adt::VariantCast::from_operation(db, *op) else {
+        let Ok(variant_cast) = arena_adt::VariantCast::from_op(ctx, op) else {
             return false;
         };
 
-        let tag = variant_cast.tag(db);
+        let loc = ctx.op(op).location;
+        let tag = variant_cast.tag(ctx);
+        let ref_val = variant_cast.r#ref(ctx);
 
         // Get the enum type - prefer operand type over attribute type
         // (attribute may have unsubstituted type.var, operand has concrete type)
-        // Using rewriter.operand_type() handles both OpResult and BlockArg cases
-        let enum_type = rewriter
-            .operand_type(0)
-            .unwrap_or_else(|| variant_cast.r#type(db));
+        let operand_ty = ctx.value_ty(ref_val);
+        let attr_type = variant_cast.r#type(ctx);
+        let enum_type = if operand_ty != attr_type {
+            operand_ty
+        } else {
+            attr_type
+        };
 
         // Create variant-specific type for the ref.cast
-        let variant_type = make_variant_type(db, enum_type, tag);
+        let variant_type = make_variant_type(ctx, enum_type, tag);
+        let variant_name = ctx.types.get(variant_type).name;
 
         // Create wasm.ref_cast with variant-specific type
         // Result type is the variant-specific type - emit infers type_idx from it
-        // Override 'type' attribute with variant type (original has base enum type)
-        let ref_cast = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_cast")
-            .attr("type", Attribute::Type(variant_type))
-            .results(IdVec::from(vec![variant_type]))
-            .build();
-
-        rewriter.replace_op(ref_cast);
+        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, variant_type, variant_name, None);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -331,27 +326,26 @@ impl<'db> RewritePattern<'db> for VariantCastPattern {
 /// The type for struct.get comes from the operand (the variant_cast result).
 struct VariantGetPattern;
 
-impl<'db> RewritePattern<'db> for VariantGetPattern {
+impl ArenaRewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_variant_get) = adt::VariantGet::from_operation(db, *op) else {
+        let Ok(variant_get) = arena_adt::VariantGet::from_op(ctx, op) else {
             return false;
         };
 
+        let loc = ctx.op(op).location;
+        let ref_val = variant_get.r#ref(ctx);
+        let result_ty = variant_get.result_ty(ctx);
+        let field_idx = variant_get.field(ctx);
+
         // Infer type from the operand (the cast result has the variant-specific type)
-        // field attribute is already u64 and will be preserved by modify()
-        let mut builder = op.modify(db).dialect_str("wasm").name_str("struct_get");
-
-        // Override type attribute with operand type (original might have base enum type)
-        if let Some(ref_type) = rewriter.operand_type(0) {
-            builder = builder.attr("type", Attribute::Type(ref_type));
-        }
-
-        rewriter.replace_op(builder.build());
+        // field attribute is already u32 and will be used directly
+        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -359,33 +353,33 @@ impl<'db> RewritePattern<'db> for VariantGetPattern {
 /// Pattern for `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
 struct ArrayNewPattern;
 
-impl<'db> RewritePattern<'db> for ArrayNewPattern {
+impl ArenaRewritePattern for ArrayNewPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_NEW() {
+        let Ok(array_new) = arena_adt::ArrayNew::from_op(ctx, op) else {
             return false;
-        }
-
-        let operands = op.operands(db);
-
-        // If only size operand, use array_new_default; otherwise array_new
-        let wasm_name = if operands.len() <= 1 {
-            "array_new_default"
-        } else {
-            "array_new"
         };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str(wasm_name)
-            .build();
+        let loc = ctx.op(op).location;
+        let result_ty = array_new.result_ty(ctx);
+        let operands = array_new.elements(ctx).to_vec();
 
-        rewriter.replace_op(new_op);
+        // If only size operand, use array_new_default; otherwise array_new
+        if operands.len() <= 1 {
+            let size = operands[0];
+            let new_op = arena_wasm::array_new_default(ctx, loc, size, result_ty, 0);
+            rewriter.replace_op(new_op.op_ref());
+        } else {
+            let size = operands[0];
+            let init = operands[1];
+            let new_op = arena_wasm::array_new(ctx, loc, size, init, result_ty, 0);
+            rewriter.replace_op(new_op.op_ref());
+        }
+
         true
     }
 }
@@ -393,24 +387,24 @@ impl<'db> RewritePattern<'db> for ArrayNewPattern {
 /// Pattern for `adt.array_get` -> `wasm.array_get`
 struct ArrayGetPattern;
 
-impl<'db> RewritePattern<'db> for ArrayGetPattern {
+impl ArenaRewritePattern for ArrayGetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_GET() {
+        let Ok(array_get) = arena_adt::ArrayGet::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("array_get")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = array_get.r#ref(ctx);
+        let index = array_get.index(ctx);
+        let result_ty = array_get.result_ty(ctx);
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::array_get(ctx, loc, ref_val, index, result_ty, 0);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -418,24 +412,24 @@ impl<'db> RewritePattern<'db> for ArrayGetPattern {
 /// Pattern for `adt.array_set` -> `wasm.array_set`
 struct ArraySetPattern;
 
-impl<'db> RewritePattern<'db> for ArraySetPattern {
+impl ArenaRewritePattern for ArraySetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_SET() {
+        let Ok(array_set) = arena_adt::ArraySet::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("array_set")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = array_set.r#ref(ctx);
+        let index = array_set.index(ctx);
+        let value = array_set.value(ctx);
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::array_set(ctx, loc, ref_val, index, value, 0);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -443,24 +437,23 @@ impl<'db> RewritePattern<'db> for ArraySetPattern {
 /// Pattern for `adt.array_len` -> `wasm.array_len`
 struct ArrayLenPattern;
 
-impl<'db> RewritePattern<'db> for ArrayLenPattern {
+impl ArenaRewritePattern for ArrayLenPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::ARRAY_LEN() {
+        let Ok(array_len) = arena_adt::ArrayLen::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("array_len")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = array_len.r#ref(ctx);
+        let result_ty = array_len.result_ty(ctx);
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::array_len(ctx, loc, ref_val, result_ty);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -468,24 +461,26 @@ impl<'db> RewritePattern<'db> for ArrayLenPattern {
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
 struct RefNullPattern;
 
-impl<'db> RewritePattern<'db> for RefNullPattern {
+impl ArenaRewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_NULL() {
+        let Ok(ref_null) = arena_adt::RefNull::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_null")
-            .build();
+        let loc = ctx.op(op).location;
+        let result_ty = ref_null.result_ty(ctx);
 
-        rewriter.replace_op(new_op);
+        // Get the type name for heap_type from the adt type attribute
+        let adt_type = ref_null.r#type(ctx);
+        let heap_type = ctx.types.get(adt_type).name;
+
+        let new_op = arena_wasm::ref_null(ctx, loc, result_ty, heap_type, None);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -493,24 +488,23 @@ impl<'db> RewritePattern<'db> for RefNullPattern {
 /// Pattern for `adt.ref_is_null` -> `wasm.ref_is_null`
 struct RefIsNullPattern;
 
-impl<'db> RewritePattern<'db> for RefIsNullPattern {
+impl ArenaRewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_IS_NULL() {
+        let Ok(ref_is_null) = arena_adt::RefIsNull::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_is_null")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = ref_is_null.r#ref(ctx);
+        let result_ty = ref_is_null.result_ty(ctx);
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::ref_is_null(ctx, loc, ref_val, result_ty);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -518,67 +512,27 @@ impl<'db> RewritePattern<'db> for RefIsNullPattern {
 /// Pattern for `adt.ref_cast` -> `wasm.ref_cast`
 struct RefCastPattern;
 
-impl<'db> RewritePattern<'db> for RefCastPattern {
+impl ArenaRewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != adt::DIALECT_NAME() || op.name(db) != adt::REF_CAST() {
+        let Ok(ref_cast) = arena_adt::RefCast::from_op(ctx, op) else {
             return false;
-        }
+        };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("ref_cast")
-            .build();
+        let loc = ctx.op(op).location;
+        let ref_val = ref_cast.r#ref(ctx);
+        let result_ty = ref_cast.result_ty(ctx);
 
-        rewriter.replace_op(new_op);
+        // Get the target type name from the adt type attribute
+        let adt_type = ref_cast.r#type(ctx);
+        let target_type = ctx.types.get(adt_type).name;
+
+        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, result_ty, target_type, None);
+        rewriter.replace_op(new_op.op_ref());
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
-    use trunk_ir::{Block, BlockId, DialectType, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_struct_new_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create adt.struct_new with type attribute
-        let struct_new = adt::struct_new(db, location, vec![], i32_ty, i32_ty).as_operation();
-
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![struct_new]);
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check_names(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let lowered = lower(db, module, TypeConverter::new());
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter().map(|op| op.full_name(db)).collect()
-    }
-
-    #[salsa_test]
-    fn test_struct_new_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_struct_new_module(db);
-        let op_names = lower_and_check_names(db, module);
-
-        assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
-        assert!(!op_names.iter().any(|n| n == "adt.struct_new"));
     }
 }

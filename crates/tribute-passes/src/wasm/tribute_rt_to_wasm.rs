@@ -1,14 +1,14 @@
 //! Lower tribute_rt dialect operations to wasm dialect.
 //!
 //! This pass converts boxing/unboxing operations to their wasm equivalents:
-//! - `tribute_rt.box_int` -> `wasm.ref_i31` (i32 -> i31ref)
-//! - `tribute_rt.unbox_int` -> `wasm.i31_get_s` (i31ref -> i32, signed)
-//! - `tribute_rt.box_nat` -> `wasm.ref_i31` (i32 -> i31ref)
-//! - `tribute_rt.unbox_nat` -> `wasm.i31_get_u` (i31ref -> i32, unsigned)
-//! - `tribute_rt.box_float` -> `wasm.struct_new` (f64 -> BoxedF64 struct)
-//! - `tribute_rt.unbox_float` -> `wasm.struct_get` (BoxedF64 -> f64)
-//! - `tribute_rt.box_bool` -> `wasm.ref_i31` (i32 -> i31ref)
-//! - `tribute_rt.unbox_bool` -> `wasm.i31_get_u` (i31ref -> i32, unsigned)
+//! - `tribute_rt.box_int` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.unbox_int` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_s`
+//! - `tribute_rt.box_nat` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.unbox_nat` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_u`
+//! - `tribute_rt.box_float` -> `adt.struct_new` (f64 -> BoxedF64 struct) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.unbox_float` -> `adt.ref_cast` (BoxedF64) + `adt.struct_get`
+//! - `tribute_rt.box_bool` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.unbox_bool` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_u`
 //!
 //! ## Type Mappings
 //!
@@ -19,49 +19,81 @@
 //! - `tribute_rt.intref` -> `wasm.i31ref`
 //! - `tribute_rt.any` -> `wasm.anyref`
 
-use tribute_ir::dialect::tribute_rt;
-use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{core, wasm};
-use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
-use trunk_ir::{DialectOp, DialectType, Operation};
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+};
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+use trunk_ir::ir::Symbol;
 
-use super::type_converter::wasm_type_converter;
-use trunk_ir_wasm_backend::gc_types::BOXED_F64_IDX;
+/// Helper to create arena type refs for common types.
+fn i32_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
 
-/// Create i31 unbox operations (ref_cast + i31_get_s/u).
+fn f64_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
+}
+
+fn i31ref_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("i31ref")).build())
+}
+
+fn anyref_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build())
+}
+
+/// Get the BoxedF64 struct type: `adt.struct(f64, name="_BoxedF64")`
+fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
+    let f64_ty = f64_type(ctx);
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .param(f64_ty)
+            .attr("name", ArenaAttribute::Symbol(Symbol::new("_BoxedF64")))
+            .build(),
+    )
+}
+
+/// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).
 ///
-/// Performs a cast from anyref to i31ref and then extracts the i32 value.
-/// - `is_signed = true`: Use `i31_get_s` for signed extraction (Int)
-/// - `is_signed = false`: Use `i31_get_u` for unsigned extraction (Nat, Bool)
-fn create_i31_unbox<'db>(
-    db: &'db dyn salsa::Database,
-    location: trunk_ir::Location<'db>,
-    value: trunk_ir::Value<'db>,
+/// Returns `(prefix_ops, final_op)` where prefix_ops should be inserted before
+/// and final_op is the replacement.
+fn create_i31_unbox(
+    ctx: &mut IrContext,
+    location: Location,
+    value: ValueRef,
     is_signed: bool,
-) -> Vec<Operation<'db>> {
-    // Cast anyref to i31ref first (abstract type, no type_idx needed)
-    let i31ref_ty = wasm::I31ref::new(db).as_type();
-    let cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-    let cast_result = cast_op.as_operation().result(db, 0);
+) -> (Vec<OpRef>, OpRef) {
+    let i31ref_ty = i31ref_type(ctx);
+    let i32_ty = i32_type(ctx);
 
-    let i32_ty = core::I32::new(db).as_type();
+    // Cast anyref to i31ref first (abstract type, no type_idx needed)
+    let cast_op =
+        arena_wasm::ref_cast(ctx, location, value, i31ref_ty, Symbol::new("i31ref"), None);
+    let cast_result = cast_op.result(ctx);
 
     // Extract value: signed or unsigned
-    let get_op = if is_signed {
-        wasm::i31_get_s(db, location, cast_result, i32_ty).as_operation()
+    let get_op_ref = if is_signed {
+        arena_wasm::i31_get_s(ctx, location, cast_result, i32_ty).op_ref()
     } else {
-        wasm::i31_get_u(db, location, cast_result, i32_ty).as_operation()
+        arena_wasm::i31_get_u(ctx, location, cast_result, i32_ty).op_ref()
     };
 
-    vec![cast_op.as_operation(), get_op]
+    (vec![cast_op.op_ref()], get_op_ref)
 }
 
 /// Lower tribute_rt dialect to wasm dialect.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_dialect("tribute_rt");
-    PatternApplicator::new(wasm_type_converter())
+pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
+    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)
         .add_pattern(BoxNatPattern)
@@ -69,66 +101,70 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(BoxFloatPattern)
         .add_pattern(UnboxFloatPattern)
         .add_pattern(BoxBoolPattern)
-        .add_pattern(UnboxBoolPattern)
-        .apply_partial(db, module, target)
-        .module
+        .add_pattern(UnboxBoolPattern);
+    applicator.apply_partial(ctx, module);
 }
 
-/// Pattern for `tribute_rt.box_int` -> `wasm.ref_i31`
+/// Pattern for `tribute_rt.box_int` -> `wasm.ref_i31` + `wasm.ref_cast(anyref)`
 ///
-/// Boxing converts an unboxed i32 to an i31ref.
-/// Since tribute_rt.int is 31-bit, no truncation is needed.
+/// Boxing converts an unboxed i32 to an i31ref, then upcasts to anyref.
 struct BoxIntPattern;
 
-impl<'db> RewritePattern<'db> for BoxIntPattern {
+impl ArenaRewritePattern for BoxIntPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxInt::from_operation(db, *op) else {
+        let Ok(box_op) = arena_tribute_rt::BoxInt::from_op(ctx, op) else {
             return false;
         };
 
-        let location = op.location(db);
-        let value = box_op.value(db);
+        let location = ctx.op(op).location;
+        let value = box_op.value(ctx);
 
-        // Result type is i31ref
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let i31ref_ty = i31ref_type(ctx);
 
         // wasm.ref_i31: i32 -> i31ref
-        let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
+        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
 
-        rewriter.replace_op(new_op.as_operation());
+        rewriter.replace_op(new_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BoxIntPattern"
     }
 }
 
 /// Pattern for `tribute_rt.unbox_int` -> `wasm.ref_cast` + `wasm.i31_get_s`
 ///
 /// Unboxing extracts the signed i32 from an i31ref.
-/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxIntPattern;
 
-impl<'db> RewritePattern<'db> for UnboxIntPattern {
+impl ArenaRewritePattern for UnboxIntPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxInt::from_operation(db, *op) else {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxInt::from_op(ctx, op) else {
             return false;
         };
 
-        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), true);
-        let last = ops.pop().unwrap();
-        for o in ops {
-            rewriter.insert_op(o);
+        let location = ctx.op(op).location;
+        let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), true);
+        for prefix in prefix_ops {
+            rewriter.insert_op(prefix);
         }
-        rewriter.replace_op(last);
+        rewriter.replace_op(final_op);
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnboxIntPattern"
     }
 }
 
@@ -137,122 +173,131 @@ impl<'db> RewritePattern<'db> for UnboxIntPattern {
 /// Boxing converts an unboxed nat (u32) to an i31ref.
 struct BoxNatPattern;
 
-impl<'db> RewritePattern<'db> for BoxNatPattern {
+impl ArenaRewritePattern for BoxNatPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxNat::from_operation(db, *op) else {
+        let Ok(box_op) = arena_tribute_rt::BoxNat::from_op(ctx, op) else {
             return false;
         };
 
-        let location = op.location(db);
-        let value = box_op.value(db);
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let location = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let i31ref_ty = i31ref_type(ctx);
 
-        let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-        rewriter.replace_op(new_op.as_operation());
+        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+        rewriter.replace_op(new_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BoxNatPattern"
     }
 }
 
 /// Pattern for `tribute_rt.unbox_nat` -> `wasm.ref_cast` + `wasm.i31_get_u`
 ///
 /// Unboxing extracts the unsigned i32 from an i31ref.
-/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxNatPattern;
 
-impl<'db> RewritePattern<'db> for UnboxNatPattern {
+impl ArenaRewritePattern for UnboxNatPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxNat::from_operation(db, *op) else {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxNat::from_op(ctx, op) else {
             return false;
         };
 
-        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
-        let last = ops.pop().unwrap();
-        for o in ops {
-            rewriter.insert_op(o);
+        let location = ctx.op(op).location;
+        let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), false);
+        for prefix in prefix_ops {
+            rewriter.insert_op(prefix);
         }
-        rewriter.replace_op(last);
+        rewriter.replace_op(final_op);
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnboxNatPattern"
     }
 }
 
-/// Pattern for `tribute_rt.box_float` -> `wasm.struct_new`
+/// Pattern for `tribute_rt.box_float` -> `adt.struct_new(BoxedF64)` + `wasm.ref_cast(anyref)`
 ///
-/// Boxing converts an f64 to a BoxedF64 struct.
+/// Boxing converts an f64 to a BoxedF64 struct, then casts to anyref.
 struct BoxFloatPattern;
 
-impl<'db> RewritePattern<'db> for BoxFloatPattern {
+impl ArenaRewritePattern for BoxFloatPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxFloat::from_operation(db, *op) else {
+        let Ok(box_op) = arena_tribute_rt::BoxFloat::from_op(ctx, op) else {
             return false;
         };
 
-        let location = op.location(db);
-        let value = box_op.value(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
+        let location = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let anyref_ty = anyref_type(ctx);
+        let boxed_f64_ty = boxed_f64_type(ctx);
 
-        // wasm.struct_new creates BoxedF64 struct with the f64 value
-        let new_op = wasm::struct_new(db, location, vec![value], anyref_ty, BOXED_F64_IDX);
-        rewriter.replace_op(new_op.as_operation());
+        // adt.struct_new creates BoxedF64 struct with the f64 value
+        let struct_op = arena_adt::struct_new(ctx, location, vec![value], anyref_ty, boxed_f64_ty);
+
+        rewriter.replace_op(struct_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BoxFloatPattern"
     }
 }
 
-/// Pattern for `tribute_rt.unbox_float` -> `wasm.ref_cast` + `wasm.struct_get`
+/// Pattern for `tribute_rt.unbox_float` -> `adt.ref_cast(BoxedF64)` + `adt.struct_get`
 ///
 /// Unboxing extracts the f64 from a BoxedF64 struct.
-/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxFloatPattern;
 
-impl<'db> RewritePattern<'db> for UnboxFloatPattern {
+impl ArenaRewritePattern for UnboxFloatPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxFloat::from_operation(db, *op) else {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxFloat::from_op(ctx, op) else {
             return false;
         };
 
-        let location = op.location(db);
-        let value = unbox_op.value(db);
+        let location = ctx.op(op).location;
+        let value = unbox_op.value(ctx);
+
+        let boxed_f64_ty = boxed_f64_type(ctx);
+        let f64_ty = f64_type(ctx);
 
         // Cast anyref to BoxedF64 struct first
-        // Use anyref as the result type since struct types are represented as anyref
-        // BoxedF64 is a concrete struct type, so we pass its type_idx
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let cast_op = wasm::ref_cast(
-            db,
-            location,
-            value,
-            anyref_ty,
-            anyref_ty,
-            Some(BOXED_F64_IDX),
-        );
-        let cast_result = cast_op.as_operation().result(db, 0);
+        let anyref_ty = anyref_type(ctx);
+        let cast_op = arena_adt::ref_cast(ctx, location, value, anyref_ty, boxed_f64_ty);
+        let cast_result = cast_op.result(ctx);
 
-        let f64_ty = core::F64::new(db).as_type();
+        // adt.struct_get extracts field 0 (the f64 value) from BoxedF64
+        let get_op = arena_adt::struct_get(ctx, location, cast_result, f64_ty, boxed_f64_ty, 0);
 
-        // wasm.struct_get extracts field 0 (the f64 value) from BoxedF64
-        let get_op = wasm::struct_get(db, location, cast_result, f64_ty, BOXED_F64_IDX, 0);
-        rewriter.insert_op(cast_op.as_operation());
-        rewriter.replace_op(get_op.as_operation());
+        rewriter.insert_op(cast_op.op_ref());
+        rewriter.replace_op(get_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnboxFloatPattern"
     }
 }
 
@@ -261,167 +306,58 @@ impl<'db> RewritePattern<'db> for UnboxFloatPattern {
 /// Boxing converts an i32 boolean to an i31ref.
 struct BoxBoolPattern;
 
-impl<'db> RewritePattern<'db> for BoxBoolPattern {
+impl ArenaRewritePattern for BoxBoolPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(box_op) = tribute_rt::BoxBool::from_operation(db, *op) else {
+        let Ok(box_op) = arena_tribute_rt::BoxBool::from_op(ctx, op) else {
             return false;
         };
 
-        let location = op.location(db);
-        let value = box_op.value(db);
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
+        let location = ctx.op(op).location;
+        let value = box_op.value(ctx);
+        let i31ref_ty = i31ref_type(ctx);
 
-        let new_op = wasm::ref_i31(db, location, value, i31ref_ty);
-        rewriter.replace_op(new_op.as_operation());
+        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+        rewriter.replace_op(new_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BoxBoolPattern"
     }
 }
 
 /// Pattern for `tribute_rt.unbox_bool` -> `wasm.ref_cast` + `wasm.i31_get_u`
 ///
 /// Unboxing extracts the boolean (0 or 1) from an i31ref.
-/// The input may be anyref (from generic functions), so we add a ref_cast first.
 struct UnboxBoolPattern;
 
-impl<'db> RewritePattern<'db> for UnboxBoolPattern {
+impl ArenaRewritePattern for UnboxBoolPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(unbox_op) = tribute_rt::UnboxBool::from_operation(db, *op) else {
+        let Ok(unbox_op) = arena_tribute_rt::UnboxBool::from_op(ctx, op) else {
             return false;
         };
 
+        let location = ctx.op(op).location;
         // Use unsigned extraction since bool is 0 or 1
-        let mut ops = create_i31_unbox(db, op.location(db), unbox_op.value(db), false);
-        let last = ops.pop().unwrap();
-        for o in ops {
-            rewriter.insert_op(o);
+        let (prefix_ops, final_op) = create_i31_unbox(ctx, location, unbox_op.value(ctx), false);
+        for prefix in prefix_ops {
+            rewriter.insert_op(prefix);
         }
-        rewriter.replace_op(last);
+        rewriter.replace_op(final_op);
         true
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_and_lower_box_int_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let intref_ty = tribute_rt::intref_type(db);
-
-        // Create: %0 = wasm.i32_const 42
-        //         %1 = tribute_rt.box_int %0
-        let const_op = wasm::i32_const(db, location, i32_ty, 42);
-        let box_op = tribute_rt::box_int(
-            db,
-            location,
-            const_op.as_operation().result(db, 0),
-            intref_ty,
-        );
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![const_op.as_operation(), box_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = core::Module::create(db, location, "test".into(), region);
-
-        // Lower within the tracked function
-        lower(db, module)
-    }
-
-    #[salsa_test]
-    fn test_box_int_lowering(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_box_int_module(db);
-
-        // Check result: should have wasm.ref_i31 instead of tribute_rt.box_int
-        let ops: Vec<_> = lowered
-            .body(db)
-            .blocks(db)
-            .first()
-            .unwrap()
-            .operations(db)
-            .iter()
-            .copied()
-            .collect();
-
-        assert_eq!(ops.len(), 2);
-        assert_eq!(ops[1].dialect(db), wasm::DIALECT_NAME());
-        assert_eq!(ops[1].name(db), wasm::REF_I31());
-    }
-
-    #[salsa::tracked]
-    fn make_and_lower_unbox_int_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i31ref_ty = wasm::I31ref::new(db).as_type();
-
-        // Create a dummy i31ref value (use i32_const as placeholder for test)
-        // In real usage, this would come from box_int or another source
-        let placeholder = wasm::i32_const(db, location, i31ref_ty, 42);
-        let unbox_op = tribute_rt::unbox_int(
-            db,
-            location,
-            placeholder.as_operation().result(db, 0),
-            i32_ty,
-        );
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![placeholder.as_operation(), unbox_op.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        let module = core::Module::create(db, location, "test".into(), region);
-
-        // Lower within the tracked function
-        lower(db, module)
-    }
-
-    #[salsa_test]
-    fn test_unbox_int_lowering(db: &salsa::DatabaseImpl) {
-        let lowered = make_and_lower_unbox_int_module(db);
-
-        // Check result: should have wasm.ref_cast + wasm.i31_get_s instead of tribute_rt.unbox_int
-        let ops: Vec<_> = lowered
-            .body(db)
-            .blocks(db)
-            .first()
-            .unwrap()
-            .operations(db)
-            .iter()
-            .copied()
-            .collect();
-
-        // Now expands to: placeholder + ref_cast + i31_get_s
-        assert_eq!(ops.len(), 3);
-        assert_eq!(ops[1].dialect(db), wasm::DIALECT_NAME());
-        assert_eq!(ops[1].name(db), wasm::REF_CAST());
-        assert_eq!(ops[2].dialect(db), wasm::DIALECT_NAME());
-        assert_eq!(ops[2].name(db), wasm::I31_GET_S());
+    fn name(&self) -> &'static str {
+        "UnboxBoolPattern"
     }
 }

@@ -11,12 +11,16 @@
 use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+};
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::ir::Symbol;
 
-use super::type_converter::wasm_type_converter;
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 // Bytes struct field indices (must match gc_types layout)
@@ -25,26 +29,39 @@ const BYTES_OFFSET_FIELD: u32 = 1; // i32
 const BYTES_LEN_FIELD: u32 = 2; // i32
 
 /// Extracted Bytes struct fields: (data, offset, len) values.
-struct BytesFields<'db> {
-    data: trunk_ir::Value<'db>,
-    offset: trunk_ir::Value<'db>,
-    len: trunk_ir::Value<'db>,
+struct BytesFields {
+    data: ValueRef,
+    offset: ValueRef,
+    len: ValueRef,
 }
 
 /// Extract (data, offset, len) fields from a Bytes struct value.
 ///
 /// Returns the extracted field values and the operations that produced them.
-fn extract_bytes_fields<'db>(
-    db: &'db dyn salsa::Database,
-    location: trunk_ir::Location<'db>,
-    bytes_value: trunk_ir::Value<'db>,
-) -> (BytesFields<'db>, Vec<Operation<'db>>) {
-    let i32_ty = core::I32::new(db).as_type();
-    let i8_ty = core::I8::new(db).as_type();
-    let array_ref_ty = core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+fn extract_bytes_fields(
+    ctx: &mut IrContext,
+    location: trunk_ir::arena::types::Location,
+    bytes_value: ValueRef,
+) -> (BytesFields, Vec<OpRef>) {
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let i8_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+    let array_ty = ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+            .param(i8_ty)
+            .build(),
+    );
+    let array_ref_ty = ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
+            .param(array_ty)
+            .build(),
+    );
 
-    let get_data = wasm::struct_get(
-        db,
+    let get_data = arena_wasm::struct_get(
+        ctx,
         location,
         bytes_value,
         array_ref_ty,
@@ -52,8 +69,8 @@ fn extract_bytes_fields<'db>(
         BYTES_DATA_FIELD,
     );
 
-    let get_offset = wasm::struct_get(
-        db,
+    let get_offset = arena_wasm::struct_get(
+        ctx,
         location,
         bytes_value,
         i32_ty,
@@ -61,8 +78,8 @@ fn extract_bytes_fields<'db>(
         BYTES_OFFSET_FIELD,
     );
 
-    let get_len = wasm::struct_get(
-        db,
+    let get_len = arena_wasm::struct_get(
+        ctx,
         location,
         bytes_value,
         i32_ty,
@@ -71,28 +88,21 @@ fn extract_bytes_fields<'db>(
     );
 
     let fields = BytesFields {
-        data: get_data.result(db),
-        offset: get_offset.result(db),
-        len: get_len.result(db),
+        data: get_data.result(ctx),
+        offset: get_offset.result(ctx),
+        len: get_len.result(ctx),
     };
 
-    let ops = vec![
-        get_data.operation(),
-        get_offset.operation(),
-        get_len.operation(),
-    ];
+    let ops = vec![get_data.op_ref(), get_offset.op_ref(), get_len.op_ref()];
 
     (fields, ops)
 }
 
 /// Result of intrinsic analysis - tracks WASI needs and data segment allocations.
-#[salsa::tracked]
-pub struct IntrinsicAnalysis<'db> {
+pub struct IntrinsicAnalysis {
     /// Whether fd_write import is needed.
     pub needs_fd_write: bool,
     /// Iovec allocations: (ptr, len) -> offset in data segment.
-    /// Using Vec for salsa compatibility.
-    #[returns(ref)]
     pub iovec_allocations: Vec<(u32, u32, u32)>,
     /// Offset of nwritten buffer (if any intrinsics need it).
     pub nwritten_offset: Option<u32>,
@@ -100,23 +110,62 @@ pub struct IntrinsicAnalysis<'db> {
     pub total_size: u32,
 }
 
-impl<'db> IntrinsicAnalysis<'db> {
+impl IntrinsicAnalysis {
     /// Look up iovec offset for given (ptr, len) pair.
-    pub fn iovec_offset(&self, db: &'db dyn salsa::Database, ptr: u32, len: u32) -> Option<u32> {
-        self.iovec_allocations(db)
+    pub fn iovec_offset(&self, ptr: u32, len: u32) -> Option<u32> {
+        self.iovec_allocations
             .iter()
             .find(|(p, l, _)| *p == ptr && *l == len)
             .map(|(_, _, offset)| *offset)
     }
 }
 
+/// Walk all operations in a region recursively.
+fn walk_ops_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    callback: &mut impl FnMut(&IrContext, OpRef),
+) {
+    for &block in ctx.region(region).blocks.iter() {
+        for &op in ctx.block(block).ops.iter() {
+            callback(ctx, op);
+            for &nested in ctx.op(op).regions.iter() {
+                walk_ops_in_region(ctx, nested, callback);
+            }
+        }
+    }
+}
+
+/// Get literal pointer and length from a value's defining operation.
+fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
+    let def = ctx.value_def(value);
+    let trunk_ir::arena::ValueDef::OpResult(op, _) = def else {
+        return None;
+    };
+    let data = ctx.op(op);
+    if data.dialect != arena_wasm::DIALECT_NAME() {
+        return None;
+    }
+    if data.name != Symbol::new("i32_const") {
+        return None;
+    }
+    let ArenaAttribute::IntBits(ptr) = data.attributes.get(&Symbol::new("value"))? else {
+        return None;
+    };
+    let ArenaAttribute::IntBits(len) = data.attributes.get(&Symbol::new("literal_len"))? else {
+        return None;
+    };
+    let ptr_u32 = u32::try_from(*ptr).ok()?;
+    let len_u32 = u32::try_from(*len).ok()?;
+    Some((ptr_u32, len_u32))
+}
+
 /// Analyze a module to collect intrinsic calls and allocate runtime data segments.
-/// Note: This is not a salsa::tracked function because base_offset is a runtime value.
-pub fn analyze_intrinsics<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
+pub fn analyze_intrinsics(
+    ctx: &IrContext,
+    module: ArenaModule,
     base_offset: u32,
-) -> IntrinsicAnalysis<'db> {
+) -> IntrinsicAnalysis {
     let mut needs_fd_write = false;
     let mut iovec_map: HashMap<(u32, u32), u32> = HashMap::new();
     let mut iovec_allocations: Vec<(u32, u32, u32)> = Vec::new();
@@ -131,60 +180,63 @@ pub fn analyze_intrinsics<'db>(
     }
 
     // Visit operations to find __print_line calls with literal args
-    fn visit_op<'db>(
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
+    fn visit_op(
+        ctx: &IrContext,
+        op: OpRef,
         needs_fd_write: &mut bool,
         iovec_map: &mut HashMap<(u32, u32), u32>,
         iovec_allocations: &mut Vec<(u32, u32, u32)>,
         next_offset: &mut u32,
     ) {
         // Check for wasm.call to __print_line
-        if let Ok(call) = wasm::Call::from_operation(db, *op)
-            && call.callee(db).last_segment() == Symbol::new("__print_line")
-            && let Some(arg) = op.operands(db).first()
-            && let Some((ptr, len)) = get_literal_info(db, *arg)
-        {
-            *needs_fd_write = true;
+        if let Ok(call) = arena_wasm::Call::from_op(ctx, op) {
+            let callee = call.callee(ctx);
+            if callee.last_segment() == Symbol::new("__print_line") {
+                let operands = ctx.op_operands(op);
+                if let Some(&arg) = operands.first() {
+                    if let Some((ptr, len)) = get_literal_info(ctx, arg) {
+                        *needs_fd_write = true;
 
-            // Allocate iovec if not already done
-            iovec_map.entry((ptr, len)).or_insert_with(|| {
-                let offset = align_to(*next_offset, 4);
-                iovec_allocations.push((ptr, len, offset));
-                *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
-                offset
-            });
+                        // Allocate iovec if not already done
+                        iovec_map.entry((ptr, len)).or_insert_with(|| {
+                            let offset = align_to(*next_offset, 4);
+                            iovec_allocations.push((ptr, len, offset));
+                            *next_offset = offset + 8; // iovec is 8 bytes (ptr + len)
+                            offset
+                        });
+                    }
+                }
+            }
         }
 
         // Recurse into regions
-        for region in op.regions(db).iter() {
-            for block in region.blocks(db).iter() {
-                for nested_op in block.operations(db).iter() {
-                    visit_op(
-                        db,
-                        nested_op,
-                        needs_fd_write,
-                        iovec_map,
-                        iovec_allocations,
-                        next_offset,
-                    );
-                }
-            }
+        for &region in ctx.op(op).regions.iter() {
+            walk_ops_in_region(ctx, region, &mut |ctx, nested_op| {
+                visit_op(
+                    ctx,
+                    nested_op,
+                    needs_fd_write,
+                    iovec_map,
+                    iovec_allocations,
+                    next_offset,
+                );
+            });
         }
     }
 
     // Walk all operations in module body
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            visit_op(
-                db,
-                op,
-                &mut needs_fd_write,
-                &mut iovec_map,
-                &mut iovec_allocations,
-                &mut next_offset,
-            );
+    if let Some(body) = module.body(ctx) {
+        for &block in ctx.region(body).blocks.iter() {
+            for &op in ctx.block(block).ops.iter() {
+                visit_op(
+                    ctx,
+                    op,
+                    &mut needs_fd_write,
+                    &mut iovec_map,
+                    &mut iovec_allocations,
+                    &mut next_offset,
+                );
+            }
         }
     }
 
@@ -197,51 +249,22 @@ pub fn analyze_intrinsics<'db>(
         None
     };
 
-    IntrinsicAnalysis::new(
-        db,
+    IntrinsicAnalysis {
         needs_fd_write,
         iovec_allocations,
         nwritten_offset,
-        next_offset - base_offset,
-    )
-}
-
-/// Get literal pointer and length from a value's defining operation.
-fn get_literal_info(db: &dyn salsa::Database, value: trunk_ir::Value<'_>) -> Option<(u32, u32)> {
-    let def = value.def(db);
-    let trunk_ir::ValueDef::OpResult(op) = def else {
-        return None;
-    };
-    if op.dialect(db) != wasm::DIALECT_NAME() {
-        return None;
+        total_size: next_offset - base_offset,
     }
-    if op.name(db) != Symbol::new("i32_const") {
-        return None;
-    }
-    let attrs = op.attributes(db);
-    let Attribute::IntBits(ptr) = attrs.get(&Symbol::new("value"))? else {
-        return None;
-    };
-    let Attribute::IntBits(len) = attrs.get(&Symbol::new("literal_len"))? else {
-        return None;
-    };
-    let ptr_u32 = u32::try_from(*ptr).ok()?;
-    let len_u32 = u32::try_from(*len).ok()?;
-    Some((ptr_u32, len_u32))
 }
 
 /// Lower intrinsic calls using pre-computed analysis.
-pub fn lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    analysis: IntrinsicAnalysis<'db>,
-) -> Module<'db> {
-    let mut applicator = PatternApplicator::new(wasm_type_converter());
+pub fn lower(ctx: &mut IrContext, module: ArenaModule, analysis: &IntrinsicAnalysis) {
+    let mut applicator = PatternApplicator::new(ArenaTypeConverter::new());
 
     // Add __print_line pattern if needed
-    if analysis.needs_fd_write(db) {
-        let iovec_allocations = analysis.iovec_allocations(db).clone();
-        let nwritten_offset = analysis.nwritten_offset(db);
+    if analysis.needs_fd_write {
+        let iovec_allocations = analysis.iovec_allocations.clone();
+        let nwritten_offset = analysis.nwritten_offset;
         applicator =
             applicator.add_pattern(PrintLinePattern::new(iovec_allocations, nwritten_offset));
     }
@@ -253,10 +276,7 @@ pub fn lower<'db>(
         .add_pattern(BytesSliceOrPanicPattern)
         .add_pattern(BytesConcatPattern);
 
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_op("wasm", "call");
-    applicator.apply_partial(db, module, target).module
+    applicator.apply_partial(ctx, module);
 }
 
 /// Pattern for `wasm.call(__print_line)` -> `fd_write` sequence
@@ -281,28 +301,28 @@ impl PrintLinePattern {
     }
 }
 
-impl<'db> RewritePattern<'db> for PrintLinePattern {
+impl ArenaRewritePattern for PrintLinePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Check if this is wasm.call to __print_line
-        let Ok(call_op) = wasm::Call::from_operation(db, *op) else {
+        let Ok(call_op) = arena_wasm::Call::from_op(ctx, op) else {
             return false;
         };
 
-        if call_op.callee(db).last_segment() != Symbol::new("__print_line") {
+        if call_op.callee(ctx).last_segment() != Symbol::new("__print_line") {
             return false;
         }
 
         // Get the string literal argument
-        let operands = op.operands(db);
+        let operands = ctx.op_operands(op).to_vec();
         let Some(arg) = operands.first().copied() else {
             return false;
         };
-        let Some((ptr, len)) = get_literal_info(db, arg) else {
+        let Some((ptr, len)) = get_literal_info(ctx, arg) else {
             return false;
         };
 
@@ -314,8 +334,10 @@ impl<'db> RewritePattern<'db> for PrintLinePattern {
             return false;
         };
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
         // Generate fd_write call sequence:
         // fd_const = wasm.i32_const(1)  // stdout
@@ -325,49 +347,52 @@ impl<'db> RewritePattern<'db> for PrintLinePattern {
         // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
         // wasm.drop(result)
 
-        let fd_const = wasm::i32_const(db, location, i32_ty, 1); // stdout
-        let iovec_const = wasm::i32_const(db, location, i32_ty, iovec_offset as i32);
-        let iovec_len_const = wasm::i32_const(db, location, i32_ty, 1); // one iovec entry
-        let nwritten_const = wasm::i32_const(db, location, i32_ty, nwritten_offset as i32);
+        let fd_const = arena_wasm::i32_const(ctx, location, i32_ty, 1); // stdout
+        let iovec_const = arena_wasm::i32_const(ctx, location, i32_ty, iovec_offset as i32);
+        let iovec_len_const = arena_wasm::i32_const(ctx, location, i32_ty, 1); // one iovec entry
+        let nwritten_const = arena_wasm::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
 
-        let call = wasm::call(
-            db,
+        let call = arena_wasm::call(
+            ctx,
             location,
             vec![
-                fd_const.result(db),
-                iovec_const.result(db),
-                iovec_len_const.result(db),
-                nwritten_const.result(db),
+                fd_const.result(ctx),
+                iovec_const.result(ctx),
+                iovec_len_const.result(ctx),
+                nwritten_const.result(ctx),
             ],
             vec![i32_ty],
             Symbol::new("fd_write"),
         );
 
-        let drop_op = wasm::drop(db, location, call.result(db, 0));
+        let drop_op = arena_wasm::drop(ctx, location, call.results(ctx)[0]);
 
         // Emit all operations
-        let results = op.results(db);
-        if results.is_empty()
-            || (results.len() == 1
-                && results[0].dialect(db) == core::DIALECT_NAME()
-                && results[0].name(db) == Symbol::new("nil"))
-        {
+        let result_types = ctx.op_result_types(op).to_vec();
+        let nil_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+        if result_types.is_empty() || (result_types.len() == 1 && result_types[0] == nil_ty) {
             // Void: emit operations and drop the fd_write result
-            rewriter.insert_op(fd_const.operation());
-            rewriter.insert_op(iovec_const.operation());
-            rewriter.insert_op(iovec_len_const.operation());
-            rewriter.insert_op(nwritten_const.operation());
-            rewriter.insert_op(call.operation());
-            rewriter.replace_op(drop_op.operation());
+            rewriter.insert_op(fd_const.op_ref());
+            rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(iovec_len_const.op_ref());
+            rewriter.insert_op(nwritten_const.op_ref());
+            rewriter.insert_op(call.op_ref());
+            rewriter.replace_op(drop_op.op_ref());
         } else {
             // Non-void: emit operations, call result becomes the replacement value
-            rewriter.insert_op(fd_const.operation());
-            rewriter.insert_op(iovec_const.operation());
-            rewriter.insert_op(iovec_len_const.operation());
-            rewriter.insert_op(nwritten_const.operation());
-            rewriter.replace_op(call.operation());
+            rewriter.insert_op(fd_const.op_ref());
+            rewriter.insert_op(iovec_const.op_ref());
+            rewriter.insert_op(iovec_len_const.op_ref());
+            rewriter.insert_op(nwritten_const.op_ref());
+            rewriter.replace_op(call.op_ref());
         }
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "PrintLinePattern"
     }
 }
 
@@ -376,15 +401,11 @@ impl<'db> RewritePattern<'db> for PrintLinePattern {
 // =============================================================================
 
 /// Check if operation is a wasm.call to a `__bytes_*` intrinsic.
-fn is_bytes_intrinsic_call<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    intrinsic_name: &'static str,
-) -> bool {
-    let Ok(call) = wasm::Call::from_operation(db, *op) else {
+fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_name: &'static str) -> bool {
+    let Ok(call) = arena_wasm::Call::from_op(ctx, op) else {
         return false;
     };
-    let callee = call.callee(db);
+    let callee = call.callee(ctx);
     // Check if callee is "__bytes_xxx"
     callee.last_segment() == Symbol::new(intrinsic_name)
 }
@@ -394,28 +415,30 @@ fn is_bytes_intrinsic_call<'db>(
 /// Returns i32 directly since Nat is mapped to i32.
 struct BytesLenPattern;
 
-impl<'db> RewritePattern<'db> for BytesLenPattern {
+impl ArenaRewritePattern for BytesLenPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(db, op, "__bytes_len") {
+        if !is_bytes_intrinsic_call(ctx, op, "__bytes_len") {
             return false;
         }
 
-        let operands = op.operands(db);
+        let operands = ctx.op_operands(op).to_vec();
         let Some(bytes_ref) = operands.first().copied() else {
             return false;
         };
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
         // struct.get to get len field (field 2)
-        let get_len = wasm::struct_get(
-            db,
+        let get_len = arena_wasm::struct_get(
+            ctx,
             location,
             bytes_ref,
             i32_ty,
@@ -423,8 +446,12 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
             BYTES_LEN_FIELD,
         );
 
-        rewriter.replace_op(get_len.operation());
+        rewriter.replace_op(get_len.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BytesLenPattern"
     }
 }
 
@@ -433,33 +460,45 @@ impl<'db> RewritePattern<'db> for BytesLenPattern {
 /// Index is i32 (Nat), returns i32 (Nat, byte value 0-255).
 struct BytesGetOrPanicPattern;
 
-impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
+impl ArenaRewritePattern for BytesGetOrPanicPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(db, op, "__bytes_get_or_panic") {
+        if !is_bytes_intrinsic_call(ctx, op, "__bytes_get_or_panic") {
             return false;
         }
 
-        let operands = op.operands(db);
+        let operands = ctx.op_operands(op).to_vec();
         if operands.len() < 2 {
             return false;
         }
         let bytes_ref = operands[0];
         let index = operands[1]; // i32 (Nat)
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i8_ty = core::I8::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
 
         // Get data array ref (field 0)
-        let array_ref_ty =
-            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
-        let get_data = wasm::struct_get(
-            db,
+        let array_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+                .param(i8_ty)
+                .build(),
+        );
+        let array_ref_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
+                .param(array_ty)
+                .build(),
+        );
+        let get_data = arena_wasm::struct_get(
+            ctx,
             location,
             bytes_ref,
             array_ref_ty,
@@ -468,8 +507,8 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
         );
 
         // Get offset (field 1)
-        let get_offset = wasm::struct_get(
-            db,
+        let get_offset = arena_wasm::struct_get(
+            ctx,
             location,
             bytes_ref,
             i32_ty,
@@ -478,23 +517,27 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
         );
 
         // Add offset to index: actual_index = offset + index
-        let add_offset = wasm::i32_add(db, location, get_offset.result(db), index, i32_ty);
+        let add_offset = arena_wasm::i32_add(ctx, location, get_offset.result(ctx), index, i32_ty);
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
-        let array_get = wasm::array_get_u(
-            db,
+        let array_get = arena_wasm::array_get_u(
+            ctx,
             location,
-            get_data.result(db),
-            add_offset.result(db),
+            get_data.result(ctx),
+            add_offset.result(ctx),
             i32_ty,
             BYTES_ARRAY_IDX,
         );
 
-        rewriter.insert_op(get_data.operation());
-        rewriter.insert_op(get_offset.operation());
-        rewriter.insert_op(add_offset.operation());
-        rewriter.replace_op(array_get.operation());
+        rewriter.insert_op(get_data.op_ref());
+        rewriter.insert_op(get_offset.op_ref());
+        rewriter.insert_op(add_offset.op_ref());
+        rewriter.replace_op(array_get.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BytesGetOrPanicPattern"
     }
 }
 
@@ -503,18 +546,18 @@ impl<'db> RewritePattern<'db> for BytesGetOrPanicPattern {
 /// Start and end are i32 (Nat), returns Bytes.
 struct BytesSliceOrPanicPattern;
 
-impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
+impl ArenaRewritePattern for BytesSliceOrPanicPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(db, op, "__bytes_slice_or_panic") {
+        if !is_bytes_intrinsic_call(ctx, op, "__bytes_slice_or_panic") {
             return false;
         }
 
-        let operands = op.operands(db);
+        let operands = ctx.op_operands(op).to_vec();
         if operands.len() < 3 {
             return false;
         }
@@ -522,16 +565,30 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
         let start = operands[1]; // i32 (Nat)
         let end = operands[2]; // i32 (Nat)
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i8_ty = core::I8::new(db).as_type();
-        let bytes_ty = core::Bytes::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let bytes_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Get data array ref (field 0) - shared, zero-copy
-        let array_ref_ty =
-            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
-        let get_data = wasm::struct_get(
-            db,
+        let array_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+                .param(i8_ty)
+                .build(),
+        );
+        let array_ref_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
+                .param(array_ty)
+                .build(),
+        );
+        let get_data = arena_wasm::struct_get(
+            ctx,
             location,
             bytes_ref,
             array_ref_ty,
@@ -540,8 +597,8 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
         );
 
         // Get current offset (field 1)
-        let get_offset = wasm::struct_get(
-            db,
+        let get_offset = arena_wasm::struct_get(
+            ctx,
             location,
             bytes_ref,
             i32_ty,
@@ -550,85 +607,104 @@ impl<'db> RewritePattern<'db> for BytesSliceOrPanicPattern {
         );
 
         // new_offset = offset + start
-        let new_offset = wasm::i32_add(db, location, get_offset.result(db), start, i32_ty);
+        let new_offset = arena_wasm::i32_add(ctx, location, get_offset.result(ctx), start, i32_ty);
 
         // new_len = end - start
-        let new_len = wasm::i32_sub(db, location, end, start, i32_ty);
+        let new_len = arena_wasm::i32_sub(ctx, location, end, start, i32_ty);
 
         // struct.new to create new Bytes (shares the underlying array)
-        let struct_new = wasm::struct_new(
-            db,
+        let struct_new = arena_wasm::struct_new(
+            ctx,
             location,
             vec![
-                get_data.result(db),
-                new_offset.result(db),
-                new_len.result(db),
+                get_data.result(ctx),
+                new_offset.result(ctx),
+                new_len.result(ctx),
             ],
             bytes_ty,
             BYTES_STRUCT_IDX,
         );
 
-        rewriter.insert_op(get_data.operation());
-        rewriter.insert_op(get_offset.operation());
-        rewriter.insert_op(new_offset.operation());
-        rewriter.insert_op(new_len.operation());
-        rewriter.replace_op(struct_new.operation());
+        rewriter.insert_op(get_data.op_ref());
+        rewriter.insert_op(get_offset.op_ref());
+        rewriter.insert_op(new_offset.op_ref());
+        rewriter.insert_op(new_len.op_ref());
+        rewriter.replace_op(struct_new.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "BytesSliceOrPanicPattern"
     }
 }
 
 /// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both
 struct BytesConcatPattern;
 
-impl<'db> RewritePattern<'db> for BytesConcatPattern {
+impl ArenaRewritePattern for BytesConcatPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(db, op, "__bytes_concat") {
+        if !is_bytes_intrinsic_call(ctx, op, "__bytes_concat") {
             return false;
         }
 
-        let operands = op.operands(db);
+        let operands = ctx.op_operands(op).to_vec();
         if operands.len() < 2 {
             return false;
         }
         let left = operands[0];
         let right = operands[1];
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i8_ty = core::I8::new(db).as_type();
-        let bytes_ty = core::Bytes::new(db).as_type();
-        let array_ref_ty =
-            core::Ref::new(db, core::Array::new(db, i8_ty).as_type(), false).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+        let bytes_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+        let array_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+                .param(i8_ty)
+                .build(),
+        );
+        let array_ref_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
+                .param(array_ty)
+                .build(),
+        );
 
         // Extract fields from left and right Bytes structs
-        let (left_fields, left_ops) = extract_bytes_fields(db, location, left);
-        let (right_fields, right_ops) = extract_bytes_fields(db, location, right);
+        let (left_fields, left_ops) = extract_bytes_fields(ctx, location, left);
+        let (right_fields, right_ops) = extract_bytes_fields(ctx, location, right);
 
         // Calculate total_len = left.len + right.len
-        let total_len = wasm::i32_add(db, location, left_fields.len, right_fields.len, i32_ty);
+        let total_len =
+            arena_wasm::i32_add(ctx, location, left_fields.len, right_fields.len, i32_ty);
 
         // Allocate new array: array_new_default(total_len)
-        let new_array = wasm::array_new_default(
-            db,
+        let new_array = arena_wasm::array_new_default(
+            ctx,
             location,
-            total_len.result(db),
+            total_len.result(ctx),
             array_ref_ty,
             BYTES_ARRAY_IDX,
         );
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = wasm::i32_const(db, location, i32_ty, 0);
+        let zero = arena_wasm::i32_const(ctx, location, i32_ty, 0);
 
-        let copy_left = wasm::array_copy(
-            db,
+        let copy_left = arena_wasm::array_copy(
+            ctx,
             location,
-            new_array.result(db),
-            zero.result(db),
+            new_array.result(ctx),
+            zero.result(ctx),
             left_fields.data,
             left_fields.offset,
             left_fields.len,
@@ -637,10 +713,10 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         );
 
         // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
-        let copy_right = wasm::array_copy(
-            db,
+        let copy_right = arena_wasm::array_copy(
+            ctx,
             location,
-            new_array.result(db),
+            new_array.result(ctx),
             left_fields.len,
             right_fields.data,
             right_fields.offset,
@@ -650,10 +726,14 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         );
 
         // Create new Bytes struct: struct_new(new_arr, 0, total_len)
-        let struct_new = wasm::struct_new(
-            db,
+        let struct_new = arena_wasm::struct_new(
+            ctx,
             location,
-            vec![new_array.result(db), zero.result(db), total_len.result(db)],
+            vec![
+                new_array.result(ctx),
+                zero.result(ctx),
+                total_len.result(ctx),
+            ],
             bytes_ty,
             BYTES_STRUCT_IDX,
         );
@@ -662,12 +742,12 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         let mut ops = Vec::with_capacity(left_ops.len() + right_ops.len() + 6);
         ops.extend(left_ops);
         ops.extend(right_ops);
-        ops.push(total_len.operation());
-        ops.push(new_array.operation());
-        ops.push(zero.operation());
-        ops.push(copy_left.operation());
-        ops.push(copy_right.operation());
-        ops.push(struct_new.operation());
+        ops.push(total_len.op_ref());
+        ops.push(new_array.op_ref());
+        ops.push(zero.op_ref());
+        ops.push(copy_left.op_ref());
+        ops.push(copy_right.op_ref());
+        ops.push(struct_new.op_ref());
 
         let last = ops.pop().unwrap();
         for o in ops {
@@ -676,304 +756,8 @@ impl<'db> RewritePattern<'db> for BytesConcatPattern {
         rewriter.replace_op(last);
         true
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockArg, BlockId, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_print_line_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-
-        // Create string constant (offset 0 in data section)
-        let string_const = wasm::i32_const(db, location, i32_ty, 0);
-
-        // Create __print_line call
-        let print_line = wasm::call(
-            db,
-            location,
-            vec![string_const.result(db)],
-            vec![nil_ty],
-            Symbol::new("__print_line"),
-        );
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![string_const.as_operation(), print_line.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn analyze_and_check(db: &dyn salsa::Database, module: Module<'_>) -> (bool, usize, bool) {
-        let analysis = analyze_intrinsics(db, module, 0);
-        (
-            analysis.needs_fd_write(db),
-            analysis.iovec_allocations(db).len(),
-            analysis.nwritten_offset(db).is_some(),
-        )
-    }
-
-    #[salsa_test]
-    #[ignore = "TODO: Update after DataRegistry integration - literal_len attribute removed"]
-    fn test_intrinsic_analysis(db: &salsa::DatabaseImpl) {
-        let module = make_print_line_module(db);
-        let (needs_fd_write, iovec_count, has_nwritten) = analyze_and_check(db, module);
-
-        assert!(needs_fd_write);
-        assert_eq!(iovec_count, 1);
-        assert!(has_nwritten);
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let analysis = analyze_intrinsics(db, module, 0);
-        let lowered = lower(db, module, analysis);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter().map(|op| op.full_name(db)).collect()
-    }
-
-    /// Extract callee names from all wasm.call operations in the module.
-    #[salsa::tracked]
-    fn extract_callees(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let analysis = analyze_intrinsics(db, module, 0);
-        let lowered = lower(db, module, analysis);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter()
-            .filter_map(|op| {
-                let Ok(call) = wasm::Call::from_operation(db, *op) else {
-                    return None;
-                };
-                Some(call.callee(db).last_segment().to_string())
-            })
-            .collect()
-    }
-
-    #[salsa_test]
-    #[ignore = "TODO: Update after DataRegistry integration - literal_len attribute removed"]
-    fn test_print_line_to_fd_write(db: &salsa::DatabaseImpl) {
-        let module = make_print_line_module(db);
-        let op_names = lower_and_check(db, module);
-        let callees = extract_callees(db, module);
-
-        // Should have wasm.call operations
-        assert!(op_names.iter().any(|n| n == "wasm.call"));
-        // The call should be to fd_write, not __print_line
-        assert!(callees.contains(&"fd_write".to_string()));
-        assert!(!callees.contains(&"__print_line".to_string()));
-    }
-
-    // === Bytes intrinsic tests ===
-
-    /// Create an intrinsic name for __bytes_* functions
-    fn bytes_intrinsic_name(method: &'static str) -> Symbol {
-        Symbol::from_dynamic(&format!("__bytes_{}", method))
-    }
-
-    #[salsa::tracked]
-    fn make_bytes_len_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let bytes_ty = core::Bytes::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create a fake bytes value (block arg)
-        let block_id = BlockId::fresh();
-        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-
-        // Create Bytes::len call (returns i32/Nat)
-        let len_call = wasm::call(
-            db,
-            location,
-            vec![bytes_val],
-            vec![i32_ty],
-            bytes_intrinsic_name("len"),
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            block_id,
-            location,
-            idvec![BlockArg::of_type(db, bytes_ty)],
-            idvec![len_call],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_bytes_len_to_struct_get(db: &salsa::DatabaseImpl) {
-        let module = make_bytes_len_module(db);
-        let op_names = lower_and_check(db, module);
-
-        // Should have struct_get, no extend needed (Nat is i32)
-        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
-        // No Bytes::len call should remain
-        let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "__bytes_len"));
-    }
-
-    #[salsa::tracked]
-    fn make_bytes_get_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let bytes_ty = core::Bytes::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        let block_id = BlockId::fresh();
-        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-        let index_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
-
-        // Create Bytes::get_or_panic call (index and result are i32/Nat)
-        let get_call = wasm::call(
-            db,
-            location,
-            vec![bytes_val, index_val],
-            vec![i32_ty],
-            bytes_intrinsic_name("get_or_panic"),
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            block_id,
-            location,
-            idvec![
-                BlockArg::of_type(db, bytes_ty),
-                BlockArg::of_type(db, i32_ty)
-            ],
-            idvec![get_call],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_bytes_get_to_array_get(db: &salsa::DatabaseImpl) {
-        let module = make_bytes_get_module(db);
-        let op_names = lower_and_check(db, module);
-
-        // Should have struct_get (for data and offset), i32_add, and array_get_u
-        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
-        assert!(op_names.iter().any(|n| n == "wasm.array_get_u"));
-        // No Bytes::get_or_panic call should remain
-        let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "__bytes_get_or_panic"));
-    }
-
-    #[salsa::tracked]
-    fn make_bytes_slice_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let bytes_ty = core::Bytes::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        let block_id = BlockId::fresh();
-        let bytes_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-        let start_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
-        let end_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 2);
-
-        // Create Bytes::slice_or_panic call (start and end are i32/Nat)
-        let slice_call = wasm::call(
-            db,
-            location,
-            vec![bytes_val, start_val, end_val],
-            vec![bytes_ty],
-            bytes_intrinsic_name("slice_or_panic"),
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            block_id,
-            location,
-            idvec![
-                BlockArg::of_type(db, bytes_ty),
-                BlockArg::of_type(db, i32_ty),
-                BlockArg::of_type(db, i32_ty)
-            ],
-            idvec![slice_call],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_bytes_slice_to_struct_new(db: &salsa::DatabaseImpl) {
-        let module = make_bytes_slice_module(db);
-        let op_names = lower_and_check(db, module);
-
-        // Should have struct_get, i32_add, i32_sub, and struct_new
-        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_sub"));
-        assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
-        // No Bytes::slice_or_panic call should remain
-        let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "__bytes_slice_or_panic"));
-    }
-
-    #[salsa::tracked]
-    fn make_bytes_concat_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let bytes_ty = core::Bytes::new(db).as_type();
-
-        let block_id = BlockId::fresh();
-        let left_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 0);
-        let right_val = trunk_ir::Value::new(db, trunk_ir::ValueDef::BlockArg(block_id), 1);
-
-        // Create Bytes::concat call
-        let concat_call = wasm::call(
-            db,
-            location,
-            vec![left_val, right_val],
-            vec![bytes_ty],
-            bytes_intrinsic_name("concat"),
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            block_id,
-            location,
-            idvec![
-                BlockArg::of_type(db, bytes_ty),
-                BlockArg::of_type(db, bytes_ty)
-            ],
-            idvec![concat_call],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_bytes_concat_to_array_copy(db: &salsa::DatabaseImpl) {
-        let module = make_bytes_concat_module(db);
-        let op_names = lower_and_check(db, module);
-
-        // Should have struct_get, i32_add, array_new_default, array_copy, and struct_new
-        assert!(op_names.iter().any(|n| n == "wasm.struct_get"));
-        assert!(op_names.iter().any(|n| n == "wasm.i32_add"));
-        assert!(op_names.iter().any(|n| n == "wasm.array_new_default"));
-        assert!(op_names.iter().any(|n| n == "wasm.array_copy"));
-        assert!(op_names.iter().any(|n| n == "wasm.struct_new"));
-        // No Bytes::concat call should remain
-        let callees = extract_callees(db, module);
-        assert!(!callees.iter().any(|n| n == "__bytes_concat"));
+    fn name(&self) -> &'static str {
+        "BytesConcatPattern"
     }
 }

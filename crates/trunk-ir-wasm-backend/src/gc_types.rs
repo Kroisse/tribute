@@ -836,6 +836,41 @@ pub fn step_marker_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
     )
 }
 
+/// Create the Continuation ADT type (Salsa-based, for gc_types_collection).
+///
+/// Layout: (resume_fn: i32, state: anyref, tag: i32, shift_value: anyref)
+pub fn continuation_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let i32_ty = core::I32::new(db).as_type();
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_Continuation",
+        vec![
+            (Symbol::new("resume_fn"), i32_ty),
+            (Symbol::new("state"), anyref_ty),
+            (Symbol::new("tag"), i32_ty),
+            (Symbol::new("shift_value"), anyref_ty),
+        ],
+    )
+}
+
+/// Create the ResumeWrapper ADT type (Salsa-based, for gc_types_collection).
+///
+/// Layout: (state: anyref, resume_value: anyref)
+pub fn resume_wrapper_adt_type<'db>(db: &'db dyn salsa::Database) -> Type<'db> {
+    let anyref_ty = wasm::Anyref::new(db).as_type();
+
+    adt::struct_type(
+        db,
+        "_ResumeWrapper",
+        vec![
+            (Symbol::new("state"), anyref_ty),
+            (Symbol::new("resume_value"), anyref_ty),
+        ],
+    )
+}
+
 /// Register the Step struct type in the registry.
 ///
 /// Step is used for trampoline-based effect system in the WasmGC backend.

@@ -52,7 +52,7 @@ mod wasm {
         {}
     }
 
-    #[attr(module: String, name: String, sym_name: Symbol, r#type: Type)]
+    #[attr(module: Symbol, name: Symbol, sym_name: Symbol, r#type: Type)]
     fn import_func() {}
 
     #[attr(name: String, func: Symbol)]

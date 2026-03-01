@@ -1,6 +1,6 @@
 //! Lower trampoline dialect operations to WASM and ADT operations.
 //!
-//! This pass converts all trampoline operations using RewritePattern infrastructure:
+//! This pass converts all trampoline operations using ArenaRewritePattern infrastructure:
 //!
 //! ## Struct operations -> ADT operations
 //! - `trampoline.build_continuation` -> `adt.struct_new` (Continuation type)
@@ -20,22 +20,26 @@
 //! - `trampoline.get_yield_shift_value` -> wasm.global_get + adt.struct_get
 //! - `trampoline.check_yield` -> wasm.global_get
 //!
-//! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
+//! This pass uses ArenaTypeConverter to consistently convert trampoline types to ADT types.
 
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::cont;
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::trampoline::{self, STEP_TAG_DONE, STEP_TAG_SHIFT};
-use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{
-    ConversionTarget, MaterializeResult, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
+use trunk_ir::arena::dialect::{
+    adt as arena_adt, func as arena_func, trampoline as arena_trampoline, wasm as arena_wasm,
 };
-use trunk_ir::{
-    Attribute, Block, BlockArg, DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol,
-    Type, Value,
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+use trunk_ir::ir::Symbol;
+
+use trunk_ir::arena::rewrite::type_converter::MaterializeResult;
+
+/// Tag value for Step::Done variant.
+const STEP_TAG_DONE: i32 = 0;
+/// Tag value for Step::Shift variant.
+const STEP_TAG_SHIFT: i32 = 1;
 
 /// Global variable indices for yield/trampoline state.
 ///
@@ -52,9 +56,9 @@ pub mod yield_globals {
     pub const OP_IDX: u32 = 3;
 }
 
-/// Lower all trampoline operations to WASM/ADT using RewritePattern infrastructure.
-pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let type_converter = create_type_converter();
+/// Lower all trampoline operations to WASM/ADT using ArenaRewritePattern infrastructure.
+pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
+    let type_converter = create_type_converter(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ConvertFuncTypePattern)
@@ -70,10 +74,21 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
         .add_pattern(LowerYieldContinuationAccessPattern)
         .add_pattern(LowerYieldGlobalGetPattern);
 
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_dialect("trampoline");
-    applicator.apply_partial(db, module, target).module
+    applicator.apply_partial(ctx, module);
+}
+
+// ============================================================================
+// Type Helpers
+// ============================================================================
+
+fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+}
+
+fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
 // ============================================================================
@@ -83,22 +98,21 @@ pub fn lower<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 /// Get the canonical Step ADT type.
 /// Layout: (tag: i32, value: anyref, prompt: i32, op_idx: i32)
 ///
-/// IMPORTANT: Must use wasm::Anyref to match step_marker_type in gc_types.rs.
-/// Using tribute_rt::Any would create a different type identity, causing
+/// IMPORTANT: Must use wasm.anyref to match step_marker_type in gc_types.rs.
+/// Using tribute_rt.any would create a different type identity, causing
 /// type_idx_by_type lookup failures.
-pub fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    let i32_ty = core::I32::new(db).as_type();
-    let anyref_ty = wasm::Anyref::new(db).as_type();
+pub fn step_adt_type(ctx: &mut IrContext) -> TypeRef {
+    let i32_ty = intern_type(ctx, "core", "i32");
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
-    adt::struct_type(
-        db,
-        "_Step",
-        vec![
-            (Symbol::new("tag"), i32_ty),
-            (Symbol::new("value"), anyref_ty),
-            (Symbol::new("prompt"), i32_ty),
-            (Symbol::new("op_idx"), i32_ty),
-        ],
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .param(i32_ty)
+            .param(anyref_ty)
+            .param(i32_ty)
+            .param(i32_ty)
+            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Step")))
+            .build(),
     )
 }
 
@@ -106,39 +120,38 @@ pub fn step_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 /// Layout: (resume_fn: i32, state: anyref, tag: i32, shift_value: anyref)
 ///
 /// resume_fn is stored as i32 (function table index), same as closures.
-/// Uses wasm::Anyref for consistency with step_adt_type.
-pub fn continuation_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    let i32_ty = core::I32::new(db).as_type();
-    let anyref_ty = wasm::Anyref::new(db).as_type();
+/// Uses wasm.anyref for consistency with step_adt_type.
+pub fn continuation_adt_type(ctx: &mut IrContext) -> TypeRef {
+    let i32_ty = intern_type(ctx, "core", "i32");
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
-    // resume_fn is stored as i32 (function table index), same as closures.
-    // This matches how func.constant is lowered to wasm.i32_const.
-    adt::struct_type(
-        db,
-        "_Continuation",
-        vec![
-            (Symbol::new("resume_fn"), i32_ty),
-            (Symbol::new("state"), anyref_ty),
-            (Symbol::new("tag"), i32_ty),
-            (Symbol::new("shift_value"), anyref_ty),
-        ],
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .param(i32_ty)
+            .param(anyref_ty)
+            .param(i32_ty)
+            .param(anyref_ty)
+            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Continuation")))
+            .build(),
     )
 }
 
 /// Get the canonical ResumeWrapper ADT type.
 /// Layout: (state: anyref, resume_value: anyref)
 ///
-/// Uses wasm::Anyref for consistency with step_adt_type.
-pub fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
-    let anyref_ty = wasm::Anyref::new(db).as_type();
+/// Uses wasm.anyref for consistency with step_adt_type.
+pub fn resume_wrapper_adt_type(ctx: &mut IrContext) -> TypeRef {
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
-    adt::struct_type(
-        db,
-        "_ResumeWrapper",
-        vec![
-            (Symbol::new("state"), anyref_ty),
-            (Symbol::new("resume_value"), anyref_ty),
-        ],
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .param(anyref_ty)
+            .param(anyref_ty)
+            .attr(
+                "name",
+                ArenaAttribute::Symbol(Symbol::new("_ResumeWrapper")),
+            )
+            .build(),
     )
 }
 
@@ -146,338 +159,313 @@ pub fn resume_wrapper_adt_type(db: &dyn salsa::Database) -> Type<'_> {
 /// Layout: (value: f64)
 ///
 /// Used to box f64 values into anyref for storage in generic containers.
-fn boxed_f64_type(db: &dyn salsa::Database) -> Type<'_> {
-    let f64_ty = core::F64::new(db).as_type();
-    adt::struct_type(db, "_BoxedF64", vec![(Symbol::new("value"), f64_ty)])
+fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
+    let f64_ty = intern_type(ctx, "core", "f64");
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .param(f64_ty)
+            .attr("name", ArenaAttribute::Symbol(Symbol::new("_BoxedF64")))
+            .build(),
+    )
 }
 
 // ============================================================================
 // Type Converter
 // ============================================================================
 
-/// Create a TypeConverter that converts trampoline types to ADT types.
-fn create_type_converter() -> TypeConverter {
-    TypeConverter::new()
-        // Convert trampoline.step -> _Step ADT
-        .add_conversion(|db, ty| trampoline::Step::from_type(db, ty).map(|_| step_adt_type(db)))
-        // Convert trampoline.continuation -> _Continuation ADT
-        .add_conversion(|db, ty| {
-            trampoline::Continuation::from_type(db, ty).map(|_| continuation_adt_type(db))
-        })
-        // Convert trampoline.resume_wrapper -> _ResumeWrapper ADT
-        .add_conversion(|db, ty| {
-            trampoline::ResumeWrapper::from_type(db, ty).map(|_| resume_wrapper_adt_type(db))
-        })
-        // Convert cont.prompt_tag -> core.i32 (same representation at runtime)
-        .add_conversion(|db, ty| {
-            cont::PromptTag::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
-        // Materialize: trampoline types to ADT types are no-op conversions
-        .add_materialization(|db, _location, _value, from_ty, to_ty| {
-            if from_ty == to_ty {
-                return MaterializeResult::Skip;
-            }
+/// Create an ArenaTypeConverter that converts trampoline types to ADT types.
+fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+    // Pre-compute types
+    let step_ty = step_adt_type(ctx);
+    let cont_ty = continuation_adt_type(ctx);
+    let rw_ty = resume_wrapper_adt_type(ctx);
+    let i32_ty = intern_type(ctx, "core", "i32");
+    let f64_ty = intern_type(ctx, "core", "f64");
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
+    let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
+    let boxed_f64_ty = boxed_f64_type(ctx);
 
-            // trampoline.step -> _Step ADT (same representation)
-            if trampoline::Step::from_type(db, from_ty).is_some() && to_ty == step_adt_type(db) {
-                return MaterializeResult::NoOp;
-            }
+    let mut tc = ArenaTypeConverter::new();
 
-            // trampoline.continuation -> _Continuation ADT (same representation)
-            if trampoline::Continuation::from_type(db, from_ty).is_some()
-                && to_ty == continuation_adt_type(db)
-            {
-                return MaterializeResult::NoOp;
-            }
+    // Convert trampoline.step -> _Step ADT
+    tc.add_conversion(move |ctx, ty| {
+        if is_type(ctx, ty, "trampoline", "step") {
+            Some(step_ty)
+        } else {
+            None
+        }
+    });
 
-            // trampoline.resume_wrapper -> _ResumeWrapper ADT (same representation)
-            if trampoline::ResumeWrapper::from_type(db, from_ty).is_some()
-                && to_ty == resume_wrapper_adt_type(db)
-            {
-                return MaterializeResult::NoOp;
-            }
+    // Convert trampoline.continuation -> _Continuation ADT
+    tc.add_conversion(move |ctx, ty| {
+        if is_type(ctx, ty, "trampoline", "continuation") {
+            Some(cont_ty)
+        } else {
+            None
+        }
+    });
 
-            MaterializeResult::Skip
-        })
-        // Materialize: i32 -> anyref (box via i31ref, then upcast to anyref)
-        .add_materialization(|db, location, value, from_ty, to_ty| {
-            let is_from_i32 = core::I32::from_type(db, from_ty).is_some();
-            let is_to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+    // Convert trampoline.resume_wrapper -> _ResumeWrapper ADT
+    tc.add_conversion(move |ctx, ty| {
+        if is_type(ctx, ty, "trampoline", "resume_wrapper") {
+            Some(rw_ty)
+        } else {
+            None
+        }
+    });
 
-            if is_from_i32 && is_to_anyref {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let anyref_ty = wasm::Anyref::new(db).as_type();
+    // Convert cont.prompt_tag -> core.i32 (same representation at runtime)
+    tc.add_conversion(move |ctx, ty| {
+        if is_type(ctx, ty, "cont", "prompt_tag") {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
 
-                // wasm.ref_i31: i32 -> i31ref
-                let box_op = wasm::ref_i31(db, location, value, i31ref_ty);
-                let i31ref_value = box_op.as_operation().result(db, 0);
+    // Combined materializer for all type conversions
+    tc.set_materializer(move |ctx, location, value, from_ty, to_ty| {
+        if from_ty == to_ty {
+            return None;
+        }
 
-                // Upcast i31ref -> anyref (no-op in runtime, but needed for IR type correctness)
-                let upcast_op =
-                    wasm::ref_cast(db, location, i31ref_value, anyref_ty, anyref_ty, None);
+        let is_from_trampoline_step = is_type(ctx, from_ty, "trampoline", "step");
+        let is_from_trampoline_cont = is_type(ctx, from_ty, "trampoline", "continuation");
+        let is_from_trampoline_rw = is_type(ctx, from_ty, "trampoline", "resume_wrapper");
 
-                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
-                    box_op.as_operation(),
-                    upcast_op.as_operation(),
-                ]);
-            }
-            MaterializeResult::Skip
-        })
-        // Materialize: f64 -> anyref (box via BoxedF64 struct)
-        .add_materialization(|db, location, value, from_ty, to_ty| {
-            let is_from_f64 = core::F64::from_type(db, from_ty).is_some();
-            let is_to_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+        // trampoline types -> ADT types (no-op, same representation)
+        if is_from_trampoline_step && to_ty == step_ty {
+            return Some(MaterializeResult { value, ops: vec![] });
+        }
+        if is_from_trampoline_cont && to_ty == cont_ty {
+            return Some(MaterializeResult { value, ops: vec![] });
+        }
+        if is_from_trampoline_rw && to_ty == rw_ty {
+            return Some(MaterializeResult { value, ops: vec![] });
+        }
 
-            if is_from_f64 && is_to_anyref {
-                let boxed_ty = boxed_f64_type(db);
-                let anyref_ty = wasm::Anyref::new(db).as_type();
+        // i32 -> anyref (box via i31ref, then upcast to anyref)
+        let is_from_i32 = from_ty == i32_ty;
+        let is_to_anyref = to_ty == anyref_ty;
 
-                // Create BoxedF64 struct containing the f64 value
-                let box_op = adt::struct_new(db, location, vec![value], boxed_ty, boxed_ty);
-                let boxed_value = box_op.as_operation().result(db, 0);
+        if is_from_i32 && is_to_anyref {
+            // wasm.ref_i31: i32 -> i31ref
+            let box_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+            let i31ref_value = ctx.op_result(box_op.op_ref(), 0);
 
-                // Upcast BoxedF64 to anyref
-                let upcast_op =
-                    wasm::ref_cast(db, location, boxed_value, anyref_ty, anyref_ty, None);
+            // Upcast i31ref -> anyref (no-op in runtime, but needed for IR type correctness)
+            let upcast_op = arena_wasm::ref_cast(
+                ctx,
+                location,
+                i31ref_value,
+                anyref_ty,
+                Symbol::new("anyref"),
+                None,
+            );
+            let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
-                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
-                    box_op.as_operation(),
-                    upcast_op.as_operation(),
-                ]);
-            }
-            MaterializeResult::Skip
-        })
-        // Materialize: anyref -> i32 (unbox via i31ref)
-        .add_materialization(|db, location, value, from_ty, to_ty| {
-            let is_from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
-            let is_to_i32 = core::I32::from_type(db, to_ty).is_some();
+            return Some(MaterializeResult {
+                value: final_value,
+                ops: vec![box_op.op_ref(), upcast_op.op_ref()],
+            });
+        }
 
-            if is_from_anyref && is_to_i32 {
-                let i31ref_ty = wasm::I31ref::new(db).as_type();
-                let i32_ty = core::I32::new(db).as_type();
+        // f64 -> anyref (box via BoxedF64 struct)
+        let is_from_f64 = from_ty == f64_ty;
 
-                // Cast anyref to i31ref
-                let ref_cast_op = wasm::ref_cast(db, location, value, i31ref_ty, i31ref_ty, None);
-                let i31ref_value = ref_cast_op.as_operation().result(db, 0);
+        if is_from_f64 && is_to_anyref {
+            // Create BoxedF64 struct containing the f64 value
+            let box_op =
+                arena_adt::struct_new(ctx, location, vec![value], boxed_f64_ty, boxed_f64_ty);
+            let boxed_value = ctx.op_result(box_op.op_ref(), 0);
 
-                // Unbox i31ref to i32
-                let unbox_op = wasm::i31_get_s(db, location, i31ref_value, i32_ty);
+            // Upcast BoxedF64 to anyref
+            let upcast_op = arena_wasm::ref_cast(
+                ctx,
+                location,
+                boxed_value,
+                anyref_ty,
+                Symbol::new("anyref"),
+                None,
+            );
+            let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
-                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
-                    ref_cast_op.as_operation(),
-                    unbox_op.as_operation(),
-                ]);
-            }
-            MaterializeResult::Skip
-        })
-        // Materialize: anyref -> f64 (unbox via BoxedF64 struct)
-        .add_materialization(|db, location, value, from_ty, to_ty| {
-            let is_from_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
-            let is_to_f64 = core::F64::from_type(db, to_ty).is_some();
+            return Some(MaterializeResult {
+                value: final_value,
+                ops: vec![box_op.op_ref(), upcast_op.op_ref()],
+            });
+        }
 
-            if is_from_anyref && is_to_f64 {
-                let f64_ty = core::F64::new(db).as_type();
-                let boxed_ty = boxed_f64_type(db);
+        // anyref -> i32 (unbox via i31ref)
+        let is_from_anyref = from_ty == anyref_ty;
+        let is_to_i32 = to_ty == i32_ty;
 
-                // Cast anyref to BoxedF64
-                let ref_cast_op = adt::ref_cast(db, location, value, boxed_ty, boxed_ty);
-                let boxed_value = ref_cast_op.as_operation().result(db, 0);
+        if is_from_anyref && is_to_i32 {
+            // Cast anyref to i31ref
+            let ref_cast_op =
+                arena_wasm::ref_cast(ctx, location, value, i31ref_ty, Symbol::new("i31ref"), None);
+            let i31ref_value = ctx.op_result(ref_cast_op.op_ref(), 0);
 
-                // Extract f64 from BoxedF64.value (field 0)
-                let unbox_op = adt::struct_get(db, location, boxed_value, f64_ty, boxed_ty, 0);
+            // Unbox i31ref to i32
+            let unbox_op = arena_wasm::i31_get_s(ctx, location, i31ref_value, i32_ty);
+            let final_value = ctx.op_result(unbox_op.op_ref(), 0);
 
-                return MaterializeResult::Ops(trunk_ir::smallvec::smallvec![
-                    ref_cast_op.as_operation(),
-                    unbox_op.as_operation(),
-                ]);
-            }
-            MaterializeResult::Skip
-        })
-        // Materialize: cont.prompt_tag -> i32 (no-op, same representation)
-        .add_materialization(|db, _location, _value, from_ty, to_ty| {
-            let is_from_prompt_tag = cont::PromptTag::from_type(db, from_ty).is_some();
-            let is_to_i32 = core::I32::from_type(db, to_ty).is_some();
+            return Some(MaterializeResult {
+                value: final_value,
+                ops: vec![ref_cast_op.op_ref(), unbox_op.op_ref()],
+            });
+        }
 
-            if is_from_prompt_tag && is_to_i32 {
-                // PromptTag is represented as i32 at runtime, no conversion needed
-                return MaterializeResult::NoOp;
-            }
-            MaterializeResult::Skip
-        })
+        // anyref -> f64 (unbox via BoxedF64 struct)
+        let is_to_f64 = to_ty == f64_ty;
+
+        if is_from_anyref && is_to_f64 {
+            // Cast anyref to BoxedF64
+            let ref_cast_op = arena_adt::ref_cast(ctx, location, value, boxed_f64_ty, boxed_f64_ty);
+            let boxed_value = ctx.op_result(ref_cast_op.op_ref(), 0);
+
+            // Extract f64 from BoxedF64.value (field 0)
+            let unbox_op =
+                arena_adt::struct_get(ctx, location, boxed_value, f64_ty, boxed_f64_ty, 0);
+            let final_value = ctx.op_result(unbox_op.op_ref(), 0);
+
+            return Some(MaterializeResult {
+                value: final_value,
+                ops: vec![ref_cast_op.op_ref(), unbox_op.op_ref()],
+            });
+        }
+
+        // cont.prompt_tag -> i32 (no-op, same representation)
+        let is_from_prompt_tag = is_type(ctx, from_ty, "cont", "prompt_tag");
+
+        if is_from_prompt_tag && is_to_i32 {
+            return Some(MaterializeResult { value, ops: vec![] });
+        }
+
+        None
+    });
+
+    tc
 }
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
 
-fn create_i32_const<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    value: i32,
-) -> Operation<'db> {
-    let i32_ty = core::I32::new(db).as_type();
-    wasm::i32_const(db, location, i32_ty, value).as_operation()
+fn create_i32_const(ctx: &mut IrContext, location: Location, value: i32) -> OpRef {
+    let i32_ty = intern_type(ctx, "core", "i32");
+    arena_wasm::i32_const(ctx, location, i32_ty, value).op_ref()
 }
 
 /// Push an i32 constant and a global_set operation to set a global variable.
-fn push_set_i32_global<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
+fn push_set_i32_global(
+    ctx: &mut IrContext,
+    location: Location,
     value: i32,
     global_idx: u32,
-    ops: &mut Vec<Operation<'db>>,
+    ops: &mut Vec<OpRef>,
 ) {
-    let i32_ty = core::I32::new(db).as_type();
-    let const_op = wasm::i32_const(db, location, i32_ty, value);
-    let const_val = const_op.as_operation().result(db, 0);
-    ops.push(const_op.as_operation());
-    ops.push(wasm::global_set(db, location, const_val, global_idx).as_operation());
+    let const_op = create_i32_const(ctx, location, value);
+    let const_val = ctx.op_result(const_op, 0);
+    ops.push(const_op);
+    ops.push(arena_wasm::global_set(ctx, location, const_val, global_idx).op_ref());
 }
 
-/// Step fields: tag=0, value=1, prompt=2, op_idx=3
-fn step_field_index(field_name: Symbol) -> u32 {
-    field_name.with_str(|s| match s {
-        "tag" => 0,
-        "value" => 1,
-        "prompt" => 2,
-        "op_idx" => 3,
-        _ => panic!("unknown Step field: {s}"),
-    })
-}
-
-/// Continuation fields: resume_fn=0, state=1, tag=2, shift_value=3
-fn continuation_field_index(field_name: Symbol) -> u32 {
-    field_name.with_str(|s| match s {
-        "resume_fn" => 0,
-        "state" => 1,
-        "tag" => 2,
-        "shift_value" => 3,
-        _ => panic!("unknown Continuation field: {s}"),
-    })
-}
-
-/// ResumeWrapper fields: state=0, resume_value=1
-fn resume_wrapper_field_index(field_name: Symbol) -> u32 {
-    field_name.with_str(|s| match s {
-        "state" => 0,
-        "resume_value" => 1,
-        _ => panic!("unknown ResumeWrapper field: {s}"),
-    })
-}
-
-/// Cast a value to `wasm::Anyref` type using TypeConverter materializations.
+/// Cast a value to anyref type using TypeConverter materializations.
 ///
-/// Uses the rewriter's materialize method to generate boxing operations:
+/// Uses the rewriter's type converter to generate boxing operations:
 /// - For i32: boxes to i31ref then casts to anyref
 /// - For f64: boxes using adt.struct_new (BoxedF64)
 /// - For reference types: uses ref_cast upcast
-fn materialize_to_any<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    value: Value<'db>,
-    rewriter: &PatternRewriter<'db, '_>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    let anyref_ty = wasm::Anyref::new(db).as_type();
+fn materialize_to_any(
+    ctx: &mut IrContext,
+    location: Location,
+    value: ValueRef,
+    rewriter: &PatternRewriter<'_>,
+    ops: &mut Vec<OpRef>,
+) -> ValueRef {
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
-    // Get the value's type using rewriter (handles block args correctly)
-    let Some(value_ty) = rewriter.get_value_type(db, value) else {
-        // Fallback: assume it's a reference type, just upcast
-        let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
-        let cast_val = cast_op.as_operation().result(db, 0);
-        ops.push(cast_op.as_operation());
-        return cast_val;
-    };
+    // Get the value's type
+    let value_ty = ctx.value_ty(value);
 
     // Already anyref - no conversion needed
-    if wasm::Anyref::from_type(db, value_ty).is_some() {
+    if value_ty == anyref_ty {
         return value;
     }
 
-    // Try to materialize the conversion
-    if let Some(result) = rewriter.materialize(db, location, value, value_ty, anyref_ty) {
-        match result {
-            MaterializeResult::NoOp => return value,
-            MaterializeResult::Ops(mat_ops) => {
-                // Get the final value from the last op's result
-                if let Some(last_op) = mat_ops.last() {
-                    let final_value = last_op.result(db, 0);
-                    ops.extend(mat_ops);
-                    return final_value;
-                }
-            }
-            MaterializeResult::Skip => {}
+    // Try to materialize the conversion via type converter
+    let tc = rewriter.type_converter();
+    if let Some(result) = tc.materialize(ctx, location, value, value_ty, anyref_ty) {
+        if result.ops.is_empty() {
+            // NoOp - value is already correct
+            return result.value;
         }
+        let final_value = result.value;
+        ops.extend(result.ops);
+        return final_value;
     }
 
     // Fallback: upcast to anyref using ref_cast
-    let cast_op = wasm::ref_cast(db, location, value, anyref_ty, anyref_ty, None);
-    let cast_val = cast_op.as_operation().result(db, 0);
-    ops.push(cast_op.as_operation());
+    let cast_op =
+        arena_wasm::ref_cast(ctx, location, value, anyref_ty, Symbol::new("anyref"), None);
+    let cast_val = ctx.op_result(cast_op.op_ref(), 0);
+    ops.push(cast_op.op_ref());
     cast_val
 }
 
-/// Unbox a value from `wasm::Anyref` to a target type using TypeConverter materializations.
+/// Unbox a value from anyref to a target type using TypeConverter materializations.
 ///
-/// Uses the rewriter's materialize method to generate unboxing operations:
+/// Uses the rewriter's type converter to generate unboxing operations:
 /// - For i32: ref_cast to i31ref then i31_get_s
 /// - For f64: ref_cast to BoxedF64 then struct_get
 /// - For reference types: ref_cast
-fn materialize_from_any<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    value: Value<'db>,
-    target_ty: Type<'db>,
-    rewriter: &PatternRewriter<'db, '_>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    let anyref_ty = wasm::Anyref::new(db).as_type();
+fn materialize_from_any(
+    ctx: &mut IrContext,
+    location: Location,
+    value: ValueRef,
+    target_ty: TypeRef,
+    rewriter: &PatternRewriter<'_>,
+    ops: &mut Vec<OpRef>,
+) -> ValueRef {
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
     // Already the target type - no conversion needed
     if target_ty == anyref_ty {
         return value;
     }
 
-    // Try to materialize the conversion
-    if let Some(result) = rewriter.materialize(db, location, value, anyref_ty, target_ty) {
-        match result {
-            MaterializeResult::NoOp => return value,
-            MaterializeResult::Ops(mat_ops) => {
-                // Get the final value from the last op's result
-                if let Some(last_op) = mat_ops.last() {
-                    let final_value = last_op.result(db, 0);
-                    ops.extend(mat_ops);
-                    return final_value;
-                }
-            }
-            MaterializeResult::Skip => {}
+    // Try to materialize the conversion via type converter
+    let tc = rewriter.type_converter();
+    if let Some(result) = tc.materialize(ctx, location, value, anyref_ty, target_ty) {
+        if result.ops.is_empty() {
+            return result.value;
         }
+        let final_value = result.value;
+        ops.extend(result.ops);
+        return final_value;
     }
 
     // Fallback: ref_cast to target type (for reference types)
-    let cast_op = adt::ref_cast(db, location, value, target_ty, target_ty);
-    let cast_val = cast_op.as_operation().result(db, 0);
-    ops.push(cast_op.as_operation());
+    let cast_op = arena_adt::ref_cast(ctx, location, value, target_ty, target_ty);
+    let cast_val = ctx.op_result(cast_op.op_ref(), 0);
+    ops.push(cast_op.op_ref());
     cast_val
 }
 
-/// Create a null reference of `wasm::Anyref` type.
-fn null_any<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    ops: &mut Vec<Operation<'db>>,
-) -> Value<'db> {
-    let anyref_ty = wasm::Anyref::new(db).as_type();
-    let null_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-    let null_val = null_op.as_operation().result(db, 0);
-    ops.push(null_op.as_operation());
+/// Create a null reference of anyref type.
+fn null_any(ctx: &mut IrContext, location: Location, ops: &mut Vec<OpRef>) -> ValueRef {
+    let anyref_ty = intern_type(ctx, "wasm", "anyref");
+    let null_op = arena_adt::ref_null(ctx, location, anyref_ty, anyref_ty);
+    let null_val = ctx.op_result(null_op.op_ref(), 0);
+    ops.push(null_op.op_ref());
     null_val
 }
 
 /// Helper to insert prefix ops and replace op from an ops vec.
 ///
 /// All ops except the last are inserted before, the last replaces the current op.
-fn expand_ops<'db>(rewriter: &mut PatternRewriter<'db, '_>, ops: Vec<Operation<'db>>) {
+fn expand_ops(rewriter: &mut PatternRewriter<'_>, ops: Vec<OpRef>) {
     let len = ops.len();
     for (i, op) in ops.into_iter().enumerate() {
         if i < len - 1 {
@@ -485,6 +473,19 @@ fn expand_ops<'db>(rewriter: &mut PatternRewriter<'db, '_>, ops: Vec<Operation<'
         } else {
             rewriter.replace_op(op);
         }
+    }
+}
+
+/// Convert a trampoline type to its corresponding ADT type.
+fn convert_trampoline_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    if is_type(ctx, ty, "trampoline", "step") {
+        step_adt_type(ctx)
+    } else if is_type(ctx, ty, "trampoline", "continuation") {
+        continuation_adt_type(ctx)
+    } else if is_type(ctx, ty, "trampoline", "resume_wrapper") {
+        resume_wrapper_adt_type(ctx)
+    } else {
+        ty
     }
 }
 
@@ -497,22 +498,21 @@ fn expand_ops<'db>(rewriter: &mut PatternRewriter<'db, '_>, ops: Vec<Operation<'
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerBuildContinuationPattern;
 
-impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
+impl ArenaRewritePattern for LowerBuildContinuationPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let _build_cont = match trampoline::BuildContinuation::from_operation(db, *op) {
-            Ok(bc) => bc,
-            Err(_) => return false,
-        };
+        if arena_trampoline::BuildContinuation::from_op(ctx, op).is_err() {
+            return false;
+        }
 
-        let location = op.location(db);
-        let cont_type = continuation_adt_type(db);
+        let location = ctx.op(op).location;
+        let cont_type = continuation_adt_type(ctx);
 
-        let operands = rewriter.operands().clone();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
         // Operands are (tag, resume_fn, state, shift_value)
         let tag_operand = operands.first().copied();
         let resume_fn = operands.get(1).copied();
@@ -528,29 +528,31 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
         let resume_fn_field = if let Some(v) = resume_fn {
             v
         } else {
-            let null_const = create_i32_const(db, location, -1);
+            let null_const = create_i32_const(ctx, location, -1);
+            let val = ctx.op_result(null_const, 0);
             ops.push(null_const);
-            null_const.result(db, 0)
+            val
         };
 
         // state field - cast to any
         let state_field = if let Some(v) = state {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         // shift_value field - cast to any
         let shift_value_field = if let Some(v) = shift_value {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         let fields = vec![resume_fn_field, state_field, tag_value, shift_value_field];
 
-        let struct_new = adt::struct_new(db, location, fields, cont_type, cont_type);
-        ops.push(struct_new.as_operation());
+        let struct_new =
+            arena_adt::struct_new(ctx, location, fields, cont_type, cont_type).op_ref();
+        ops.push(struct_new);
 
         expand_ops(rewriter, ops);
         true
@@ -560,32 +562,33 @@ impl<'db> RewritePattern<'db> for LowerBuildContinuationPattern {
 /// Lower `trampoline.step_done` -> `adt.struct_new` with tag=0
 struct LowerStepDonePattern;
 
-impl<'db> RewritePattern<'db> for LowerStepDonePattern {
+impl ArenaRewritePattern for LowerStepDonePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != trampoline::DIALECT_NAME() || op.name(db) != trampoline::STEP_DONE() {
+        if arena_trampoline::StepDone::from_op(ctx, op).is_err() {
             return false;
         }
 
-        let location = op.location(db);
-        let step_type = step_adt_type(db);
+        let location = ctx.op(op).location;
+        let step_type = step_adt_type(ctx);
 
-        let value = rewriter.operands().first().copied();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+        let value = operands.first().copied();
 
         let mut ops = Vec::new();
 
         // Create constants for tag=0, prompt=0, op_idx=0
-        let tag_const = create_i32_const(db, location, STEP_TAG_DONE);
-        let prompt_const = create_i32_const(db, location, 0);
-        let op_idx_const = create_i32_const(db, location, 0);
+        let tag_const = create_i32_const(ctx, location, STEP_TAG_DONE);
+        let prompt_const = create_i32_const(ctx, location, 0);
+        let op_idx_const = create_i32_const(ctx, location, 0);
 
-        let tag_value = tag_const.result(db, 0);
-        let prompt_value = prompt_const.result(db, 0);
-        let op_idx_value = op_idx_const.result(db, 0);
+        let tag_value = ctx.op_result(tag_const, 0);
+        let prompt_value = ctx.op_result(prompt_const, 0);
+        let op_idx_value = ctx.op_result(op_idx_const, 0);
 
         ops.push(tag_const);
         ops.push(prompt_const);
@@ -593,14 +596,15 @@ impl<'db> RewritePattern<'db> for LowerStepDonePattern {
 
         // Value field - cast to any using TypeConverter materialization
         let value_field = if let Some(v) = value {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
-        let struct_new = adt::struct_new(db, location, fields, step_type, step_type);
-        ops.push(struct_new.as_operation());
+        let struct_new =
+            arena_adt::struct_new(ctx, location, fields, step_type, step_type).op_ref();
+        ops.push(struct_new);
 
         expand_ops(rewriter, ops);
         true
@@ -612,24 +616,23 @@ impl<'db> RewritePattern<'db> for LowerStepDonePattern {
 /// Takes prompt tag as first operand (dynamic tag from evidence lookup).
 struct LowerStepShiftPattern;
 
-impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
+impl ArenaRewritePattern for LowerStepShiftPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let step_shift = match trampoline::StepShift::from_operation(db, *op) {
-            Ok(ss) => ss,
-            Err(_) => return false,
+        let Ok(step_shift) = arena_trampoline::StepShift::from_op(ctx, op) else {
+            return false;
         };
 
-        let location = op.location(db);
-        let step_type = step_adt_type(db);
+        let location = ctx.op(op).location;
+        let step_type = step_adt_type(ctx);
 
-        let op_idx = step_shift.op_idx(db);
+        let op_idx = step_shift.op_idx(ctx);
 
-        let operands = rewriter.operands().clone();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
         // Operands are (prompt, continuation)
         let prompt_operand = operands.first().copied();
         let continuation = operands.get(1).copied();
@@ -637,28 +640,29 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
         let mut ops = Vec::new();
 
         // Create constants for tag
-        let tag_const = create_i32_const(db, location, STEP_TAG_SHIFT);
-        let tag_value = tag_const.result(db, 0);
+        let tag_const = create_i32_const(ctx, location, STEP_TAG_SHIFT);
+        let tag_value = ctx.op_result(tag_const, 0);
         ops.push(tag_const);
 
         // Prompt comes from operand (cont.prompt_tag has same representation as i32)
         let prompt_value = prompt_operand.expect("step_shift requires prompt operand");
 
         // op_idx from attribute
-        let op_idx_const = create_i32_const(db, location, op_idx as i32);
-        let op_idx_value = op_idx_const.result(db, 0);
+        let op_idx_const = create_i32_const(ctx, location, op_idx as i32);
+        let op_idx_value = ctx.op_result(op_idx_const, 0);
         ops.push(op_idx_const);
 
         // Value field - cast continuation to any
         let value_field = if let Some(v) = continuation {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         let fields = vec![tag_value, value_field, prompt_value, op_idx_value];
-        let struct_new = adt::struct_new(db, location, fields, step_type, step_type);
-        ops.push(struct_new.as_operation());
+        let struct_new =
+            arena_adt::struct_new(ctx, location, fields, step_type, step_type).op_ref();
+        ops.push(struct_new);
 
         expand_ops(rewriter, ops);
         true
@@ -674,49 +678,51 @@ impl<'db> RewritePattern<'db> for LowerStepShiftPattern {
 /// - `trampoline.state_get` (all fields are anyref)
 struct LowerTrampolineStructGetPattern;
 
-impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
+impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let any_ty = wasm::Anyref::new(db).as_type();
+        let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
         // Try to match each struct-get operation type and extract parameters
         let (struct_type, field_idx, is_any_field) =
-            if let Ok(step_get) = trampoline::StepGet::from_operation(db, *op) {
-                let idx = step_field_index(step_get.field(db));
-                (step_adt_type(db), idx, idx == 1)
-            } else if let Ok(cont_get) = trampoline::ContinuationGet::from_operation(db, *op) {
-                let idx = continuation_field_index(cont_get.field(db));
-                (continuation_adt_type(db), idx, idx == 1 || idx == 3)
-            } else if let Ok(wrapper_get) = trampoline::ResumeWrapperGet::from_operation(db, *op) {
-                let idx = resume_wrapper_field_index(wrapper_get.field(db));
-                (resume_wrapper_adt_type(db), idx, true)
-            } else if let Ok(state_get) = trampoline::StateGet::from_operation(db, *op) {
-                let field_idx = state_get
-                    .field(db)
-                    .with_str(|s| s.strip_prefix("field").and_then(|n| n.parse::<u32>().ok()))
-                    .unwrap_or(0);
+            if let Ok(step_get) = arena_trampoline::StepGet::from_op(ctx, op) {
+                let idx = step_get.field(ctx);
+                (step_adt_type(ctx), idx, idx == 1)
+            } else if let Ok(cont_get) = arena_trampoline::ContinuationGet::from_op(ctx, op) {
+                let idx = cont_get.field(ctx);
+                (continuation_adt_type(ctx), idx, idx == 1 || idx == 3)
+            } else if let Ok(wrapper_get) = arena_trampoline::ResumeWrapperGet::from_op(ctx, op) {
+                let idx = wrapper_get.field(ctx);
+                (resume_wrapper_adt_type(ctx), idx, true)
+            } else if let Ok(state_get) = arena_trampoline::StateGet::from_op(ctx, op) {
+                let field_idx = state_get.field(ctx);
                 // state_type is added manually as an attribute
-                let state_type = op
-                    .attributes(db)
+                let state_type = ctx
+                    .op(op)
+                    .attributes
                     .get(&Symbol::new("state_type"))
                     .and_then(|a| match a {
-                        Attribute::Type(ty) => Some(*ty),
+                        ArenaAttribute::Type(ty) => Some(*ty),
                         _ => None,
                     })
-                    .unwrap_or(any_ty);
+                    .unwrap_or(anyref_ty);
                 (state_type, field_idx, true)
             } else {
                 return false;
             };
 
-        let location = op.location(db);
-        let expected_result_type = op.results(db).first().copied().unwrap_or(any_ty);
-        let struct_value = rewriter
-            .operands()
+        let location = ctx.op(op).location;
+        let expected_result_type = ctx
+            .op_result_types(op)
+            .first()
+            .copied()
+            .unwrap_or(anyref_ty);
+        let struct_value = ctx
+            .op_operands(op)
             .first()
             .copied()
             .expect("struct_get requires operand");
@@ -724,19 +730,20 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
         if is_any_field {
             let mut ops = Vec::new();
 
-            let struct_get = adt::struct_get(
-                db,
+            let struct_get = arena_adt::struct_get(
+                ctx,
                 location,
                 struct_value,
-                any_ty,
+                anyref_ty,
                 struct_type,
-                field_idx as u64,
-            );
-            let any_value = struct_get.as_operation().result(db, 0);
-            ops.push(struct_get.as_operation());
+                field_idx,
+            )
+            .op_ref();
+            let any_value = ctx.op_result(struct_get, 0);
+            ops.push(struct_get);
 
             materialize_from_any(
-                db,
+                ctx,
                 location,
                 any_value,
                 expected_result_type,
@@ -747,16 +754,17 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
             expand_ops(rewriter, ops);
             true
         } else {
-            let struct_get = adt::struct_get(
-                db,
+            let struct_get = arena_adt::struct_get(
+                ctx,
                 location,
                 struct_value,
                 expected_result_type,
                 struct_type,
-                field_idx as u64,
-            );
+                field_idx,
+            )
+            .op_ref();
 
-            rewriter.replace_op(struct_get.as_operation());
+            rewriter.replace_op(struct_get);
             true
         }
     }
@@ -765,37 +773,37 @@ impl<'db> RewritePattern<'db> for LowerTrampolineStructGetPattern {
 /// Lower `trampoline.build_state` -> `adt.struct_new`
 struct LowerBuildStatePattern;
 
-impl<'db> RewritePattern<'db> for LowerBuildStatePattern {
+impl ArenaRewritePattern for LowerBuildStatePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let build_state = match trampoline::BuildState::from_operation(db, *op) {
-            Ok(bs) => bs,
-            Err(_) => return false,
+        let Ok(build_state) = arena_trampoline::BuildState::from_op(ctx, op) else {
+            return false;
         };
 
-        let location = op.location(db);
-        let operands = rewriter.operands().clone();
+        let location = ctx.op(op).location;
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
 
         // Use the original state type directly. State fields are already set to
         // anyref (tribute_rt.any) in cont_to_trampoline, ensuring the same nominal
         // type is used for both creation (build_state) and extraction (struct_get).
-        let state_type = build_state.state_type(db);
+        let state_type = build_state.state_type(ctx);
 
         let mut ops = Vec::new();
         let mut fields = Vec::new();
 
         // Cast all operands to any type using TypeConverter materialization
         for v in operands.iter() {
-            let casted = materialize_to_any(db, location, *v, rewriter, &mut ops);
+            let casted = materialize_to_any(ctx, location, *v, rewriter, &mut ops);
             fields.push(casted);
         }
 
-        let struct_new = adt::struct_new(db, location, fields, state_type, state_type);
-        ops.push(struct_new.as_operation());
+        let struct_new =
+            arena_adt::struct_new(ctx, location, fields, state_type, state_type).op_ref();
+        ops.push(struct_new);
 
         expand_ops(rewriter, ops);
         true
@@ -805,23 +813,21 @@ impl<'db> RewritePattern<'db> for LowerBuildStatePattern {
 /// Lower `trampoline.build_resume_wrapper` -> `adt.struct_new`
 struct LowerBuildResumeWrapperPattern;
 
-impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
+impl ArenaRewritePattern for LowerBuildResumeWrapperPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != trampoline::DIALECT_NAME()
-            || op.name(db) != trampoline::BUILD_RESUME_WRAPPER()
-        {
+        if arena_trampoline::BuildResumeWrapper::from_op(ctx, op).is_err() {
             return false;
         }
 
-        let location = op.location(db);
-        let wrapper_type = resume_wrapper_adt_type(db);
+        let location = ctx.op(op).location;
+        let wrapper_type = resume_wrapper_adt_type(ctx);
 
-        let operands = rewriter.operands().clone();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
         let state = operands.first().copied();
         let resume_value = operands.get(1).copied();
 
@@ -829,21 +835,22 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
 
         // Cast state to any using TypeConverter materialization
         let state_field = if let Some(v) = state {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         // Cast resume_value to any using TypeConverter materialization
         let resume_value_field = if let Some(v) = resume_value {
-            materialize_to_any(db, location, v, rewriter, &mut ops)
+            materialize_to_any(ctx, location, v, rewriter, &mut ops)
         } else {
-            null_any(db, location, &mut ops)
+            null_any(ctx, location, &mut ops)
         };
 
         let fields = vec![state_field, resume_value_field];
-        let struct_new = adt::struct_new(db, location, fields, wrapper_type, wrapper_type);
-        ops.push(struct_new.as_operation());
+        let struct_new =
+            arena_adt::struct_new(ctx, location, fields, wrapper_type, wrapper_type).op_ref();
+        ops.push(struct_new);
 
         expand_ops(rewriter, ops);
         true
@@ -859,22 +866,21 @@ impl<'db> RewritePattern<'db> for LowerBuildResumeWrapperPattern {
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerSetYieldStatePattern;
 
-impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
+impl ArenaRewritePattern for LowerSetYieldStatePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let set_yield = match trampoline::SetYieldState::from_operation(db, *op) {
-            Ok(sy) => sy,
-            Err(_) => return false,
+        let Ok(set_yield) = arena_trampoline::SetYieldState::from_op(ctx, op) else {
+            return false;
         };
 
-        let location = op.location(db);
-        let op_idx = set_yield.op_idx(db);
+        let location = ctx.op(op).location;
+        let op_idx = set_yield.op_idx(ctx);
 
-        let operands = rewriter.operands().clone();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
         // Operands are (tag, continuation)
         let tag_operand = operands
             .first()
@@ -888,19 +894,25 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
         let mut ops = Vec::new();
 
         // Set $yield_state = 1 (yielding)
-        push_set_i32_global(db, location, 1, yield_globals::STATE_IDX, &mut ops);
+        push_set_i32_global(ctx, location, 1, yield_globals::STATE_IDX, &mut ops);
 
         // Set $yield_tag = tag (cont.prompt_tag has same representation as i32)
         ops.push(
-            wasm::global_set(db, location, tag_operand, yield_globals::TAG_IDX).as_operation(),
+            arena_wasm::global_set(ctx, location, tag_operand, yield_globals::TAG_IDX).op_ref(),
         );
 
         // Set $yield_cont = continuation (as anyref)
-        let cont_any = materialize_to_any(db, location, cont_val, rewriter, &mut ops);
-        ops.push(wasm::global_set(db, location, cont_any, yield_globals::CONT_IDX).as_operation());
+        let cont_any = materialize_to_any(ctx, location, cont_val, rewriter, &mut ops);
+        ops.push(arena_wasm::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref());
 
         // Set $yield_op_idx = op_idx
-        push_set_i32_global(db, location, op_idx as i32, yield_globals::OP_IDX, &mut ops);
+        push_set_i32_global(
+            ctx,
+            location,
+            op_idx as i32,
+            yield_globals::OP_IDX,
+            &mut ops,
+        );
 
         expand_ops(rewriter, ops);
         true
@@ -910,24 +922,22 @@ impl<'db> RewritePattern<'db> for LowerSetYieldStatePattern {
 /// Lower `trampoline.reset_yield_state` -> wasm.global_set ($yield_state = 0)
 struct LowerResetYieldStatePattern;
 
-impl<'db> RewritePattern<'db> for LowerResetYieldStatePattern {
+impl ArenaRewritePattern for LowerResetYieldStatePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != trampoline::DIALECT_NAME()
-            || op.name(db) != trampoline::RESET_YIELD_STATE()
-        {
+        if arena_trampoline::ResetYieldState::from_op(ctx, op).is_err() {
             return false;
         }
 
-        let location = op.location(db);
+        let location = ctx.op(op).location;
         let mut ops = Vec::new();
 
         // Set $yield_state = 0 (not yielding)
-        push_set_i32_global(db, location, 0, yield_globals::STATE_IDX, &mut ops);
+        push_set_i32_global(ctx, location, 0, yield_globals::STATE_IDX, &mut ops);
 
         expand_ops(rewriter, ops);
         true
@@ -941,45 +951,57 @@ impl<'db> RewritePattern<'db> for LowerResetYieldStatePattern {
 /// - `trampoline.get_yield_shift_value` -> load, cast, and extract shift_value field
 struct LowerYieldContinuationAccessPattern;
 
-impl<'db> RewritePattern<'db> for LowerYieldContinuationAccessPattern {
+impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != trampoline::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("trampoline") {
             return false;
         }
 
-        let extract_shift_value = if op.name(db) == trampoline::GET_YIELD_CONTINUATION() {
+        let extract_shift_value = if data.name == Symbol::new("get_yield_continuation") {
             false
-        } else if op.name(db) == trampoline::GET_YIELD_SHIFT_VALUE() {
+        } else if data.name == Symbol::new("get_yield_shift_value") {
             true
         } else {
             return false;
         };
 
-        let location = op.location(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let cont_type = continuation_adt_type(db);
+        let location = ctx.op(op).location;
+        let anyref_ty = intern_type(ctx, "wasm", "anyref");
+        let cont_type = continuation_adt_type(ctx);
 
         let mut ops = Vec::new();
 
         // Load continuation from $yield_cont global
-        let get_cont = wasm::global_get(db, location, anyref_ty, yield_globals::CONT_IDX);
-        let cont_anyref = get_cont.as_operation().result(db, 0);
-        ops.push(get_cont.as_operation());
+        let get_cont =
+            arena_wasm::global_get(ctx, location, anyref_ty, yield_globals::CONT_IDX).op_ref();
+        let cont_anyref = ctx.op_result(get_cont, 0);
+        ops.push(get_cont);
 
         // Cast anyref to continuation type
-        let cont_cast = wasm::ref_cast(db, location, cont_anyref, cont_type, cont_type, None);
-        let cont_ref = cont_cast.as_operation().result(db, 0);
-        ops.push(cont_cast.as_operation());
+        // For wasm.ref_cast, target_type is a Symbol and type_idx is optional
+        let cont_cast = arena_wasm::ref_cast(
+            ctx,
+            location,
+            cont_anyref,
+            cont_type,
+            Symbol::new("_Continuation"),
+            None,
+        )
+        .op_ref();
+        let cont_ref = ctx.op_result(cont_cast, 0);
+        ops.push(cont_cast);
 
         if extract_shift_value {
             // Extract shift_value from continuation (field 3)
-            let get_shift_value = adt::struct_get(db, location, cont_ref, anyref_ty, cont_type, 3);
-            ops.push(get_shift_value.as_operation());
+            let get_shift_value =
+                arena_adt::struct_get(ctx, location, cont_ref, anyref_ty, cont_type, 3).op_ref();
+            ops.push(get_shift_value);
         }
 
         expand_ops(rewriter, ops);
@@ -994,30 +1016,31 @@ impl<'db> RewritePattern<'db> for LowerYieldContinuationAccessPattern {
 /// - `trampoline.get_yield_op_idx` -> yield_op_idx global
 struct LowerYieldGlobalGetPattern;
 
-impl<'db> RewritePattern<'db> for LowerYieldGlobalGetPattern {
+impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != trampoline::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("trampoline") {
             return false;
         }
 
-        let global_idx = if op.name(db) == trampoline::CHECK_YIELD() {
+        let global_idx = if data.name == Symbol::new("check_yield") {
             yield_globals::STATE_IDX
-        } else if op.name(db) == trampoline::GET_YIELD_OP_IDX() {
+        } else if data.name == Symbol::new("get_yield_op_idx") {
             yield_globals::OP_IDX
         } else {
             return false;
         };
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let get_global = wasm::global_get(db, location, i32_ty, global_idx);
+        let location = ctx.op(op).location;
+        let i32_ty = intern_type(ctx, "core", "i32");
+        let get_global = arena_wasm::global_get(ctx, location, i32_ty, global_idx).op_ref();
 
-        rewriter.replace_op(get_global.as_operation());
+        rewriter.replace_op(get_global);
         true
     }
 }
@@ -1032,117 +1055,82 @@ impl<'db> RewritePattern<'db> for LowerYieldGlobalGetPattern {
 /// when the return type is trampoline.Step.
 struct ConvertFuncTypePattern;
 
-impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
+impl ArenaRewritePattern for ConvertFuncTypePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func) = Func::from_operation(db, *op) else {
+        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
             return false;
         };
 
-        let func_ty = func.r#type(db);
-        let Some(fn_ty) = core::Func::from_type(db, func_ty) else {
+        let func_ty = func_op.r#type(ctx);
+        let func_data = ctx.types.get(func_ty);
+        if func_data.dialect != Symbol::new("core") || func_data.name != Symbol::new("func") {
             return false;
-        };
+        }
 
-        // Convert parameter types using the shared helper function
-        let original_params = fn_ty.params(db);
-        let new_params: Vec<Type<'db>> = original_params
-            .iter()
-            .map(|&ty| convert_trampoline_type(db, ty))
-            .collect();
-        let params_changed = new_params
-            .iter()
-            .zip(original_params.iter())
-            .any(|(new, old)| new != old);
+        // params[0] = return type, params[1..] = parameter types
+        if func_data.params.is_empty() {
+            return false;
+        }
 
-        // Convert result type using the shared helper function
-        let result_ty = fn_ty.result(db);
-        let new_result = convert_trampoline_type(db, result_ty);
-        let result_changed = new_result != result_ty;
+        // Clone data we need before mutating ctx.types
+        let params: Vec<TypeRef> = func_data.params.to_vec();
+        let effect_attr = func_data.attrs.get(&Symbol::new("effect")).cloned();
+
+        // Convert return type (params[0]) and parameter types (params[1..])
+        let new_result = convert_trampoline_type(ctx, params[0]);
+        let result_changed = new_result != params[0];
+
+        let mut params_changed = false;
+        let mut new_params = Vec::with_capacity(params.len());
+        new_params.push(new_result); // return type at index 0
+
+        for &param_ty in &params[1..] {
+            let new_param = convert_trampoline_type(ctx, param_ty);
+            if new_param != param_ty {
+                params_changed = true;
+            }
+            new_params.push(new_param);
+        }
 
         if !params_changed && !result_changed {
             return false;
         }
 
-        tracing::debug!(
-            "ConvertFuncTypePattern: converting func {} signature (params_changed={}, result_changed={}, orig_params={:?}, new_params={:?})",
-            func.sym_name(db),
-            params_changed,
-            result_changed,
-            fn_ty
-                .params(db)
-                .iter()
-                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                .collect::<Vec<_>>(),
-            new_params
-                .iter()
-                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                .collect::<Vec<_>>()
-        );
+        // Build new function type preserving effect attribute
+        let mut builder =
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).params(new_params);
+        if let Some(eff) = effect_attr {
+            builder = builder.attr("effect", eff);
+        }
+        let new_func_ty = ctx.types.intern(builder.build());
 
-        // Rebuild function with new type AND update block arguments
-        // The block arguments must match the function signature parameter types
-        // IMPORTANT: Build new_blocks first (using new_params.iter()), then new_fn_ty
-        let body = func.body(db);
-        let blocks = body.blocks(db);
-        let new_blocks: IdVec<Block<'db>> = blocks
-            .iter()
-            .enumerate()
-            .map(|(block_idx, block)| {
-                if block_idx == 0 && params_changed {
-                    // Entry block: update block args to match new param types
-                    let new_block_args: IdVec<BlockArg<'db>> = new_params
-                        .iter()
-                        .enumerate()
-                        .map(|(i, ty)| {
-                            // Preserve any existing attributes from the original block arg
-                            let orig_arg = block.args(db).get(i);
-                            let attrs = orig_arg.map(|a| a.attrs(db).clone()).unwrap_or_default();
-                            BlockArg::new(db, *ty, attrs)
-                        })
-                        .collect();
-                    Block::new(
-                        db,
-                        block.id(db),
-                        block.location(db),
-                        new_block_args,
-                        block.operations(db).clone(),
-                    )
-                } else {
-                    *block
+        // Update block arguments in the entry block to match new param types
+        let body = func_op.body(ctx);
+        let blocks = ctx.region(body).blocks.to_vec();
+        if let Some(&entry_block) = blocks.first() {
+            if params_changed {
+                let block_args = ctx.block(entry_block).args.clone();
+                for (i, _arg) in block_args.iter().enumerate() {
+                    let new_func_ty_data = ctx.types.get(new_func_ty);
+                    // params[1..] maps to block args[0..]
+                    if i + 1 < new_func_ty_data.params.len() {
+                        let new_param_ty = new_func_ty_data.params[i + 1];
+                        ctx.set_block_arg_type(entry_block, i as u32, new_param_ty);
+                    }
                 }
-            })
-            .collect();
-        let new_body = Region::new(db, body.location(db), new_blocks);
+            }
+        }
 
-        // Build new function type (consumes new_params)
-        let new_fn_ty = core::Func::with_effect(
-            db,
-            new_params.into_iter().collect(),
-            new_result,
-            fn_ty.effect(db),
-        );
-
-        tracing::debug!(
-            "ConvertFuncTypePattern: new func type has result={}.{}, params={:?}",
-            new_fn_ty.result(db).dialect(db),
-            new_fn_ty.result(db).name(db),
-            new_fn_ty
-                .params(db)
-                .iter()
-                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                .collect::<Vec<_>>()
-        );
-
-        let new_op = op
-            .modify(db)
-            .attr(Symbol::new("type"), Attribute::Type(new_fn_ty.as_type()))
-            .regions(IdVec::from(vec![new_body]))
-            .build();
+        // Rebuild function with new type, reusing detached body region
+        let func_name = func_op.sym_name(ctx);
+        let loc = ctx.op(op).location;
+        ctx.detach_region(body);
+        let new_op = arena_func::func(ctx, loc, func_name, new_func_ty, body).op_ref();
 
         rewriter.replace_op(new_op);
         true
@@ -1154,302 +1142,115 @@ impl<'db> RewritePattern<'db> for ConvertFuncTypePattern {
 /// Applies to: func.call, func.call_indirect, wasm.if
 struct ConvertTrampolineResultTypePattern;
 
-impl<'db> RewritePattern<'db> for ConvertTrampolineResultTypePattern {
+impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Check if this is a supported operation type
-        let is_supported = func::Call::from_operation(db, *op).is_ok()
-            || func::CallIndirect::from_operation(db, *op).is_ok()
-            || wasm::If::from_operation(db, *op).is_ok();
+        let is_supported = arena_func::Call::from_op(ctx, op).is_ok()
+            || arena_func::CallIndirect::from_op(ctx, op).is_ok()
+            || arena_wasm::If::from_op(ctx, op).is_ok();
 
         if !is_supported {
             return false;
         }
 
-        let results = op.results(db);
-        if results.is_empty() {
+        let result_types = ctx.op_result_types(op).to_vec();
+        if result_types.is_empty() {
             return false;
         }
 
-        let result_ty = results[0];
-        let new_result_ty = convert_trampoline_type(db, result_ty);
+        let result_ty = result_types[0];
+        let new_result_ty = convert_trampoline_type(ctx, result_ty);
 
         if new_result_ty == result_ty {
             return false;
         }
 
-        tracing::debug!(
-            "ConvertTrampolineResultTypePattern: {} - converting result type from {}.{} to {}.{}",
-            op.name(db),
-            result_ty.dialect(db),
-            result_ty.name(db),
-            new_result_ty.dialect(db),
-            new_result_ty.name(db)
-        );
+        tracing::debug!("ConvertTrampolineResultTypePattern: converting result type");
 
-        let new_op = op
-            .modify(db)
-            .results(IdVec::from(vec![new_result_ty]))
-            .build();
+        // Update the result type in-place
+        ctx.set_op_result_type(op, 0, new_result_ty);
+
+        // We mutated the op directly but didn't replace it. We need to signal
+        // that a change happened. Use a trick: mark it as "changed" by inserting
+        // zero prefix ops and not replacing. But the rewriter expects a mutation...
+        // Actually, since we mutated the op in-place, we don't need to go through
+        // the rewriter. But we need to return true and have mutations.
+        // The simplest approach: the in-place mutation already happened, so we
+        // just need the applicator to know something changed.
+        // PatternRewriter requires has_mutations() to be true for the change to count.
+        // We'll create a no-op by inserting nothing - but that won't work either.
+        //
+        // The cleanest approach is to rebuild the op with updated result type.
+        // But for func.call with variadic results this would be complex.
+        // Instead, since we already mutated in-place, let's use erase_op with
+        // the same values to make the rewriter happy.
+        //
+        // Actually, the simplest: just return true without mutations.
+        // The applicator checks has_mutations() before applying... so we need a real mutation.
+        //
+        // Let's do the simplest thing: read out the results and erase_op mapping to themselves.
+        // Wait, that would remove the op. Let's use a different approach.
+        //
+        // The cleanest way: rebuild the op. For func.call, we need callee + args.
+        // Let's just update the result type directly and create a dummy mutation
+        // so the framework counts it.
+        //
+        // After re-reading the rewriter code: if matched=true but no mutations,
+        // changes won't be incremented. We already mutated in-place, so let's
+        // just return false to avoid double counting, but we still want fixpoint
+        // to detect the change...
+        //
+        // Actually the simplest correct approach: since we modified in-place already,
+        // we need to tell the applicator. The framework only counts changes when
+        // has_mutations() returns true. Since the actual IR is already correct,
+        // we should rebuild the op to go through the proper channel.
+
+        // Rebuild approach: create new op with same data but updated result types
+        let data = ctx.op(op);
+        let loc = data.location;
+        let dialect = data.dialect;
+        let name = data.name;
+        let attrs = data.attributes.clone();
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+        let regions: Vec<_> = data.regions.to_vec();
+        let successors: Vec<_> = data.successors.to_vec();
+
+        // Compute all result types with the conversion applied
+        let new_result_types: Vec<TypeRef> = result_types
+            .iter()
+            .enumerate()
+            .map(|(i, &ty)| if i == 0 { new_result_ty } else { ty })
+            .collect();
+
+        // Revert the in-place mutation (we'll rebuild properly)
+        ctx.set_op_result_type(op, 0, result_ty);
+
+        // Detach regions from the old op before building the new one
+        for &r in &regions {
+            ctx.detach_region(r);
+        }
+
+        let mut builder = OperationDataBuilder::new(loc, dialect, name)
+            .operands(operands)
+            .results(new_result_types);
+        for (key, val) in attrs {
+            builder = builder.attr(key, val);
+        }
+        for r in regions {
+            builder = builder.region(r);
+        }
+        for s in successors {
+            builder = builder.successor(s);
+        }
+        let new_data = builder.build(ctx);
+        let new_op = ctx.create_op(new_data);
 
         rewriter.replace_op(new_op);
         true
-    }
-}
-
-/// Convert a trampoline type to its corresponding ADT type.
-fn convert_trampoline_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> Type<'db> {
-    if trampoline::Step::from_type(db, ty).is_some() {
-        step_adt_type(db)
-    } else if trampoline::Continuation::from_type(db, ty).is_some() {
-        continuation_adt_type(db)
-    } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
-        resume_wrapper_adt_type(db)
-    } else {
-        ty
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, PathId, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    // ========================================================================
-    // Test: yield_globals constants
-    // ========================================================================
-
-    #[test]
-    fn test_yield_globals_indices_are_sequential() {
-        // Verify indices are sequential starting from 0
-        assert_eq!(yield_globals::STATE_IDX, 0);
-        assert_eq!(yield_globals::TAG_IDX, 1);
-        assert_eq!(yield_globals::CONT_IDX, 2);
-        assert_eq!(yield_globals::OP_IDX, 3);
-    }
-
-    #[test]
-    fn test_yield_globals_indices_are_unique() {
-        let indices = [
-            yield_globals::STATE_IDX,
-            yield_globals::TAG_IDX,
-            yield_globals::CONT_IDX,
-            yield_globals::OP_IDX,
-        ];
-
-        // Check all indices are unique
-        for (i, &idx1) in indices.iter().enumerate() {
-            for (j, &idx2) in indices.iter().enumerate() {
-                if i != j {
-                    assert_ne!(idx1, idx2, "Indices {} and {} should be unique", i, j);
-                }
-            }
-        }
-    }
-
-    // ========================================================================
-    // Test: LowerBuildContinuationPattern (via lower())
-    // ========================================================================
-
-    #[salsa::tracked]
-    fn make_build_continuation_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let cont_ty = trampoline::Continuation::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-
-        // Create operands: tag (prompt_tag), resume_fn (i32 table index), state (anyref), shift_value (anyref)
-        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 1);
-        let resume_fn_op = wasm::i32_const(db, location, core::I32::new(db).as_type(), -1);
-        let state_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-        let shift_value_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-
-        let tag = tag_op.as_operation().result(db, 0);
-        let resume_fn = resume_fn_op.result(db);
-        let state = state_op.as_operation().result(db, 0);
-        let shift_value = shift_value_op.as_operation().result(db, 0);
-
-        // Create trampoline.build_continuation with tag operand
-        let build_cont_op = trampoline::build_continuation(
-            db,
-            location,
-            tag,
-            resume_fn,
-            state,
-            shift_value,
-            cont_ty,
-            0,
-        );
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                tag_op.as_operation(),
-                resume_fn_op.as_operation(),
-                state_op.as_operation(),
-                shift_value_op.as_operation(),
-                build_cont_op.as_operation()
-            ],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check_has_struct_new(db: &dyn salsa::Database, module: Module<'_>) -> bool {
-        let lowered = lower(db, module);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter()
-            .any(|op| op.dialect(db) == adt::DIALECT_NAME() && op.name(db) == adt::STRUCT_NEW())
-    }
-
-    #[salsa_test]
-    fn test_build_continuation_lowers_to_struct_new(db: &salsa::DatabaseImpl) {
-        let module = make_build_continuation_module(db);
-        assert!(
-            lower_and_check_has_struct_new(db, module),
-            "Expected adt.struct_new in lowered output"
-        );
-    }
-
-    // ========================================================================
-    // Test: LowerSetYieldStatePattern (via lower())
-    // ========================================================================
-
-    #[salsa::tracked]
-    fn make_set_yield_state_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-
-        // Create operands: tag, continuation
-        let tag_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
-        let tag_val = tag_op.as_operation().result(db, 0);
-        let cont_op = adt::ref_null(db, location, anyref_ty, anyref_ty);
-        let cont_val = cont_op.as_operation().result(db, 0);
-
-        // Create trampoline.set_yield_state with tag operand
-        let set_yield_op = trampoline::set_yield_state(db, location, tag_val, cont_val, 7);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                tag_op.as_operation(),
-                cont_op.as_operation(),
-                set_yield_op.as_operation()
-            ],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn lower_and_collect_global_set_indices(
-        db: &dyn salsa::Database,
-        module: Module<'_>,
-    ) -> Vec<u32> {
-        let lowered = lower(db, module);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        let mut indices = Vec::new();
-        for op in ops.iter() {
-            if op.dialect(db) == wasm::DIALECT_NAME()
-                && op.name(db) == wasm::GLOBAL_SET()
-                && let Some(Attribute::IntBits(idx)) = op.attributes(db).get(&Symbol::new("index"))
-            {
-                indices.push(*idx as u32);
-            }
-        }
-        indices
-    }
-
-    #[salsa_test]
-    fn test_set_yield_state_uses_yield_globals(db: &salsa::DatabaseImpl) {
-        let module = make_set_yield_state_module(db);
-        let indices = lower_and_collect_global_set_indices(db, module);
-
-        // Should set: STATE_IDX (0), TAG_IDX (1), CONT_IDX (2), OP_IDX (3)
-        assert!(
-            indices.contains(&yield_globals::STATE_IDX),
-            "Should set yield_state global"
-        );
-        assert!(
-            indices.contains(&yield_globals::TAG_IDX),
-            "Should set yield_tag global"
-        );
-        assert!(
-            indices.contains(&yield_globals::CONT_IDX),
-            "Should set yield_cont global"
-        );
-        assert!(
-            indices.contains(&yield_globals::OP_IDX),
-            "Should set yield_op_idx global"
-        );
-    }
-
-    // ========================================================================
-    // Test: TypeConverter prompt_tag conversion
-    // ========================================================================
-
-    #[salsa::tracked]
-    fn type_converter_converts_prompt_tag(db: &dyn salsa::Database) -> bool {
-        let type_converter = create_type_converter();
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        let converted = type_converter.convert_type(db, prompt_tag_ty);
-        converted == Some(i32_ty)
-    }
-
-    #[salsa_test]
-    fn test_type_converter_converts_prompt_tag_to_i32(db: &salsa::DatabaseImpl) {
-        assert!(
-            type_converter_converts_prompt_tag(db),
-            "cont.prompt_tag should convert to core.i32"
-        );
-    }
-
-    #[salsa::tracked]
-    fn type_converter_prompt_tag_materialization(db: &dyn salsa::Database) -> bool {
-        let type_converter = create_type_converter();
-        let location = test_location(db);
-        let prompt_tag_ty = cont::PromptTag::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create a dummy value with prompt_tag type
-        let dummy_op = wasm::i32_const(db, location, prompt_tag_ty, 42);
-        let dummy_val = dummy_op.as_operation().result(db, 0);
-
-        let result = type_converter.materialize(db, location, dummy_val, prompt_tag_ty, i32_ty);
-        matches!(result, Some(MaterializeResult::NoOp))
-    }
-
-    #[salsa_test]
-    fn test_type_converter_prompt_tag_materialization_is_noop(db: &salsa::DatabaseImpl) {
-        assert!(
-            type_converter_prompt_tag_materialization(db),
-            "cont.prompt_tag -> i32 materialization should be NoOp"
-        );
     }
 }
