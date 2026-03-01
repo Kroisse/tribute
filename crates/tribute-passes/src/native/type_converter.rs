@@ -558,7 +558,7 @@ pub fn native_type_converter_arena(ctx: &mut IrContext) -> (ArenaTypeConverter, 
             return Some(r.core_i64);
         }
         // ADT struct/enum/variant_instance/typeref → ptr
-        if is_adt_ptr_type(ctx, ty, r.evidence_ty) {
+        if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
         }
         // closure.closure → ptr
@@ -827,7 +827,7 @@ pub fn is_ptr_like_arena(
 }
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
-fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef, _evidence_ty: TypeRef) -> bool {
+fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("adt") {
         return false;

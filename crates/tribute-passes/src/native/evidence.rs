@@ -608,8 +608,13 @@ fn replace_stubs_and_add_empty_arena(ctx: &mut IrContext, module: ArenaModule) {
     if !has_evidence_empty {
         let empty_op = make_evidence_empty_extern_arena(ctx, loc, i64_ty);
         // Insert at front of module block
-        let first_op = ctx.block(first_block).ops[0];
-        ctx.insert_op_before(first_block, first_op, empty_op);
+        let block_ops = &ctx.block(first_block).ops;
+        if block_ops.is_empty() {
+            ctx.push_op(first_block, empty_op);
+        } else {
+            let first_op = block_ops[0];
+            ctx.insert_op_before(first_block, first_op, empty_op);
+        }
     }
 }
 
@@ -831,23 +836,28 @@ fn rewrite_evidence_ops_in_block_arena(ctx: &mut IrContext, block: BlockRef) {
                     let ev_val = operands[0];
                     let marker_val = operands[1];
 
-                    if let Some(fields) = marker_struct_operands.get(&marker_val) {
-                        let mut args = vec![ev_val];
-                        args.extend_from_slice(fields);
-                        let old_result = ctx.op_result(op, 0);
-                        let new_call = arena_func::call(
-                            ctx,
-                            loc,
-                            args,
-                            i64_ty,
-                            Symbol::new("__tribute_evidence_extend"),
-                        );
-                        let new_result = new_call.result(ctx);
-                        ctx.insert_op_before(block, op, new_call.op_ref());
-                        ctx.replace_all_uses(old_result, new_result);
-                        ops_to_erase.push(op);
-                        continue;
-                    }
+                    let fields = marker_struct_operands.get(&marker_val).unwrap_or_else(|| {
+                        panic!(
+                            "evidence_extend rewrite: missing marker decomposition for \
+                             marker_val={marker_val:?} at op={op:?} (loc={loc:?}). \
+                             The adt.struct_new that produced this marker was not recorded."
+                        )
+                    });
+                    let mut args = vec![ev_val];
+                    args.extend_from_slice(fields);
+                    let old_result = ctx.op_result(op, 0);
+                    let new_call = arena_func::call(
+                        ctx,
+                        loc,
+                        args,
+                        i64_ty,
+                        Symbol::new("__tribute_evidence_extend"),
+                    );
+                    let new_result = new_call.result(ctx);
+                    ctx.insert_op_before(block, op, new_call.op_ref());
+                    ctx.replace_all_uses(old_result, new_result);
+                    ops_to_erase.push(op);
+                    continue;
                 }
             }
         }

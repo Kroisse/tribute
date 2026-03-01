@@ -726,6 +726,7 @@ pub fn lower_rc_arena(ctx: &mut IrContext, module: ArenaModule) {
 /// Arena: Recursively lower RC ops in a region.
 fn lower_rc_in_region_arena(ctx: &mut IrContext, region: RegionRef) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.clone().to_vec();
+    let original_block_count = blocks.len();
 
     for block in blocks {
         // Step 1: Lower retain/release ops (may split block → add blocks to region)
@@ -745,8 +746,8 @@ fn lower_rc_in_region_arena(ctx: &mut IrContext, region: RegionRef) {
     // Also process nested regions in newly-created blocks (do_retain, do_release, free)
     // These blocks were added to the region during step 1
     let all_blocks: Vec<BlockRef> = ctx.region(region).blocks.clone().to_vec();
-    for block in all_blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+    for block in &all_blocks[original_block_count..] {
+        let ops: Vec<OpRef> = ctx.block(*block).ops.to_vec();
         for op in ops {
             let nested: Vec<RegionRef> = ctx.op(op).regions.to_vec();
             for nested_region in nested {
@@ -856,6 +857,8 @@ fn lower_rc_in_block_arena(ctx: &mut IrContext, region: RegionRef, block: BlockR
                 .unwrap();
             region_blocks.insert(pos + 1, do_retain_block);
             region_blocks.insert(pos + 2, skip_block);
+            ctx.block_mut(do_retain_block).parent_region = Some(region);
+            ctx.block_mut(skip_block).parent_region = Some(region);
 
             // Now recursively process the skip block for remaining RC ops
             lower_rc_in_block_arena(ctx, region, skip_block);
@@ -945,6 +948,9 @@ fn lower_rc_in_block_arena(ctx: &mut IrContext, region: RegionRef, block: BlockR
             region_blocks.insert(pos + 1, do_release_block);
             region_blocks.insert(pos + 2, free_block);
             region_blocks.insert(pos + 3, skip_block);
+            ctx.block_mut(do_release_block).parent_region = Some(region);
+            ctx.block_mut(free_block).parent_region = Some(region);
+            ctx.block_mut(skip_block).parent_region = Some(region);
 
             // Recursively process skip block for remaining RC ops
             lower_rc_in_block_arena(ctx, region, skip_block);

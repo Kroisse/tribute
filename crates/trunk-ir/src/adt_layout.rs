@@ -266,18 +266,26 @@ pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symb
     };
 
     let mut result = Vec::new();
-    for field in fields {
+    for (i, field) in fields.iter().enumerate() {
         let ArenaAttribute::List(pair) = field else {
-            continue;
+            panic!("get_struct_fields_arena: field[{i}] expected List, got {field:?}");
         };
-        if pair.len() < 2 {
-            continue;
-        }
+        assert!(
+            pair.len() >= 2,
+            "get_struct_fields_arena: field[{i}] pair too short (len={})",
+            pair.len()
+        );
         let ArenaAttribute::Symbol(name) = &pair[0] else {
-            continue;
+            panic!(
+                "get_struct_fields_arena: field[{i}] name expected Symbol, got {:?}",
+                pair[0]
+            );
         };
         let ArenaAttribute::Type(field_ty) = &pair[1] else {
-            continue;
+            panic!(
+                "get_struct_fields_arena: field[{i}] type expected Type, got {:?}",
+                pair[1]
+            );
         };
         result.push((*name, *field_ty));
     }
@@ -303,28 +311,38 @@ pub fn get_enum_variants_arena(
     };
 
     let mut result = Vec::new();
-    for variant in variants {
+    for (i, variant) in variants.iter().enumerate() {
         let ArenaAttribute::List(pair) = variant else {
-            continue;
+            panic!("get_enum_variants_arena: variant[{i}] expected List, got {variant:?}");
         };
-        if pair.len() < 2 {
-            continue;
-        }
+        assert!(
+            pair.len() >= 2,
+            "get_enum_variants_arena: variant[{i}] pair too short (len={})",
+            pair.len()
+        );
         let ArenaAttribute::Symbol(name) = &pair[0] else {
-            continue;
+            panic!(
+                "get_enum_variants_arena: variant[{i}] name expected Symbol, got {:?}",
+                pair[0]
+            );
         };
         let ArenaAttribute::List(field_types_attr) = &pair[1] else {
-            continue;
+            panic!(
+                "get_enum_variants_arena: variant[{i}] fields expected List, got {:?}",
+                pair[1]
+            );
         };
 
         let field_types: Vec<TypeRef> = field_types_attr
             .iter()
-            .filter_map(|a| {
-                if let ArenaAttribute::Type(ty) = a {
-                    Some(*ty)
-                } else {
-                    None
-                }
+            .enumerate()
+            .map(|(j, a)| {
+                let ArenaAttribute::Type(ty) = a else {
+                    panic!(
+                        "get_enum_variants_arena: variant[{i}] field[{j}] expected Type, got {a:?}"
+                    );
+                };
+                *ty
             })
             .collect();
 
