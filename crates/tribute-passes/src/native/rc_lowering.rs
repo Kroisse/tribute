@@ -42,7 +42,7 @@
 //!   // remaining ops from original block
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::dialect::{clif, core};
@@ -726,7 +726,7 @@ pub fn lower_rc_arena(ctx: &mut IrContext, module: ArenaModule) {
 /// Arena: Recursively lower RC ops in a region.
 fn lower_rc_in_region_arena(ctx: &mut IrContext, region: RegionRef) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.clone().to_vec();
-    let original_block_count = blocks.len();
+    let original_blocks: HashSet<BlockRef> = blocks.iter().copied().collect();
 
     for block in blocks {
         // Step 1: Lower retain/release ops (may split block → add blocks to region)
@@ -746,7 +746,10 @@ fn lower_rc_in_region_arena(ctx: &mut IrContext, region: RegionRef) {
     // Also process nested regions in newly-created blocks (do_retain, do_release, free)
     // These blocks were added to the region during step 1
     let all_blocks: Vec<BlockRef> = ctx.region(region).blocks.clone().to_vec();
-    for block in &all_blocks[original_block_count..] {
+    for block in &all_blocks {
+        if original_blocks.contains(block) {
+            continue;
+        }
         let ops: Vec<OpRef> = ctx.block(*block).ops.to_vec();
         for op in ops {
             let nested: Vec<RegionRef> = ctx.op(op).regions.to_vec();

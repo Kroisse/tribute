@@ -1004,17 +1004,17 @@ mod tests {
 
         // Find the new main wrapper and check its return type
         for &op in &module.ops(&ctx) {
-            if let Ok(f) = arena_func::Func::from_op(&ctx, op) {
-                if f.sym_name(&ctx) == Symbol::new("main") {
-                    let func_ty_ref = f.r#type(&ctx);
-                    let type_data = ctx.types.get(func_ty_ref);
-                    // core.func params[0] = result type
-                    assert_eq!(
-                        type_data.params[0], i32_ty,
-                        "main wrapper should return i32"
-                    );
-                    return;
-                }
+            if let Ok(f) = arena_func::Func::from_op(&ctx, op)
+                && f.sym_name(&ctx) == Symbol::new("main")
+            {
+                let func_ty_ref = f.r#type(&ctx);
+                let type_data = ctx.types.get(func_ty_ref);
+                // core.func params[0] = result type
+                assert_eq!(
+                    type_data.params[0], i32_ty,
+                    "main wrapper should return i32"
+                );
+                return;
             }
         }
         panic!("main wrapper not found after entrypoint generation");

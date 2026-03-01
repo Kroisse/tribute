@@ -745,8 +745,7 @@ fn is_evidence_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if a type is a Marker type in arena.
 fn is_marker_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("ability") && data.name == Symbol::new("marker")
+    tribute_ir::arena::dialect::ability::is_marker_type_ref(ctx, ty)
 }
 
 fn rewrite_evidence_ops_in_block_arena(ctx: &mut IrContext, block: BlockRef) {
