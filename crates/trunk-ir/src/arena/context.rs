@@ -147,7 +147,7 @@ impl IrContext {
         let operand_slice: SmallVec<[ValueRef; 8]> =
             data.operands.as_slice(&self.value_pool).into();
 
-        let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
+        let num_results = data.results.as_slice(&self.type_pool).len();
 
         let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
 
@@ -174,7 +174,7 @@ impl IrContext {
 
         // Allocate result values
         let mut result_value_list = EntityList::new();
-        for idx in 0..result_types.len() {
+        for idx in 0..num_results {
             let v = self.values.push(ValueData {
                 def: ValueDef::OpResult(op, idx as u32),
             });
@@ -1004,6 +1004,75 @@ mod tests {
         assert_eq!(ctx.block_args(block).len(), 1);
         assert_eq!(ctx.block_arg(block, 0), new_arg);
         assert_eq!(ctx.value_def(new_arg), ValueDef::BlockArg(block, 0));
+    }
+
+    #[test]
+    fn set_op_result_type_updates_value_ty() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .result(i32_ty)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op = ctx.create_op(data);
+
+        let r0 = ctx.op_result(op, 0);
+        let r1 = ctx.op_result(op, 1);
+        assert_eq!(ctx.value_ty(r0), i32_ty);
+        assert_eq!(ctx.value_ty(r1), i32_ty);
+
+        // Mutate the second result type
+        ctx.set_op_result_type(op, 1, f64_ty);
+
+        // The existing ValueRef should now reflect the new type
+        assert_eq!(ctx.value_ty(r0), i32_ty); // unchanged
+        assert_eq!(ctx.value_ty(r1), f64_ty); // updated
+        assert_eq!(ctx.op_result_types(op), &[i32_ty, f64_ty]);
+    }
+
+    #[test]
+    fn set_block_arg_type_updates_value_ty() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+        let f64_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
+
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+            ],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+
+        let a0 = ctx.block_arg(block, 0);
+        let a1 = ctx.block_arg(block, 1);
+        assert_eq!(ctx.value_ty(a0), i32_ty);
+        assert_eq!(ctx.value_ty(a1), i32_ty);
+
+        // Mutate the first arg type
+        ctx.set_block_arg_type(block, 0, f64_ty);
+
+        // The existing ValueRef should now reflect the new type
+        assert_eq!(ctx.value_ty(a0), f64_ty); // updated
+        assert_eq!(ctx.value_ty(a1), i32_ty); // unchanged
+        assert_eq!(ctx.block(block).args[0].ty, f64_ty);
+        assert_eq!(ctx.block(block).args[1].ty, i32_ty);
     }
 
     #[test]

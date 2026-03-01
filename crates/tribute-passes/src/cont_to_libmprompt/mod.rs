@@ -29,7 +29,8 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaTypeConverter, PatternApplicator as ArenaPatternApplicator,
+    ArenaConversionTarget, ArenaModule, ArenaTypeConverter,
+    PatternApplicator as ArenaPatternApplicator,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
 use trunk_ir::dialect::core::Module;
@@ -121,7 +122,23 @@ pub fn lower_cont_to_libmprompt_arena(ctx: &mut IrContext, module: ArenaModule) 
 
     applicator.apply_partial(ctx, module);
 
-    // Step 3: Convert remaining cont.prompt_tag types to core.i32
+    // Step 3: Verify all cont.* ops are converted (matching Salsa path)
+    let mut target = ArenaConversionTarget::new();
+    target.add_illegal_dialect("cont");
+    target.add_legal_op("cont", "drop");
+    target.add_legal_op("cont", "done");
+    target.add_legal_op("cont", "suspend");
+
+    if let Some(body) = module.body(ctx) {
+        let illegal = target.verify(ctx, body);
+        assert!(
+            illegal.is_empty(),
+            "lower_cont_to_libmprompt_arena: unconverted cont.* ops remain: {:?}",
+            illegal,
+        );
+    }
+
+    // Step 4: Convert remaining cont.prompt_tag types to core.i32
     //
     // The arena PatternApplicator doesn't yet support automatic type conversion
     // (the Salsa version does this via virtual type mapping in RewriteContext).
