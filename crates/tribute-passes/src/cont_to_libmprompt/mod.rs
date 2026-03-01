@@ -139,9 +139,7 @@ fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef
         let num_args = ctx.block(block).args.len();
         for i in 0..num_args {
             if ctx.block(block).args[i].ty == from {
-                ctx.block_mut(block).args[i].ty = to;
-                let arg_value = ctx.block_arg(block, i as u32);
-                ctx.set_value_ty(arg_value, to);
+                ctx.set_block_arg_type(block, i as u32, to);
             }
         }
 
@@ -149,10 +147,10 @@ fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef
         let ops: Vec<_> = ctx.block(block).ops.to_vec();
         for op in ops {
             // Convert result types
-            let results: Vec<_> = ctx.op_results(op).to_vec();
-            for v in results {
-                if ctx.value_ty(v) == from {
-                    ctx.set_value_ty(v, to);
+            let num_results = ctx.op_result_types(op).len();
+            for i in 0..num_results {
+                if ctx.op_result_types(op)[i] == from {
+                    ctx.set_op_result_type(op, i as u32, to);
                 }
             }
             // Recurse into nested regions
