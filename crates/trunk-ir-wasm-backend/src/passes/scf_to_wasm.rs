@@ -159,6 +159,11 @@ impl ArenaRewritePattern for ScfYieldPattern {
             return true;
         }
 
+        if operands.len() > 1 {
+            // Multi-value yields are not yet supported; leave unlowered.
+            return false;
+        }
+
         let value = operands[0];
         let loc = ctx.op(op).location;
         let new_op = arena_wasm::r#yield(ctx, loc, value);

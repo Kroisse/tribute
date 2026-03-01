@@ -208,36 +208,20 @@ pub fn analyze_intrinsics(
                 }
             }
         }
-
-        // Recurse into regions
-        for &region in ctx.op(op).regions.iter() {
-            walk_ops_in_region(ctx, region, &mut |ctx, nested_op| {
-                visit_op(
-                    ctx,
-                    nested_op,
-                    needs_fd_write,
-                    iovec_map,
-                    iovec_allocations,
-                    next_offset,
-                );
-            });
-        }
     }
 
     // Walk all operations in module body
     if let Some(body) = module.body(ctx) {
-        for &block in ctx.region(body).blocks.iter() {
-            for &op in ctx.block(block).ops.iter() {
-                visit_op(
-                    ctx,
-                    op,
-                    &mut needs_fd_write,
-                    &mut iovec_map,
-                    &mut iovec_allocations,
-                    &mut next_offset,
-                );
-            }
-        }
+        walk_ops_in_region(ctx, body, &mut |ctx, op| {
+            visit_op(
+                ctx,
+                op,
+                &mut needs_fd_write,
+                &mut iovec_map,
+                &mut iovec_allocations,
+                &mut next_offset,
+            );
+        });
     }
 
     // Allocate nwritten buffer if needed

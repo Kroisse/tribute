@@ -516,14 +516,12 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         // Struct-like bridging materializations
         // -----------------------------------------------------------------
 
-        // adt.typeref <-> wasm.structref: same runtime representation, no cast needed
+        // adt.typeref -> wasm.structref is a safe upcast (no-op).
+        // structref -> adt.typeref is a downcast and needs ref.cast (handled below).
         let from_is_typeref = is_adt_typeref(ctx, from_ty);
-        let to_is_typeref = is_adt_typeref(ctx, to_ty);
-        let from_is_structref =
-            is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("structref"));
         let to_is_structref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"));
 
-        if (from_is_typeref && to_is_structref) || (from_is_structref && to_is_typeref) {
+        if from_is_typeref && to_is_structref {
             return Some(MaterializeResult { value, ops: vec![] });
         }
 
@@ -532,11 +530,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
-            // Skip ref_cast for safe upcasts to abstract types (e.g., struct -> anyref)
+            // Skip ref_cast for safe upcasts to anyref (e.g., struct -> anyref).
+            // Note: anyref -> structref is a downcast and needs ref.cast, so we
+            // only short-circuit for anyref target, not structref.
             let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
-            let to_is_structref =
-                is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"));
-            if to_is_anyref || to_is_structref {
+            if to_is_anyref {
                 return Some(MaterializeResult { value, ops: vec![] });
             }
 

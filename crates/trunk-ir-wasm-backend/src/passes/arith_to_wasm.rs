@@ -69,39 +69,36 @@ impl ArenaRewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => {
-                let v = match value {
-                    ArenaAttribute::IntBits(v) => v as i32,
-                    _ => 0,
+                let ArenaAttribute::IntBits(v) = value else {
+                    warn!("arith.const: expected IntBits for i32, got {:?}", value);
+                    return false;
                 };
-                arena_wasm::i32_const(ctx, loc, result_ty, v).op_ref()
+                arena_wasm::i32_const(ctx, loc, result_ty, v as i32).op_ref()
             }
             "i64" => {
-                let v = match value {
-                    ArenaAttribute::IntBits(v) => v as i64,
-                    _ => 0,
+                let ArenaAttribute::IntBits(v) = value else {
+                    warn!("arith.const: expected IntBits for i64, got {:?}", value);
+                    return false;
                 };
-                arena_wasm::i64_const(ctx, loc, result_ty, v).op_ref()
+                arena_wasm::i64_const(ctx, loc, result_ty, v as i64).op_ref()
             }
             "f32" => {
-                let v = match value {
-                    ArenaAttribute::FloatBits(v) => f32::from_bits(v as u32),
-                    _ => 0.0,
+                let ArenaAttribute::FloatBits(v) = value else {
+                    warn!("arith.const: expected FloatBits for f32, got {:?}", value);
+                    return false;
                 };
-                arena_wasm::f32_const(ctx, loc, result_ty, v).op_ref()
+                arena_wasm::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                let v = match value {
-                    ArenaAttribute::FloatBits(v) => f64::from_bits(v),
-                    _ => 0.0,
+                let ArenaAttribute::FloatBits(v) = value else {
+                    warn!("arith.const: expected FloatBits for f64, got {:?}", value);
+                    return false;
                 };
-                arena_wasm::f64_const(ctx, loc, result_ty, v).op_ref()
+                arena_wasm::f64_const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
             }
             _ => {
-                let v = match value {
-                    ArenaAttribute::IntBits(v) => v as i32,
-                    _ => 0,
-                };
-                arena_wasm::i32_const(ctx, loc, result_ty, v).op_ref()
+                warn!("arith.const: unsupported type suffix '{}'", type_name);
+                return false;
             }
         };
 
@@ -223,15 +220,18 @@ impl ArenaRewritePattern for ArithCmpPattern {
 
         // Get operand type from first operand
         let operands = ctx.op_operands(op).to_vec();
-        let operand_ty = operands.first().map(|&v| ctx.value_ty(v));
+        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
+            return false;
+        };
+        let operand_ty = Some(ctx.value_ty(lhs));
         let suffix = type_suffix_opt(ctx, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
         let result_types = ctx.op_result_types(op);
-        let result_ty = result_types[0];
+        let Some(&result_ty) = result_types.first() else {
+            return false;
+        };
         let loc = ctx.op(op).location;
-        let lhs = operands[0];
-        let rhs = operands[1];
 
         let new_op = if name == Symbol::new("cmp_eq") {
             match suffix {
@@ -448,13 +448,17 @@ impl ArenaRewritePattern for ArithConversionPattern {
 
         // Get source type from operand
         let operands = ctx.op_operands(op).to_vec();
-        let operand = operands[0];
+        let Some(&operand) = operands.first() else {
+            return false;
+        };
         let src_ty = ctx.value_ty(operand);
         let src_suffix = type_suffix(ctx, Some(src_ty));
 
         // Get destination type from result
         let result_types = ctx.op_result_types(op);
-        let dst_ty = result_types[0];
+        let Some(&dst_ty) = result_types.first() else {
+            return false;
+        };
         let dst_suffix = type_suffix(ctx, Some(dst_ty));
 
         let loc = ctx.op(op).location;
