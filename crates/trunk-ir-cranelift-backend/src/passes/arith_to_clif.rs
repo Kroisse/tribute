@@ -383,19 +383,16 @@ impl ArenaRewritePattern for ArenaArithNegPattern {
         };
 
         let result_ty = rewriter.result_type(ctx, op, 0);
+        let Some(ty) = result_ty else {
+            return false;
+        };
         let category = arena_type_category(ctx, result_ty);
         let loc = ctx.op(op).location;
         let operand = neg_op.operand(ctx);
 
         let new_op = match category {
-            "f32" | "f64" => {
-                let ty = result_ty.unwrap();
-                arena_clif::fneg(ctx, loc, operand, ty).op_ref()
-            }
-            _ => {
-                let ty = result_ty.unwrap();
-                arena_clif::ineg(ctx, loc, operand, ty).op_ref()
-            }
+            "f32" | "f64" => arena_clif::fneg(ctx, loc, operand, ty).op_ref(),
+            _ => arena_clif::ineg(ctx, loc, operand, ty).op_ref(),
         };
 
         rewriter.replace_op(new_op);

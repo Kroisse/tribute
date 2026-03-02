@@ -165,9 +165,9 @@ fn convert_result_types_in_region(
         let ops: Vec<_> = ctx.block(block).ops.to_vec();
         for op in ops {
             // Convert result types
-            let num_results = ctx.op_result_types(op).len();
-            for i in 0..num_results {
-                if ctx.op_result_types(op)[i] == from {
+            let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
+            for (i, &ty) in result_types.iter().enumerate() {
+                if ty == from {
                     ctx.set_op_result_type(op, i as u32, to);
                 }
             }

@@ -279,6 +279,9 @@ impl ArenaRewritePattern for ArenaFuncCallIndirectPattern {
         }
 
         let operands = ctx.op_operands(op).to_vec();
+        if operands.is_empty() {
+            return false;
+        }
 
         // Collect arg types (skip operand 0 = callee).
         // Operand types are already converted by the applicator's cast insertion.
