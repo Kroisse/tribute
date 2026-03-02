@@ -139,7 +139,13 @@ impl ArenaRewritePattern for StructNewPattern {
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
-        let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or(0) as i64;
+        let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or_else(|| {
+            panic!(
+                "adt_rc_header: missing RTTI entry for struct type {:?}; \
+                     ensure generate_rtti runs before this pass",
+                struct_ty
+            )
+        }) as i64;
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
@@ -155,12 +161,17 @@ impl ArenaRewritePattern for StructNewPattern {
         ops.push(payload_ptr.op_ref());
 
         // 6. Store each field at its computed offset (relative to payload)
+        assert_eq!(
+            fields.len(),
+            layout.field_offsets.len(),
+            "adt_rc_header: struct_new operand count ({}) != layout field count ({})",
+            fields.len(),
+            layout.field_offsets.len(),
+        );
         for (i, &field_val) in fields.iter().enumerate() {
-            if i < layout.field_offsets.len() {
-                let offset = layout.field_offsets[i] as i32;
-                let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
-                ops.push(store_op.op_ref());
-            }
+            let offset = layout.field_offsets[i] as i32;
+            let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
+            ops.push(store_op.op_ref());
         }
 
         // 7. Identity pass-through
@@ -255,7 +266,13 @@ impl ArenaRewritePattern for VariantNewPattern {
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
-        let rtti_idx = self.rtti_map.get(&enum_ty).copied().unwrap_or(0) as i64;
+        let rtti_idx = self.rtti_map.get(&enum_ty).copied().unwrap_or_else(|| {
+            panic!(
+                "adt_rc_header: missing RTTI entry for enum type {:?}; \
+                     ensure generate_rtti runs before this pass",
+                enum_ty
+            )
+        }) as i64;
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
@@ -278,12 +295,17 @@ impl ArenaRewritePattern for VariantNewPattern {
         ops.push(store_tag.op_ref());
 
         // 7. Store each field at its computed offset (relative to payload + fields_offset)
+        assert_eq!(
+            fields.len(),
+            variant_layout.field_offsets.len(),
+            "adt_rc_header: variant_new operand count ({}) != variant field count ({})",
+            fields.len(),
+            variant_layout.field_offsets.len(),
+        );
         for (i, &field_val) in fields.iter().enumerate() {
-            if i < variant_layout.field_offsets.len() {
-                let offset = (enum_layout.fields_offset + variant_layout.field_offsets[i]) as i32;
-                let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
-                ops.push(store_op.op_ref());
-            }
+            let offset = (enum_layout.fields_offset + variant_layout.field_offsets[i]) as i32;
+            let store_op = clif::store(ctx, loc, field_val, payload_val, offset);
+            ops.push(store_op.op_ref());
         }
 
         // 8. Identity pass-through

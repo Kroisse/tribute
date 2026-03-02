@@ -45,17 +45,16 @@ pub fn rewrite_cont_rc(ctx: &mut IrContext, module: ArenaModule) {
                 continue;
             }
             let body = func_op.body(ctx);
-            rewrite_region(ctx, body);
+            let mut cont_values: HashSet<ValueRef> = HashSet::new();
+            rewrite_region(ctx, body, &mut cont_values);
         }
     }
 }
 
-fn rewrite_region(ctx: &mut IrContext, region: RegionRef) {
-    let mut cont_values: HashSet<ValueRef> = HashSet::new();
-
+fn rewrite_region(ctx: &mut IrContext, region: RegionRef, cont_values: &mut HashSet<ValueRef>) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        rewrite_block(ctx, block, &mut cont_values);
+        rewrite_block(ctx, block, cont_values);
     }
 }
 
@@ -71,7 +70,7 @@ fn rewrite_block(ctx: &mut IrContext, block: BlockRef, cont_values: &mut HashSet
         // Rewrite nested regions first
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
-            rewrite_region(ctx, region);
+            rewrite_region(ctx, region, cont_values);
         }
 
         // Check for clif.call operations

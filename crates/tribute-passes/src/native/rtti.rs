@@ -401,9 +401,9 @@ fn generate_release_function_for_enum(
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let i1_ty = ctx
+    let i8_ty = ctx
         .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
     let func_ty = ctx.types.intern(
@@ -505,25 +505,64 @@ fn generate_release_function_for_enum(
         return func_op.op_ref();
     }
 
-    // Build release blocks for each variant
-    let mut release_blocks: Vec<BlockRef> = Vec::new();
+    // Build null-guarded release block chains for each variant.
+    // Each variant gets a chain of check→release blocks (like struct release),
+    // with the final block jumping to dealloc_block.
+    let mut release_entry_blocks: Vec<BlockRef> = Vec::new();
+    let mut extra_blocks: Vec<BlockRef> = Vec::new();
+
     for vr in &variants_with_ptrs {
-        let release_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        for &offset in &vr.ptr_field_offsets {
+        // Build chain backwards from dealloc_block
+        let mut next_block = dealloc_block;
+
+        for &offset in vr.ptr_field_offsets.iter().rev() {
+            // Release block: load field, release, jump to next
+            let rel_block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            let reload = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
+            ctx.push_op(rel_block, reload.op_ref());
+            let release_op = arena_tribute_rt::release(ctx, loc, reload.result(ctx), 0);
+            ctx.push_op(rel_block, release_op.op_ref());
+            let jump = arena_clif::jump(ctx, loc, [], next_block);
+            ctx.push_op(rel_block, jump.op_ref());
+
+            // Check block: load field, null check, branch
+            let chk_block = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
             let load_op = arena_clif::load(ctx, loc, payload_ptr, ptr_ty, offset);
-            ctx.push_op(release_block, load_op.op_ref());
-            let release_op = arena_tribute_rt::release(ctx, loc, load_op.result(ctx), 0);
-            ctx.push_op(release_block, release_op.op_ref());
+            ctx.push_op(chk_block, load_op.op_ref());
+            let null_const = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+            ctx.push_op(chk_block, null_const.op_ref());
+            let is_null = arena_clif::icmp(
+                ctx,
+                loc,
+                load_op.result(ctx),
+                null_const.result(ctx),
+                i8_ty,
+                Symbol::new("eq"),
+            );
+            ctx.push_op(chk_block, is_null.op_ref());
+            let brif = arena_clif::brif(ctx, loc, is_null.result(ctx), next_block, rel_block);
+            ctx.push_op(chk_block, brif.op_ref());
+
+            extra_blocks.push(rel_block);
+            extra_blocks.push(chk_block);
+            next_block = chk_block;
         }
-        let jump_to_dealloc = arena_clif::jump(ctx, loc, [], dealloc_block);
-        ctx.push_op(release_block, jump_to_dealloc.op_ref());
-        release_blocks.push(release_block);
+
+        // The first check block is this variant's entry point
+        release_entry_blocks.push(next_block);
     }
+    // Replace release_blocks with release_entry_blocks for tag dispatch
+    let release_blocks = release_entry_blocks;
 
     // Build check blocks for variants_with_ptrs[1..] in reverse
     let mut check_blocks: Vec<BlockRef> = Vec::new();
@@ -550,7 +589,7 @@ fn generate_release_function_for_enum(
             loc,
             tag_val,
             expected.result(ctx),
-            i1_ty,
+            i8_ty,
             Symbol::new("eq"),
         );
         ctx.push_op(check_block, cmp_op.op_ref());
@@ -577,7 +616,7 @@ fn generate_release_function_for_enum(
         loc,
         tag_val,
         expected.result(ctx),
-        i1_ty,
+        i8_ty,
         Symbol::new("eq"),
     );
     ctx.push_op(entry_block, cmp_op.op_ref());
@@ -590,10 +629,11 @@ fn generate_release_function_for_enum(
     );
     ctx.push_op(entry_block, brif_op.op_ref());
 
-    // Assemble blocks: entry, check_blocks, release_blocks, dealloc
+    // Assemble blocks: entry, tag check_blocks, variant null-check/release blocks, dealloc
     let mut all_blocks: Vec<BlockRef> = vec![entry_block];
     all_blocks.extend(check_blocks);
     all_blocks.extend(release_blocks);
+    all_blocks.extend(extra_blocks);
     all_blocks.push(dealloc_block);
 
     let body = ctx.create_region(RegionData {
