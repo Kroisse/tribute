@@ -380,7 +380,9 @@ fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'d
 /// the native runtime, rewrites empty evidence creation and extend call sites.
 #[salsa::tracked]
 fn stage_evidence_to_native<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    tribute_passes::native::evidence::lower_evidence_to_native(db, module)
+    with_arena_session(db, module, |ctx, m| {
+        tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
+    })
 }
 
 /// Dead Code Elimination (DCE).
@@ -682,7 +684,7 @@ fn compile_module_to_native<'db>(
 
     // Phase -1 - Generate native entrypoint (arena)
     let module = with_arena_session(db, module, |ctx, m| {
-        tribute_passes::native::entrypoint::generate_native_entrypoint_arena(ctx, m, sanitize);
+        tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, m, sanitize);
     });
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
@@ -704,13 +706,8 @@ fn compile_module_to_native<'db>(
     let module = with_arena_session(db, module, |ctx, m| {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(ctx);
-        let rtti_map = tribute_passes::native::rtti::generate_rtti_arena(ctx, m, &type_converter);
-        tribute_passes::native::adt_rc_header::lower_arena(
-            ctx,
-            m,
-            type_converter,
-            &rtti_map.type_to_idx,
-        );
+        let rtti_map = tribute_passes::native::rtti::generate_rtti(ctx, m, &type_converter);
+        tribute_passes::native::adt_rc_header::lower(ctx, m, type_converter, &rtti_map.type_to_idx);
     });
     trunk_ir::validation::debug_assert_value_integrity(db, module, "rtti+adt_rc_header");
 
@@ -728,9 +725,9 @@ fn compile_module_to_native<'db>(
     let module = with_arena_session(db, module, |ctx, m| {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(ctx);
-        tribute_passes::native::tribute_rt_to_clif::lower_arena(ctx, m, type_converter);
-        tribute_passes::native::rc_insertion::insert_rc_arena(ctx, m);
-        tribute_passes::native::cont_rc::rewrite_cont_rc_arena(ctx, m);
+        tribute_passes::native::tribute_rt_to_clif::lower(ctx, m, type_converter);
+        tribute_passes::native::rc_insertion::insert_rc(ctx, m);
+        tribute_passes::native::cont_rc::rewrite_cont_rc(ctx, m);
     });
     trunk_ir::validation::debug_assert_value_integrity(db, module, "tribute_rt+rc+cont_rc");
 
@@ -764,9 +761,9 @@ fn compile_module_to_native<'db>(
     };
     trunk_ir::validation::debug_assert_value_integrity(db, module, "resolve_unrealized_casts");
 
-    // Phase 3.5 - Lower RC operations (retain/release) to inline clif code (arena)
+    // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     let module = with_arena_session(db, module, |ctx, m| {
-        tribute_passes::native::rc_lowering::lower_rc_arena(ctx, m);
+        tribute_passes::native::rc_lowering::lower_rc(ctx, m);
     });
     trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_rc");
 

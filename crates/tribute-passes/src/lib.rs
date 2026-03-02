@@ -34,8 +34,6 @@ pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use evidence::{
     collect_effectful_functions, collect_functions_with_evidence_param, is_effectful_type,
 };
-pub use native::entrypoint::generate_native_entrypoint;
-pub use native::evidence::lower_evidence_to_native;
 pub use native::type_converter::native_type_converter;
 pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{
