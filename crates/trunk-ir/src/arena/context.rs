@@ -1228,6 +1228,66 @@ mod tests {
     }
 
     #[test]
+    fn set_op_operand_updates_use_chains() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        // Create two constants: v_old and v_new
+        let data_old = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op_old = ctx.create_op(data_old);
+        let v_old = ctx.op_result(op_old, 0);
+
+        let data_new = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op_new = ctx.create_op(data_new);
+        let v_new = ctx.op_result(op_new, 0);
+
+        // Create op that uses v_old at operand 0
+        let data_user = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+            .operand(v_old)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op_user = ctx.create_op(data_user);
+
+        // Verify initial state
+        assert_eq!(ctx.uses(v_old).len(), 1);
+        assert_eq!(
+            ctx.uses(v_old)[0],
+            Use {
+                user: op_user,
+                operand_index: 0
+            }
+        );
+        assert!(!ctx.has_uses(v_new));
+
+        // Set operand to v_new
+        ctx.set_op_operand(op_user, 0, v_new);
+
+        // v_old should have no uses
+        assert!(!ctx.has_uses(v_old));
+        // v_new should have the use
+        assert_eq!(ctx.uses(v_new).len(), 1);
+        assert_eq!(
+            ctx.uses(v_new)[0],
+            Use {
+                user: op_user,
+                operand_index: 0
+            }
+        );
+        // Operand should reflect the change
+        assert_eq!(ctx.op_operands(op_user)[0], v_new);
+
+        // Set same value again (no-op)
+        ctx.set_op_operand(op_user, 0, v_new);
+        assert_eq!(ctx.uses(v_new).len(), 1); // unchanged
+        assert!(!ctx.has_uses(v_old)); // still no uses
+    }
+
+    #[test]
     #[should_panic(expected = "already belongs to region")]
     fn create_region_panics_when_block_already_owned() {
         let mut ctx = IrContext::new();

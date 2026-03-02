@@ -653,11 +653,17 @@ fn generate_release_function_for_enum(
     );
     ctx.push_op(entry_block, brif_op.op_ref());
 
-    // Assemble blocks: entry, tag check_blocks, variant null-check/release blocks, dealloc
+    // Assemble blocks: entry, tag check_blocks, variant null-check/release blocks, dealloc.
+    // Filter extra_blocks to exclude release_entry_blocks (already in release_blocks)
+    // to avoid duplicate BlockRef entries in the region.
     let mut all_blocks: Vec<BlockRef> = vec![entry_block];
     all_blocks.extend(check_blocks);
-    all_blocks.extend(release_blocks);
-    all_blocks.extend(extra_blocks);
+    all_blocks.extend(&release_blocks);
+    for &block in &extra_blocks {
+        if !release_blocks.contains(&block) {
+            all_blocks.push(block);
+        }
+    }
     all_blocks.push(dealloc_block);
 
     let body = ctx.create_region(RegionData {

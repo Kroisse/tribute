@@ -219,6 +219,15 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
         if dialect == Symbol::new("adt") && name == Symbol::new("array_new") {
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
+                // Evidence array_new must represent an empty evidence vector.
+                // The only operand should be the size hint (arith.const 0).
+                let operand_count = ctx.op_operands(op).len();
+                assert!(
+                    operand_count <= 1,
+                    "evidence_to_native: adt.array_new with evidence type has {operand_count} \
+                     operands; expected at most 1 (the size hint). Non-empty evidence arrays \
+                     should not reach this pass."
+                );
                 let old_result = ctx.op_result(op, 0);
                 let call = arena_func::call(
                     ctx,

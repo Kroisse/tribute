@@ -15,8 +15,6 @@
 
 use std::collections::HashMap;
 
-use tracing::warn;
-
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{
@@ -111,8 +109,11 @@ impl ArenaRewritePattern for StructNewPattern {
         let tc = rewriter.type_converter();
 
         let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
-            warn!("adt_rc_header: cannot compute layout for struct_new type");
-            return false;
+            panic!(
+                "adt_rc_header: cannot compute layout for struct_new type {:?}; \
+                 the struct type matched adt.struct_new but has no valid layout",
+                struct_ty
+            );
         };
 
         let loc = ctx.op(op).location;
@@ -233,13 +234,19 @@ impl ArenaRewritePattern for VariantNewPattern {
         let tc = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
-            warn!("adt_rc_header: cannot compute enum layout for variant_new");
-            return false;
+            panic!(
+                "adt_rc_header: cannot compute enum layout for variant_new type {:?}; \
+                 the enum type matched adt.variant_new but has no valid layout",
+                enum_ty
+            );
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            warn!("adt_rc_header: unknown variant tag {:?}", tag);
-            return false;
+            panic!(
+                "adt_rc_header: unknown variant tag {:?} for enum type {:?}; \
+                 the variant_new references a tag not present in the enum layout",
+                tag, enum_ty
+            );
         };
 
         let loc = ctx.op(op).location;

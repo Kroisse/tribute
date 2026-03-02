@@ -77,10 +77,11 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
     }
 
     if has_tribute_main {
-        tracing::warn!(
-            "`_tribute_main` already exists in module; skipping `main` rename to avoid collision"
+        panic!(
+            "entrypoint: `_tribute_main` already exists in module; \
+             cannot rename `main` to `_tribute_main` due to symbol collision. \
+             Ensure no user-defined function is named `_tribute_main`."
         );
-        return;
     }
 
     // Intern needed types
