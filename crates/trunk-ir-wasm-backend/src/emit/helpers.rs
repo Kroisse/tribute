@@ -251,7 +251,15 @@ pub(crate) fn attr_heap_type(
     key: Symbol,
 ) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
+        Some(ArenaAttribute::IntBits(bits)) => {
+            let idx = u32::try_from(*bits).map_err(|_| {
+                CompilationError::invalid_attribute(format!(
+                    "heap type index {} out of u32 range",
+                    bits
+                ))
+            })?;
+            Ok(HeapType::Concrete(idx))
+        }
         Some(ArenaAttribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
         Some(ArenaAttribute::Type(ty)) => {
             let data = ctx.types.get(*ty);
@@ -329,7 +337,7 @@ pub(crate) fn get_type_idx_from_attrs(
 ) -> Option<u32> {
     // First try type_idx attribute
     if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&Symbol::new("type_idx")) {
-        return Some(*idx as u32);
+        return u32::try_from(*idx).ok();
     }
     // Fall back to type attribute
     if let Some(ArenaAttribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
@@ -352,13 +360,18 @@ pub(crate) fn get_type_idx_from_attrs(
 // Attribute extraction helpers
 // ============================================================================
 
-/// Get attribute value as u32.
+/// Get attribute value as u32 (checked conversion).
 pub(crate) fn attr_u32(
     attrs: &BTreeMap<Symbol, ArenaAttribute>,
     key: Symbol,
 ) -> CompilationResult<u32> {
     match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => Ok(*bits as u32),
+        Some(ArenaAttribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "attribute '{}' value {} out of u32 range",
+                key, bits
+            ))
+        }),
         _ => Err(CompilationError::missing_attribute("u32")),
     }
 }

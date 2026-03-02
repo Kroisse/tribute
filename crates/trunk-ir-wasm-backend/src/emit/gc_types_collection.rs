@@ -32,6 +32,20 @@ trunk_ir::symbols! {
     ATTR_HEAP_TYPE => "heap_type",
 }
 
+/// Checked conversion from IntBits (u64) to u32.
+fn intbits_to_u32(value: u64) -> CompilationResult<u32> {
+    u32::try_from(value).map_err(|_| {
+        CompilationError::invalid_attribute(format!("IntBits value {} out of u32 range", value))
+    })
+}
+
+/// Checked conversion from IntBits (u64) to usize.
+fn intbits_to_usize(value: u64) -> CompilationResult<usize> {
+    usize::try_from(value).map_err(|_| {
+        CompilationError::invalid_attribute(format!("IntBits value {} out of usize range", value))
+    })
+}
+
 /// Result type for GC type collection.
 /// Returns: (type_defs, type_idx_by_type, placeholder_struct_type_idx)
 pub(crate) type GcTypesResult = (
@@ -394,24 +408,29 @@ pub(crate) fn collect_gc_types(
     // This ensures placeholder allocation doesn't conflict with explicit indices
     // (covers struct_new, ref_cast, and any other op with an explicit type_idx attribute)
     let mut reserved_indices: HashSet<u32> = HashSet::new();
-    fn collect_reserved_indices(ctx: &IrContext, region: RegionRef, reserved: &mut HashSet<u32>) {
+    fn collect_reserved_indices(
+        ctx: &IrContext,
+        region: RegionRef,
+        reserved: &mut HashSet<u32>,
+    ) -> CompilationResult<()> {
         for &block in ctx.region(region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
                 if let Some(ArenaAttribute::IntBits(idx)) =
                     ctx.op(op).attributes.get(&ATTR_TYPE_IDX())
                 {
-                    reserved.insert(*idx as u32);
+                    reserved.insert(intbits_to_u32(*idx)?);
                 }
                 for &nested_region in ctx.op(op).regions.iter() {
-                    collect_reserved_indices(ctx, nested_region, reserved);
+                    collect_reserved_indices(ctx, nested_region, reserved)?;
                 }
             }
         }
+        Ok(())
     }
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
-    collect_reserved_indices(ctx, body, &mut reserved_indices);
+    collect_reserved_indices(ctx, body, &mut reserved_indices)?;
     debug!(
         "GC: collected {} reserved type indices from explicit struct_new: {:?}",
         reserved_indices.len(),
@@ -635,15 +654,29 @@ pub(crate) fn collect_gc_types(
                 for (field_idx, &value) in operands.iter().enumerate() {
                     let ty = helpers::value_type(ctx, value);
                     let ty_data = ctx.types.get(ty);
+                    let field_idx_u32 = u32::try_from(field_idx).map_err(|_| {
+                        CompilationError::invalid_module("struct field index out of u32 range")
+                    })?;
                     debug!(
                         "GC: struct_new type_idx={} recording field {} with type {}.{}",
                         type_idx, field_idx, ty_data.dialect, ty_data.name
                     );
-                    record_struct_field(ctx, type_idx, builder, field_idx as u32, ty)?;
+                    record_struct_field(ctx, type_idx, builder, field_idx_u32, ty)?;
                 }
             }
         } else if arena_wasm::StructGet::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
+
+            // Honor explicit type_idx attribute first (set by wasm_gc_type_assign pass),
+            // matching the behavior of struct_new and ref_cast.
+            let explicit_type_idx = get_type_idx(
+                ctx,
+                attrs,
+                &mut type_idx_by_type,
+                &mut next_type_idx,
+                None,
+                &reserved_indices,
+            );
 
             // Check if this uses a placeholder type (wasm.structref) that allows
             // multiple structs with same type but different field counts
@@ -681,7 +714,10 @@ pub(crate) fn collect_gc_types(
                 }
             });
 
-            let type_idx = if let Some(idx) = builtin_type_idx {
+            let type_idx = if let Some(idx) = explicit_type_idx {
+                // Explicit type_idx (from ATTR_TYPE_IDX or type_idx_by_type) takes priority
+                idx
+            } else if let Some(idx) = builtin_type_idx {
                 idx
             } else if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
@@ -694,7 +730,7 @@ pub(crate) fn collect_gc_types(
                 else {
                     return Err(CompilationError::missing_attribute("field_count"));
                 };
-                let field_count = *field_count as usize;
+                let field_count = intbits_to_usize(*field_count)?;
                 let key = (ty, field_count);
                 if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
                     idx
@@ -765,7 +801,7 @@ pub(crate) fn collect_gc_types(
                     && let Some(ArenaAttribute::IntBits(fc)) =
                         attrs.get(&Symbol::new("field_count"))
                 {
-                    let fc = *fc as usize;
+                    let fc = intbits_to_usize(*fc)?;
                     builder.field_count = Some(fc);
                     if builder.fields.len() < fc {
                         builder.fields.resize_with(fc, || None);
@@ -928,14 +964,14 @@ pub(crate) fn collect_gc_types(
             let attrs = &ctx.op(op).attributes;
             if let Some(&ArenaAttribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx"))
             {
-                let dst_type_idx = dst_idx as u32;
+                let dst_type_idx = intbits_to_u32(dst_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, dst_type_idx) {
                     builder.kind = GcKind::Array;
                 }
             }
             if let Some(&ArenaAttribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx"))
             {
-                let src_type_idx = src_idx as u32;
+                let src_type_idx = intbits_to_u32(src_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, src_type_idx) {
                     builder.kind = GcKind::Array;
                 }
@@ -957,12 +993,12 @@ pub(crate) fn collect_gc_types(
                 && is_structref(ctx, *target_ty)
                 && let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
             {
-                let field_count = *fc as usize;
+                let field_count = intbits_to_usize(*fc)?;
                 let target_ty = *target_ty;
 
                 // Check for explicit type_idx attribute first
                 if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-                    let idx = *idx as u32;
+                    let idx = intbits_to_u32(*idx)?;
                     next_type_idx = next_type_idx.max(idx.saturating_add(1));
                     if let Some(builder) = try_get_builder(&mut builders, idx) {
                         builder.kind = GcKind::Struct;
@@ -1099,7 +1135,13 @@ fn get_type_idx(
 
     // First try type_idx attribute
     if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        let idx = *idx as u32;
+        let Ok(idx) = u32::try_from(*idx) else {
+            debug!(
+                "GC: get_type_idx: IntBits value {} out of u32 range, skipping",
+                idx
+            );
+            return None;
+        };
         // Advance next_type_idx to avoid collision with explicit indices
         *next_type_idx = (*next_type_idx).max(idx.saturating_add(1));
         return Some(idx);

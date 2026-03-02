@@ -863,7 +863,7 @@ fn assign_locals_in_region(
                         } else {
                             attrs.get(&Symbol::new("field_count")).and_then(|attr| {
                                 if let ArenaAttribute::IntBits(fc) = attr {
-                                    Some(*fc as usize)
+                                    usize::try_from(*fc).ok()
                                 } else {
                                     None
                                 }

@@ -102,7 +102,7 @@ pub(crate) fn handle_ref_cast(
                     // Fall back to placeholder lookup
                     if let Some(&type_idx) = module_info
                         .placeholder_struct_type_idx
-                        .get(&(*target_ty, *fc as usize))
+                        .get(&(*target_ty, usize::try_from(*fc).unwrap_or(0)))
                     {
                         tracing::debug!(
                             "ref_cast: found placeholder type_idx={} for field_count={}",
@@ -130,7 +130,7 @@ pub(crate) fn handle_ref_cast(
             {
                 if let Some(&type_idx) = module_info
                     .placeholder_struct_type_idx
-                    .get(&(*target_ty, *fc as usize))
+                    .get(&(*target_ty, usize::try_from(*fc).unwrap_or(0)))
                 {
                     tracing::debug!(
                         "ref_cast: found placeholder type_idx={} for field_count={}",
