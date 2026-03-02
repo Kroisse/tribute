@@ -213,6 +213,20 @@ impl IrContext {
         self.ops[op].results.as_mut_slice(&mut self.type_pool)[index as usize] = new_ty;
     }
 
+    /// Set the i-th operand of an operation, updating use-chains.
+    pub fn set_op_operand(&mut self, op: OpRef, index: u32, new_val: ValueRef) {
+        let old_val = self.ops[op].operands.as_slice(&self.value_pool)[index as usize];
+        if old_val == new_val {
+            return;
+        }
+        self.uses[old_val].retain(|u| !(u.user == op && u.operand_index == index));
+        self.ops[op].operands.as_mut_slice(&mut self.value_pool)[index as usize] = new_val;
+        self.uses[new_val].push(Use {
+            user: op,
+            operand_index: index,
+        });
+    }
+
     /// Get the i-th result value of an operation.
     pub fn op_result(&self, op: OpRef, index: u32) -> ValueRef {
         self.result_values[op].as_slice(&self.value_pool)[index as usize]

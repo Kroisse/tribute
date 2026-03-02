@@ -64,10 +64,8 @@ use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
-use tribute_passes::generate_native_entrypoint;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_trampoline;
-use tribute_passes::lower_evidence_to_native;
 use tribute_passes::wasm::lower::lower_to_wasm;
 use tribute_passes::wasm::type_converter::wasm_type_converter;
 use trunk_ir::Span;
@@ -382,7 +380,9 @@ fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'d
 /// the native runtime, rewrites empty evidence creation and extend call sites.
 #[salsa::tracked]
 fn stage_evidence_to_native<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    lower_evidence_to_native(db, module)
+    with_arena_session(db, module, |ctx, m| {
+        tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
+    })
 }
 
 /// Dead Code Elimination (DCE).
@@ -682,8 +682,10 @@ fn compile_module_to_native<'db>(
     use tribute_passes::native_type_converter;
     use trunk_ir::transforms::lower_scf_to_cf;
 
-    // Phase -1 - Generate native entrypoint (wrap user's main)
-    let module = generate_native_entrypoint(db, module, sanitize);
+    // Phase -1 - Generate native entrypoint (arena)
+    let module = with_arena_session(db, module, |ctx, m| {
+        tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, m, sanitize);
+    });
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
     let module = lower_scf_to_cf(db, module);
@@ -700,19 +702,14 @@ fn compile_module_to_native<'db>(
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
     trunk_ir::validation::debug_assert_value_integrity(db, module, "cf_to_clif");
 
-    // Phase 1.9 - RTTI pass: assign rtti_idx per struct type, generate release functions
-    let (module, rtti_map) =
-        tribute_passes::native::rtti::generate_rtti(db, module, &native_type_converter());
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "generate_rtti");
-
-    // Phase 1.95 - Lower adt.struct_new to clif with RC header (Tribute-specific)
-    let module = tribute_passes::native::adt_rc_header::lower(
-        db,
-        module,
-        native_type_converter(),
-        &rtti_map.type_to_idx,
-    );
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "adt_rc_header");
+    // Phase 1.9-1.95 - RTTI + ADT RC header (arena session)
+    let module = with_arena_session(db, module, |ctx, m| {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        let rtti_map = tribute_passes::native::rtti::generate_rtti(ctx, m, &type_converter);
+        tribute_passes::native::adt_rc_header::lower(ctx, m, type_converter, &rtti_map.type_to_idx);
+    });
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "rtti+adt_rc_header");
 
     // Phase 2 - Lower ADT struct access operations to clif dialect (struct_get/struct_set)
     let module = adt_to_clif::lower(db, module, native_type_converter())
@@ -724,18 +721,15 @@ fn compile_module_to_native<'db>(
         .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
     trunk_ir::validation::debug_assert_value_integrity(db, module, "arith_to_clif");
 
-    // Phase 2.7 - Lower tribute_rt boxing/unboxing operations to clif dialect
-    let module =
-        tribute_passes::native::tribute_rt_to_clif::lower(db, module, native_type_converter());
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "tribute_rt_to_clif");
-
-    // Phase 2.8 - Insert reference counting (retain/release) for pointer values
-    let module = tribute_passes::native::rc_insertion::insert_rc(db, module);
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "rc_insertion");
-
-    // Phase 2.85 - Rewrite continuation ops to use RC-safe wrappers
-    let module = tribute_passes::native::cont_rc::rewrite_cont_rc(db, module);
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "cont_rc");
+    // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC (arena session)
+    let module = with_arena_session(db, module, |ctx, m| {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        tribute_passes::native::tribute_rt_to_clif::lower(ctx, m, type_converter);
+        tribute_passes::native::rc_insertion::insert_rc(ctx, m);
+        tribute_passes::native::cont_rc::rewrite_cont_rc(ctx, m);
+    });
+    trunk_ir::validation::debug_assert_value_integrity(db, module, "tribute_rt+rc+cont_rc");
 
     // Phase 3 - Resolve unrealized_conversion_cast operations
     let module = {
@@ -768,7 +762,9 @@ fn compile_module_to_native<'db>(
     trunk_ir::validation::debug_assert_value_integrity(db, module, "resolve_unrealized_casts");
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
-    let module = tribute_passes::native::rc_lowering::lower_rc(db, module);
+    let module = with_arena_session(db, module, |ctx, m| {
+        tribute_passes::native::rc_lowering::lower_rc(ctx, m);
+    });
     trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_rc");
 
     // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
