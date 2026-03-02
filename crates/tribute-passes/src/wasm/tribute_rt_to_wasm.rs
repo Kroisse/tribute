@@ -1,13 +1,13 @@
 //! Lower tribute_rt dialect operations to wasm dialect.
 //!
 //! This pass converts boxing/unboxing operations to their wasm equivalents:
-//! - `tribute_rt.box_int` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.box_int` -> `wasm.ref_i31` (i32 -> i31ref)
 //! - `tribute_rt.unbox_int` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_s`
-//! - `tribute_rt.box_nat` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.box_nat` -> `wasm.ref_i31` (i32 -> i31ref)
 //! - `tribute_rt.unbox_nat` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_u`
-//! - `tribute_rt.box_float` -> `adt.struct_new` (f64 -> BoxedF64 struct) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.box_float` -> `adt.struct_new` (f64 -> BoxedF64 struct)
 //! - `tribute_rt.unbox_float` -> `adt.ref_cast` (BoxedF64) + `adt.struct_get`
-//! - `tribute_rt.box_bool` -> `wasm.ref_i31` (i32 -> i31ref) + `wasm.ref_cast` (-> anyref)
+//! - `tribute_rt.box_bool` -> `wasm.ref_i31` (i32 -> i31ref)
 //! - `tribute_rt.unbox_bool` -> `wasm.ref_cast` (i31ref) + `wasm.i31_get_u`
 //!
 //! ## Type Mappings

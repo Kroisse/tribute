@@ -87,20 +87,22 @@ fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
     }
     debug_func_params(ctx, module, "after wasm_func_signature_conversion");
 
-    // Convert ALL adt ops to wasm (including those from trampoline_to_adt)
+    // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
+    // This must run BEFORE adt_to_wasm because float boxing/unboxing emits
+    // adt.struct_new / adt.ref_cast / adt.struct_get that need conversion.
+    {
+        let _span = tracing::info_span!("tribute_rt_to_wasm").entered();
+        super::tribute_rt_to_wasm::lower(ctx, module);
+    }
+    debug_func_params(ctx, module, "after tribute_rt_to_wasm");
+
+    // Convert ALL adt ops to wasm (including those from tribute_rt_to_wasm)
     {
         let _span = tracing::info_span!("adt_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
         trunk_ir_wasm_backend::passes::adt_to_wasm::lower(ctx, module, tc);
     }
     debug_func_params(ctx, module, "after adt_to_wasm");
-
-    // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
-    {
-        let _span = tracing::info_span!("tribute_rt_to_wasm").entered();
-        super::tribute_rt_to_wasm::lower(ctx, module);
-    }
-    debug_func_params(ctx, module, "after tribute_rt_to_wasm");
 
     // Lower evidence runtime function stubs (prepare for inline WASM operations)
     {

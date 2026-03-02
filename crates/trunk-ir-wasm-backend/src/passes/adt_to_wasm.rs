@@ -39,6 +39,7 @@
 //! For operations where the result type is set explicitly (e.g., variant_new, variant_cast),
 //! emit can infer type_idx from result/operand types without the attribute.
 
+use tracing::warn;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -366,16 +367,26 @@ impl ArenaRewritePattern for ArrayNewPattern {
         let result_ty = array_new.result_ty(ctx);
         let operands = array_new.elements(ctx).to_vec();
 
-        // If only size operand, use array_new_default; otherwise array_new
-        if operands.len() <= 1 {
-            let size = operands[0];
-            let new_op = arena_wasm::array_new_default(ctx, loc, size, result_ty, 0);
-            rewriter.replace_op(new_op.op_ref());
-        } else {
-            let size = operands[0];
-            let init = operands[1];
-            let new_op = arena_wasm::array_new(ctx, loc, size, init, result_ty, 0);
-            rewriter.replace_op(new_op.op_ref());
+        match operands.len() {
+            0 => {
+                warn!("adt.array_new with no operands");
+                return false;
+            }
+            1 => {
+                // Only size operand -> array_new_default
+                let new_op = arena_wasm::array_new_default(ctx, loc, operands[0], result_ty, 0);
+                rewriter.replace_op(new_op.op_ref());
+            }
+            2 => {
+                // size + init value -> array_new
+                let new_op =
+                    arena_wasm::array_new(ctx, loc, operands[0], operands[1], result_ty, 0);
+                rewriter.replace_op(new_op.op_ref());
+            }
+            n => {
+                warn!("adt.array_new with unexpected {n} operands, expected 1 or 2");
+                return false;
+            }
         }
 
         true

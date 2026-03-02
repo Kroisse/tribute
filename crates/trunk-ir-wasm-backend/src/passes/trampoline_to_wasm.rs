@@ -1095,11 +1095,12 @@ impl ArenaRewritePattern for ConvertFuncTypePattern {
             && params_changed
         {
             let block_args = ctx.block(entry_block).args.clone();
+            // Hoist type lookup before the loop to avoid repeated lookups
+            let new_params = ctx.types.get(new_func_ty).params.to_vec();
             for (i, _arg) in block_args.iter().enumerate() {
-                let new_func_ty_data = ctx.types.get(new_func_ty);
                 // params[1..] maps to block args[0..]
-                if i + 1 < new_func_ty_data.params.len() {
-                    let new_param_ty = new_func_ty_data.params[i + 1];
+                if i + 1 < new_params.len() {
+                    let new_param_ty = new_params[i + 1];
                     ctx.set_block_arg_type(entry_block, i as u32, new_param_ty);
                 }
             }
