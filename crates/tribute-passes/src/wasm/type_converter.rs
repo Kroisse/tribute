@@ -532,8 +532,10 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         if from_is_struct_like && to_is_struct_like {
             // Skip ref_cast for safe upcasts to abstract supertypes
             // (e.g., concrete struct -> anyref, concrete struct -> structref).
+            // But anyref -> structref is a downcast and still needs ref_cast.
             let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
-            if to_is_anyref || to_is_structref {
+            let from_is_anyref = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"));
+            if to_is_anyref || (to_is_structref && !from_is_anyref) {
                 return Some(MaterializeResult { value, ops: vec![] });
             }
 
@@ -1058,10 +1060,12 @@ pub mod salsa_converter {
                 }
                 let from_is_struct_like = is_struct_like(db, from_ty);
                 let to_is_struct_like = is_struct_like(db, to_ty);
-                // Safe upcasts to abstract ref types need no runtime cast
-                let to_is_abstract = wasm::Structref::from_type(db, to_ty).is_some()
-                    || wasm::Anyref::from_type(db, to_ty).is_some();
-                if to_is_abstract && from_is_struct_like {
+                // Safe upcasts to abstract ref types need no runtime cast.
+                // But anyref -> structref is a downcast and still needs ref_cast.
+                let to_is_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
+                let to_is_structref = wasm::Structref::from_type(db, to_ty).is_some();
+                let from_is_anyref = wasm::Anyref::from_type(db, from_ty).is_some();
+                if from_is_struct_like && (to_is_anyref || (to_is_structref && !from_is_anyref)) {
                     return MaterializeResult::NoOp;
                 }
                 // Downcasts and lateral casts between struct-like types need ref_cast
