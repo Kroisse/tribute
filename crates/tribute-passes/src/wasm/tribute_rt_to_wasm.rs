@@ -77,8 +77,7 @@ fn create_i31_unbox(
     let i32_ty = i32_type(ctx);
 
     // Cast anyref to i31ref first (abstract type, no type_idx needed)
-    let cast_op =
-        arena_wasm::ref_cast(ctx, location, value, i31ref_ty, Symbol::new("i31ref"), None);
+    let cast_op = arena_wasm::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
     let cast_result = cast_op.result(ctx);
 
     // Extract value: signed or unsigned

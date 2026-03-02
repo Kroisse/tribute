@@ -254,14 +254,8 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
             let i31ref_value = ctx.op_result(box_op.op_ref(), 0);
 
             // Upcast i31ref -> anyref (no-op in runtime, but needed for IR type correctness)
-            let upcast_op = arena_wasm::ref_cast(
-                ctx,
-                location,
-                i31ref_value,
-                anyref_ty,
-                Symbol::new("anyref"),
-                None,
-            );
+            let upcast_op =
+                arena_wasm::ref_cast(ctx, location, i31ref_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -280,14 +274,8 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
             let boxed_value = ctx.op_result(box_op.op_ref(), 0);
 
             // Upcast BoxedF64 to anyref
-            let upcast_op = arena_wasm::ref_cast(
-                ctx,
-                location,
-                boxed_value,
-                anyref_ty,
-                Symbol::new("anyref"),
-                None,
-            );
+            let upcast_op =
+                arena_wasm::ref_cast(ctx, location, boxed_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -303,7 +291,7 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         if is_from_anyref && is_to_i32 {
             // Cast anyref to i31ref
             let ref_cast_op =
-                arena_wasm::ref_cast(ctx, location, value, i31ref_ty, Symbol::new("i31ref"), None);
+                arena_wasm::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
             let i31ref_value = ctx.op_result(ref_cast_op.op_ref(), 0);
 
             // Unbox i31ref to i32
@@ -407,8 +395,7 @@ fn materialize_to_any(
     }
 
     // Fallback: upcast to anyref using ref_cast
-    let cast_op =
-        arena_wasm::ref_cast(ctx, location, value, anyref_ty, Symbol::new("anyref"), None);
+    let cast_op = arena_wasm::ref_cast(ctx, location, value, anyref_ty, anyref_ty, None);
     let cast_val = ctx.op_result(cast_op.op_ref(), 0);
     ops.push(cast_op.op_ref());
     cast_val
@@ -984,16 +971,8 @@ impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
         ops.push(get_cont);
 
         // Cast anyref to continuation type
-        // For wasm.ref_cast, target_type is a Symbol and type_idx is optional
-        let cont_cast = arena_wasm::ref_cast(
-            ctx,
-            location,
-            cont_anyref,
-            cont_type,
-            Symbol::new("_Continuation"),
-            None,
-        )
-        .op_ref();
+        let cont_cast =
+            arena_wasm::ref_cast(ctx, location, cont_anyref, cont_type, cont_type, None).op_ref();
         let cont_ref = ctx.op_result(cont_cast, 0);
         ops.push(cont_cast);
 

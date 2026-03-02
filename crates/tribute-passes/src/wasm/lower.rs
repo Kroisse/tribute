@@ -714,14 +714,8 @@ impl<'a> WasmLowerer<'a> {
             if is_int_like {
                 // Unbox to i32 and print
                 let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
-                let cast = arena_wasm::ref_cast(
-                    ctx,
-                    location,
-                    value_val,
-                    i31ref_ty,
-                    Symbol::new("i31ref"),
-                    None,
-                );
+                let cast =
+                    arena_wasm::ref_cast(ctx, location, value_val, i31ref_ty, i31ref_ty, None);
                 ctx.push_op(then_block, cast.op_ref());
 
                 let unbox_val = if is_nat {

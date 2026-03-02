@@ -268,10 +268,9 @@ impl ArenaRewritePattern for VariantIsPattern {
 
         // Create variant-specific type for the ref.test
         let variant_type = make_variant_type(ctx, enum_type, tag);
-        let variant_name = ctx.types.get(variant_type).name;
 
         // Create wasm.ref_test with variant-specific type
-        let new_op = arena_wasm::ref_test(ctx, loc, ref_val, result_ty, variant_name, None);
+        let new_op = arena_wasm::ref_test(ctx, loc, ref_val, result_ty, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -309,11 +308,10 @@ impl ArenaRewritePattern for VariantCastPattern {
 
         // Create variant-specific type for the ref.cast
         let variant_type = make_variant_type(ctx, enum_type, tag);
-        let variant_name = ctx.types.get(variant_type).name;
 
         // Create wasm.ref_cast with variant-specific type
         // Result type is the variant-specific type - emit infers type_idx from it
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, variant_type, variant_name, None);
+        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, variant_type, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -527,11 +525,10 @@ impl ArenaRewritePattern for RefCastPattern {
         let ref_val = ref_cast.r#ref(ctx);
         let result_ty = ref_cast.result_ty(ctx);
 
-        // Get the target type name from the adt type attribute
+        // Get the target type from the adt type attribute
         let adt_type = ref_cast.r#type(ctx);
-        let target_type = ctx.types.get(adt_type).name;
 
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, result_ty, target_type, None);
+        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, result_ty, adt_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }

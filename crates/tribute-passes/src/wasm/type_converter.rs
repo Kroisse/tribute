@@ -282,7 +282,7 @@ fn box_via_i31(
     let i31_val = ref_op.result(ctx);
 
     // Upcast i31ref -> anyref (needed for IR type correctness)
-    let upcast = arena_wasm::ref_cast(ctx, loc, i31_val, anyref_ty, Symbol::new("anyref"), None);
+    let upcast = arena_wasm::ref_cast(ctx, loc, i31_val, anyref_ty, anyref_ty, None);
     ops.push(upcast.op_ref());
 
     Some(MaterializeResult {
@@ -303,7 +303,7 @@ fn unbox_via_i31(
     i32_ty: TypeRef,
 ) -> Option<MaterializeResult> {
     // Cast anyref to i31ref
-    let cast_op = arena_wasm::ref_cast(ctx, loc, value, i31ref_ty, Symbol::new("i31ref"), None);
+    let cast_op = arena_wasm::ref_cast(ctx, loc, value, i31ref_ty, i31ref_ty, None);
     let cast_val = cast_op.result(ctx);
 
     // Extract i32 from i31ref
@@ -539,8 +539,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
                 return Some(MaterializeResult { value, ops: vec![] });
             }
 
-            let cast_op =
-                arena_wasm::ref_cast(ctx, location, value, to_ty, Symbol::new("struct"), None);
+            let cast_op = arena_wasm::ref_cast(ctx, location, value, to_ty, to_ty, None);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -558,7 +557,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
             // Trampoline types must already be converted to ADT types by add_conversion
             // rules before materialization runs (convert_type is applied to to_ty in
             // resolve_unrealized_casts before calling materialize).
-            debug_assert!(
+            assert!(
                 !is_type(
                     ctx,
                     to_ty,
@@ -573,8 +572,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
                     ),
                 "ICE: trampoline type reached materialization without conversion"
             );
-            let cast_op =
-                arena_wasm::ref_cast(ctx, location, value, to_ty, Symbol::new("struct"), None);
+            let cast_op = arena_wasm::ref_cast(ctx, location, value, to_ty, to_ty, None);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -827,14 +825,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         let from_is_any = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
             || is_type(ctx, from_ty, Symbol::new("tribute_rt"), Symbol::new("any"));
         if from_is_any && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("arrayref")) {
-            let cast_op = arena_wasm::ref_cast(
-                ctx,
-                location,
-                value,
-                arrayref_ty,
-                Symbol::new("arrayref"),
-                None,
-            );
+            let cast_op =
+                arena_wasm::ref_cast(ctx, location, value, arrayref_ty, arrayref_ty, None);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -1079,7 +1071,7 @@ pub mod salsa_converter {
                     || tribute_rt::Any::from_type(db, from_ty).is_some();
                 let to_is_abstract_anyref = wasm::Anyref::from_type(db, to_ty).is_some();
                 if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
-                    debug_assert!(
+                    assert!(
                         trampoline::ResumeWrapper::from_type(db, to_ty).is_none()
                             && trampoline::Step::from_type(db, to_ty).is_none()
                             && trampoline::Continuation::from_type(db, to_ty).is_none(),
