@@ -501,6 +501,58 @@ mod tests {
     }
 
     #[test]
+    fn test_box_nat_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.ptr {
+    %1 = tribute_rt.box_nat %0 : core.ptr
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_unbox_nat_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.ptr) -> core.i32 {
+    %1 = tribute_rt.unbox_nat %0 : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_box_bool_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.ptr {
+    %1 = tribute_rt.box_bool %0 : core.ptr
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_unbox_bool_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.ptr) -> core.i32 {
+    %1 = tribute_rt.unbox_bool %0 : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
     fn test_retain_release_pass_through() {
         let mut ctx = IrContext::new();
         let ir = r#"core.module @test {

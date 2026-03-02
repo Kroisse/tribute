@@ -1,9 +1,10 @@
 ---
 source: crates/tribute-passes/src/native/rtti.rs
+assertion_line: 844
 expression: output
 ---
 core.module @test {
-  func.func @create_struct(%0: core.i32, %1: core.ptr) -> core.ptr {
+  func.func @create_struct(%0: core.i32, %1: core.ptr) -> adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]]} {
     ^bb0:
       %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]]}} : adt.struct() {fields = [[@value, core.i32], [@next, core.ptr]]}
       func.return %2

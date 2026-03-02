@@ -705,11 +705,9 @@ mod tests {
         struct_ty: TypeRef,
         field_types: &[TypeRef],
     ) -> ArenaModule {
-        let ptr_ty = intern_ty(ctx, "core", "ptr");
-
-        // Build function type: (field_types...) -> ptr
+        // Build function type: (field_types...) -> struct_ty
         let mut ft_builder =
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(ptr_ty);
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(struct_ty);
         for &ft in field_types {
             ft_builder = ft_builder.param(ft);
         }
