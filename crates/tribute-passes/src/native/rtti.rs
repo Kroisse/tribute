@@ -395,6 +395,21 @@ fn gen_dealloc_and_return(
     ctx.push_op(block, ret_op.op_ref());
 }
 
+/// Build an `adt.struct` type with named fields (for testing and internal use).
+#[cfg(test)]
+pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
+    use trunk_ir::arena::types::Attribute as A;
+    let fields_list: Vec<A> = fields
+        .iter()
+        .map(|(name, ty)| A::List(vec![A::Symbol(Symbol::new(name)), A::Type(*ty)]))
+        .collect();
+    ctx.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr(Symbol::new("fields"), A::List(fields_list))
+            .build(),
+    )
+}
+
 /// Generate release function for an enum type.
 fn generate_release_function_for_enum(
     ctx: &mut IrContext,
@@ -652,4 +667,307 @@ fn generate_release_function_for_enum(
     });
     let func_op = arena_clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
     func_op.op_ref()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use trunk_ir::Span;
+    use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
+    use trunk_ir::arena::dialect::func as arena_func;
+    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::types::Attribute as ArenaAttribute;
+
+    fn test_ctx() -> (IrContext, ArenaLocation) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let loc = ArenaLocation::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    }
+
+    /// Build a module containing a function that creates a struct via adt.struct_new.
+    fn build_struct_new_module(
+        ctx: &mut IrContext,
+        loc: ArenaLocation,
+        struct_ty: TypeRef,
+        field_types: &[TypeRef],
+    ) -> ArenaModule {
+        let ptr_ty = intern_ty(ctx, "core", "ptr");
+
+        // Build function type: (field_types...) -> ptr
+        let mut ft_builder =
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(ptr_ty);
+        for &ft in field_types {
+            ft_builder = ft_builder.param(ft);
+        }
+        let func_ty = ctx.types.intern(ft_builder.build());
+
+        // Create entry block with field arguments
+        let args: Vec<BlockArgData> = field_types
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: BTreeMap::new(),
+            })
+            .collect();
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args,
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        // adt.struct_new with field args as operands
+        let field_vals: Vec<_> = (0..field_types.len())
+            .map(|i| ctx.block_arg(entry, i as u32))
+            .collect();
+
+        let struct_new_data =
+            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+                .operands(field_vals)
+                .result(struct_ty)
+                .attr("type", ArenaAttribute::Type(struct_ty))
+                .build(ctx);
+        let struct_new_ref = ctx.create_op(struct_new_data);
+        let struct_result = ctx.op_result(struct_new_ref, 0);
+        ctx.push_op(entry, struct_new_ref);
+
+        let ret = arena_func::r#return(ctx, loc, [struct_result]);
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = arena_func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+
+        // Build module
+        let module_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(module_block, func_op.op_ref());
+
+        let module_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![module_block],
+            parent_op: None,
+        });
+
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .region(module_region)
+                .build(ctx);
+        let module_op = ctx.create_op(module_data);
+
+        ArenaModule::new(ctx, module_op).expect("valid arena module")
+    }
+
+    #[test]
+    fn test_rtti_map_assignment() {
+        let mut ctx = IrContext::new();
+        let ty1 = intern_ty(&mut ctx, "test", "t1");
+        let ty2 = intern_ty(&mut ctx, "test", "t2");
+
+        let mut rtti = RttiMap::new();
+        assert_eq!(rtti.get_or_insert(ty1), 32);
+        assert_eq!(rtti.get_or_insert(ty2), 33);
+        // Idempotent
+        assert_eq!(rtti.get_or_insert(ty1), 32);
+    }
+
+    #[test]
+    fn test_release_fn_prefix() {
+        assert_eq!(RELEASE_FN_PREFIX, "__tribute_release_");
+    }
+
+    #[test]
+    fn test_no_structs_noop() {
+        let mut ctx = IrContext::new();
+        let ir = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+    func.return %0
+  }
+}"#;
+        let module = trunk_ir::arena::parser::parse_test_module(&mut ctx, ir);
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let rtti = generate_rtti(&mut ctx, module, &tc);
+        assert!(rtti.type_to_idx.is_empty());
+    }
+
+    #[test]
+    fn test_struct_no_ptr_fields() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+
+        // Point(x: i32, y: i32) - no pointer fields
+        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
+
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let _rtti = generate_rtti(&mut ctx, module, &tc);
+
+        let output = print_module(&ctx, module.op());
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_struct_with_ptr_fields() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+
+        // Node(value: i32, next: ptr) - has pointer field
+        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, ptr_ty]);
+
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let _rtti = generate_rtti(&mut ctx, module, &tc);
+
+        let output = print_module(&ctx, module.op());
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_multiple_struct_types() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+
+        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
+
+        // Build module with two struct_new ops
+        let func_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .param(ptr_ty)
+                .param(i32_ty)
+                .param(i32_ty)
+                .param(ptr_ty)
+                .build(),
+        );
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: i32_ty,
+                    attrs: BTreeMap::new(),
+                },
+                BlockArgData {
+                    ty: ptr_ty,
+                    attrs: BTreeMap::new(),
+                },
+            ],
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        let x = ctx.block_arg(entry, 0);
+        let y = ctx.block_arg(entry, 1);
+        let next = ctx.block_arg(entry, 2);
+
+        // First struct_new: Point(x, y)
+        let sn1 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+            .operands([x, y])
+            .result(point_ty)
+            .attr("type", ArenaAttribute::Type(point_ty))
+            .build(&mut ctx);
+        let sn1_ref = ctx.create_op(sn1);
+        ctx.push_op(entry, sn1_ref);
+
+        // Second struct_new: Node(x, next)
+        let sn2 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+            .operands([x, next])
+            .result(node_ty)
+            .attr("type", ArenaAttribute::Type(node_ty))
+            .build(&mut ctx);
+        let sn2_ref = ctx.create_op(sn2);
+        let sn2_result = ctx.op_result(sn2_ref, 0);
+        ctx.push_op(entry, sn2_ref);
+
+        let ret = arena_func::r#return(&mut ctx, loc, [sn2_result]);
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = arena_func::func(&mut ctx, loc, Symbol::new("create"), func_ty, body);
+
+        let module_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(module_block, func_op.op_ref());
+
+        let module_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![module_block],
+            parent_op: None,
+        });
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .region(module_region)
+                .build(&mut ctx);
+        let module_op = ctx.create_op(module_data);
+        let module = ArenaModule::new(&ctx, module_op).expect("valid");
+
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let rtti = generate_rtti(&mut ctx, module, &tc);
+
+        // Both struct types should be registered
+        assert!(rtti.type_to_idx.contains_key(&point_ty));
+        assert!(rtti.type_to_idx.contains_key(&node_ty));
+
+        // Should generate both release functions
+        let output = print_module(&ctx, module.op());
+        let point_idx = rtti.type_to_idx[&point_ty];
+        let node_idx = rtti.type_to_idx[&node_ty];
+        assert!(output.contains(&format!("__tribute_release_{point_idx}")));
+        assert!(output.contains(&format!("__tribute_release_{node_idx}")));
+    }
+
+    #[test]
+    fn test_closure_struct_skips_func_ptr() {
+        let (mut ctx, loc) = test_ctx();
+        let ptr_ty = intern_ty(&mut ctx, "core", "ptr");
+
+        // Closure struct with func_ptr + env fields
+        // func_ptr should be skipped in release (it's a code pointer, not heap)
+        let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", ptr_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, ptr_ty]);
+
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let _rtti = generate_rtti(&mut ctx, module, &tc);
+
+        let output = print_module(&ctx, module.op());
+        // The release function should only release the env field (not func_ptr)
+        // Count tribute_rt.release ops in the release function
+        let release_count = output.matches("tribute_rt.release").count();
+        assert_eq!(
+            release_count, 1,
+            "only env should be released, not func_ptr"
+        );
+    }
 }

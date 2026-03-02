@@ -1,0 +1,19 @@
+---
+source: crates/tribute-passes/src/native/rtti.rs
+expression: output
+---
+core.module @test {
+  func.func @create_struct(%0: core.i32, %1: core.i32) -> core.ptr {
+    ^bb0:
+      %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]}} : adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]}
+      func.return %2
+  }
+  clif.func {sym_name = @__tribute_release_32, type = core.func(core.nil, core.ptr)} {
+    ^bb0(%0: core.ptr):
+      %1 = clif.iconst {value = 8} : core.i64
+      %2 = clif.isub %0, %1 : core.ptr
+      %3 = clif.iconst {value = 16} : core.i64
+      %4 = clif.call %2, %3 {callee = @__tribute_dealloc} : core.nil
+      clif.return
+  }
+}

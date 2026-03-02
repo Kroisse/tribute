@@ -1,0 +1,26 @@
+---
+source: crates/tribute-passes/src/native/rc_insertion.rs
+assertion_line: 838
+expression: output
+---
+core.module @test {
+  clif.func {sym_name = @f, type = core.func(core.nil, core.ptr, core.ptr)} {
+    ^bb0(%0: core.ptr, %1: core.ptr):
+      %2 = tribute_rt.retain %0 : core.ptr
+      %3 = tribute_rt.retain %1 : core.ptr
+      %4 = tribute_rt.retain %0 : core.ptr
+      %5 = clif.iconst {value = 16} : core.i64
+      %6 = clif.call %5 {callee = @__tribute_alloc} : core.ptr
+      clif.store %0, %6 {offset = 0}
+      %7 = clif.iconst {value = 0} : core.i64
+      clif.store %7, %6 {offset = 8}
+      %8 = clif.iconst {value = 1} : core.i32
+      %9 = clif.call %6, %8 {callee = @__tribute_yield_set_rc_roots} : core.nil
+      %10 = clif.call %1 {callee = @__tribute_yield} : core.nil
+      tribute_rt.release %0 {alloc_size = 0}
+      tribute_rt.release %1 {alloc_size = 0}
+      %11 = clif.load %0 {offset = 0} : core.i32
+      tribute_rt.release %0 {alloc_size = 0}
+      clif.return %10
+  }
+}
