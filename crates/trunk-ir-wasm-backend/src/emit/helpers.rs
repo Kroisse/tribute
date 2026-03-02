@@ -337,7 +337,7 @@ pub(crate) fn get_type_idx_from_attrs(
 ) -> Option<u32> {
     // First try type_idx attribute
     if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&Symbol::new("type_idx")) {
-        return u32::try_from(*idx).ok();
+        return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
     }
     // Fall back to type attribute
     if let Some(ArenaAttribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
@@ -361,6 +361,11 @@ pub(crate) fn get_type_idx_from_attrs(
 // ============================================================================
 
 /// Get attribute value as u32 (checked conversion).
+///
+/// Distinguishes three cases:
+/// - Key absent → `missing_attribute` error
+/// - Key present but wrong variant → `invalid_attribute` error
+/// - Key present and IntBits → checked u32 conversion
 pub(crate) fn attr_u32(
     attrs: &BTreeMap<Symbol, ArenaAttribute>,
     key: Symbol,
@@ -372,7 +377,11 @@ pub(crate) fn attr_u32(
                 key, bits
             ))
         }),
-        _ => Err(CompilationError::missing_attribute("u32")),
+        Some(other) => Err(CompilationError::invalid_attribute(format!(
+            "attribute '{}' expected IntBits, got {:?}",
+            key, other
+        ))),
+        None => Err(CompilationError::missing_attribute("u32")),
     }
 }
 

@@ -40,7 +40,12 @@ pub(crate) fn handle_struct_new(
     // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
     // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
     let type_idx = if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        u32::try_from(*idx).ok()
+        Some(u32::try_from(*idx).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "struct_new: type_idx value {} out of u32 range",
+                idx
+            ))
+        })?)
     } else if let Some(ArenaAttribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
         if helpers::is_type(ctx, *ty, "wasm", "structref") {
             // Use placeholder map for wasm.structref
@@ -302,7 +307,12 @@ fn resolve_from_ref_cast(
                 def_attrs.get(&Symbol::new("field_count"))
             {
                 debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
-                usize::try_from(*fc).unwrap_or(0)
+                usize::try_from(*fc).map_err(|_| {
+                    CompilationError::invalid_attribute(format!(
+                        "struct_get: field_count value {} out of usize range",
+                        fc
+                    ))
+                })?
             } else {
                 debug!("struct_get: ref_cast (placeholder) has NO field_count!");
                 // Last resort - use struct_get's type attr to count fields
@@ -337,7 +347,12 @@ fn resolve_from_ref_cast(
             let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
                 def_attrs.get(&Symbol::new("field_count"))
             {
-                usize::try_from(*fc).unwrap_or(0)
+                usize::try_from(*fc).map_err(|_| {
+                    CompilationError::invalid_attribute(format!(
+                        "struct_get: field_count value {} out of usize range",
+                        fc
+                    ))
+                })?
             } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
                 get_struct_field_count(ctx, *ty).unwrap_or(0)
             } else {

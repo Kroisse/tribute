@@ -623,7 +623,8 @@ pub(crate) fn collect_gc_types(
                     &mut next_type_idx,
                     inferred_type,
                     &reserved_indices,
-                ) else {
+                )?
+                else {
                     continue;
                 };
                 idx
@@ -676,7 +677,7 @@ pub(crate) fn collect_gc_types(
                 &mut next_type_idx,
                 None,
                 &reserved_indices,
-            );
+            )?;
 
             // Check if this uses a placeholder type (wasm.structref) that allows
             // multiple structs with same type but different field counts
@@ -785,7 +786,8 @@ pub(crate) fn collect_gc_types(
                     &mut next_type_idx,
                     inferred_type,
                     &reserved_indices,
-                ) else {
+                )?
+                else {
                     continue;
                 };
                 idx
@@ -853,7 +855,8 @@ pub(crate) fn collect_gc_types(
                 &mut next_type_idx,
                 inferred_type,
                 &reserved_indices,
-            ) else {
+            )?
+            else {
                 continue;
             };
             let field_idx = attr_field_idx(attrs)?;
@@ -888,7 +891,8 @@ pub(crate) fn collect_gc_types(
                 &mut next_type_idx,
                 inferred_type,
                 &reserved_indices,
-            ) else {
+            )?
+            else {
                 continue;
             };
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
@@ -917,7 +921,8 @@ pub(crate) fn collect_gc_types(
                 &mut next_type_idx,
                 inferred_type,
                 &reserved_indices,
-            ) else {
+            )?
+            else {
                 continue;
             };
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
@@ -945,7 +950,8 @@ pub(crate) fn collect_gc_types(
                 &mut next_type_idx,
                 inferred_type,
                 &reserved_indices,
-            ) else {
+            )?
+            else {
                 continue;
             };
             if let Some(builder) = try_get_builder(&mut builders, type_idx) {
@@ -1039,27 +1045,29 @@ pub(crate) fn collect_gc_types(
 
             // Try specific attribute names first, then fall back to generic "type" attribute
             let type_idx = if arena_wasm::RefNull::matches(ctx, op) {
-                attr_u32(attrs, ATTR_HEAP_TYPE()).ok().or_else(|| {
-                    get_type_idx(
+                match attr_u32(attrs, ATTR_HEAP_TYPE()) {
+                    Ok(idx) => Some(idx),
+                    Err(_) => get_type_idx(
                         ctx,
                         attrs,
                         &mut type_idx_by_type,
                         &mut next_type_idx,
                         inferred_type,
                         &reserved_indices,
-                    )
-                })
+                    )?,
+                }
             } else {
-                attr_u32(attrs, ATTR_TARGET_TYPE()).ok().or_else(|| {
-                    get_type_idx(
+                match attr_u32(attrs, ATTR_TARGET_TYPE()) {
+                    Ok(idx) => Some(idx),
+                    Err(_) => get_type_idx(
                         ctx,
                         attrs,
                         &mut type_idx_by_type,
                         &mut next_type_idx,
                         inferred_type,
                         &reserved_indices,
-                    )
-                })
+                    )?,
+                }
             };
             let Some(type_idx) = type_idx else {
                 continue;
@@ -1115,6 +1123,10 @@ pub(crate) fn collect_gc_types(
 
 /// Helper to get type_idx from attributes or inferred type.
 /// Priority: type_idx attr > type attr > inferred_type (from result/operand)
+///
+/// Returns `Ok(Some(idx))` if a type_idx was found/allocated,
+/// `Ok(None)` if no type information is available (abstract types, etc.),
+/// or `Err` if an explicit attribute has an invalid value.
 fn get_type_idx(
     ctx: &IrContext,
     attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
@@ -1122,7 +1134,7 @@ fn get_type_idx(
     next_type_idx: &mut u32,
     inferred_type: Option<TypeRef>,
     reserved_indices: &std::collections::HashSet<u32>,
-) -> Option<u32> {
+) -> CompilationResult<Option<u32>> {
     // Helper to get next available type_idx, skipping reserved indices
     let next_available_idx = |next_type_idx: &mut u32| -> u32 {
         while reserved_indices.contains(next_type_idx) {
@@ -1135,34 +1147,33 @@ fn get_type_idx(
 
     // First try type_idx attribute
     if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        let Ok(idx) = u32::try_from(*idx) else {
-            debug!(
-                "GC: get_type_idx: IntBits value {} out of u32 range, skipping",
+        let idx = u32::try_from(*idx).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "type_idx attribute value {} out of u32 range",
                 idx
-            );
-            return None;
-        };
+            ))
+        })?;
         // Advance next_type_idx to avoid collision with explicit indices
         *next_type_idx = (*next_type_idx).max(idx.saturating_add(1));
-        return Some(idx);
+        return Ok(Some(idx));
     }
     // Fall back to type attribute (legacy, will be removed)
     if let Some(ArenaAttribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
         if let Some(idx) = get_builtin_struct_idx(ctx, *ty) {
-            return Some(idx);
+            return Ok(Some(idx));
         }
         if let Some(&idx) = type_idx_by_type.get(ty) {
             debug!(
                 "GC: get_type_idx reusing type_idx={} for type {:?}",
                 idx, ty
             );
-            return Some(idx);
+            return Ok(Some(idx));
         }
         // Don't allocate concrete GC type indices for abstract WASM heap types.
         // Types like wasm.anyref, wasm.i31ref are built-in abstract types, not
         // user-defined struct/array definitions.
         if is_abstract_wasm_heap_type(ctx, *ty) {
-            return None;
+            return Ok(None);
         }
         // Allocate new type_idx, skipping reserved indices
         let idx = next_available_idx(next_type_idx);
@@ -1171,23 +1182,23 @@ fn get_type_idx(
             idx, ty
         );
         type_idx_by_type.insert(*ty, idx);
-        return Some(idx);
+        return Ok(Some(idx));
     }
     // Fall back to inferred type (from result or operand types)
     if let Some(ty) = inferred_type {
         if let Some(idx) = get_builtin_struct_idx(ctx, ty) {
-            return Some(idx);
+            return Ok(Some(idx));
         }
         if let Some(&idx) = type_idx_by_type.get(&ty) {
             debug!(
                 "GC: get_type_idx reusing type_idx={} for inferred type {:?}",
                 idx, ty
             );
-            return Some(idx);
+            return Ok(Some(idx));
         }
         // Don't allocate concrete GC type indices for abstract WASM heap types.
         if is_abstract_wasm_heap_type(ctx, ty) {
-            return None;
+            return Ok(None);
         }
         // Allocate new type_idx, skipping reserved indices
         let idx = next_available_idx(next_type_idx);
@@ -1196,7 +1207,7 @@ fn get_type_idx(
             idx, ty
         );
         type_idx_by_type.insert(ty, idx);
-        return Some(idx);
+        return Ok(Some(idx));
     }
-    None
+    Ok(None)
 }

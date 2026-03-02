@@ -100,10 +100,15 @@ pub(crate) fn handle_ref_cast(
                     attrs.get(&Symbol::new("field_count"))
                 {
                     // Fall back to placeholder lookup
-                    if let Some(&type_idx) = module_info
-                        .placeholder_struct_type_idx
-                        .get(&(*target_ty, usize::try_from(*fc).unwrap_or(0)))
-                    {
+                    if let Some(&type_idx) = module_info.placeholder_struct_type_idx.get(&(
+                        *target_ty,
+                        usize::try_from(*fc).map_err(|_| {
+                            CompilationError::invalid_attribute(format!(
+                                "ref_cast: field_count value {} out of usize range",
+                                fc
+                            ))
+                        })?,
+                    )) {
                         tracing::debug!(
                             "ref_cast: found placeholder type_idx={} for field_count={}",
                             type_idx,
@@ -128,10 +133,15 @@ pub(crate) fn handle_ref_cast(
                 }
             } else if let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
             {
-                if let Some(&type_idx) = module_info
-                    .placeholder_struct_type_idx
-                    .get(&(*target_ty, usize::try_from(*fc).unwrap_or(0)))
-                {
+                if let Some(&type_idx) = module_info.placeholder_struct_type_idx.get(&(
+                    *target_ty,
+                    usize::try_from(*fc).map_err(|_| {
+                        CompilationError::invalid_attribute(format!(
+                            "ref_cast: field_count value {} out of usize range",
+                            fc
+                        ))
+                    })?,
+                )) {
                     tracing::debug!(
                         "ref_cast: found placeholder type_idx={} for field_count={}",
                         type_idx,
