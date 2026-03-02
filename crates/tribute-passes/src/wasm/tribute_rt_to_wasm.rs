@@ -284,8 +284,7 @@ impl ArenaRewritePattern for UnboxFloatPattern {
         let f64_ty = f64_type(ctx);
 
         // Cast anyref to BoxedF64 struct first
-        let anyref_ty = anyref_type(ctx);
-        let cast_op = arena_adt::ref_cast(ctx, location, value, anyref_ty, boxed_f64_ty);
+        let cast_op = arena_adt::ref_cast(ctx, location, value, boxed_f64_ty, boxed_f64_ty);
         let cast_result = cast_op.result(ctx);
 
         // adt.struct_get extracts field 0 (the f64 value) from BoxedF64

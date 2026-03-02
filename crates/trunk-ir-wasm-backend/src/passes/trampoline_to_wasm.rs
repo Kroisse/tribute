@@ -635,7 +635,8 @@ impl ArenaRewritePattern for LowerStepShiftPattern {
         let prompt_value = prompt_operand.expect("step_shift requires prompt operand");
 
         // op_idx from attribute
-        let op_idx_const = create_i32_const(ctx, location, op_idx as i32);
+        let op_idx_i32: i32 = op_idx.try_into().expect("op_idx out of i32 range");
+        let op_idx_const = create_i32_const(ctx, location, op_idx_i32);
         let op_idx_value = ctx.op_result(op_idx_const, 0);
         ops.push(op_idx_const);
 
@@ -891,13 +892,8 @@ impl ArenaRewritePattern for LowerSetYieldStatePattern {
         ops.push(arena_wasm::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref());
 
         // Set $yield_op_idx = op_idx
-        push_set_i32_global(
-            ctx,
-            location,
-            op_idx as i32,
-            yield_globals::OP_IDX,
-            &mut ops,
-        );
+        let op_idx_i32: i32 = op_idx.try_into().expect("op_idx out of i32 range");
+        push_set_i32_global(ctx, location, op_idx_i32, yield_globals::OP_IDX, &mut ops);
 
         expand_ops(rewriter, ops);
         true
