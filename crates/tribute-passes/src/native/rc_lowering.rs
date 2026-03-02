@@ -444,3 +444,172 @@ fn gen_deep_release_call(
     let jump = clif::jump(ctx, loc, [], continue_block);
     ctx.push_op(block, jump.op_ref());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::arena::context::IrContext;
+    use trunk_ir::arena::parser::parse_test_module;
+    use trunk_ir::arena::printer::print_module;
+
+    fn run_pass(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        lower_rc(&mut ctx, module);
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn test_snapshot_retain() {
+        // retain result is unused (matches real pipeline behavior:
+        // insert_rc adds retain for side-effect only)
+        let result = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = tribute_rt.retain %0 : core.ptr
+    clif.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_snapshot_release() {
+        let result = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.nil {
+    tribute_rt.release %0 {alloc_size = 12}
+    clif.return
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_snapshot_retain_and_release() {
+        let result = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.nil {
+    %1 = tribute_rt.retain %0 : core.ptr
+    tribute_rt.release %0 {alloc_size = 12}
+    clif.return
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_chained_retains() {
+        // Two independent retains on same pointer (retain result unused)
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = tribute_rt.retain %0 : core.ptr
+    %2 = tribute_rt.retain %0 : core.ptr
+    clif.return %0
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt."),
+            "no tribute_rt ops should remain after lowering"
+        );
+        // Each retain produces one iadd (rc + 1) in its do_retain block
+        let iadd_count = output.matches("clif.iadd").count();
+        assert_eq!(iadd_count, 2, "expected 2 RC increments, got {iadd_count}");
+    }
+
+    #[test]
+    fn test_multiple_functions() {
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = tribute_rt.retain %0 : core.ptr
+    clif.return %0
+  }
+  clif.func @g(%0: core.ptr) -> core.nil {
+    tribute_rt.release %0 {alloc_size = 16}
+    clif.return
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt."),
+            "no tribute_rt ops should remain"
+        );
+    }
+
+    #[test]
+    fn test_no_rc_ops_noop() {
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.i32) -> core.i32 {
+    clif.return %0
+  }
+}"#,
+        );
+        // No RC ops → no null checks or block splits
+        assert!(
+            !output.contains("clif.icmp"),
+            "no null checks should be inserted without RC ops"
+        );
+        assert!(
+            !output.contains("clif.brif"),
+            "no branch splits should occur without RC ops"
+        );
+    }
+
+    #[test]
+    fn test_release_successors() {
+        let mut ctx = IrContext::new();
+        let ir = r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.nil {
+    tribute_rt.release %0 {alloc_size = 12}
+    clif.return
+  }
+}"#;
+        let module = parse_test_module(&mut ctx, ir);
+        lower_rc(&mut ctx, module);
+
+        // After lowering a single release:
+        // entry_block (null check + brif) → do_release_block → free_block → skip_block
+        let func_ops = module.ops(&ctx);
+        let func_op = func_ops[0];
+        let regions = ctx.op(func_op).regions.to_vec();
+        let body = regions[0];
+        let block_count = ctx.region(body).blocks.len();
+        assert_eq!(
+            block_count, 4,
+            "expected 4 blocks after release lowering, got {block_count}"
+        );
+    }
+
+    #[test]
+    fn test_retain_produces_null_guard() {
+        // Verify retain lowering produces the expected null-guard structure:
+        // iconst(0), icmp eq, brif to skip/do_retain
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = tribute_rt.retain %0 : core.ptr
+    clif.return %0
+  }
+}"#,
+        );
+        assert!(
+            output.contains("clif.icmp"),
+            "null check comparison should be present"
+        );
+        assert!(
+            output.contains("clif.brif"),
+            "conditional branch should be present"
+        );
+        assert!(
+            output.contains("clif.iadd"),
+            "RC increment should be present"
+        );
+    }
+}

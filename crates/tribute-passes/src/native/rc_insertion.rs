@@ -757,3 +757,225 @@ fn apply_insertion_plan(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::arena::context::IrContext;
+    use trunk_ir::arena::parser::parse_test_module;
+    use trunk_ir::arena::printer::print_module;
+
+    fn run_pass(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        insert_rc(&mut ctx, module);
+        print_module(&ctx, module.op())
+    }
+
+    // =========================================================================
+    // Snapshot tests
+    // =========================================================================
+
+    #[test]
+    fn test_snapshot_simple_param() {
+        // ptr parameter → load → return: retain at entry, release after last non-return use
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_snapshot_alloc_store_return() {
+        // alloc → store → return ptr: no RC for returned alloc (ownership transfer)
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.i32) -> core.ptr {
+    %1 = clif.iconst {value = 16} : core.i64
+    %2 = clif.call %1 {callee = @__tribute_alloc} : core.ptr
+    %3 = clif.iconst {value = 8} : core.i64
+    %4 = clif.iadd %2, %3 : core.ptr
+    clif.store %0, %4 {offset = 0}
+    clif.return %4
+  }
+}"#,
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_snapshot_multiple_uses() {
+        // ptr param used in two loads — release after last use
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    %2 = clif.load %0 {offset = 4} : core.i32
+    clif.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_snapshot_yield_with_live_ptr() {
+        // ptr param + yield: RC root setup around yield
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
+    %2 = clif.call %1 {callee = @__tribute_yield} : core.nil
+    %3 = clif.load %0 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#,
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    // =========================================================================
+    // Unit tests
+    // =========================================================================
+
+    #[test]
+    fn test_symbol_addr_no_rc() {
+        // clif.symbol_addr produces static pointer — no retain/release
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f() -> core.ptr {
+    %0 = clif.symbol_addr {sym = @some_global} : core.ptr
+    clif.return %0
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt.retain"),
+            "symbol_addr should not be retained"
+        );
+        assert!(
+            !output.contains("tribute_rt.release"),
+            "symbol_addr should not be released"
+        );
+    }
+
+    #[test]
+    fn test_null_ptr_iconst_no_rc() {
+        // clif.iconst 0 : ptr is a null pointer — no RC
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f() -> core.ptr {
+    %0 = clif.iconst {value = 0} : core.ptr
+    clif.return %0
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt.retain"),
+            "null ptr iconst should not be retained"
+        );
+        assert!(
+            !output.contains("tribute_rt.release"),
+            "null ptr iconst should not be released"
+        );
+    }
+
+    #[test]
+    fn test_no_ptr_noop() {
+        // i32-only function — no RC ops inserted
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.i32) -> core.i32 {
+    %1 = clif.iconst {value = 42} : core.i32
+    clif.return %1
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt"),
+            "no ptr values means no RC ops"
+        );
+    }
+
+    #[test]
+    fn test_store_ptr_retains() {
+        // store ptr into ptr: retain before store
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
+    clif.store %0, %1 {offset = 0}
+    %2 = clif.iconst {value = 0} : core.nil
+    clif.return %2
+  }
+}"#,
+        );
+        assert!(
+            output.contains("tribute_rt.retain"),
+            "store of ptr should insert retain"
+        );
+    }
+
+    #[test]
+    fn test_load_ptr_retains() {
+        // load ptr from ptr: retain after load
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.ptr {
+    %1 = clif.load %0 {offset = 0} : core.ptr
+    clif.return %1
+  }
+}"#,
+        );
+        // Should retain the loaded ptr and the parameter
+        let retain_count = output.matches("tribute_rt.retain").count();
+        assert!(
+            retain_count >= 2,
+            "should retain param and loaded ptr, got {retain_count}"
+        );
+    }
+
+    #[test]
+    fn test_unused_ptr_param_released() {
+        // unused ptr param: retain + release both present
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.i32 {
+    %1 = clif.iconst {value = 0} : core.i32
+    clif.return %1
+  }
+}"#,
+        );
+        assert!(
+            output.contains("tribute_rt.retain"),
+            "unused ptr param should still be retained"
+        );
+        assert!(
+            output.contains("tribute_rt.release"),
+            "unused ptr param should be released"
+        );
+    }
+
+    #[test]
+    fn test_alloc_return_no_release() {
+        // alloc and return: no release (ownership transfer)
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f() -> core.ptr {
+    %0 = clif.iconst {value = 16} : core.i64
+    %1 = clif.call %0 {callee = @__tribute_alloc} : core.ptr
+    %2 = clif.iconst {value = 8} : core.i64
+    %3 = clif.iadd %1, %2 : core.ptr
+    clif.return %3
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt.release"),
+            "returned alloc should not be released"
+        );
+    }
+}

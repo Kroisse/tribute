@@ -432,3 +432,96 @@ impl ArenaRewritePattern for UnboxFloatPattern {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::arena::context::IrContext;
+    use trunk_ir::arena::parser::parse_test_module;
+    use trunk_ir::arena::printer::print_module;
+
+    fn run_pass(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        lower(&mut ctx, module, tc);
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn test_box_int_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.ptr {
+    %1 = tribute_rt.box_int %0 : core.ptr
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_unbox_int_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.ptr) -> core.i32 {
+    %1 = tribute_rt.unbox_int %0 : core.i32
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_box_float_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.f64) -> core.ptr {
+    %1 = tribute_rt.box_float %0 : core.ptr
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_unbox_float_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%0: core.ptr) -> core.f64 {
+    %1 = tribute_rt.unbox_float %0 : core.f64
+    func.return %1
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_retain_release_pass_through() {
+        let mut ctx = IrContext::new();
+        let ir = r#"core.module @test {
+  func.func @f(%0: core.ptr) -> core.ptr {
+    %1 = tribute_rt.retain %0 : core.ptr
+    tribute_rt.release %0 {alloc_size = 0}
+    func.return %1
+  }
+}"#;
+        let module = parse_test_module(&mut ctx, ir);
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        lower(&mut ctx, module, tc);
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains("tribute_rt.retain"),
+            "retain should be preserved"
+        );
+        assert!(
+            output.contains("tribute_rt.release"),
+            "release should be preserved"
+        );
+    }
+}

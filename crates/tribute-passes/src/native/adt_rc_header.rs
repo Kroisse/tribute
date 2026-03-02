@@ -324,3 +324,143 @@ impl ArenaRewritePattern for VariantNewPattern {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use trunk_ir::Span;
+    use trunk_ir::arena::context::{
+        BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
+    };
+    use trunk_ir::arena::dialect::func as arena_func;
+    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::types::Attribute as ArenaAttribute;
+    use trunk_ir::arena::types::Location as ArenaLocation;
+    use trunk_ir::smallvec::smallvec;
+
+    fn test_ctx() -> (IrContext, ArenaLocation) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("file:///test.trb".to_owned());
+        let loc = ArenaLocation::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn intern_ty(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
+    }
+
+    fn build_and_lower(
+        ctx: &mut IrContext,
+        loc: ArenaLocation,
+        struct_ty: TypeRef,
+        field_types: &[TypeRef],
+    ) -> String {
+        let ptr_ty = intern_ty(ctx, "core", "ptr");
+
+        // Build function type: (field_types...) -> ptr
+        let mut ft_builder =
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(ptr_ty);
+        for &ft in field_types {
+            ft_builder = ft_builder.param(ft);
+        }
+        let func_ty = ctx.types.intern(ft_builder.build());
+
+        // Create entry block with field arguments
+        let args: Vec<BlockArgData> = field_types
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: BTreeMap::new(),
+            })
+            .collect();
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args,
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        // adt.struct_new with field args as operands
+        let field_vals: Vec<_> = (0..field_types.len())
+            .map(|i| ctx.block_arg(entry, i as u32))
+            .collect();
+
+        let struct_new_data =
+            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+                .operands(field_vals)
+                .result(struct_ty)
+                .attr("type", ArenaAttribute::Type(struct_ty))
+                .build(ctx);
+        let struct_new_ref = ctx.create_op(struct_new_data);
+        let struct_result = ctx.op_result(struct_new_ref, 0);
+        ctx.push_op(entry, struct_new_ref);
+
+        let ret = arena_func::r#return(ctx, loc, [struct_result]);
+        ctx.push_op(entry, ret.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_op = arena_func::func(ctx, loc, Symbol::new("create_struct"), func_ty, body);
+
+        // Build module
+        let module_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        ctx.push_op(module_block, func_op.op_ref());
+
+        let module_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![module_block],
+            parent_op: None,
+        });
+
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .region(module_region)
+                .build(ctx);
+        let module_op = ctx.create_op(module_data);
+        let module = ArenaModule::new(ctx, module_op).expect("valid arena module");
+
+        // Run RTTI pass first (needed for rtti_map)
+        let (tc, _) = crate::native::type_converter::native_type_converter_arena(ctx);
+        let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc);
+
+        // Run adt_rc_header pass
+        lower(ctx, module, tc, &rtti.type_to_idx);
+
+        print_module(ctx, module.op())
+    }
+
+    #[test]
+    fn test_struct_new_to_clif() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+
+        // Point(x: i32, y: i32) - two scalar fields
+        let point_ty =
+            crate::native::rtti::make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
+        let output = build_and_lower(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn test_struct_new_empty() {
+        let (mut ctx, loc) = test_ctx();
+
+        // Unit struct with no fields
+        let unit_ty = crate::native::rtti::make_struct_type(&mut ctx, &[]);
+        let output = build_and_lower(&mut ctx, loc, unit_ty, &[]);
+        insta::assert_snapshot!(output);
+    }
+}
