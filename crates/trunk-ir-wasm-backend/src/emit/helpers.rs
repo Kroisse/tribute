@@ -336,8 +336,15 @@ pub(crate) fn get_type_idx_from_attrs(
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> Option<u32> {
     // First try type_idx attribute
-    if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&Symbol::new("type_idx")) {
-        return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
+    match attrs.get(&Symbol::new("type_idx")) {
+        Some(ArenaAttribute::IntBits(idx)) => {
+            return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
+        }
+        Some(_) => {
+            // type_idx present but wrong variant — this is an invariant violation
+            panic!("type_idx attribute has unexpected variant (expected IntBits)");
+        }
+        None => {} // not present, continue to fallback
     }
     // Fall back to type attribute
     if let Some(ArenaAttribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
@@ -386,6 +393,13 @@ pub(crate) fn attr_u32(
 }
 
 /// Get field index from attributes, trying both `field_idx` and `field` attribute names.
+///
+/// Only falls back to `field` when `field_idx` is missing. If `field_idx` is present
+/// but has a wrong variant or out-of-range value, that error is propagated immediately.
 pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, ArenaAttribute>) -> CompilationResult<u32> {
-    attr_u32(attrs, Symbol::new("field_idx")).or_else(|_| attr_u32(attrs, Symbol::new("field")))
+    match attr_u32(attrs, Symbol::new("field_idx")) {
+        Ok(v) => Ok(v),
+        Err(e) if e.is_missing_attribute() => attr_u32(attrs, Symbol::new("field")),
+        Err(e) => Err(e),
+    }
 }

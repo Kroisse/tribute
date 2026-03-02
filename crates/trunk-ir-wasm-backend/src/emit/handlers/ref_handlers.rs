@@ -3,6 +3,8 @@
 //! This module handles WebAssembly reference operations like ref.null, ref.func,
 //! ref.cast, and ref.test.
 
+use std::collections::BTreeMap;
+
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -10,6 +12,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{AbstractHeapType, Function, HeapType, Instruction};
 
+use crate::gc_types::ATTR_FIELD_COUNT;
 use crate::{CompilationError, CompilationResult};
 
 use super::super::helpers::{
@@ -96,75 +99,11 @@ pub(crate) fn handle_ref_cast(
                         data.name
                     );
                     HeapType::Concrete(type_idx)
-                } else if let Some(ArenaAttribute::IntBits(fc)) =
-                    attrs.get(&Symbol::new("field_count"))
-                {
-                    // Fall back to placeholder lookup
-                    if let Some(&type_idx) = module_info.placeholder_struct_type_idx.get(&(
-                        *target_ty,
-                        usize::try_from(*fc).map_err(|_| {
-                            CompilationError::invalid_attribute(format!(
-                                "ref_cast: field_count value {} out of usize range",
-                                fc
-                            ))
-                        })?,
-                    )) {
-                        tracing::debug!(
-                            "ref_cast: found placeholder type_idx={} for field_count={}",
-                            type_idx,
-                            fc
-                        );
-                        HeapType::Concrete(type_idx)
-                    } else {
-                        tracing::debug!(
-                            "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
-                            fc
-                        );
-                        HeapType::Abstract {
-                            shared: false,
-                            ty: AbstractHeapType::Struct,
-                        }
-                    }
                 } else {
-                    HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Struct,
-                    }
-                }
-            } else if let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
-            {
-                if let Some(&type_idx) = module_info.placeholder_struct_type_idx.get(&(
-                    *target_ty,
-                    usize::try_from(*fc).map_err(|_| {
-                        CompilationError::invalid_attribute(format!(
-                            "ref_cast: field_count value {} out of usize range",
-                            fc
-                        ))
-                    })?,
-                )) {
-                    tracing::debug!(
-                        "ref_cast: found placeholder type_idx={} for field_count={}",
-                        type_idx,
-                        fc
-                    );
-                    HeapType::Concrete(type_idx)
-                } else {
-                    tracing::debug!(
-                        "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
-                        fc
-                    );
-                    // Fallback to abstract structref if not found
-                    HeapType::Abstract {
-                        shared: false,
-                        ty: AbstractHeapType::Struct,
-                    }
+                    resolve_placeholder_structref(attrs, *target_ty, module_info)?
                 }
             } else {
-                // No field_count - fall back to abstract structref
-                HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::Struct,
-                }
+                resolve_placeholder_structref(attrs, *target_ty, module_info)?
             }
         } else {
             // Non-placeholder type - try registry first, then attr_heap_type, then inferred type
@@ -218,10 +157,18 @@ pub(crate) fn handle_ref_test(
     let attrs = &ctx.op(op).attributes;
     // ref_test result is i32, target type must be in attribute (can't infer)
     // Try attr_heap_type first, then fall back to type-index lookup (mirroring handle_ref_cast)
+    // Pass target_type as inferred_type so get_type_idx_from_attrs can find it
+    let target_type_ref = attrs.get(&ATTR_TARGET_TYPE()).and_then(|a| {
+        if let ArenaAttribute::Type(ty) = a {
+            Some(*ty)
+        } else {
+            None
+        }
+    });
     let heap_type = attr_heap_type(ctx, attrs, ATTR_TARGET_TYPE())
         .ok()
         .or_else(|| {
-            get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)
+            get_type_idx_from_attrs(ctx, attrs, target_type_ref, &module_info.type_idx_by_type)
                 .map(HeapType::Concrete)
         })
         .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
@@ -229,6 +176,51 @@ pub(crate) fn handle_ref_test(
     function.instruction(&Instruction::RefTestNullable(heap_type));
     set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
+}
+
+/// Resolve a placeholder structref to a HeapType by looking up the field_count
+/// in the placeholder_struct_type_idx map.
+///
+/// Falls back to abstract structref if the placeholder is not found in the map.
+fn resolve_placeholder_structref(
+    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    target_ty: TypeRef,
+    module_info: &ModuleInfo,
+) -> CompilationResult<HeapType> {
+    if let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&ATTR_FIELD_COUNT()) {
+        let field_count = usize::try_from(*fc).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "ref_cast: field_count value {} out of usize range",
+                fc
+            ))
+        })?;
+        if let Some(&type_idx) = module_info
+            .placeholder_struct_type_idx
+            .get(&(target_ty, field_count))
+        {
+            tracing::debug!(
+                "ref_cast: found placeholder type_idx={} for field_count={}",
+                type_idx,
+                field_count
+            );
+            Ok(HeapType::Concrete(type_idx))
+        } else {
+            tracing::debug!(
+                "ref_cast: placeholder lookup FAILED for field_count={}, falling back to abstract structref",
+                field_count
+            );
+            Ok(HeapType::Abstract {
+                shared: false,
+                ty: AbstractHeapType::Struct,
+            })
+        }
+    } else {
+        // No field_count - fall back to abstract structref
+        Ok(HeapType::Abstract {
+            shared: false,
+            ty: AbstractHeapType::Struct,
+        })
+    }
 }
 
 /// Resolve a callee symbol to a function index.

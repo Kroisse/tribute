@@ -13,12 +13,14 @@ use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
-use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX};
+use crate::gc_types::{
+    ATTR_FIELD_COUNT, ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
+};
 use crate::{CompilationError, CompilationResult};
 
 use super::super::helpers::{self, get_type_idx_from_attrs, is_closure_struct_type, value_type};
 use super::super::value_emission::emit_operands;
-use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
+use super::super::{ATTR_TARGET_TYPE, FunctionEmitContext, ModuleInfo, set_result_local};
 
 /// Handle struct.new operation
 pub(crate) fn handle_struct_new(
@@ -281,8 +283,7 @@ fn resolve_from_ref_cast(
     module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
     let def_attrs = &ctx.op(ref_cast_op).attributes;
-    let target_type_key = Symbol::new("target_type");
-    if let Some(ArenaAttribute::Type(target_ty)) = def_attrs.get(&target_type_key) {
+    if let Some(ArenaAttribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
         // For placeholder types like wasm.structref, we MUST use field_count
         // to distinguish between different concrete types with same abstract type.
         let is_placeholder = helpers::is_type(ctx, *target_ty, "wasm", "structref");
@@ -304,7 +305,7 @@ fn resolve_from_ref_cast(
 
             // Use placeholder lookup with field_count as fallback
             let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
-                def_attrs.get(&Symbol::new("field_count"))
+                def_attrs.get(&ATTR_FIELD_COUNT())
             {
                 debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
                 usize::try_from(*fc).map_err(|_| {
@@ -313,14 +314,19 @@ fn resolve_from_ref_cast(
                         fc
                     ))
                 })?
+            } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+                debug!(
+                    "struct_get: ref_cast (placeholder) has NO field_count, inferring from type attr"
+                );
+                get_struct_field_count(ctx, *ty).ok_or_else(|| {
+                    CompilationError::invalid_attribute(
+                        "struct_get: placeholder structref requires field_count but type attr has no field info",
+                    )
+                })?
             } else {
-                debug!("struct_get: ref_cast (placeholder) has NO field_count!");
-                // Last resort - use struct_get's type attr to count fields
-                if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
-                    get_struct_field_count(ctx, *ty).unwrap_or(0)
-                } else {
-                    0
-                }
+                return Err(CompilationError::missing_attribute(
+                    "field_count or type on placeholder structref ref_cast",
+                ));
             };
             debug!(
                 "struct_get: looking up placeholder ({}.{}, field_count={})",
@@ -345,7 +351,7 @@ fn resolve_from_ref_cast(
         } else {
             // Non-placeholder but not found - try placeholder lookup as fallback
             let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
-                def_attrs.get(&Symbol::new("field_count"))
+                def_attrs.get(&ATTR_FIELD_COUNT())
             {
                 usize::try_from(*fc).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
@@ -354,9 +360,15 @@ fn resolve_from_ref_cast(
                     ))
                 })?
             } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
-                get_struct_field_count(ctx, *ty).unwrap_or(0)
+                get_struct_field_count(ctx, *ty).ok_or_else(|| {
+                    CompilationError::invalid_attribute(
+                        "struct_get: placeholder structref requires field_count but type attr has no field info",
+                    )
+                })?
             } else {
-                0
+                return Err(CompilationError::missing_attribute(
+                    "field_count or type on placeholder structref ref_cast",
+                ));
             };
             module_info
                 .placeholder_struct_type_idx
@@ -389,8 +401,7 @@ fn get_struct_field_count(ctx: &IrContext, ty: TypeRef) -> Option<usize> {
     match data.attrs.get(&Symbol::new("fields")) {
         Some(ArenaAttribute::List(fields)) => Some(fields.len()),
         _ => {
-            // Alternatively, count from type params (field types are stored as params)
-            // Subtract named attributes to get field count
+            // Field types are stored as type params in arena adt.struct types
             if !data.params.is_empty() {
                 Some(data.params.len())
             } else {

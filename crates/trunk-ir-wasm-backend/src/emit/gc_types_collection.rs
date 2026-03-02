@@ -317,24 +317,12 @@ fn type_to_field_type_arena(
     ctx: &IrContext,
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
-) -> FieldType {
-    let val_type = match helpers::type_to_valtype(ctx, ty, type_idx_by_type) {
-        Ok(vt) => vt,
-        Err(e) => {
-            let data = ctx.types.get(ty);
-            tracing::warn!(
-                "type_to_field_type_arena: failed to convert {}.{} to ValType ({}), falling back to anyref",
-                data.dialect,
-                data.name,
-                e
-            );
-            ValType::Ref(wasm_encoder::RefType::ANYREF)
-        }
-    };
-    FieldType {
+) -> CompilationResult<FieldType> {
+    let val_type = helpers::type_to_valtype(ctx, ty, type_idx_by_type)?;
+    Ok(FieldType {
         element_type: StorageType::Val(val_type),
         mutable: true,
-    }
+    })
 }
 
 /// Create an adt.struct TypeRef with a given name attribute.
@@ -1059,14 +1047,27 @@ pub(crate) fn collect_gc_types(
             } else {
                 match attr_u32(attrs, ATTR_TARGET_TYPE()) {
                     Ok(idx) => Some(idx),
-                    Err(_) => get_type_idx(
-                        ctx,
-                        attrs,
-                        &mut type_idx_by_type,
-                        &mut next_type_idx,
-                        inferred_type,
-                        &reserved_indices,
-                    )?,
+                    Err(_) => {
+                        // If target_type is an ArenaAttribute::Type, prefer it over inferred_type
+                        let target_type_ref = attrs
+                            .get(&ATTR_TARGET_TYPE())
+                            .and_then(|a| {
+                                if let ArenaAttribute::Type(ty) = a {
+                                    Some(*ty)
+                                } else {
+                                    None
+                                }
+                            })
+                            .or(inferred_type);
+                        get_type_idx(
+                            ctx,
+                            attrs,
+                            &mut type_idx_by_type,
+                            &mut next_type_idx,
+                            target_type_ref,
+                            &reserved_indices,
+                        )?
+                    }
                 }
             };
             let Some(type_idx) = type_idx else {
@@ -1088,27 +1089,27 @@ pub(crate) fn collect_gc_types(
     for builder in builders {
         match builder.kind {
             GcKind::Array => {
-                let elem = builder
-                    .array_elem
-                    .map(|ty| type_to_field_type_arena(ctx, ty, &type_idx_by_type))
-                    .unwrap_or(FieldType {
+                let elem = match builder.array_elem {
+                    Some(ty) => type_to_field_type_arena(ctx, ty, &type_idx_by_type)?,
+                    None => FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
-                    });
+                    },
+                };
                 user_types.push(GcTypeDef::Array(elem));
             }
             GcKind::Struct | GcKind::Unknown => {
                 let fields = builder
                     .fields
                     .into_iter()
-                    .map(|ty| {
-                        ty.map(|ty| type_to_field_type_arena(ctx, ty, &type_idx_by_type))
-                            .unwrap_or(FieldType {
-                                element_type: StorageType::Val(ValType::I32),
-                                mutable: false,
-                            })
+                    .map(|ty| match ty {
+                        Some(ty) => type_to_field_type_arena(ctx, ty, &type_idx_by_type),
+                        None => Ok(FieldType {
+                            element_type: StorageType::Val(ValType::I32),
+                            mutable: false,
+                        }),
                     })
-                    .collect::<Vec<_>>();
+                    .collect::<CompilationResult<Vec<_>>>()?;
                 user_types.push(GcTypeDef::Struct(fields));
             }
         }
