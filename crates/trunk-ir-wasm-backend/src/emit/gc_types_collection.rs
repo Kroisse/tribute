@@ -408,7 +408,9 @@ pub(crate) fn collect_gc_types(
             }
         }
     }
-    let body = module.body(ctx).unwrap();
+    let body = module
+        .body(ctx)
+        .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
     collect_reserved_indices(ctx, body, &mut reserved_indices);
     debug!(
         "GC: collected {} reserved type indices from explicit struct_new: {:?}",
