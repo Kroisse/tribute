@@ -530,11 +530,10 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
-            // Skip ref_cast for safe upcasts to anyref (e.g., struct -> anyref).
-            // Note: anyref -> structref is a downcast and needs ref.cast, so we
-            // only short-circuit for anyref target, not structref.
+            // Skip ref_cast for safe upcasts to abstract supertypes
+            // (e.g., concrete struct -> anyref, concrete struct -> structref).
             let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
-            if to_is_anyref {
+            if to_is_anyref || to_is_structref {
                 return Some(MaterializeResult { value, ops: vec![] });
             }
 
