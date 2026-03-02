@@ -38,6 +38,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
     // Scan module-level ops to find main function and check for existing declarations
     let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
     let mut found_main = false;
+    let mut has_tribute_main = false;
     let mut main_return_ty: Option<TypeRef> = None;
     let mut has_tribute_init = false;
     let mut has_asan_init = false;
@@ -58,6 +59,9 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
                     main_return_ty = Some(type_data.params[0]);
                 }
             }
+            if name == tribute_main_sym {
+                has_tribute_main = true;
+            }
             if name == init_sym {
                 has_tribute_init = true;
             }
@@ -69,6 +73,13 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
 
     if !found_main {
         tracing::warn!("No main function found; skipping entrypoint generation");
+        return;
+    }
+
+    if has_tribute_main {
+        tracing::warn!(
+            "`_tribute_main` already exists in module; skipping `main` rename to avoid collision"
+        );
         return;
     }
 

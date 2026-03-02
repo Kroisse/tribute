@@ -45,6 +45,31 @@ use trunk_ir::smallvec::smallvec;
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 
+/// Commonly used CLIF primitive types, pre-interned for convenience.
+struct ClifTypes {
+    ptr: TypeRef,
+    nil: TypeRef,
+    i64: TypeRef,
+    i32: TypeRef,
+    i8: TypeRef,
+}
+
+impl ClifTypes {
+    fn intern(ctx: &mut IrContext) -> Self {
+        let mk = |ctx: &mut IrContext, name: &'static str| {
+            ctx.types
+                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new(name)).build())
+        };
+        Self {
+            ptr: mk(ctx, "ptr"),
+            nil: mk(ctx, "nil"),
+            i64: mk(ctx, "i64"),
+            i32: mk(ctx, "i32"),
+            i8: mk(ctx, "i8"),
+        }
+    }
+}
+
 /// First index for user-defined struct types.
 pub const RTTI_USER_START: u32 = 32;
 
@@ -178,18 +203,11 @@ fn generate_release_function_for_struct(
     let layout = compute_struct_layout_arena(ctx, struct_ty, type_converter)
         .expect("struct type registered in RttiMap must have a valid layout");
 
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let i8_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+    let tys = ClifTypes::intern(ctx);
+    let ptr_ty = tys.ptr;
+    let nil_ty = tys.nil;
+    let i64_ty = tys.i64;
+    let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
@@ -389,21 +407,12 @@ fn generate_release_function_for_enum(
         .expect("enum type registered in RttiMap must have a valid layout");
     let variants = get_enum_variants_arena(ctx, enum_ty).unwrap_or_default();
 
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let i32_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let i8_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
+    let tys = ClifTypes::intern(ctx);
+    let ptr_ty = tys.ptr;
+    let nil_ty = tys.nil;
+    let i64_ty = tys.i64;
+    let i32_ty = tys.i32;
+    let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
     let func_ty = ctx.types.intern(
