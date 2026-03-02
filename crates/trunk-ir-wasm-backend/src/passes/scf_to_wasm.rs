@@ -47,6 +47,16 @@ impl ArenaRewritePattern for ScfIfPattern {
 
         let loc = ctx.op(op).location;
 
+        // Get result type (default to nil if none); reject multi-result
+        let result_types = ctx.op_result_types(op);
+        if result_types.len() > 1 {
+            return false;
+        }
+        let result_ty = result_types
+            .first()
+            .copied()
+            .unwrap_or_else(|| intern_nil_type(ctx));
+
         // Get the condition operand
         let cond = scf_if_op.cond(ctx);
 
@@ -55,13 +65,6 @@ impl ArenaRewritePattern for ScfIfPattern {
         let else_region = scf_if_op.else_region(ctx);
         ctx.detach_region(then_region);
         ctx.detach_region(else_region);
-
-        // Get result type (default to nil if none)
-        let result_types = ctx.op_result_types(op);
-        let result_ty = result_types
-            .first()
-            .copied()
-            .unwrap_or_else(|| intern_nil_type(ctx));
 
         let new_op = arena_wasm::r#if(ctx, loc, cond, result_ty, then_region, else_region);
         rewriter.replace_op(new_op.op_ref());
@@ -90,8 +93,11 @@ impl ArenaRewritePattern for ScfLoopPattern {
 
         let loc = ctx.op(op).location;
 
-        // Get result type
+        // Get result type; reject multi-result loops
         let result_types = ctx.op_result_types(op);
+        if result_types.len() > 1 {
+            return false;
+        }
         let result_ty = result_types
             .first()
             .copied()

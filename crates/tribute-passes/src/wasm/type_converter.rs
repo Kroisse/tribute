@@ -1057,15 +1057,15 @@ pub mod salsa_converter {
                 if from_ty == to_ty {
                     return MaterializeResult::NoOp;
                 }
-                let from_is_typeref = adt::is_typeref(db, from_ty);
-                let to_is_typeref = adt::is_typeref(db, to_ty);
-                let from_is_structref = wasm::Structref::from_type(db, from_ty).is_some();
-                let to_is_structref = wasm::Structref::from_type(db, to_ty).is_some();
-                if (from_is_typeref && to_is_structref) || (from_is_structref && to_is_typeref) {
-                    return MaterializeResult::NoOp;
-                }
                 let from_is_struct_like = is_struct_like(db, from_ty);
                 let to_is_struct_like = is_struct_like(db, to_ty);
+                // Safe upcasts to abstract ref types need no runtime cast
+                let to_is_abstract = wasm::Structref::from_type(db, to_ty).is_some()
+                    || wasm::Anyref::from_type(db, to_ty).is_some();
+                if to_is_abstract && from_is_struct_like {
+                    return MaterializeResult::NoOp;
+                }
+                // Downcasts and lateral casts between struct-like types need ref_cast
                 if from_is_struct_like && to_is_struct_like {
                     let cast_op = wasm::ref_cast(db, location, value, to_ty, to_ty, None);
                     let mut ops = OpVec::new();
