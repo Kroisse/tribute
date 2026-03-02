@@ -104,9 +104,9 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
     applicator.apply_partial(ctx, module);
 }
 
-/// Pattern for `tribute_rt.box_int` -> `wasm.ref_i31` + `wasm.ref_cast(anyref)`
+/// Pattern for `tribute_rt.box_int` -> `wasm.ref_i31`
 ///
-/// Boxing converts an unboxed i32 to an i31ref, then upcasts to anyref.
+/// Boxing converts an unboxed i32 to an i31ref via `wasm.ref_i31`.
 struct BoxIntPattern;
 
 impl ArenaRewritePattern for BoxIntPattern {
@@ -227,9 +227,10 @@ impl ArenaRewritePattern for UnboxNatPattern {
     }
 }
 
-/// Pattern for `tribute_rt.box_float` -> `adt.struct_new(BoxedF64)` + `wasm.ref_cast(anyref)`
+/// Pattern for `tribute_rt.box_float` -> `adt.struct_new(BoxedF64, anyref)`
 ///
-/// Boxing converts an f64 to a BoxedF64 struct, then casts to anyref.
+/// Boxing converts an f64 to a BoxedF64 struct typed as anyref via
+/// `adt.struct_new` with `anyref_ty` as the result type.
 struct BoxFloatPattern;
 
 impl ArenaRewritePattern for BoxFloatPattern {

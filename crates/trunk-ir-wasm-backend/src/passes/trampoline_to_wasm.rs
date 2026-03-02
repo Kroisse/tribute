@@ -675,32 +675,30 @@ impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
         let anyref_ty = intern_type(ctx, "wasm", "anyref");
 
         // Try to match each struct-get operation type and extract parameters
-        let (struct_type, field_idx, is_any_field) =
-            if let Ok(step_get) = arena_trampoline::StepGet::from_op(ctx, op) {
-                let idx = step_get.field(ctx);
-                (step_adt_type(ctx), idx, idx == 1)
-            } else if let Ok(cont_get) = arena_trampoline::ContinuationGet::from_op(ctx, op) {
-                let idx = cont_get.field(ctx);
-                (continuation_adt_type(ctx), idx, idx == 1 || idx == 3)
-            } else if let Ok(wrapper_get) = arena_trampoline::ResumeWrapperGet::from_op(ctx, op) {
-                let idx = wrapper_get.field(ctx);
-                (resume_wrapper_adt_type(ctx), idx, true)
-            } else if let Ok(state_get) = arena_trampoline::StateGet::from_op(ctx, op) {
-                let field_idx = state_get.field(ctx);
-                // state_type is added manually as an attribute
-                let state_type = ctx
-                    .op(op)
-                    .attributes
-                    .get(&Symbol::new("state_type"))
-                    .and_then(|a| match a {
-                        ArenaAttribute::Type(ty) => Some(*ty),
-                        _ => None,
-                    })
-                    .unwrap_or(anyref_ty);
-                (state_type, field_idx, true)
-            } else {
-                return false;
+        let (struct_type, field_idx, is_any_field) = if let Ok(step_get) =
+            arena_trampoline::StepGet::from_op(ctx, op)
+        {
+            let idx = step_get.field(ctx);
+            (step_adt_type(ctx), idx, idx == 1)
+        } else if let Ok(cont_get) = arena_trampoline::ContinuationGet::from_op(ctx, op) {
+            let idx = cont_get.field(ctx);
+            (continuation_adt_type(ctx), idx, idx == 1 || idx == 3)
+        } else if let Ok(wrapper_get) = arena_trampoline::ResumeWrapperGet::from_op(ctx, op) {
+            let idx = wrapper_get.field(ctx);
+            (resume_wrapper_adt_type(ctx), idx, true)
+        } else if let Ok(state_get) = arena_trampoline::StateGet::from_op(ctx, op) {
+            let field_idx = state_get.field(ctx);
+            // state_type must be set by the producer pass
+            let state_type = match ctx.op(op).attributes.get(&Symbol::new("state_type")) {
+                Some(ArenaAttribute::Type(ty)) => *ty,
+                other => unreachable!(
+                    "trampoline.state_get op {op:?} missing or invalid 'state_type' attribute: {other:?}"
+                ),
             };
+            (state_type, field_idx, true)
+        } else {
+            return false;
+        };
 
         let location = ctx.op(op).location;
         let expected_result_type = ctx
@@ -1143,10 +1141,12 @@ impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
             return false;
         }
 
-        let result_ty = result_types[0];
-        let new_result_ty = convert_trampoline_type(ctx, result_ty);
+        let new_result_types: Vec<TypeRef> = result_types
+            .iter()
+            .map(|&ty| convert_trampoline_type(ctx, ty))
+            .collect();
 
-        if new_result_ty == result_ty {
+        if new_result_types == result_types {
             return false;
         }
 
@@ -1161,12 +1161,6 @@ impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
         let regions: Vec<_> = data.regions.to_vec();
         let successors: Vec<_> = data.successors.to_vec();
-
-        let new_result_types: Vec<TypeRef> = result_types
-            .iter()
-            .enumerate()
-            .map(|(i, &ty)| if i == 0 { new_result_ty } else { ty })
-            .collect();
 
         // Detach regions from the old op before building the new one
         for &r in &regions {
