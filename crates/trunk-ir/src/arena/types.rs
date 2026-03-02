@@ -196,6 +196,17 @@ impl TypeInterner {
         let data = &self.types[r];
         data.dialect == dialect && data.name == name
     }
+
+    /// Iterate over all interned types, yielding `(TypeRef, &TypeData)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (TypeRef, &TypeData)> {
+        self.types.iter()
+    }
+
+    /// Find a TypeRef by looking up through the dedup map.
+    /// Returns `None` if no type with the given data exists.
+    pub fn lookup(&self, data: &TypeData) -> Option<TypeRef> {
+        self.dedup.get(data).copied()
+    }
 }
 
 impl Default for TypeInterner {

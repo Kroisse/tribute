@@ -7,7 +7,7 @@ mod call_indirect_collection;
 mod definitions;
 mod gc_types_collection;
 mod handlers;
-mod helpers;
+pub(crate) mod helpers;
 mod value_emission;
 
 use call_indirect_collection::*;
@@ -36,10 +36,13 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
-use trunk_ir::dialect::{core, wasm};
-use trunk_ir::{
-    Attribute, Attrs, BlockId, DialectOp, DialectType, Operation, Region, Symbol, Type, Value,
-};
+use trunk_ir::Symbol;
+use trunk_ir::arena::ArenaModule;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -48,10 +51,7 @@ use wasm_encoder::{
     TypeSection, ValType,
 };
 
-use crate::errors;
-use crate::gc_types::{ATTR_FIELD_IDX, ATTR_TYPE, GcTypeDef};
-#[cfg(test)]
-use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX};
+use crate::gc_types::GcTypeDef;
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
@@ -210,9 +210,9 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
 });
 
 #[derive(Default)]
-struct ModuleInfo<'db> {
-    imports: Vec<ImportFuncDef<'db>>,
-    funcs: Vec<FunctionDef<'db>>,
+struct ModuleInfo {
+    imports: Vec<ImportFuncDef>,
+    funcs: Vec<FunctionDef>,
     exports: Vec<ExportDef>,
     memory: Option<MemoryDef>,
     data: Vec<DataDef>,
@@ -220,39 +220,43 @@ struct ModuleInfo<'db> {
     elements: Vec<ElementDef>,
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
-    type_idx_by_type: HashMap<Type<'db>, u32>,
+    type_idx_by_type: HashMap<TypeRef, u32>,
     /// Placeholder struct type_idx lookup (for wasm.structref types)
-    placeholder_struct_type_idx: HashMap<(Type<'db>, usize), u32>,
-    /// Function type lookup map for boxing/unboxing at call sites.
-    func_types: HashMap<Symbol, core::Func<'db>>,
+    placeholder_struct_type_idx: HashMap<(TypeRef, usize), u32>,
+    /// Function type lookup map (core.func TypeRef).
+    func_types: HashMap<Symbol, TypeRef>,
     /// Function index lookup map (import index or func index).
     func_indices: HashMap<Symbol, u32>,
-    /// Block argument types map for resolving block argument types.
-    block_arg_types: HashMap<(BlockId, usize), Type<'db>>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<Symbol>,
     /// Additional function types from call_indirect that need to be added to type section.
-    /// Stored as (type_idx, core::Func) pairs.
-    call_indirect_types: Vec<(u32, core::Func<'db>)>,
+    /// Stored as (type_idx, core.func TypeRef) pairs.
+    call_indirect_types: Vec<(u32, TypeRef)>,
+    /// Pre-interned common types for use in handlers.
+    common_types: CommonTypes,
+}
+
+/// Pre-interned common types to avoid needing `&mut IrContext` during emission.
+#[derive(Default)]
+struct CommonTypes {
+    anyref: Option<TypeRef>,
+    funcref: Option<TypeRef>,
+    step: Option<TypeRef>,
 }
 
 /// Context for emitting a single function's code.
-struct FunctionEmitContext<'db> {
+struct FunctionEmitContext {
     /// Maps values to their local indices.
-    value_locals: HashMap<Value<'db>, u32>,
+    value_locals: HashMap<ValueRef, u32>,
     /// Effective types for values (after unification).
-    effective_types: HashMap<Value<'db>, Type<'db>>,
+    effective_types: HashMap<ValueRef, TypeRef>,
     /// The function's expected return type (from function signature).
-    /// Used to determine block types for polymorphic operations.
-    func_return_type: Option<Type<'db>>,
+    func_return_type: Option<TypeRef>,
 }
 
-pub fn emit_wasm<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> CompilationResult<Vec<u8>> {
+pub fn emit_wasm(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
     debug!("emit_wasm: collecting module info...");
-    let module_info = match collect_module_info(db, module) {
+    let module_info = match collect_module_info(ctx, module) {
         Ok(info) => {
             debug!("emit_wasm: module info collected successfully");
             info
@@ -278,7 +282,6 @@ pub fn emit_wasm<'db>(
     let mut next_type_index = gc_type_count;
 
     // All GC types must be in a single rec group for nominal typing.
-    // This makes structurally identical types distinct for ref.test.
     let gc_subtypes: Vec<SubType> = module_info
         .gc_types
         .iter()
@@ -312,13 +315,13 @@ pub fn emit_wasm<'db>(
     }
 
     for import_def in module_info.imports.iter() {
-        let params = import_def
-            .ty
-            .params(db)
+        let (params_refs, result_ref) = func_type_parts(ctx, import_def.func_type)
+            .ok_or_else(|| CompilationError::type_error("import func type is not core.func"))?;
+        let params = params_refs
             .iter()
-            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
+            .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(db, import_def.ty.result(db), &module_info.type_idx_by_type)?;
+        let results = result_types(ctx, result_ref, &module_info.type_idx_by_type)?;
         type_section.ty().function(params, results);
         let type_index = next_type_index;
         next_type_index += 1;
@@ -331,60 +334,44 @@ pub fn emit_wasm<'db>(
 
     for func_def in module_info.funcs.iter() {
         debug!("Processing function type for: {:?}", func_def.name);
-        let params = func_def
-            .ty
-            .params(db)
+        let (params_refs, declared_result) = func_type_parts(ctx, func_def.func_type)
+            .ok_or_else(|| CompilationError::type_error("func type is not core.func"))?;
+        let params = params_refs
             .iter()
-            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
+            .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
 
-        // Check if the function return type needs to be adjusted.
-        //
-        // Handler lambdas may be typed to return funcref but the computation lambda
-        // actually returns i32. Detect this case and adjust the return type.
-        //
-        // Key distinction:
-        // - Handler arm lambdas (k(value)): done path calls call_indirect → returns funcref
-        // - Computation lambda: done path executes body → returns i32
-        //
-        // NOTE: Functions that perform abilities (can yield) also have type issues,
-        // but fixing those at emit time breaks callers. A proper fix is needed in
-        // the lowering pass (cont_to_wasm) to update function types and call sites.
-        let declared_result = func_def.ty.result(db);
+        let declared_result_data = ctx.types.get(declared_result);
         debug!(
             "  checking return type adjustment for {}: declared={}.{}",
-            func_def.name,
-            declared_result.dialect(db),
-            declared_result.name(db)
+            func_def.name, declared_result_data.dialect, declared_result_data.name
         );
 
-        let effective_result = if let Some(body_region) = func_def.op.regions(db).first() {
-            // Handler lambdas with funcref return type
-            if core::Func::from_type(db, declared_result).is_some()
-                || wasm::Funcref::from_type(db, declared_result).is_some()
-            {
-                debug!("  checking funcref function for handler dispatch...");
-                if should_adjust_handler_return_to_i32(db, body_region) {
-                    debug!(
-                        "  adjusting return type from funcref to i32 for computation lambda: {}",
-                        func_def.name
-                    );
-                    core::I32::new(db).as_type()
+        let effective_result = {
+            let regions = &ctx.op(func_def.op).regions;
+            if let Some(&body_region) = regions.first() {
+                if is_type(ctx, declared_result, "core", "func")
+                    || is_type(ctx, declared_result, "wasm", "funcref")
+                {
+                    debug!("  checking funcref function for handler dispatch...");
+                    if should_adjust_handler_return_to_i32(ctx, body_region) {
+                        debug!(
+                            "  adjusting return type from funcref to i32 for computation lambda: {}",
+                            func_def.name
+                        );
+                        intern_simple_type(ctx, "core", "i32")
+                    } else {
+                        declared_result
+                    }
                 } else {
-                    debug!(
-                        "  keeping funcref return type for handler arm lambda: {}",
-                        func_def.name
-                    );
                     declared_result
                 }
             } else {
                 declared_result
             }
-        } else {
-            declared_result
         };
 
-        let results = match result_types(db, effective_result, &module_info.type_idx_by_type) {
+        let results = match result_types(ctx, effective_result, &module_info.type_idx_by_type) {
             Ok(r) => {
                 debug!("  results: {:?}", r);
                 r
@@ -401,27 +388,29 @@ pub fn emit_wasm<'db>(
         debug!("  type_index: {}", type_index);
     }
 
-    // Emit call_indirect function types (these were collected during module info gathering)
+    // Emit call_indirect function types
     for (type_idx, func_ty) in &module_info.call_indirect_types {
+        let (params_refs, result_ref) = func_type_parts(ctx, *func_ty)
+            .ok_or_else(|| CompilationError::type_error("call_indirect type is not core.func"))?;
         debug!(
             "Emitting call_indirect type idx={}: params={:?}, result={}.{}",
             type_idx,
-            func_ty
-                .params(db)
+            params_refs
                 .iter()
-                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                .map(|t| {
+                    let d = ctx.types.get(*t);
+                    format!("{}.{}", d.dialect, d.name)
+                })
                 .collect::<Vec<_>>(),
-            func_ty.result(db).dialect(db),
-            func_ty.result(db).name(db)
+            ctx.types.get(result_ref).dialect,
+            ctx.types.get(result_ref).name
         );
-        let params = func_ty
-            .params(db)
+        let params = params_refs
             .iter()
-            .map(|ty| type_to_valtype(db, *ty, &module_info.type_idx_by_type))
+            .map(|ty| type_to_valtype(ctx, *ty, &module_info.type_idx_by_type))
             .collect::<CompilationResult<Vec<_>>>()?;
-        let results = result_types(db, func_ty.result(db), &module_info.type_idx_by_type)?;
+        let results = result_types(ctx, result_ref, &module_info.type_idx_by_type)?;
         type_section.ty().function(params, results);
-        // Verify the type index matches what we expect
         assert_eq!(
             *type_idx, next_type_index,
             "call_indirect type index mismatch: expected {}, got {}",
@@ -440,7 +429,6 @@ pub fn emit_wasm<'db>(
         });
     }
 
-    // Generate table section
     for table_def in &module_info.tables {
         table_section.table(TableType {
             element_type: table_def.reftype,
@@ -451,7 +439,6 @@ pub fn emit_wasm<'db>(
         });
     }
 
-    // Generate global section
     for global_def in &module_info.globals {
         let init_expr = match global_def.valtype {
             ValType::I32 => ConstExpr::i32_const(global_def.init as i32),
@@ -497,7 +484,6 @@ pub fn emit_wasm<'db>(
             let Some(index) = module_info.func_indices.get(&func_def.name) else {
                 continue;
             };
-            // Export with qualified name to avoid collisions (e.g., std::List::map vs std::Option::map)
             let name = func_def.name.to_string();
             export_section.export(&name, ExportKind::Func, *index);
         }
@@ -512,7 +498,6 @@ pub fn emit_wasm<'db>(
         }
     }
 
-    // Generate element section (active element segments)
     for elem_def in &module_info.elements {
         let func_idxs: Vec<u32> = elem_def
             .funcs
@@ -529,8 +514,6 @@ pub fn emit_wasm<'db>(
         }
     }
 
-    // Generate declarative element segment for functions referenced via ref.func
-    // This is required by WebAssembly to declare that these functions can be referenced
     if !module_info.ref_funcs.is_empty() {
         let func_idxs: Vec<u32> = module_info
             .ref_funcs
@@ -548,7 +531,7 @@ pub fn emit_wasm<'db>(
     );
     for (i, func_def) in module_info.funcs.iter().enumerate() {
         debug!("emit_wasm: emitting function {}: {:?}", i, func_def.name);
-        match emit_function(db, func_def, &module_info) {
+        match emit_function(ctx, func_def, &module_info) {
             Ok(function) => {
                 code_section.function(&function);
             }
@@ -560,8 +543,6 @@ pub fn emit_wasm<'db>(
     }
 
     let mut module_bytes = Module::new();
-    // Section order per WebAssembly spec:
-    // Type, Import, Function, Table, Memory, Global, Export, Start, Element, Code, Data
     module_bytes.section(&type_section);
     if !module_info.imports.is_empty() {
         module_bytes.section(&import_section);
@@ -582,7 +563,6 @@ pub fn emit_wasm<'db>(
     if !module_info.elements.is_empty() || !module_info.ref_funcs.is_empty() {
         module_bytes.section(&element_section);
     }
-    // Data count section is required when using array.new_data or memory.init
     if !module_info.data.is_empty() {
         module_bytes.section(&DataCountSection {
             count: module_info.data.len() as u32,
@@ -598,52 +578,50 @@ pub fn emit_wasm<'db>(
     Ok(module_bytes.finish())
 }
 
-/// Recursively collect wasm operations from a region, including nested core.module operations.
-/// WebAssembly doesn't support nested modules, so we flatten all functions from namespaced
-/// modules into a single list.
-fn collect_wasm_ops_from_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    info: &mut ModuleInfo<'db>,
+/// Recursively collect wasm operations from a region.
+fn collect_wasm_ops_from_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    info: &mut ModuleInfo,
 ) -> CompilationResult<()> {
     let core_dialect = Symbol::new("core");
     let module_name = Symbol::new("module");
 
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            let dialect = op.dialect(db);
-            let name = op.name(db);
+    for &block_ref in &ctx.region(region).blocks {
+        for &op in &ctx.block(block_ref).ops {
+            let op_data = ctx.op(op);
+            let dialect = op_data.dialect;
+            let name = op_data.name;
 
-            // Recurse into nested core.module operations
             if dialect == core_dialect && name == module_name {
-                for nested_region in op.regions(db).iter() {
-                    collect_wasm_ops_from_region(db, nested_region, info)?;
+                for &nested_region in &op_data.regions {
+                    collect_wasm_ops_from_region(ctx, nested_region, info)?;
                 }
                 continue;
             }
 
-            // Collect wasm operations using typed wrappers
-            if let Ok(func_op) = wasm::Func::from_operation(db, *op) {
-                if let Ok(func_def) = extract_function_def(db, func_op) {
+            if let Ok(func_op) = arena_wasm::Func::from_op(ctx, op) {
+                if let Ok(func_def) = extract_function_def(ctx, func_op) {
                     debug!("Including function: {}", func_def.name);
                     info.funcs.push(func_def);
                 }
-            } else if let Ok(import_op) = wasm::ImportFunc::from_operation(db, *op) {
-                info.imports.push(extract_import_def(db, import_op)?);
-            } else if let Ok(export_op) = wasm::ExportFunc::from_operation(db, *op) {
-                info.exports.push(extract_export_func(db, export_op)?);
-            } else if let Ok(export_mem_op) = wasm::ExportMemory::from_operation(db, *op) {
-                info.exports.push(extract_export_memory(db, export_mem_op)?);
-            } else if let Ok(memory_op) = wasm::Memory::from_operation(db, *op) {
-                info.memory = Some(extract_memory_def(db, memory_op)?);
-            } else if let Ok(data_op) = wasm::Data::from_operation(db, *op) {
-                info.data.push(extract_data_def(db, data_op)?);
-            } else if let Ok(table_op) = wasm::Table::from_operation(db, *op) {
-                info.tables.push(extract_table_def(db, table_op)?);
-            } else if let Ok(elem_op) = wasm::Elem::from_operation(db, *op) {
-                info.elements.push(extract_element_def(db, elem_op)?);
-            } else if let Ok(global_op) = wasm::Global::from_operation(db, *op) {
-                info.globals.push(extract_global_def(db, global_op)?);
+            } else if let Ok(import_op) = arena_wasm::ImportFunc::from_op(ctx, op) {
+                info.imports.push(extract_import_def(ctx, import_op)?);
+            } else if let Ok(export_op) = arena_wasm::ExportFunc::from_op(ctx, op) {
+                info.exports.push(extract_export_func(ctx, export_op)?);
+            } else if let Ok(export_mem_op) = arena_wasm::ExportMemory::from_op(ctx, op) {
+                info.exports
+                    .push(extract_export_memory(ctx, export_mem_op)?);
+            } else if let Ok(memory_op) = arena_wasm::Memory::from_op(ctx, op) {
+                info.memory = Some(extract_memory_def(ctx, memory_op)?);
+            } else if let Ok(data_op) = arena_wasm::Data::from_op(ctx, op) {
+                info.data.push(extract_data_def(ctx, data_op)?);
+            } else if let Ok(table_op) = arena_wasm::Table::from_op(ctx, op) {
+                info.tables.push(extract_table_def(ctx, table_op)?);
+            } else if let Ok(elem_op) = arena_wasm::Elem::from_op(ctx, op) {
+                info.elements.push(extract_element_def(ctx, elem_op)?);
+            } else if let Ok(global_op) = arena_wasm::Global::from_op(ctx, op) {
+                info.globals.push(extract_global_def(ctx, global_op)?);
             }
         }
     }
@@ -651,81 +629,40 @@ fn collect_wasm_ops_from_region<'db>(
     Ok(())
 }
 
-/// Collect block argument types from the module.
-/// Returns a map from (BlockId, arg_index) to Type.
-fn collect_block_arg_types<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> HashMap<(BlockId, usize), Type<'db>> {
-    let mut map = HashMap::new();
+fn collect_module_info(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<ModuleInfo> {
+    let mut info = ModuleInfo::default();
 
-    fn collect_from_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: &Region<'db>,
-        map: &mut HashMap<(BlockId, usize), Type<'db>>,
-    ) {
-        for block in region.blocks(db).iter() {
-            let block_id = block.id(db);
-            for (idx, arg) in block.args(db).iter().enumerate() {
-                map.insert((block_id, idx), arg.ty(db));
-            }
-            // Recursively collect from nested regions in operations
-            for op in block.operations(db).iter() {
-                for nested_region in op.regions(db).iter() {
-                    collect_from_region(db, nested_region, map);
-                }
-            }
-        }
-    }
+    let body = module
+        .body(ctx)
+        .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
 
-    collect_from_region(db, &module.body(db), &mut map);
-    map
-}
+    collect_wasm_ops_from_region(ctx, body, &mut info)?;
 
-fn collect_module_info<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> CompilationResult<ModuleInfo<'db>> {
-    // Collect block argument types for resolving block argument types
-    let mut info = ModuleInfo {
-        block_arg_types: collect_block_arg_types(db, module),
-        ..Default::default()
-    };
-
-    // Recursively collect wasm operations from the module and any nested core.module operations.
-    collect_wasm_ops_from_region(db, &module.body(db), &mut info)?;
-
-    // Collect GC types (structs, arrays)
+    // Collect GC types
     let (gc_types, mut type_idx_by_type, placeholder_struct_type_idx) =
-        collect_gc_types(db, module, &info.block_arg_types)?;
+        collect_gc_types(ctx, module)?;
     info.gc_types = gc_types;
 
     // Collect function types from call_indirect operations
-    // Pass the counts so call_indirect types get indices after GC types and function definitions
     let gc_type_count = info.gc_types.len();
     let func_type_count = info.imports.len() + info.funcs.len();
 
-    // Register function definition types in type_idx_by_type so that
-    // call_indirect can reuse existing type indices instead of allocating
-    // duplicate entries for structurally identical function signatures.
+    // Register function definition types in type_idx_by_type
     for (i, import_def) in info.imports.iter().enumerate() {
-        let func_type = import_def.ty.as_type();
         type_idx_by_type
-            .entry(func_type)
+            .entry(import_def.func_type)
             .or_insert(gc_type_count as u32 + i as u32);
     }
     for (i, func_def) in info.funcs.iter().enumerate() {
-        let func_type = func_def.ty.as_type();
         type_idx_by_type
-            .entry(func_type)
+            .entry(func_def.func_type)
             .or_insert(gc_type_count as u32 + info.imports.len() as u32 + i as u32);
     }
 
     let call_indirect_types = collect_call_indirect_types(
-        db,
+        ctx,
         module,
         &mut type_idx_by_type,
-        &info.block_arg_types,
         gc_type_count,
         func_type_count,
     )?;
@@ -734,16 +671,15 @@ fn collect_module_info<'db>(
     info.call_indirect_types = call_indirect_types;
     info.placeholder_struct_type_idx = placeholder_struct_type_idx;
 
-    // Build function type lookup map for boxing/unboxing.
-    // Use the qualified name already stored in func/import definitions.
+    // Build function type lookup map
     for func in &info.funcs {
-        info.func_types.insert(func.name, func.ty);
+        info.func_types.insert(func.name, func.func_type);
     }
     for import in &info.imports {
-        info.func_types.insert(import.sym, import.ty);
+        info.func_types.insert(import.sym, import.func_type);
     }
 
-    // Build function index map (import index or func index).
+    // Build function index map
     for (index, import_def) in info.imports.iter().enumerate() {
         info.func_indices.insert(import_def.sym, index as u32);
     }
@@ -753,12 +689,11 @@ fn collect_module_info<'db>(
             .insert(func_def.name, import_count + index as u32);
     }
 
-    // Collect functions referenced via ref.func for declarative elem segment
-    info.ref_funcs = collect_ref_funcs(db, module);
+    // Collect functions referenced via ref.func
+    info.ref_funcs = collect_ref_funcs(ctx, module);
 
-    // Auto-create a funcref table if call_indirect is used but no table is defined.
-    // WebAssembly requires a table for call_indirect to reference.
-    if info.tables.is_empty() && has_call_indirect(db, module) {
+    // Auto-create a funcref table if call_indirect is used but no table is defined
+    if info.tables.is_empty() && has_call_indirect(ctx, module) {
         debug!("Auto-generating funcref table for call_indirect");
         info.tables.push(TableDef {
             reftype: RefType::FUNCREF,
@@ -767,126 +702,126 @@ fn collect_module_info<'db>(
         });
     }
 
+    // Pre-intern common types so handlers don't need &mut IrContext
+    info.common_types = CommonTypes {
+        anyref: Some(intern_simple_type(ctx, "wasm", "anyref")),
+        funcref: Some(intern_simple_type(ctx, "wasm", "funcref")),
+        step: Some(intern_named_adt_struct(ctx, "_Step")),
+    };
+
     Ok(info)
 }
 
-// GcTypesResult and collect_gc_types moved to gc_types_collection module
-fn emit_function<'db>(
-    db: &'db dyn salsa::Database,
-    func_def: &FunctionDef<'db>,
-    module_info: &ModuleInfo<'db>,
+fn emit_function(
+    ctx: &IrContext,
+    func_def: &FunctionDef,
+    module_info: &ModuleInfo,
 ) -> CompilationResult<Function> {
     debug!("=== emit_function: {:?} ===", func_def.name);
-    let region = func_def
-        .op
-        .regions(db)
+    let regions = &ctx.op(func_def.op).regions;
+    let &region = regions
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.func missing body region"))?;
-    let blocks = region.blocks(db);
-    let block = blocks
+    let blocks = &ctx.region(region).blocks;
+    let &block = blocks
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.func has no entry block"))?;
 
-    let params = func_def.ty.params(db);
-    if params.len() != block.args(db).len() {
+    let (params_refs, result_ref) = func_type_parts(ctx, func_def.func_type)
+        .ok_or_else(|| CompilationError::type_error("func type is not core.func"))?;
+    let block_args = ctx.block_args(block);
+    if params_refs.len() != block_args.len() {
         return Err(CompilationError::invalid_module(
             "function parameter count does not match entry block args",
         ));
     }
 
-    // Get the function's expected return type for polymorphic block type inference
-    let func_return_type = Some(func_def.ty.result(db));
-    let mut ctx = FunctionEmitContext {
+    let func_return_type = Some(result_ref);
+    let mut emit_ctx = FunctionEmitContext {
         value_locals: HashMap::new(),
         effective_types: HashMap::new(),
         func_return_type,
     };
     let mut locals: Vec<ValType> = Vec::new();
 
-    for (index, arg) in block.args(db).iter().enumerate() {
-        ctx.value_locals.insert(block.arg(db, index), index as u32);
-        // Block args have their types from the block definition
-        ctx.effective_types.insert(block.arg(db, index), arg.ty(db));
+    for (index, &arg) in block_args.iter().enumerate() {
+        emit_ctx.value_locals.insert(arg, index as u32);
+        let arg_ty = ctx.value_ty(arg);
+        emit_ctx.effective_types.insert(arg, arg_ty);
     }
 
-    let param_count = params.len() as u32;
+    let param_count = params_refs.len() as u32;
 
-    assign_locals_in_region(db, region, param_count, &mut locals, &mut ctx, module_info)?;
+    assign_locals_in_region(
+        ctx,
+        region,
+        param_count,
+        &mut locals,
+        &mut emit_ctx,
+        module_info,
+    )?;
 
     let mut function = Function::new(compress_locals(&locals));
 
-    emit_region_ops(db, region, &ctx, module_info, &mut function)?;
+    emit_region_ops(ctx, region, &emit_ctx, module_info, &mut function)?;
 
     function.instruction(&Instruction::End);
 
     Ok(function)
 }
 
-fn assign_locals_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+fn assign_locals_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
     param_count: u32,
     locals: &mut Vec<ValType>,
-    ctx: &mut FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+    emit_ctx: &mut FunctionEmitContext,
+    module_info: &ModuleInfo,
 ) -> CompilationResult<()> {
-    for block in region.blocks(db).iter() {
-        // Allocate locals for block arguments (for nested regions)
-        // In WASM, these represent values that flow through control structures
-        for (index, arg) in block.args(db).iter().enumerate() {
-            let block_arg = block.arg(db, index);
-            // Skip if already assigned (e.g., function entry block args)
-            if ctx.value_locals.contains_key(&block_arg) {
+    for &block_ref in &ctx.region(region).blocks {
+        let block_args = ctx.block_args(block_ref);
+        for &block_arg in block_args.iter() {
+            if emit_ctx.value_locals.contains_key(&block_arg) {
                 continue;
             }
-            let arg_ty = arg.ty(db);
-            let val_type = type_to_valtype(db, arg_ty, &module_info.type_idx_by_type)?;
+            let arg_ty = ctx.value_ty(block_arg);
+            let val_type = type_to_valtype(ctx, arg_ty, &module_info.type_idx_by_type)?;
             let local_index = param_count + locals.len() as u32;
-            ctx.value_locals.insert(block_arg, local_index);
-            ctx.effective_types.insert(block_arg, arg_ty);
+            emit_ctx.value_locals.insert(block_arg, local_index);
+            emit_ctx.effective_types.insert(block_arg, arg_ty);
             locals.push(val_type);
+            let ty_data = ctx.types.get(arg_ty);
             tracing::debug!(
-                "Allocated local {} for block arg {:?} type {}.{}",
+                "Allocated local {} for block arg type {}.{}",
                 local_index,
-                block.id(db),
-                arg_ty.dialect(db),
-                arg_ty.name(db)
+                ty_data.dialect,
+                ty_data.name
             );
         }
 
-        for op in block.operations(db).iter() {
-            // IMPORTANT: Process nested regions FIRST so that their effective types
-            // are available when we compute the effective type for this operation.
-            // This is critical for wasm.if which needs to know the branch result types.
-            for nested in op.regions(db).iter() {
-                assign_locals_in_region(db, nested, param_count, locals, ctx, module_info)?;
+        for &op in &ctx.block(block_ref).ops {
+            // Process nested regions FIRST
+            let nested_regions = ctx.op(op).regions.clone();
+            for &nested in &nested_regions {
+                assign_locals_in_region(ctx, nested, param_count, locals, emit_ctx, module_info)?;
             }
 
-            let result_types = op.results(db);
+            let result_types = ctx.op_result_types(op);
             if result_types.len() > 1 {
                 return Err(CompilationError::unsupported_feature("multi-result ops"));
             }
-            // Note: We no longer filter out nil types here because they may be
-            // used as arguments (e.g., empty closure environments passed as ref.null none).
-            // The local allocation handles nil types specially below.
-            if let Some(result_ty) = result_types.first().copied() {
-                // Use the IR result type directly. Type variables are resolved at AST level
-                // before IR generation, so types should already be concrete.
+            if let Some(&result_ty) = result_types.first() {
                 let effective_ty = result_ty;
 
-                // For wasm.ref_cast and wasm.struct_new with placeholder structref type,
-                // use the concrete type from the placeholder map for the local variable type.
-                // This ensures struct.get operations can access the correct type.
-                let is_ref_cast = wasm::RefCast::matches(db, *op);
-                let is_struct_new = wasm::StructNew::matches(db, *op);
+                let is_ref_cast = arena_wasm::RefCast::matches(ctx, op);
+                let is_struct_new = arena_wasm::StructNew::matches(ctx, op);
                 let val_type = if is_ref_cast || is_struct_new {
-                    let attrs = op.attributes(db);
+                    let attrs = &ctx.op(op).attributes;
 
-                    // For ref_cast: check target_type attr; for struct_new: check type attr or result type
                     let placeholder_ty = if is_ref_cast {
                         attrs.get(&ATTR_TARGET_TYPE()).and_then(|attr| {
-                            if let Attribute::Type(ty) = attr {
-                                if wasm::Structref::from_type(db, *ty).is_some() {
+                            if let ArenaAttribute::Type(ty) = attr {
+                                if is_type(ctx, *ty, "wasm", "structref") {
                                     Some(*ty)
                                 } else {
                                     None
@@ -896,12 +831,11 @@ fn assign_locals_in_region<'db>(
                             }
                         })
                     } else if is_struct_new {
-                        // Check type attribute or result type for structref
                         attrs
-                            .get(&ATTR_TYPE())
+                            .get(&Symbol::new("type"))
                             .and_then(|attr| {
-                                if let Attribute::Type(ty) = attr {
-                                    if wasm::Structref::from_type(db, *ty).is_some() {
+                                if let ArenaAttribute::Type(ty) = attr {
+                                    if is_type(ctx, *ty, "wasm", "structref") {
                                         Some(*ty)
                                     } else {
                                         None
@@ -911,8 +845,8 @@ fn assign_locals_in_region<'db>(
                                 }
                             })
                             .or_else(|| {
-                                op.results(db).first().copied().and_then(|ty| {
-                                    if wasm::Structref::from_type(db, ty).is_some() {
+                                ctx.op_result_types(op).first().copied().and_then(|ty| {
+                                    if is_type(ctx, ty, "wasm", "structref") {
                                         Some(ty)
                                     } else {
                                         None
@@ -924,12 +858,11 @@ fn assign_locals_in_region<'db>(
                     };
 
                     if let Some(placeholder_type) = placeholder_ty {
-                        // Get field_count: from attribute for ref_cast, from operands for struct_new
                         let field_count = if is_struct_new {
-                            Some(op.operands(db).len())
+                            Some(ctx.op_operands(op).len())
                         } else {
                             attrs.get(&Symbol::new("field_count")).and_then(|attr| {
-                                if let Attribute::IntBits(fc) = attr {
+                                if let ArenaAttribute::IntBits(fc) = attr {
                                     Some(*fc as usize)
                                 } else {
                                     None
@@ -957,33 +890,31 @@ fn assign_locals_in_region<'db>(
                                     heap_type: HeapType::Concrete(type_idx),
                                 })
                             } else {
-                                type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                                type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
                             }
                         } else {
-                            type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                            type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
                         }
                     } else {
-                        type_to_valtype(db, effective_ty, &module_info.type_idx_by_type)?
+                        type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type)?
                     }
                 } else {
-                    match type_to_valtype(db, effective_ty, &module_info.type_idx_by_type) {
+                    match type_to_valtype(ctx, effective_ty, &module_info.type_idx_by_type) {
                         Ok(vt) => vt,
                         Err(e) => {
+                            let op_data = ctx.op(op);
                             debug!(
                                 "type_to_valtype failed for op {}.{}: {:?}",
-                                op.dialect(db),
-                                op.name(db),
-                                e
+                                op_data.dialect, op_data.name, e
                             );
                             return Err(e);
                         }
                     }
                 };
                 let local_index = param_count + locals.len() as u32;
-                let result_value = op.result(db, 0);
-                ctx.value_locals.insert(result_value, local_index);
-                // Record the effective type for boxing/unboxing decisions
-                ctx.effective_types.insert(result_value, effective_ty);
+                let result_value = ctx.op_result(op, 0);
+                emit_ctx.value_locals.insert(result_value, local_index);
+                emit_ctx.effective_types.insert(result_value, effective_ty);
                 locals.push(val_type);
             }
         }
@@ -992,316 +923,277 @@ fn assign_locals_in_region<'db>(
 }
 
 /// Describes what kind of construct a nesting level represents.
-/// Used to determine how yield+br patterns should emit code.
 #[derive(Clone, Debug)]
 enum NestingKind {
-    /// A `wasm.block` — br carries a stack value as the block result.
     Block,
-    /// A `wasm.loop` — br restarts the loop; loop-carried values must be
-    /// written to their corresponding locals before the branch.
     Loop { arg_locals: Vec<u32> },
-    /// A `wasm.if` — br carries a stack value as the if result.
     If,
 }
 
-fn emit_region_ops<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+fn emit_region_ops(
+    ctx: &IrContext,
+    region: RegionRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    emit_region_ops_nested(db, region, ctx, module_info, function, &[])
+    emit_region_ops_nested(ctx, region, emit_ctx, module_info, function, &[])
 }
 
-fn emit_region_ops_nested<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+fn emit_region_ops_nested(
+    ctx: &IrContext,
+    region: RegionRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
     nesting: &[NestingKind],
 ) -> CompilationResult<()> {
-    let blocks = region.blocks(db);
+    let blocks = &ctx.region(region).blocks;
     if blocks.len() != 1 {
         return Err(CompilationError::unsupported_feature("multi-block regions"));
     }
-    let block = &blocks[0];
-    let mut ops = block.operations(db).iter().peekable();
-    while let Some(op) = ops.next() {
-        if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
-            // When wasm.yield is followed by wasm.br, emit the value for the branch.
-            // - For block/if targets: put value on stack (br carries it as result).
-            // - For loop targets: write value to loop arg local, then br (no stack value).
-            // Standalone wasm.yield (region fall-through) is handled by the
-            // caller via region_result_value + emit_value_get.
-            let followed_by_br = ops
+    let block_ref = blocks[0];
+    let ops = ctx.block(block_ref).ops.clone();
+    let mut iter = ops.iter().peekable();
+    while let Some(&op) = iter.next() {
+        if let Ok(yield_op) = arena_wasm::Yield::from_op(ctx, op) {
+            let followed_by_br = iter
                 .peek()
-                .is_some_and(|next| wasm::Br::from_operation(db, **next).is_ok());
+                .is_some_and(|&&next| arena_wasm::Br::from_op(ctx, next).is_ok());
             if followed_by_br {
-                let br_op = wasm::Br::from_operation(db, **ops.peek().unwrap()).unwrap();
-                let depth = br_op.target(db) as usize;
-                let value = yield_op.value(db);
-                let index = *ctx.value_locals.get(&value).ok_or_else(|| {
+                let br_op = arena_wasm::Br::from_op(ctx, **iter.peek().unwrap()).unwrap();
+                let depth = br_op.target(ctx) as usize;
+                let value = yield_op.value(ctx);
+                let index = *emit_ctx.value_locals.get(&value).ok_or_else(|| {
                     CompilationError::invalid_module("wasm.yield value missing local")
                 })?;
 
-                // Check if the br target is a loop
                 if depth < nesting.len()
                     && let NestingKind::Loop { ref arg_locals } = nesting[nesting.len() - 1 - depth]
                 {
-                    // Loop target: write to loop arg local, then br (no stack value)
                     for &local in arg_locals.iter() {
                         function.instruction(&Instruction::LocalGet(index));
                         function.instruction(&Instruction::LocalSet(local));
                     }
-                    // Skip the yield, let the next iteration emit the br
                     continue;
                 }
 
-                // Block/if target: put value on stack
                 function.instruction(&Instruction::LocalGet(index));
             }
             continue;
         }
-        emit_op_nested(db, op, ctx, module_info, function, nesting)?;
+        emit_op_nested(ctx, op, emit_ctx, module_info, function, nesting)?;
     }
     Ok(())
 }
 
-fn region_result_value<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-) -> Option<Value<'db>> {
-    let blocks = region.blocks(db);
-    let block = blocks.last()?;
-    let op = block.operations(db).last()?;
+fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
+    let blocks = &ctx.region(region).blocks;
+    let &block_ref = blocks.last()?;
+    let ops = &ctx.block(block_ref).ops;
+    let &op = ops.last()?;
 
-    // Check for wasm.yield - its operand is the region's result value.
-    // This handles cases where the result is defined outside the region
-    // (e.g., handler dispatch done body where result is the scrutinee).
-    if let Ok(yield_op) = wasm::Yield::from_operation(db, *op) {
-        return Some(yield_op.value(db));
+    if let Ok(yield_op) = arena_wasm::Yield::from_op(ctx, op) {
+        return Some(yield_op.value(ctx));
     }
 
-    // Fallback: the last operation's first result
-    if op.results(db).is_empty() {
+    let result_types = ctx.op_result_types(op);
+    if result_types.is_empty() {
         None
     } else {
-        Some(op.result(db, 0))
+        Some(ctx.op_result(op, 0))
     }
 }
 
-fn emit_op_nested<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+fn emit_op_nested(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
     nesting: &[NestingKind],
 ) -> CompilationResult<()> {
+    let op_data = ctx.op(op);
     let wasm_dialect = Symbol::new("wasm");
-    if op.dialect(db) != wasm_dialect {
+    if op_data.dialect != wasm_dialect {
         return Err(CompilationError::unsupported_feature(
             "non-wasm op in wasm backend",
         ));
     }
 
-    let name = op.name(db);
-    let operands = op.operands(db);
+    let name = op_data.name;
+    let operands = ctx.op_operands(op);
 
-    debug!("emit_op: {}.{}", op.dialect(db), name);
+    debug!("emit_op: wasm.{}", name);
 
-    // Handle wasm.nop - it's a placeholder for nil constants
-    // For primitive types, no WASM instruction is emitted.
-    // For reference types (func, anyref, etc.), emit ref.null so the value can be used.
-    if wasm::Nop::matches(db, *op) {
-        // Check if the result type is a reference type
-        if let Some(result_ty) = op.results(db).first() {
-            debug!(
-                "wasm.nop: result_ty={}.{}",
-                result_ty.dialect(db),
-                result_ty.name(db)
-            );
-            if core::Func::from_type(db, *result_ty).is_some()
-                || wasm::Funcref::from_type(db, *result_ty).is_some()
+    // Handle wasm.nop
+    if arena_wasm::Nop::matches(ctx, op) {
+        if let Some(&result_ty) = ctx.op_result_types(op).first() {
+            let ty_data = ctx.types.get(result_ty);
+            debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
+            if is_type(ctx, result_ty, "core", "func") || is_type(ctx, result_ty, "wasm", "funcref")
             {
                 debug!("wasm.nop: emitting ref.null func");
-                // Emit ref.null func for function reference types
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::Func,
                 }));
-                set_result_local(db, op, ctx, function)?;
-            } else if wasm::Anyref::from_type(db, *result_ty).is_some()
-                || wasm::Structref::from_type(db, *result_ty).is_some()
+                set_result_local(ctx, op, emit_ctx, function)?;
+            } else if is_type(ctx, result_ty, "wasm", "anyref")
+                || is_type(ctx, result_ty, "wasm", "structref")
             {
                 debug!("wasm.nop: emitting ref.null any");
-                // Emit ref.null any for other reference types
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::Any,
                 }));
-                set_result_local(db, op, ctx, function)?;
-            } else if core::Nil::from_type(db, *result_ty).is_some() {
-                // Nil type - emit ref.null none for use as empty environment
+                set_result_local(ctx, op, emit_ctx, function)?;
+            } else if is_nil_type(ctx, result_ty) {
                 debug!("wasm.nop: emitting ref.null none for nil type");
                 function.instruction(&Instruction::RefNull(HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::None,
                 }));
-                set_result_local(db, op, ctx, function)?;
+                set_result_local(ctx, op, emit_ctx, function)?;
             } else {
                 debug!("wasm.nop: skipping (unknown primitive type)");
             }
-            // For primitive types (nil, i32, etc.), skip - no runtime value
         }
         return Ok(());
     }
 
-    // Fast path: simple operations (emit operands → instruction → set result)
+    // Fast path: simple operations
     if let Some(instr) = SIMPLE_OPS.get(&name) {
-        emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+        emit_operands(ctx, operands, emit_ctx, function)?;
         function.instruction(instr);
-        set_result_local(db, op, ctx, function)?;
+        set_result_local(ctx, op, emit_ctx, function)?;
         return Ok(());
     }
 
-    // Special cases: const, control flow, calls, locals, GC ops
-    if let Ok(const_op) = wasm::I32Const::from_operation(db, *op) {
-        handle_i32_const(db, const_op, ctx, function)
-    } else if let Ok(const_op) = wasm::I64Const::from_operation(db, *op) {
-        handle_i64_const(db, const_op, ctx, function)
-    } else if let Ok(const_op) = wasm::F32Const::from_operation(db, *op) {
-        handle_f32_const(db, const_op, ctx, function)
-    } else if let Ok(const_op) = wasm::F64Const::from_operation(db, *op) {
-        handle_f64_const(db, const_op, ctx, function)
-    } else if wasm::If::matches(db, *op) {
-        handle_if(db, op, ctx, module_info, function, nesting)
-    } else if wasm::Block::matches(db, *op) {
-        handle_block(db, op, ctx, module_info, function, nesting)
-    } else if wasm::Loop::matches(db, *op) {
-        handle_loop(db, op, ctx, module_info, function, nesting)
-    } else if let Ok(br_op) = wasm::Br::from_operation(db, *op) {
-        handle_br(db, br_op, function)
-    } else if let Ok(br_if_op) = wasm::BrIf::from_operation(db, *op) {
-        handle_br_if(db, br_if_op, ctx, module_info, function)
-    } else if let Ok(call_op) = wasm::Call::from_operation(db, *op) {
-        handle_call(db, call_op, ctx, module_info, function)
-    } else if wasm::CallIndirect::matches(db, *op) {
-        handle_call_indirect(db, op, ctx, module_info, function)
-    } else if let Ok(return_call_op) = wasm::ReturnCall::from_operation(db, *op) {
-        handle_return_call(db, return_call_op, ctx, module_info, function)
-    } else if let Ok(local_op) = wasm::LocalGet::from_operation(db, *op) {
-        handle_local_get(db, local_op, ctx, function)
-    } else if let Ok(local_op) = wasm::LocalSet::from_operation(db, *op) {
-        handle_local_set(db, local_op, ctx, module_info, function)
-    } else if let Ok(local_op) = wasm::LocalTee::from_operation(db, *op) {
-        handle_local_tee(db, local_op, ctx, module_info, function)
-    } else if let Ok(global_op) = wasm::GlobalGet::from_operation(db, *op) {
-        handle_global_get(db, global_op, ctx, module_info, function)
-    } else if let Ok(global_op) = wasm::GlobalSet::from_operation(db, *op) {
-        handle_global_set(db, global_op, ctx, module_info, function)
-    } else if wasm::StructNew::matches(db, *op) {
-        handle_struct_new(db, op, ctx, module_info, function)
-    } else if wasm::StructGet::matches(db, *op) {
-        handle_struct_get(db, op, ctx, module_info, function)
-    } else if let Ok(struct_set_op) = wasm::StructSet::from_operation(db, *op) {
-        handle_struct_set(db, struct_set_op, ctx, module_info, function)
-    } else if let Ok(array_new_op) = wasm::ArrayNew::from_operation(db, *op) {
-        handle_array_new(db, array_new_op, ctx, module_info, function)
-    } else if wasm::ArrayNewDefault::matches(db, *op) {
-        handle_array_new_default(db, op, ctx, module_info, function)
-    } else if let Ok(array_get_op) = wasm::ArrayGet::from_operation(db, *op) {
-        handle_array_get(db, array_get_op, ctx, module_info, function)
-    } else if let Ok(array_get_s_op) = wasm::ArrayGetS::from_operation(db, *op) {
-        handle_array_get_s(db, array_get_s_op, ctx, module_info, function)
-    } else if let Ok(array_get_u_op) = wasm::ArrayGetU::from_operation(db, *op) {
-        handle_array_get_u(db, array_get_u_op, ctx, module_info, function)
-    } else if let Ok(array_set_op) = wasm::ArraySet::from_operation(db, *op) {
-        handle_array_set(db, array_set_op, ctx, module_info, function)
-    } else if let Ok(array_copy_op) = wasm::ArrayCopy::from_operation(db, *op) {
-        handle_array_copy(db, array_copy_op, ctx, module_info, function)
-    } else if wasm::RefNull::matches(db, *op) {
-        handle_ref_null(db, op, ctx, module_info, function)
-    } else if let Ok(ref_func_op) = wasm::RefFunc::from_operation(db, *op) {
-        handle_ref_func(db, ref_func_op, ctx, module_info, function)
-    } else if wasm::RefCast::matches(db, *op) {
-        handle_ref_cast(db, op, ctx, module_info, function)
-    } else if wasm::RefTest::matches(db, *op) {
-        handle_ref_test(db, op, ctx, module_info, function)
-    } else if let Ok(bytes_op) = wasm::BytesFromData::from_operation(db, *op) {
-        handle_bytes_from_data(db, bytes_op, ctx, function)
-
-    // === Linear Memory Management ===
-    } else if let Ok(mem_size_op) = wasm::MemorySize::from_operation(db, *op) {
-        handle_memory_size(db, mem_size_op, ctx, function)
-    } else if let Ok(mem_grow_op) = wasm::MemoryGrow::from_operation(db, *op) {
-        handle_memory_grow(db, mem_grow_op, ctx, module_info, function)
-
-    // === Full-Width Loads ===
-    } else if let Ok(load_op) = wasm::I32Load::from_operation(db, *op) {
-        handle_i32_load(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load::from_operation(db, *op) {
-        handle_i64_load(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::F32Load::from_operation(db, *op) {
-        handle_f32_load(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::F64Load::from_operation(db, *op) {
-        handle_f64_load(db, load_op, ctx, module_info, function)
-
-    // === Partial-Width Loads (i32) ===
-    } else if let Ok(load_op) = wasm::I32Load8S::from_operation(db, *op) {
-        handle_i32_load8_s(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I32Load8U::from_operation(db, *op) {
-        handle_i32_load8_u(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I32Load16S::from_operation(db, *op) {
-        handle_i32_load16_s(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I32Load16U::from_operation(db, *op) {
-        handle_i32_load16_u(db, load_op, ctx, module_info, function)
-
-    // === Partial-Width Loads (i64) ===
-    } else if let Ok(load_op) = wasm::I64Load8S::from_operation(db, *op) {
-        handle_i64_load8_s(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load8U::from_operation(db, *op) {
-        handle_i64_load8_u(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load16S::from_operation(db, *op) {
-        handle_i64_load16_s(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load16U::from_operation(db, *op) {
-        handle_i64_load16_u(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load32S::from_operation(db, *op) {
-        handle_i64_load32_s(db, load_op, ctx, module_info, function)
-    } else if let Ok(load_op) = wasm::I64Load32U::from_operation(db, *op) {
-        handle_i64_load32_u(db, load_op, ctx, module_info, function)
-
-    // === Full-Width Stores ===
-    } else if let Ok(store_op) = wasm::I32Store::from_operation(db, *op) {
-        handle_i32_store(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::I64Store::from_operation(db, *op) {
-        handle_i64_store(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::F32Store::from_operation(db, *op) {
-        handle_f32_store(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::F64Store::from_operation(db, *op) {
-        handle_f64_store(db, store_op, ctx, module_info, function)
-
-    // === Partial-Width Stores ===
-    } else if let Ok(store_op) = wasm::I32Store8::from_operation(db, *op) {
-        handle_i32_store8(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::I32Store16::from_operation(db, *op) {
-        handle_i32_store16(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::I64Store8::from_operation(db, *op) {
-        handle_i64_store8(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::I64Store16::from_operation(db, *op) {
-        handle_i64_store16(db, store_op, ctx, module_info, function)
-    } else if let Ok(store_op) = wasm::I64Store32::from_operation(db, *op) {
-        handle_i64_store32(db, store_op, ctx, module_info, function)
+    // Special cases
+    if let Ok(const_op) = arena_wasm::I32Const::from_op(ctx, op) {
+        handle_i32_const(ctx, const_op, emit_ctx, function)
+    } else if let Ok(const_op) = arena_wasm::I64Const::from_op(ctx, op) {
+        handle_i64_const(ctx, const_op, emit_ctx, function)
+    } else if let Ok(const_op) = arena_wasm::F32Const::from_op(ctx, op) {
+        handle_f32_const(ctx, const_op, emit_ctx, function)
+    } else if let Ok(const_op) = arena_wasm::F64Const::from_op(ctx, op) {
+        handle_f64_const(ctx, const_op, emit_ctx, function)
+    } else if arena_wasm::If::matches(ctx, op) {
+        handle_if(ctx, op, emit_ctx, module_info, function, nesting)
+    } else if arena_wasm::Block::matches(ctx, op) {
+        handle_block(ctx, op, emit_ctx, module_info, function, nesting)
+    } else if arena_wasm::Loop::matches(ctx, op) {
+        handle_loop(ctx, op, emit_ctx, module_info, function, nesting)
+    } else if let Ok(br_op) = arena_wasm::Br::from_op(ctx, op) {
+        handle_br(ctx, br_op, function)
+    } else if let Ok(br_if_op) = arena_wasm::BrIf::from_op(ctx, op) {
+        handle_br_if(ctx, br_if_op, emit_ctx, module_info, function)
+    } else if let Ok(call_op) = arena_wasm::Call::from_op(ctx, op) {
+        handle_call(ctx, call_op, emit_ctx, module_info, function)
+    } else if arena_wasm::CallIndirect::matches(ctx, op) {
+        handle_call_indirect(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(return_call_op) = arena_wasm::ReturnCall::from_op(ctx, op) {
+        handle_return_call(ctx, return_call_op, emit_ctx, module_info, function)
+    } else if let Ok(local_op) = arena_wasm::LocalGet::from_op(ctx, op) {
+        handle_local_get(ctx, local_op, emit_ctx, function)
+    } else if let Ok(local_op) = arena_wasm::LocalSet::from_op(ctx, op) {
+        handle_local_set(ctx, local_op, emit_ctx, function)
+    } else if let Ok(local_op) = arena_wasm::LocalTee::from_op(ctx, op) {
+        handle_local_tee(ctx, local_op, emit_ctx, function)
+    } else if let Ok(global_op) = arena_wasm::GlobalGet::from_op(ctx, op) {
+        handle_global_get(ctx, global_op, emit_ctx, module_info, function)
+    } else if let Ok(global_op) = arena_wasm::GlobalSet::from_op(ctx, op) {
+        handle_global_set(ctx, global_op, emit_ctx, function)
+    } else if arena_wasm::StructNew::matches(ctx, op) {
+        handle_struct_new(ctx, op, emit_ctx, module_info, function)
+    } else if arena_wasm::StructGet::matches(ctx, op) {
+        handle_struct_get(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(struct_set_op) = arena_wasm::StructSet::from_op(ctx, op) {
+        handle_struct_set(ctx, struct_set_op, emit_ctx, module_info, function)
+    } else if let Ok(array_new_op) = arena_wasm::ArrayNew::from_op(ctx, op) {
+        handle_array_new(ctx, array_new_op, emit_ctx, module_info, function)
+    } else if arena_wasm::ArrayNewDefault::matches(ctx, op) {
+        handle_array_new_default(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(array_get_op) = arena_wasm::ArrayGet::from_op(ctx, op) {
+        handle_array_get(ctx, array_get_op, emit_ctx, module_info, function)
+    } else if let Ok(array_get_s_op) = arena_wasm::ArrayGetS::from_op(ctx, op) {
+        handle_array_get_s(ctx, array_get_s_op, emit_ctx, module_info, function)
+    } else if let Ok(array_get_u_op) = arena_wasm::ArrayGetU::from_op(ctx, op) {
+        handle_array_get_u(ctx, array_get_u_op, emit_ctx, module_info, function)
+    } else if let Ok(array_set_op) = arena_wasm::ArraySet::from_op(ctx, op) {
+        handle_array_set(ctx, array_set_op, emit_ctx, module_info, function)
+    } else if let Ok(array_copy_op) = arena_wasm::ArrayCopy::from_op(ctx, op) {
+        handle_array_copy(ctx, array_copy_op, emit_ctx, module_info, function)
+    } else if arena_wasm::RefNull::matches(ctx, op) {
+        handle_ref_null(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, op) {
+        handle_ref_func(ctx, ref_func_op, emit_ctx, module_info, function)
+    } else if arena_wasm::RefCast::matches(ctx, op) {
+        handle_ref_cast(ctx, op, emit_ctx, module_info, function)
+    } else if arena_wasm::RefTest::matches(ctx, op) {
+        handle_ref_test(ctx, op, emit_ctx, module_info, function)
+    } else if let Ok(bytes_op) = arena_wasm::BytesFromData::from_op(ctx, op) {
+        handle_bytes_from_data(ctx, bytes_op, emit_ctx, function)
+    } else if let Ok(mem_size_op) = arena_wasm::MemorySize::from_op(ctx, op) {
+        handle_memory_size(ctx, mem_size_op, emit_ctx, function)
+    } else if let Ok(mem_grow_op) = arena_wasm::MemoryGrow::from_op(ctx, op) {
+        handle_memory_grow(ctx, mem_grow_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I32Load::from_op(ctx, op) {
+        handle_i32_load(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load::from_op(ctx, op) {
+        handle_i64_load(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::F32Load::from_op(ctx, op) {
+        handle_f32_load(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::F64Load::from_op(ctx, op) {
+        handle_f64_load(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I32Load8S::from_op(ctx, op) {
+        handle_i32_load8_s(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I32Load8U::from_op(ctx, op) {
+        handle_i32_load8_u(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I32Load16S::from_op(ctx, op) {
+        handle_i32_load16_s(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I32Load16U::from_op(ctx, op) {
+        handle_i32_load16_u(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load8S::from_op(ctx, op) {
+        handle_i64_load8_s(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load8U::from_op(ctx, op) {
+        handle_i64_load8_u(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load16S::from_op(ctx, op) {
+        handle_i64_load16_s(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load16U::from_op(ctx, op) {
+        handle_i64_load16_u(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load32S::from_op(ctx, op) {
+        handle_i64_load32_s(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(load_op) = arena_wasm::I64Load32U::from_op(ctx, op) {
+        handle_i64_load32_u(ctx, load_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I32Store::from_op(ctx, op) {
+        handle_i32_store(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I64Store::from_op(ctx, op) {
+        handle_i64_store(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::F32Store::from_op(ctx, op) {
+        handle_f32_store(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::F64Store::from_op(ctx, op) {
+        handle_f64_store(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I32Store8::from_op(ctx, op) {
+        handle_i32_store8(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I32Store16::from_op(ctx, op) {
+        handle_i32_store16(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I64Store8::from_op(ctx, op) {
+        handle_i64_store8(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I64Store16::from_op(ctx, op) {
+        handle_i64_store16(ctx, store_op, emit_ctx, module_info, function)
+    } else if let Ok(store_op) = arena_wasm::I64Store32::from_op(ctx, op) {
+        handle_i64_store32(ctx, store_op, emit_ctx, module_info, function)
     } else {
+        let op_data = ctx.op(op);
         tracing::error!(
             "unsupported wasm op: {} (dialect={}, operands={}, results={}, attrs={:?})",
             name,
-            op.dialect(db),
-            op.operands(db).len(),
-            op.results(db).len(),
-            op.attributes(db).keys().collect::<Vec<_>>()
+            op_data.dialect,
+            ctx.op_operands(op).len(),
+            ctx.op_result_types(op).len(),
+            op_data.attributes.keys().collect::<Vec<_>>()
         );
         Err(CompilationError::unsupported_feature_msg(format!(
             "wasm op not supported: {}",
@@ -1310,22 +1202,19 @@ fn emit_op_nested<'db>(
     }
 }
 
-fn set_result_local<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    ctx: &FunctionEmitContext<'db>,
+fn set_result_local(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let results = op.results(db);
+    let results = ctx.op_result_types(op);
     if results.is_empty() {
         return Ok(());
     }
-    // Note: We no longer skip nil types here because they may be used as
-    // arguments (e.g., empty closure environments). Nil types now have local
-    // mappings and produce ref.null none values.
-    let local = ctx
+    let local = emit_ctx
         .value_locals
-        .get(&op.result(db, 0))
+        .get(&ctx.op_result(op, 0))
         .ok_or_else(|| CompilationError::invalid_module("result missing local mapping"))?;
     function.instruction(&Instruction::LocalSet(*local));
     Ok(())
@@ -1339,47 +1228,25 @@ fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
 
-/// Detect if a function body's handler dispatch should return i32 instead of funcref.
-///
-/// Handler dispatch generates wasm.if operations:
-/// - then branch: suspend path (calls continuation, returns funcref)
-/// - else branch: done path (returns actual computation result)
-///
-/// For handler lambdas that call continuations (k(value)), the done path also calls
-/// the continuation via call_indirect, so it legitimately returns funcref.
-/// For the computation lambda, the done path returns the actual result (i32).
-///
-/// Returns true if the function should return i32 (computation lambda case).
-fn should_adjust_handler_return_to_i32<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-) -> bool {
-    // Walk the region looking for wasm.if operations
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            // Check if this is a wasm.if (handler dispatch generates these)
-            if wasm::If::matches(db, *op) {
-                // Get the else region (done path) - it's region index 1
-                let regions = op.regions(db);
-                if let Some(else_region) = regions.get(1) {
-                    // Check if the else branch contains call_indirect (continuation call)
-                    // If it does, this lambda legitimately returns funcref
-                    // If it doesn't, this is the computation lambda returning i32
-                    let has_call_indirect = region_contains_call_indirect(db, else_region);
+fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bool {
+    for &block_ref in &ctx.region(region).blocks {
+        for &op in &ctx.block(block_ref).ops {
+            if arena_wasm::If::matches(ctx, op) {
+                let regions = &ctx.op(op).regions;
+                if let Some(&else_region) = regions.get(1) {
+                    let has_call_indirect = region_contains_call_indirect(ctx, else_region);
                     debug!(
                         "should_adjust_handler_return_to_i32: wasm.if else branch has_call_indirect={}",
                         has_call_indirect
                     );
                     if !has_call_indirect {
-                        // This is the computation lambda - its done path returns i32
                         return true;
                     }
                 }
                 return false;
             }
-            // Also check nested regions (wasm.block, etc.)
-            for nested_region in op.regions(db).iter() {
-                if should_adjust_handler_return_to_i32(db, nested_region) {
+            for &nested_region in &ctx.op(op).regions {
+                if should_adjust_handler_return_to_i32(ctx, nested_region) {
                     return true;
                 }
             }
@@ -1388,16 +1255,14 @@ fn should_adjust_handler_return_to_i32<'db>(
     false
 }
 
-/// Check if a region contains any wasm.call_indirect operations.
-fn region_contains_call_indirect<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if wasm::CallIndirect::matches(db, *op) {
+fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
+    for &block_ref in &ctx.region(region).blocks {
+        for &op in &ctx.block(block_ref).ops {
+            if arena_wasm::CallIndirect::matches(ctx, op) {
                 return true;
             }
-            // Check nested regions
-            for nested_region in op.regions(db).iter() {
-                if region_contains_call_indirect(db, nested_region) {
+            for &nested_region in &ctx.op(op).regions {
+                if region_contains_call_indirect(ctx, nested_region) {
                     return true;
                 }
             }
@@ -1426,1021 +1291,27 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
     compressed
 }
 
-fn attr_u32<'db>(attrs: &Attrs<'db>, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::from(
-            errors::CompilationErrorKind::MissingAttribute("u32"),
-        )),
-    }
+/// Intern a simple type with no params or attrs.
+fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+    ctx.types.intern(trunk_ir::arena::types::TypeData {
+        dialect: Symbol::new(dialect),
+        name: Symbol::new(name),
+        params: Default::default(),
+        attrs: Default::default(),
+    })
 }
 
-/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
-fn attr_field_idx<'db>(attrs: &Attrs<'db>) -> CompilationResult<u32> {
-    attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockBuilder, BlockId, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    /// Helper to extract the GcTypeDef kind for testing.
-    fn gc_type_kind(gc_type: &GcTypeDef) -> &'static str {
-        match gc_type {
-            GcTypeDef::Struct(_) => "struct",
-            GcTypeDef::Array(_) => "array",
-        }
-    }
-
-    // ========================================
-    // Test: struct_new collects field types
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_struct_new_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
-
-        // Create two field values with i32_const
-        let field0 = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        let field1 = wasm::i64_const(db, location, i64_ty, 100).as_operation();
-
-        // Create struct_new with two fields
-        let struct_ty = core::I32::new(db).as_type(); // placeholder type
-        let struct_new = wasm::struct_new(
-            db,
-            location,
-            vec![field0.result(db, 0), field1.result(db, 0)],
-            struct_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field0, field1, struct_new],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_struct_new_collects_field_types(db: &salsa::DatabaseImpl) {
-        let module = make_struct_new_module(db);
-        let (gc_types, type_map, _) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // Should have 10 GC types: 9 built-in + 1 user struct
-        assert_eq!(gc_types.len(), 10);
-        // Index 0 is BoxedF64
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is BytesArray
-        assert_eq!(gc_type_kind(&gc_types[1]), "array");
-        // Index 2 is BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is Step
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
-        // Index 4 is ClosureStruct
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is Marker
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
-        // Index 6 is Evidence
-        assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is Continuation
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
-        // Index 8 is ResumeWrapper
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
-        // Index 9 is the user struct
-        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
-
-        // Type should be in the map
-        let i32_ty = core::I32::new(db).as_type();
-        assert!(type_map.contains_key(&i32_ty));
-    }
-
-    // ========================================
-    // Test: array_new collects element type
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_array_new_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let f64_ty = core::F64::new(db).as_type();
-
-        // Create size value
-        let size = wasm::i32_const(db, location, i32_ty, 10).as_operation();
-
-        // Create init value (f64)
-        let init = wasm::f64_const(db, location, f64_ty, 0.0).as_operation();
-
-        // Create array_new
-        let array_new = wasm::array_new(
-            db,
-            location,
-            size.result(db, 0),
-            init.result(db, 0),
-            i32_ty, // placeholder result type
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![size, init, array_new],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_array_new_collects_element_type(db: &salsa::DatabaseImpl) {
-        let module = make_array_new_module(db);
-        let (gc_types, _type_map, _) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // Should have 10 GC types: 9 built-in + 1 user array
-        assert_eq!(gc_types.len(), 10);
-        // Index 0 is BoxedF64 (struct)
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is BytesArray (array)
-        assert_eq!(gc_type_kind(&gc_types[1]), "array");
-        // Index 2 is BytesStruct (struct)
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is Step (struct)
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
-        // Index 4 is ClosureStruct (struct)
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is Marker (struct)
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
-        // Index 6 is Evidence (array)
-        assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is Continuation (struct)
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
-        // Index 8 is ResumeWrapper (struct)
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
-        // Index 9 is the user array
-        assert_eq!(gc_type_kind(&gc_types[9]), "array");
-    }
-
-    // ========================================
-    // Test: type index deduplication
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_dedup_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create two struct_new operations with same type_idx
-        let field = wasm::i32_const(db, location, i32_ty, 1).as_operation();
-
-        let struct_new1 = wasm::struct_new(
-            db,
-            location,
-            vec![field.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        let field2 = wasm::i32_const(db, location, i32_ty, 2).as_operation();
-
-        let struct_new2 = wasm::struct_new(
-            db,
-            location,
-            vec![field2.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX, // same type_idx
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field, struct_new1, field2, struct_new2],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_type_index_deduplication(db: &salsa::DatabaseImpl) {
-        let module = make_dedup_module(db);
-        let (gc_types, _type_map, _) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // Should have 10 GC types: 9 built-in + 1 user struct (same type_idx used twice)
-        assert_eq!(gc_types.len(), 10);
-        // Index 0 is BoxedF64
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is BytesArray
-        assert_eq!(gc_type_kind(&gc_types[1]), "array");
-        // Index 2 is BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is Step
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
-        // Index 4 is ClosureStruct
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is Marker
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
-        // Index 6 is Evidence
-        assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is Continuation
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
-        // Index 8 is ResumeWrapper
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
-        // Index 9 is the deduplicated user struct
-        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
-    }
-
-    // ========================================
-    // Test: field count mismatch error
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_field_count_mismatch_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create struct_new with 1 field
-        let field = wasm::i32_const(db, location, i32_ty, 1).as_operation();
-
-        let struct_new1 = wasm::struct_new(
-            db,
-            location,
-            vec![field.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        // Create another struct_new with 2 fields (same type_idx)
-        let field2a = wasm::i32_const(db, location, i32_ty, 2).as_operation();
-
-        let field2b = wasm::i32_const(db, location, i32_ty, 3).as_operation();
-
-        let struct_new2 = wasm::struct_new(
-            db,
-            location,
-            vec![field2a.result(db, 0), field2b.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX, // same type_idx, different field count
-        )
-        .as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field, struct_new1, field2a, field2b, struct_new2],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_field_count_mismatch_error(db: &salsa::DatabaseImpl) {
-        let module = make_field_count_mismatch_module(db);
-        let result = collect_gc_types(db, module, &HashMap::new());
-
-        // Should return an error due to field count mismatch
-        let err = result.expect_err("expected error");
-        assert!(err.to_string().contains("field count mismatch"));
-    }
-
-    // ========================================
-    // Test: nested operations in function body
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_func_with_struct_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create struct_new inside function body
-        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        let struct_new = wasm::struct_new(
-            db,
-            location,
-            vec![field.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field, struct_new, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        // Create wasm.func using typed helper
-        let wasm_func =
-            wasm::func(db, location, Symbol::new("test_fn"), func_ty, body_region).as_operation();
-
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_nested_operations_in_function_body(db: &salsa::DatabaseImpl) {
-        let module = make_func_with_struct_module(db);
-        let (gc_types, _type_map, _) =
-            collect_gc_types(db, module, &HashMap::new()).expect("collect_gc_types failed");
-
-        // Should find the struct type from inside the function body
-        // (10 types: 9 built-in + 1 user struct)
-        assert_eq!(gc_types.len(), 10);
-        // Index 0 is BoxedF64
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct");
-        // Index 1 is BytesArray
-        assert_eq!(gc_type_kind(&gc_types[1]), "array");
-        // Index 2 is BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct");
-        // Index 3 is Step
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct");
-        // Index 4 is ClosureStruct
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct");
-        // Index 5 is Marker
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct");
-        // Index 6 is Evidence
-        assert_eq!(gc_type_kind(&gc_types[6]), "array");
-        // Index 7 is Continuation
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct");
-        // Index 8 is ResumeWrapper
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct");
-        // Index 9 is the user struct from inside the function body
-        assert_eq!(gc_type_kind(&gc_types[9]), "struct");
-    }
-
-    // ========================================
-    // Test: builtin type indices are skipped
-    // ========================================
-
-    /// Test that array_get with BYTES_ARRAY_IDX (1) doesn't panic.
-    /// This tests the fix for the "attempt to subtract with overflow" bug
-    /// that occurred when operations referenced builtin type indices.
-    #[salsa::tracked]
-    fn make_array_get_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Use BlockBuilder to create block with argument as placeholder for array reference
-        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
-        let array_ref_arg = block_builder.block_arg(db, 0);
-
-        // Create index value
-        let index = wasm::i32_const(db, location, i32_ty, 0);
-        block_builder.op(index);
-
-        // Create array_get_u with BYTES_ARRAY_IDX (builtin type)
-        let array_get = wasm::array_get_u(
-            db,
-            location,
-            array_ref_arg,
-            index.result(db),
-            i32_ty,
-            BYTES_ARRAY_IDX,
-        );
-        block_builder.op(array_get);
-
-        let block = block_builder.build();
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_array_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
-        let module = make_array_get_builtin_module(db);
-        let result = collect_gc_types(db, module, &HashMap::new());
-
-        // Should complete without panic
-        assert!(
-            result.is_ok(),
-            "collect_gc_types should not panic for builtin type indices"
-        );
-
-        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
-
-        // Should only have the 9 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 9);
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
-        assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
-        assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct"); // Continuation
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct"); // ResumeWrapper
-    }
-
-    /// Test that struct_get with BYTES_STRUCT_IDX (2) doesn't panic.
-    #[salsa::tracked]
-    fn make_struct_get_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Use BlockBuilder to create block with argument as placeholder for struct reference
-        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
-        let struct_ref_arg = block_builder.block_arg(db, 0);
-
-        // Create struct_get with BYTES_STRUCT_IDX (builtin type)
-        let struct_get =
-            wasm::struct_get(db, location, struct_ref_arg, i32_ty, BYTES_STRUCT_IDX, 0);
-        block_builder.op(struct_get);
-
-        let block = block_builder.build();
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_struct_get_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
-        let module = make_struct_get_builtin_module(db);
-        let result = collect_gc_types(db, module, &HashMap::new());
-
-        // Should complete without panic
-        assert!(
-            result.is_ok(),
-            "collect_gc_types should not panic for builtin type indices"
-        );
-
-        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
-
-        // Should only have the 9 built-in types (no additional user types allocated)
-        assert_eq!(gc_types.len(), 9);
-        assert_eq!(gc_type_kind(&gc_types[0]), "struct"); // BoxedF64
-        assert_eq!(gc_type_kind(&gc_types[1]), "array"); // BytesArray
-        assert_eq!(gc_type_kind(&gc_types[2]), "struct"); // BytesStruct
-        assert_eq!(gc_type_kind(&gc_types[3]), "struct"); // Step
-        assert_eq!(gc_type_kind(&gc_types[4]), "struct"); // ClosureStruct
-        assert_eq!(gc_type_kind(&gc_types[5]), "struct"); // Marker
-        assert_eq!(gc_type_kind(&gc_types[6]), "array"); // Evidence
-        assert_eq!(gc_type_kind(&gc_types[7]), "struct"); // Continuation
-        assert_eq!(gc_type_kind(&gc_types[8]), "struct"); // ResumeWrapper
-    }
-
-    /// Test that array_set with BYTES_ARRAY_IDX (1) doesn't panic.
-    #[salsa::tracked]
-    fn make_array_set_builtin_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Use BlockBuilder to create block with argument as placeholder for array reference
-        let mut block_builder = BlockBuilder::new(db, location).arg(i32_ty);
-        let array_ref_arg = block_builder.block_arg(db, 0);
-
-        // Create index value
-        let index = wasm::i32_const(db, location, i32_ty, 0);
-        block_builder.op(index);
-
-        // Create value to set
-        let value = wasm::i32_const(db, location, i32_ty, 42);
-        block_builder.op(value);
-
-        // Create array_set with BYTES_ARRAY_IDX (builtin type)
-        let array_set = wasm::array_set(
-            db,
-            location,
-            array_ref_arg,
-            index.result(db),
-            value.result(db),
-            BYTES_ARRAY_IDX,
-        );
-        block_builder.op(array_set);
-
-        let block = block_builder.build();
-        let region = Region::new(db, location, idvec![block]);
-        core::Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_array_set_with_builtin_type_idx_does_not_panic(db: &salsa::DatabaseImpl) {
-        let module = make_array_set_builtin_module(db);
-        let result = collect_gc_types(db, module, &HashMap::new());
-
-        // Should complete without panic
-        assert!(
-            result.is_ok(),
-            "collect_gc_types should not panic for builtin type indices"
-        );
-
-        let (gc_types, _type_map, _) = result.expect("collect_gc_types failed");
-
-        // Should only have the 9 built-in types
-        assert_eq!(gc_types.len(), 9);
-    }
-
-    // ========================================
-    // Test: memory load/store operations
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_memory_ops_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create address operand (i32)
-        let addr = wasm::i32_const(db, location, i32_ty, 0).as_operation();
-
-        // Create value to store (i32)
-        let value = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        // i32_store with offset and align attributes
-        let store_op = wasm::i32_store(
-            db,
-            location,
-            addr.result(db, 0),
-            value.result(db, 0),
-            4,
-            2,
-            0,
-        )
-        .as_operation();
-
-        // i32_load from same address
-        let load_op =
-            wasm::i32_load(db, location, addr.result(db, 0), i32_ty, 4, 2, 0).as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![addr, value, store_op, load_op, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        // Function definition
-        let wasm_func =
-            wasm::func(db, location, Symbol::new("test"), func_ty, body_region).as_operation();
-
-        // Memory definition (required for load/store)
-        let memory_op = wasm::memory(db, location, 1, 1, false, false).as_operation();
-
-        let module_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![memory_op, wasm_func],
-        );
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_memory_load_store_emit(db: &salsa::DatabaseImpl) {
-        let module = make_memory_ops_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "Memory load/store should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        // Check WASM magic number
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: memory_size and memory_grow
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_memory_grow_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // memory_size
-        let size_op = wasm::memory_size(db, location, i32_ty, 0).as_operation();
-
-        // delta for memory_grow
-        let delta = wasm::i32_const(db, location, i32_ty, 1).as_operation();
-
-        // memory_grow
-        let grow_op =
-            wasm::memory_grow(db, location, delta.result(db, 0), i32_ty, 0).as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![size_op, delta, grow_op, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        let wasm_func =
-            wasm::func(db, location, Symbol::new("test"), func_ty, body_region).as_operation();
-
-        let memory_op = wasm::memory(db, location, 1, 2, false, false).as_operation();
-
-        let module_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![memory_op, wasm_func],
-        );
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_memory_grow_emit(db: &salsa::DatabaseImpl) {
-        let module = make_memory_grow_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "Memory grow should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: ref.null with anyref type (ref_handlers)
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_ref_null_anyref_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let nil_ty = core::Nil::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create ref.null anyref (heap_type must be a wasm type)
-        let ref_null = wasm::ref_null(db, location, anyref_ty, anyref_ty, None).as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![ref_null, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        let wasm_func = wasm::func(
-            db,
-            location,
-            Symbol::new("test_ref_null"),
-            func_ty,
-            body_region,
-        )
-        .as_operation();
-
-        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_ref_null_anyref_type_emit(db: &salsa::DatabaseImpl) {
-        let module = make_ref_null_anyref_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "ref.null anyref type should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: struct_get operation (struct_handlers)
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_struct_get_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create a function that creates a struct and gets a field
-        // Field value
-        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        // Create struct
-        let struct_new = wasm::struct_new(
-            db,
-            location,
-            vec![field.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        // Get field from struct
-        let struct_get = wasm::struct_get(
-            db,
-            location,
-            struct_new.result(db, 0),
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-            0,
-        )
-        .as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field, struct_new, struct_get, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        let wasm_func = wasm::func(
-            db,
-            location,
-            Symbol::new("test_struct_get"),
-            func_ty,
-            body_region,
-        )
-        .as_operation();
-
-        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_struct_get_emit(db: &salsa::DatabaseImpl) {
-        let module = make_struct_get_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "struct.get should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: anyref operand in struct (value_emission)
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_anyref_operand_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let nil_ty = core::Nil::new(db).as_type();
-        let anyref_ty = wasm::Anyref::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create ref.null anyref - tests that reference operands work properly
-        let anyref_val = wasm::ref_null(db, location, anyref_ty, anyref_ty, None).as_operation();
-
-        // Create a struct with i32 and anyref fields (closure-like pattern)
-        let i32_ty = core::I32::new(db).as_type();
-        let i32_val = wasm::i32_const(db, location, i32_ty, 1).as_operation();
-
-        // Two-field struct: (i32, anyref)
-        let struct_new = wasm::struct_new(
-            db,
-            location,
-            vec![i32_val.result(db, 0), anyref_val.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![anyref_val, i32_val, struct_new, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        let wasm_func = wasm::func(
-            db,
-            location,
-            Symbol::new("test_anyref_operand"),
-            func_ty,
-            body_region,
-        )
-        .as_operation();
-
-        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_anyref_operand_in_struct(db: &salsa::DatabaseImpl) {
-        let module = make_anyref_operand_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "anyref operand should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: ref.cast with concrete type (ref_handlers)
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_ref_cast_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create a struct
-        let field = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        let struct_new = wasm::struct_new(
-            db,
-            location,
-            vec![field.result(db, 0)],
-            i32_ty,
-            FIRST_USER_TYPE_IDX,
-        )
-        .as_operation();
-
-        // Cast the struct to a concrete type (target_type, result_type, type_idx)
-        let ref_cast = wasm::ref_cast(
-            db,
-            location,
-            struct_new.result(db, 0),
-            i32_ty,
-            i32_ty,
-            Some(FIRST_USER_TYPE_IDX),
-        )
-        .as_operation();
-
-        // Return statement
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![field, struct_new, ref_cast, func_return],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        let wasm_func = wasm::func(
-            db,
-            location,
-            Symbol::new("test_ref_cast"),
-            func_ty,
-            body_region,
-        )
-        .as_operation();
-
-        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_ref_cast_concrete_type_emit(db: &salsa::DatabaseImpl) {
-        let module = make_ref_cast_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "ref.cast with concrete type should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
-
-    // ========================================
-    // Test: wasm.loop with block argument compiles
-    // ========================================
-
-    #[salsa::tracked]
-    fn make_loop_with_arg_module(db: &dyn salsa::Database) -> core::Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Init value for the loop-carried variable
-        let init_val = wasm::i32_const(db, location, i32_ty, 42).as_operation();
-
-        // Loop body: one block with a block arg (matching the init operand),
-        // immediately returns from the function
-        let mut body_builder = BlockBuilder::new(db, location).arg(i32_ty);
-        body_builder.op(wasm::r#return(db, location, vec![]));
-        let body_block = body_builder.build();
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        // wasm.loop with one init operand → body block gets one block arg
-        let loop_op = wasm::r#loop(
-            db,
-            location,
-            vec![init_val.result(db, 0)],
-            nil_ty,
-            body_region,
-        )
-        .as_operation();
-
-        // Function return (after loop, unreachable in practice)
-        let func_return = wasm::r#return(db, location, vec![]).as_operation();
-
-        let func_body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![init_val, loop_op, func_return],
-        );
-        let func_body_region = Region::new(db, location, idvec![func_body_block]);
-
-        let wasm_func = wasm::func(
-            db,
-            location,
-            Symbol::new("test_loop"),
-            func_ty,
-            func_body_region,
-        )
-        .as_operation();
-
-        let module_block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![wasm_func]);
-        let module_region = Region::new(db, location, idvec![module_block]);
-        core::Module::create(db, location, "test".into(), module_region)
-    }
-
-    #[salsa_test]
-    fn test_loop_with_block_arg_compiles(db: &salsa::DatabaseImpl) {
-        let module = make_loop_with_arg_module(db);
-        let result = emit_wasm(db, module);
-        assert!(
-            result.is_ok(),
-            "wasm.loop with block arg should compile: {:?}",
-            result.err()
-        );
-
-        let bytes = result.unwrap();
-        assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
-    }
+/// Intern a named adt.struct type (e.g., _Step, _Continuation).
+fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    let mut attrs = std::collections::BTreeMap::new();
+    attrs.insert(
+        Symbol::new("name"),
+        ArenaAttribute::Symbol(Symbol::new(name)),
+    );
+    ctx.types.intern(trunk_ir::arena::types::TypeData {
+        dialect: Symbol::new("adt"),
+        name: Symbol::new("struct"),
+        params: Default::default(),
+        attrs,
+    })
 }

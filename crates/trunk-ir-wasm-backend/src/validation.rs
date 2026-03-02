@@ -5,8 +5,10 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use trunk_ir::dialect::core::Module;
-use trunk_ir::{DialectOp, Operation, Region, Symbol};
+use trunk_ir::Symbol;
+use trunk_ir::arena::ArenaModule;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::refs::{OpRef, RegionRef};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -22,20 +24,19 @@ impl std::fmt::Display for ValidationError {
     }
 }
 
-/// Validate that a module's IR is ready for wasm emission.
+/// Validate that a module's IR is ready for wasm emission (arena version).
 ///
 /// This function checks that all operations are in the `wasm` dialect
 /// (except allowed exceptions like `core.module`).
 ///
 /// Returns an error if validation fails, preventing emission.
-pub fn validate_wasm_ir<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> CompilationResult<()> {
+pub fn validate_wasm_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResult<()> {
     let mut errors: Vec<String> = Vec::new();
 
-    let body = module.body(db);
-    validate_region(db, body, &mut errors);
+    let body = module
+        .body(ctx)
+        .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
+    validate_region(ctx, body, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -50,49 +51,43 @@ pub fn validate_wasm_ir<'db>(
 }
 
 /// Validate a region recursively.
-fn validate_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
-    errors: &mut Vec<String>,
-) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            validate_operation(db, op, errors);
+fn validate_region(ctx: &IrContext, region: RegionRef, errors: &mut Vec<String>) {
+    for &block_ref in &ctx.region(region).blocks {
+        for &op in &ctx.block(block_ref).ops {
+            validate_operation(ctx, op, errors);
         }
     }
 }
 
 /// Validate a single operation.
-fn validate_operation<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    errors: &mut Vec<String>,
-) {
-    let dialect = op.dialect(db);
-    let name = op.name(db);
+fn validate_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    let op_data = ctx.op(op);
+    let dialect = op_data.dialect;
+    let name = op_data.name;
 
     // Check dialect - must be wasm (with specific exceptions)
-    if !is_allowed_dialect(db, op) {
+    if !is_allowed_dialect(ctx, op) {
         errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
     }
 
     // Recursively validate nested regions
-    for region in op.regions(db).iter() {
-        validate_region(db, *region, errors);
+    let regions = op_data.regions.clone();
+    for &region in &regions {
+        validate_region(ctx, region, errors);
     }
 }
 
 /// Check if an operation's dialect is allowed in the emit phase.
-fn is_allowed_dialect<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
+fn is_allowed_dialect(ctx: &IrContext, op: OpRef) -> bool {
     let wasm_dialect = Symbol::new("wasm");
-    let dialect = op.dialect(db);
+    let op_data = ctx.op(op);
 
-    if dialect == wasm_dialect {
+    if op_data.dialect == wasm_dialect {
         return true;
     }
 
     // Allow core.module at the top level
-    if trunk_ir::dialect::core::Module::matches(db, *op) {
+    if op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module") {
         return true;
     }
 
