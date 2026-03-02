@@ -3,7 +3,7 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
@@ -346,4 +346,24 @@ pub(crate) fn get_type_idx_from_attrs(
         return type_idx_by_type.get(&ty).copied();
     }
     None
+}
+
+// ============================================================================
+// Attribute extraction helpers
+// ============================================================================
+
+/// Get attribute value as u32.
+pub(crate) fn attr_u32(
+    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    key: Symbol,
+) -> CompilationResult<u32> {
+    match attrs.get(&key) {
+        Some(ArenaAttribute::IntBits(bits)) => Ok(*bits as u32),
+        _ => Err(CompilationError::missing_attribute("u32")),
+    }
+}
+
+/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
+pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, ArenaAttribute>) -> CompilationResult<u32> {
+    attr_u32(attrs, Symbol::new("field_idx")).or_else(|_| attr_u32(attrs, Symbol::new("field")))
 }

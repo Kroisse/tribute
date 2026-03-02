@@ -212,8 +212,10 @@ pub(crate) fn extract_data_def(
             ));
         }
     };
+    let offset = i32::try_from(offset)
+        .map_err(|_| CompilationError::invalid_module("data segment offset exceeds i32::MAX"))?;
     Ok(DataDef {
-        offset: offset as i32,
+        offset,
         bytes,
         passive,
     })
@@ -242,7 +244,9 @@ pub(crate) fn extract_element_def(
     elem_op: arena_wasm::Elem,
 ) -> CompilationResult<ElementDef> {
     let table = elem_op.table(ctx).unwrap_or(0);
-    let offset = elem_op.offset(ctx).unwrap_or(0) as i32;
+    let raw_offset = elem_op.offset(ctx).unwrap_or(0);
+    let offset = i32::try_from(raw_offset)
+        .map_err(|_| CompilationError::invalid_module("element segment offset exceeds i32::MAX"))?;
 
     // Collect function references from the funcs region
     let funcs_region = elem_op.funcs(ctx);
@@ -287,7 +291,13 @@ pub(crate) fn extract_global_def(
     let op_data = ctx.op(global_op.op_ref());
     let init = match op_data.attributes.get(&Symbol::new("init")) {
         Some(ArenaAttribute::IntBits(v)) => *v as i64,
-        _ => 0,
+        other => {
+            debug!(
+                "extract_global_def: missing or non-IntBits 'init' attribute (got {:?}), defaulting to 0",
+                other
+            );
+            0
+        }
     };
     Ok(GlobalDef {
         valtype,

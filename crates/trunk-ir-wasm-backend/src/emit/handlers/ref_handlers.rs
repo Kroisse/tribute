@@ -207,15 +207,14 @@ pub(crate) fn handle_ref_test(
 
     let attrs = &ctx.op(op).attributes;
     // ref_test result is i32, target type must be in attribute (can't infer)
-    // Try target_type attribute first. If present but invalid, propagate error.
-    let heap_type = if attrs.get(&ATTR_TARGET_TYPE()).is_some() {
-        attr_heap_type(ctx, attrs, ATTR_TARGET_TYPE())?
-    } else {
-        // Attribute not present - fall back to type inference
-        get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)
-            .map(HeapType::Concrete)
-            .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?
-    };
+    // Try attr_heap_type first, then fall back to type-index lookup (mirroring handle_ref_cast)
+    let heap_type = attr_heap_type(ctx, attrs, ATTR_TARGET_TYPE())
+        .ok()
+        .or_else(|| {
+            get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)
+                .map(HeapType::Concrete)
+        })
+        .ok_or_else(|| CompilationError::missing_attribute("target_type or type"))?;
 
     function.instruction(&Instruction::RefTestNullable(heap_type));
     set_result_local(ctx, op, emit_ctx, function)?;

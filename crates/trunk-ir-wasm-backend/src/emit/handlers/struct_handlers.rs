@@ -472,16 +472,4 @@ pub(crate) fn handle_struct_set(
 // Helper functions
 // ============================================================================
 
-/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
-fn attr_field_idx(attrs: &BTreeMap<Symbol, ArenaAttribute>) -> CompilationResult<u32> {
-    attr_u32(attrs, Symbol::new("field_idx")).or_else(|_| attr_u32(attrs, Symbol::new("field")))
-}
-
-fn attr_u32(attrs: &BTreeMap<Symbol, ArenaAttribute>, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::from(
-            crate::errors::CompilationErrorKind::MissingAttribute("u32"),
-        )),
-    }
-}
+use super::super::helpers::attr_field_idx;

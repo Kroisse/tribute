@@ -5,14 +5,11 @@
 //! - wasm.call_indirect (indirect function call via i32 table index)
 //! - wasm.return_call (tail call)
 
-use std::collections::BTreeMap;
-
 use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};
@@ -267,14 +264,7 @@ pub(crate) fn handle_return_call(
 // Helper functions
 // ============================================================================
 
-fn attr_u32(attrs: &BTreeMap<Symbol, ArenaAttribute>, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::from(
-            crate::errors::CompilationErrorKind::MissingAttribute("u32"),
-        )),
-    }
-}
+use super::super::helpers::attr_u32;
 
 /// Find a core.func type in the type_idx_by_type registry by matching params and result.
 /// Returns the TypeRef if found. This avoids needing &mut IrContext for interning.
@@ -284,13 +274,17 @@ fn find_func_type_in_registry(
     result: TypeRef,
     module_info: &ModuleInfo,
 ) -> CompilationResult<TypeRef> {
+    let core_sym = Symbol::new("core");
+    let func_sym = Symbol::new("func");
+    let expected_len = params.len() + 1;
+
     // Search through registered func types (from imports, funcs, and call_indirect collection)
     for &ty_ref in module_info.type_idx_by_type.keys() {
         let data = ctx.types.get(ty_ref);
-        if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        if data.dialect != core_sym || data.name != func_sym {
             continue;
         }
-        if data.params.len() != params.len() + 1 {
+        if data.params.len() != expected_len {
             continue;
         }
         // Check params match (all but last)
@@ -302,10 +296,10 @@ fn find_func_type_in_registry(
     // Also check func_types map
     for &ty_ref in module_info.func_types.values() {
         let data = ctx.types.get(ty_ref);
-        if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        if data.dialect != core_sym || data.name != func_sym {
             continue;
         }
-        if data.params.len() != params.len() + 1 {
+        if data.params.len() != expected_len {
             continue;
         }
         let (ty_params, ty_result) = data.params.split_at(data.params.len() - 1);

@@ -36,7 +36,7 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResu
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
-    validate_region(ctx, body, &mut errors);
+    validate_region(ctx, body, 0, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -51,34 +51,33 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResu
 }
 
 /// Validate a region recursively.
-fn validate_region(ctx: &IrContext, region: RegionRef, errors: &mut Vec<String>) {
+fn validate_region(ctx: &IrContext, region: RegionRef, depth: usize, errors: &mut Vec<String>) {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            validate_operation(ctx, op, errors);
+            validate_operation(ctx, op, depth, errors);
         }
     }
 }
 
 /// Validate a single operation.
-fn validate_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+fn validate_operation(ctx: &IrContext, op: OpRef, depth: usize, errors: &mut Vec<String>) {
     let op_data = ctx.op(op);
     let dialect = op_data.dialect;
     let name = op_data.name;
 
     // Check dialect - must be wasm (with specific exceptions)
-    if !is_allowed_dialect(ctx, op) {
+    if !is_allowed_dialect(ctx, op, depth) {
         errors.push(format!("Non-wasm operation found: {}.{}", dialect, name));
     }
 
     // Recursively validate nested regions
-    let regions = op_data.regions.clone();
-    for &region in &regions {
-        validate_region(ctx, region, errors);
+    for &region in &op_data.regions {
+        validate_region(ctx, region, depth + 1, errors);
     }
 }
 
 /// Check if an operation's dialect is allowed in the emit phase.
-fn is_allowed_dialect(ctx: &IrContext, op: OpRef) -> bool {
+fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
     let wasm_dialect = Symbol::new("wasm");
     let op_data = ctx.op(op);
 
@@ -86,8 +85,9 @@ fn is_allowed_dialect(ctx: &IrContext, op: OpRef) -> bool {
         return true;
     }
 
-    // Allow core.module at the top level
-    if op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module") {
+    // Allow core.module only at the top level (depth 0)
+    if depth == 0 && op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module")
+    {
         return true;
     }
 

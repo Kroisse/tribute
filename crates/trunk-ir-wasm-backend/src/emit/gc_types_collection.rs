@@ -28,8 +28,6 @@ use super::helpers;
 trunk_ir::symbols! {
     ATTR_TYPE_IDX => "type_idx",
     ATTR_TYPE => "type",
-    ATTR_FIELD_IDX => "field_idx",
-    ATTR_FIELD => "field",
     ATTR_TARGET_TYPE => "target_type",
     ATTR_HEAP_TYPE => "heap_type",
 }
@@ -298,24 +296,7 @@ fn record_array_elem(
     Ok(())
 }
 
-/// Get attribute value as u32
-fn attr_u32(
-    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
-    key: Symbol,
-) -> CompilationResult<u32> {
-    match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => Ok(*bits as u32),
-        _ => Err(CompilationError::missing_attribute("u32")),
-    }
-}
-
-/// Get field index from attributes
-fn attr_field_idx(
-    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
-) -> CompilationResult<u32> {
-    // Try field_idx first (wasm dialect), then field (adt dialect)
-    attr_u32(attrs, ATTR_FIELD_IDX()).or_else(|_| attr_u32(attrs, ATTR_FIELD()))
-}
+use super::helpers::{attr_field_idx, attr_u32};
 
 /// Convert a TypeRef to a wasm FieldType for GC type building (arena version).
 fn type_to_field_type_arena(
@@ -323,9 +304,19 @@ fn type_to_field_type_arena(
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> FieldType {
-    // Use helpers::type_to_valtype to convert, defaulting to anyref on error
-    let val_type = helpers::type_to_valtype(ctx, ty, type_idx_by_type)
-        .unwrap_or(ValType::Ref(wasm_encoder::RefType::ANYREF));
+    let val_type = match helpers::type_to_valtype(ctx, ty, type_idx_by_type) {
+        Ok(vt) => vt,
+        Err(e) => {
+            let data = ctx.types.get(ty);
+            tracing::warn!(
+                "type_to_field_type_arena: failed to convert {}.{} to ValType ({}), falling back to anyref",
+                data.dialect,
+                data.name,
+                e
+            );
+            ValType::Ref(wasm_encoder::RefType::ANYREF)
+        }
+    };
     FieldType {
         element_type: StorageType::Val(val_type),
         mutable: true,
