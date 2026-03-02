@@ -23,14 +23,28 @@
 
 use tracing::warn;
 
-use crate::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
+use crate::adt_layout::{
+    compute_enum_layout, compute_enum_layout_arena, compute_struct_layout,
+    compute_struct_layout_arena, find_variant_layout, get_enum_variants_arena,
+};
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
+    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+};
+use trunk_ir::arena::types::TypeDataBuilder;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::dialect::{adt, clif, core};
+use trunk_ir::ir::Symbol;
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
-use trunk_ir::{DialectOp, DialectType, Operation, Symbol};
+use trunk_ir::{DialectOp, DialectType, Operation};
 
 /// Lower ADT operations to clif dialect.
 ///
@@ -60,6 +74,335 @@ pub fn lower<'db>(
         .apply_partial(db, module, target)
         .module)
 }
+
+// =============================================================================
+// Arena IR version
+// =============================================================================
+
+/// Lower ADT operations to clif dialect (arena IR).
+pub fn lower_arena(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+    use trunk_ir::arena::rewrite::ArenaConversionTarget;
+
+    let mut target = ArenaConversionTarget::new();
+    target.add_legal_dialect("clif");
+    target.add_illegal_dialect("adt");
+
+    let applicator = ArenaPatternApplicator::new(type_converter)
+        .with_target(target)
+        .add_pattern(ArenaStructGetPattern)
+        .add_pattern(ArenaStructSetPattern)
+        .add_pattern(ArenaVariantIsPattern)
+        .add_pattern(ArenaVariantCastPattern)
+        .add_pattern(ArenaVariantGetPattern)
+        .add_pattern(ArenaRefNullPattern)
+        .add_pattern(ArenaRefCastPattern)
+        .add_pattern(ArenaRefIsNullPattern);
+    applicator.apply_partial(ctx, module);
+}
+
+fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
+
+fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
+}
+
+fn intern_ptr_type_adt(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+}
+
+struct ArenaStructGetPattern;
+
+impl ArenaRewritePattern for ArenaStructGetPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) else {
+            return false;
+        };
+
+        let struct_ty = struct_get.r#type(ctx);
+        let field_idx = struct_get.field(ctx) as usize;
+        let tc = rewriter.type_converter();
+
+        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+            warn!("adt_to_clif arena: cannot compute layout for struct_get");
+            return false;
+        };
+
+        if field_idx >= layout.field_offsets.len() {
+            warn!("adt_to_clif arena: field index {} out of bounds", field_idx);
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let offset = layout.field_offsets[field_idx] as i32;
+        let ref_val = struct_get.r#ref(ctx);
+
+        // Convert result type through type converter (e.g. tribute_rt.any → core.ptr)
+        let result_types = ctx.op_result_types(op);
+        let result_ty = result_types.first().copied().unwrap();
+        let result_ty = tc.convert_type_or_identity(ctx, result_ty);
+
+        let load_op = arena_clif::load(ctx, loc, ref_val, result_ty, offset);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
+struct ArenaStructSetPattern;
+
+impl ArenaRewritePattern for ArenaStructSetPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(struct_set) = arena_adt::StructSet::from_op(ctx, op) else {
+            return false;
+        };
+
+        let struct_ty = struct_set.r#type(ctx);
+        let field_idx = struct_set.field(ctx) as usize;
+        let tc = rewriter.type_converter();
+
+        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+            warn!("adt_to_clif arena: cannot compute layout for struct_set");
+            return false;
+        };
+
+        if field_idx >= layout.field_offsets.len() {
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let offset = layout.field_offsets[field_idx] as i32;
+        let ref_val = struct_set.r#ref(ctx);
+        let value_val = struct_set.value(ctx);
+
+        let store_op = arena_clif::store(ctx, loc, value_val, ref_val, offset);
+        rewriter.replace_op(store_op.op_ref());
+        true
+    }
+}
+
+struct ArenaVariantIsPattern;
+
+impl ArenaRewritePattern for ArenaVariantIsPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(variant_is) = arena_adt::VariantIs::from_op(ctx, op) else {
+            return false;
+        };
+
+        let enum_ty = variant_is.r#type(ctx);
+        let tag = variant_is.tag(ctx);
+        let tc = rewriter.type_converter();
+
+        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+            warn!("adt_to_clif arena: cannot compute enum layout for variant_is");
+            return false;
+        };
+
+        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
+            warn!("adt_to_clif arena: unknown variant tag {:?}", tag);
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let i32_ty = intern_i32_type(ctx);
+        let i1_ty = intern_i1_type(ctx);
+        let ref_val = variant_is.r#ref(ctx);
+
+        // Load tag from payload_ptr + 0
+        let tag_load = arena_clif::load(ctx, loc, ref_val, i32_ty, 0);
+        let tag_val = tag_load.result(ctx);
+
+        // Compare with expected discriminant
+        let expected = arena_clif::iconst(ctx, loc, i32_ty, variant_layout.tag_value as i64);
+        let cmp_op = arena_clif::icmp(
+            ctx,
+            loc,
+            tag_val,
+            expected.result(ctx),
+            i1_ty,
+            Symbol::new("eq"),
+        );
+
+        rewriter.insert_op(tag_load.op_ref());
+        rewriter.insert_op(expected.op_ref());
+        rewriter.replace_op(cmp_op.op_ref());
+        true
+    }
+}
+
+struct ArenaVariantCastPattern;
+
+impl ArenaRewritePattern for ArenaVariantCastPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(variant_cast) = arena_adt::VariantCast::from_op(ctx, op) else {
+            return false;
+        };
+        let ref_val = variant_cast.r#ref(ctx);
+        rewriter.erase_op(vec![ref_val]);
+        true
+    }
+}
+
+struct ArenaVariantGetPattern;
+
+impl ArenaRewritePattern for ArenaVariantGetPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(variant_get) = arena_adt::VariantGet::from_op(ctx, op) else {
+            return false;
+        };
+
+        let enum_ty = variant_get.r#type(ctx);
+        let tag = variant_get.tag(ctx);
+        let field_idx = variant_get.field(ctx) as usize;
+        let tc = rewriter.type_converter();
+
+        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+            warn!("adt_to_clif arena: cannot compute enum layout for variant_get");
+            return false;
+        };
+
+        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
+            warn!("adt_to_clif arena: unknown variant tag {:?}", tag);
+            return false;
+        };
+
+        if field_idx >= variant_layout.field_offsets.len() {
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let offset = (enum_layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32;
+        let ref_val = variant_get.r#ref(ctx);
+
+        // Determine the load type from the enum type definition.
+        // The field was stored with its native type, so we must load with the
+        // same type rather than the type-erased result type (which may be
+        // tribute_rt.any instead of core.ptr).
+        let load_ty = get_enum_variants_arena(ctx, enum_ty)
+            .and_then(|variants| {
+                variants
+                    .iter()
+                    .find(|(name, _)| *name == tag)
+                    .and_then(|(_, fields)| fields.get(field_idx).copied())
+            })
+            .map(|field_ty| {
+                // Convert the field type to native (e.g., tribute_rt.any → core.ptr).
+                tc.convert_type_or_identity(ctx, field_ty)
+            })
+            .unwrap_or_else(|| {
+                let result_types = ctx.op_result_types(op);
+                let result_ty = result_types.first().copied().unwrap();
+                tc.convert_type_or_identity(ctx, result_ty)
+            });
+
+        let load_op = arena_clif::load(ctx, loc, ref_val, load_ty, offset);
+        rewriter.replace_op(load_op.op_ref());
+        true
+    }
+}
+
+struct ArenaRefNullPattern;
+
+impl ArenaRewritePattern for ArenaRefNullPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        if arena_adt::RefNull::from_op(ctx, op).is_err() {
+            return false;
+        }
+        let loc = ctx.op(op).location;
+        let ptr_ty = intern_ptr_type_adt(ctx);
+        let iconst_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+        rewriter.replace_op(iconst_op.op_ref());
+        true
+    }
+}
+
+struct ArenaRefCastPattern;
+
+impl ArenaRewritePattern for ArenaRefCastPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(ref_cast) = arena_adt::RefCast::from_op(ctx, op) else {
+            return false;
+        };
+        let ref_val = ref_cast.r#ref(ctx);
+        rewriter.erase_op(vec![ref_val]);
+        true
+    }
+}
+
+struct ArenaRefIsNullPattern;
+
+impl ArenaRewritePattern for ArenaRefIsNullPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
+    ) -> bool {
+        let Ok(ref_is_null) = arena_adt::RefIsNull::from_op(ctx, op) else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let ptr_ty = intern_ptr_type_adt(ctx);
+        let i1_ty = intern_i1_type(ctx);
+        let ref_val = ref_is_null.r#ref(ctx);
+
+        let null_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
+        let icmp_op = arena_clif::icmp(
+            ctx,
+            loc,
+            ref_val,
+            null_op.result(ctx),
+            i1_ty,
+            Symbol::new("eq"),
+        );
+        rewriter.insert_op(null_op.op_ref());
+        rewriter.replace_op(icmp_op.op_ref());
+        true
+    }
+}
+
+// =============================================================================
+// Salsa IR version
+// =============================================================================
 
 /// Pattern for `adt.struct_get(ref, field_idx)` -> `clif.load(ref, offset)`.
 struct StructGetPattern;

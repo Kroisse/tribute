@@ -23,5 +23,5 @@ mod translate;
 mod validation;
 
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
-pub use translate::emit_module_to_native;
-pub use validation::{ValidationError, validate_clif_ir};
+pub use translate::{emit_module_to_native, emit_module_to_native_arena};
+pub use validation::{ValidationError, validate_clif_ir, validate_clif_ir_arena};

@@ -5,8 +5,12 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
+use trunk_ir::arena::rewrite::ArenaModule;
 use trunk_ir::dialect::core::Module;
-use trunk_ir::{DialectOp, Operation, Region, Symbol};
+use trunk_ir::ir::Symbol;
+use trunk_ir::{DialectOp, Operation, Region};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -93,6 +97,77 @@ fn is_allowed_dialect<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) ->
 
     // Allow core.module at the top level
     if trunk_ir::dialect::core::Module::matches(db, *op) {
+        return true;
+    }
+
+    false
+}
+
+// =============================================================================
+// Arena IR version
+// =============================================================================
+
+/// Validate that a module's IR is ready for Cranelift emission (arena IR).
+pub fn validate_clif_ir_arena(ctx: &IrContext, module: ArenaModule) -> CompilationResult<()> {
+    let mut errors: Vec<String> = Vec::new();
+
+    if let Some(body) = module.body(ctx) {
+        validate_region_arena(ctx, body, &mut errors);
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        let message = format!(
+            "IR validation failed with {} error(s):\n  - {}",
+            errors.len(),
+            errors.join("\n  - ")
+        );
+        Err(CompilationError::ir_validation(message))
+    }
+}
+
+fn validate_region_arena(ctx: &IrContext, region: RegionRef, errors: &mut Vec<String>) {
+    let region_data = ctx.region(region);
+    for &block in &region_data.blocks {
+        validate_block_arena(ctx, block, errors);
+    }
+}
+
+fn validate_block_arena(ctx: &IrContext, block: BlockRef, errors: &mut Vec<String>) {
+    let block_data = ctx.block(block);
+    for &op in &block_data.ops {
+        validate_operation_arena(ctx, op, errors);
+    }
+}
+
+fn validate_operation_arena(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    let op_data = ctx.op(op);
+    let dialect = op_data.dialect;
+    let name = op_data.name;
+
+    if !is_allowed_dialect_arena(ctx, op) {
+        errors.push(format!("Non-clif operation found: {}.{}", dialect, name));
+    }
+
+    // Recursively validate nested regions
+    for &region in &op_data.regions {
+        validate_region_arena(ctx, region, errors);
+    }
+}
+
+fn is_allowed_dialect_arena(ctx: &IrContext, op: OpRef) -> bool {
+    let clif_dialect = Symbol::new("clif");
+    let core_dialect = Symbol::new("core");
+    let module_name = Symbol::new("module");
+    let op_data = ctx.op(op);
+
+    if op_data.dialect == clif_dialect {
+        return true;
+    }
+
+    // Allow core.module at the top level
+    if op_data.dialect == core_dialect && op_data.name == module_name {
         return true;
     }
 

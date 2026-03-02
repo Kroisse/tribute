@@ -18,8 +18,16 @@ use target_lexicon::Triple;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::{DialectOp, DialectType, Region, Symbol};
 
-use crate::function::{FunctionTranslator, translate_signature};
-use crate::{CompilationError, CompilationResult, validate_clif_ir};
+use crate::function::{
+    ArenaFunctionTranslator, FunctionTranslator, translate_signature, translate_signature_arena,
+    translate_type_arena,
+};
+use crate::{CompilationError, CompilationResult, validate_clif_ir, validate_clif_ir_arena};
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
+use trunk_ir::arena::rewrite::ArenaModule;
 
 /// Emit a native object file from a lowered TrunkIR module.
 ///
@@ -587,6 +595,267 @@ fn build_dispatching_deep_release(
         .ins()
         .call_indirect(release_sig_ref, release_fn, &[payload_ptr]);
     builder.ins().return_(&[]);
+}
+
+// =============================================================================
+// Arena IR version
+// =============================================================================
+
+/// Emit a native object file from a lowered Arena IR module.
+pub fn emit_module_to_native_arena(
+    ctx: &IrContext,
+    module: ArenaModule,
+) -> CompilationResult<Vec<u8>> {
+    validate_clif_ir_arena(ctx, module)?;
+    emit_module_impl_arena(ctx, module)
+}
+
+fn emit_module_impl_arena(ctx: &IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
+    // 1. ISA setup — use host triple
+    let triple = Triple::host();
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa_builder = isa::lookup(triple).map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let isa = isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let call_conv = isa.default_call_conv();
+
+    // 2. ObjectModule creation
+    let module_name = module
+        .name(ctx)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "unnamed".to_string());
+    let obj_builder = ObjectBuilder::new(isa, module_name, default_libcall_names())
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+    let mut obj_module = ObjectModule::new(obj_builder);
+
+    // 3. First pass — declare all functions
+    let mut func_ids: HashMap<Symbol, cranelift_module::FuncId> = HashMap::new();
+    let all_func_ops = collect_clif_funcs_arena(ctx, module);
+
+    for &func_op in &all_func_ops {
+        let func_wrapped = arena_clif::Func::from_op(ctx, func_op)
+            .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
+        let name_sym = func_wrapped.sym_name(ctx);
+        let func_type_ref = func_wrapped.r#type(ctx);
+
+        let sig = translate_signature_arena(ctx, func_type_ref, call_conv)?;
+
+        let op_data = ctx.op(func_op);
+        let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
+        let linkage = if name_sym == "main" {
+            Linkage::Export
+        } else if has_abi {
+            Linkage::Import
+        } else {
+            Linkage::Local
+        };
+
+        let linker_name = if linkage == Linkage::Local {
+            name_sym.with_str(mangle_native_name)
+        } else {
+            name_sym.to_string()
+        };
+
+        let func_id = obj_module
+            .declare_function(&linker_name, linkage, &sig)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+        func_ids.insert(name_sym, func_id);
+    }
+
+    // 3b. Declare runtime functions
+    declare_runtime_functions_arena(&mut obj_module, &mut func_ids, call_conv)?;
+
+    // 3c. RTTI infrastructure
+    let rtti_info = collect_and_declare_rtti(&mut obj_module, &mut func_ids, call_conv)?;
+
+    // 4. Second pass — define functions
+    let mut fb_ctx = FunctionBuilderContext::new();
+
+    for &func_op in &all_func_ops {
+        let op_data = ctx.op(func_op);
+        let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
+        if has_abi {
+            continue;
+        }
+
+        let func_wrapped = arena_clif::Func::from_op(ctx, func_op)
+            .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
+        let name_sym = func_wrapped.sym_name(ctx);
+        let func_type_ref = func_wrapped.r#type(ctx);
+
+        let sig = translate_signature_arena(ctx, func_type_ref, call_conv)?;
+        let func_id = func_ids[&name_sym];
+
+        let mut cl_func =
+            cl_ir::Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), sig);
+
+        // Declare all known functions as FuncRefs
+        let mut func_refs: HashMap<Symbol, cl_ir::FuncRef> = HashMap::new();
+        for (&sym, &fid) in &func_ids {
+            let fref = obj_module.declare_func_in_func(fid, &mut cl_func);
+            func_refs.insert(sym, fref);
+        }
+
+        // Build the function body
+        {
+            let builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
+            let mut translator = ArenaFunctionTranslator::new(ctx, builder, &func_refs);
+
+            let func_body = func_wrapped.body(ctx);
+            let body_region = ctx.region(func_body);
+            let ir_blocks: &[BlockRef] = &body_region.blocks;
+
+            // Phase 1: Create all Cranelift blocks upfront
+            let entry_block = translator.builder.create_block();
+            translator
+                .builder
+                .append_block_params_for_function_params(entry_block);
+
+            if let Some(&ir_entry_block) = ir_blocks.first() {
+                translator.block_map.insert(ir_entry_block, entry_block);
+            }
+
+            // Create Cranelift blocks for non-entry IR blocks
+            for &ir_block in ir_blocks.iter().skip(1) {
+                let cl_block = translator.builder.create_block();
+                let ir_args = ctx.block_args(ir_block);
+                for &arg_val in ir_args {
+                    let arg_ty = ctx.value_ty(arg_val);
+                    let cl_ty = translate_type_arena(ctx, arg_ty)?;
+                    translator.builder.append_block_param(cl_block, cl_ty);
+                }
+                translator.block_map.insert(ir_block, cl_block);
+            }
+
+            // Phase 2: Translate operations in each block
+            for &ir_block in ir_blocks {
+                let cl_block = translator.lookup_block(ir_block)?;
+                translator.builder.switch_to_block(cl_block);
+
+                // Map block arguments to Cranelift block params
+                let cl_params: Vec<_> = translator.builder.block_params(cl_block).to_vec();
+                let ir_args = ctx.block_args(ir_block);
+                let ir_arg_count = ir_args.len();
+                if ir_arg_count != cl_params.len() {
+                    return Err(CompilationError::codegen(format!(
+                        "block arg count mismatch: TrunkIR block has {} args but Cranelift block has {} params",
+                        ir_arg_count,
+                        cl_params.len(),
+                    )));
+                }
+                for (i, &cl_param) in cl_params.iter().enumerate() {
+                    let ir_arg = ir_args[i];
+                    translator.values.insert(ir_arg, cl_param);
+                }
+
+                // Translate each operation in this block
+                let block_ops = ctx.block(ir_block).ops.clone();
+                for &ir_op in &block_ops {
+                    translator.translate_op(ir_op).map_err(|e| {
+                        let op_data = ctx.op(ir_op);
+                        CompilationError::codegen(format!(
+                            "{e} (in {}.{} of function {})",
+                            op_data.dialect, op_data.name, name_sym,
+                        ))
+                    })?;
+                }
+            }
+
+            translator.builder.seal_all_blocks();
+            translator.builder.finalize();
+        }
+
+        // Compile the function via Cranelift
+        let mut cr_ctx = Context::for_function(cl_func);
+        obj_module
+            .define_function(func_id, &mut cr_ctx)
+            .map_err(|e| CompilationError::codegen(format!("Function {} {e:?}", name_sym)))?;
+    }
+
+    // 4b. Define RTTI table and __tribute_deep_release
+    define_rtti_infrastructure(&mut obj_module, &func_ids, &rtti_info, call_conv)?;
+
+    // 5. Emit object file
+    let product = obj_module.finish();
+    let bytes = product
+        .emit()
+        .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+
+    Ok(bytes)
+}
+
+/// Collect all `clif.func` operations from an ArenaModule.
+fn collect_clif_funcs_arena(ctx: &IrContext, module: ArenaModule) -> Vec<OpRef> {
+    let mut funcs = Vec::new();
+    if let Some(body) = module.body(ctx) {
+        collect_clif_funcs_from_region_arena(ctx, body, &mut funcs);
+    }
+    funcs
+}
+
+fn collect_clif_funcs_from_region_arena(
+    ctx: &IrContext,
+    region: RegionRef,
+    funcs: &mut Vec<OpRef>,
+) {
+    let region_data = ctx.region(region);
+    for &block in &region_data.blocks {
+        let block_data = ctx.block(block);
+        for &op in &block_data.ops {
+            if arena_clif::Func::from_op(ctx, op).is_ok() {
+                funcs.push(op);
+            } else {
+                let op_data = ctx.op(op);
+                if op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module") {
+                    for &nested_region in &op_data.regions {
+                        collect_clif_funcs_from_region_arena(ctx, nested_region, funcs);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Declare runtime functions (arena version — no db parameter needed).
+fn declare_runtime_functions_arena(
+    obj_module: &mut ObjectModule,
+    func_ids: &mut HashMap<Symbol, cranelift_module::FuncId>,
+    call_conv: isa::CallConv,
+) -> CompilationResult<()> {
+    let ptr_ty = obj_module.target_config().pointer_type();
+    let i64_ty = cranelift_codegen::ir::types::I64;
+
+    // __tribute_alloc(size: i64) -> ptr
+    let mut alloc_sig = cl_ir::Signature::new(call_conv);
+    alloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
+    alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
+
+    let alloc_sym = Symbol::new("__tribute_alloc");
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
+        let func_id = obj_module
+            .declare_function("__tribute_alloc", Linkage::Import, &alloc_sig)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+        e.insert(func_id);
+    }
+
+    // __tribute_dealloc(ptr: ptr, size: i64)
+    let mut dealloc_sig = cl_ir::Signature::new(call_conv);
+    dealloc_sig.params.push(cl_ir::AbiParam::new(ptr_ty));
+    dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
+
+    let dealloc_sym = Symbol::new("__tribute_dealloc");
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym) {
+        let func_id = obj_module
+            .declare_function("__tribute_dealloc", Linkage::Import, &dealloc_sig)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+        e.insert(func_id);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

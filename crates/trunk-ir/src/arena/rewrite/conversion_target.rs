@@ -83,6 +83,15 @@ impl ArenaConversionTarget {
         self.dynamic_checks.push(Box::new(f));
     }
 
+    /// Check if this target has any constraints (legal/illegal dialects/ops/checks).
+    pub fn has_constraints(&self) -> bool {
+        !self.legal_dialects.is_empty()
+            || !self.illegal_dialects.is_empty()
+            || !self.legal_ops.is_empty()
+            || !self.illegal_ops.is_empty()
+            || !self.dynamic_checks.is_empty()
+    }
+
     /// Check if a specific operation is legal.
     ///
     /// Resolution order:
