@@ -115,7 +115,7 @@ pub(crate) fn handle_call_indirect(
     let anyref_ty = module_info
         .common_types
         .anyref
-        .expect("anyref type not pre-interned");
+        .ok_or_else(|| CompilationError::invalid_module("anyref type not pre-interned"))?;
     let normalize_param_type = |ty: TypeRef| -> TypeRef {
         // After normalize_primitive_types pass:
         // - tribute_rt.any → wasm.anyref
@@ -151,7 +151,7 @@ pub(crate) fn handle_call_indirect(
     let funcref_ty = module_info
         .common_types
         .funcref
-        .expect("funcref type not pre-interned");
+        .ok_or_else(|| CompilationError::invalid_module("funcref type not pre-interned"))?;
     if let Some(func_ret_ty) = emit_ctx.func_return_type {
         let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
         let func_returns_funcref = helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
@@ -166,7 +166,7 @@ pub(crate) fn handle_call_indirect(
             result_ty = module_info
                 .common_types
                 .step
-                .expect("step type not pre-interned");
+                .ok_or_else(|| CompilationError::invalid_module("step type not pre-interned"))?;
         }
     }
 
@@ -269,8 +269,17 @@ pub(crate) fn handle_return_call(
 
 use super::super::helpers::attr_u32;
 
-/// Find a core.func type in the type_idx_by_type registry by matching params and result.
-/// Returns the TypeRef if found. This avoids needing &mut IrContext for interning.
+/// Find a core.func type in the `type_idx_by_type` / `func_types` registries by
+/// matching params and result.
+///
+/// core.func types encode parameters followed by a single result in `TypeData.params`:
+/// `[param1, .., paramN, result]`.
+///
+/// This performs a linear O(n) scan over the registries to avoid requiring
+/// `&mut IrContext` for interning a new type. The trade-off is O(n) per
+/// `call_indirect` emission, which is acceptable for current module sizes.
+/// If this becomes a bottleneck, a dedicated index keyed by (params, result)
+/// could be built during `collect_module_info`.
 fn find_func_type_in_registry(
     ctx: &IrContext,
     params: &[TypeRef],

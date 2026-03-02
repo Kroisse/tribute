@@ -390,15 +390,15 @@ pub(crate) fn collect_gc_types(
     // to handle multiple structs with same placeholder type but different field counts
     let mut placeholder_struct_type_idx: HashMap<(TypeRef, usize), u32> = HashMap::new();
 
-    // Phase 1: Collect explicit type_idx values from struct_new operations
+    // Phase 1: Collect explicit type_idx values from all operations
     // This ensures placeholder allocation doesn't conflict with explicit indices
+    // (covers struct_new, ref_cast, and any other op with an explicit type_idx attribute)
     let mut reserved_indices: HashSet<u32> = HashSet::new();
     fn collect_reserved_indices(ctx: &IrContext, region: RegionRef, reserved: &mut HashSet<u32>) {
         for &block in ctx.region(region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                if arena_wasm::StructNew::matches(ctx, op)
-                    && let Some(ArenaAttribute::IntBits(idx)) =
-                        ctx.op(op).attributes.get(&ATTR_TYPE_IDX())
+                if let Some(ArenaAttribute::IntBits(idx)) =
+                    ctx.op(op).attributes.get(&ATTR_TYPE_IDX())
                 {
                     reserved.insert(*idx as u32);
                 }
@@ -560,7 +560,12 @@ pub(crate) fn collect_gc_types(
 
             // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
             let type_idx = if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-                let idx = *idx as u32;
+                let idx = u32::try_from(*idx).map_err(|_| {
+                    CompilationError::invalid_attribute(format!(
+                        "type_idx value {} out of u32 range",
+                        idx
+                    ))
+                })?;
                 // Advance next_type_idx to avoid collision with explicit indices
                 next_type_idx = next_type_idx.max(idx.saturating_add(1));
                 debug!(
