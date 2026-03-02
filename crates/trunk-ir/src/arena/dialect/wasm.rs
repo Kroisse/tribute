@@ -52,7 +52,7 @@ mod wasm {
         {}
     }
 
-    #[attr(module: String, name: String, sym_name: Symbol, r#type: Type)]
+    #[attr(module: Symbol, name: Symbol, sym_name: Symbol, r#type: Type)]
     fn import_func() {}
 
     #[attr(name: String, func: Symbol)]
@@ -238,10 +238,10 @@ mod wasm {
 
     fn ref_is_null(r#ref: ()) -> result {}
 
-    #[attr(target_type: Symbol, type_idx?: u32)]
+    #[attr(target_type: Type, type_idx?: u32)]
     fn ref_cast(r#ref: ()) -> result {}
 
-    #[attr(target_type: Symbol, type_idx?: u32)]
+    #[attr(target_type: Type, type_idx?: u32)]
     fn ref_test(r#ref: ()) -> result {}
 
     // i31ref

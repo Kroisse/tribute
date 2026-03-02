@@ -379,13 +379,10 @@ pub(crate) fn collect_gc_types<'db>(
     // Evidence ADT type (core.array(Marker)) maps to EVIDENCE_IDX
     type_idx_by_type.insert(crate::gc_types::evidence_adt_type(db), EVIDENCE_IDX);
     // Continuation ADT type (_Continuation) maps to CONTINUATION_IDX
-    type_idx_by_type.insert(
-        crate::passes::trampoline_to_wasm::continuation_adt_type(db),
-        CONTINUATION_IDX,
-    );
+    type_idx_by_type.insert(crate::gc_types::continuation_adt_type(db), CONTINUATION_IDX);
     // ResumeWrapper ADT type (_ResumeWrapper) maps to RESUME_WRAPPER_IDX
     type_idx_by_type.insert(
-        crate::passes::trampoline_to_wasm::resume_wrapper_adt_type(db),
+        crate::gc_types::resume_wrapper_adt_type(db),
         RESUME_WRAPPER_IDX,
     );
 

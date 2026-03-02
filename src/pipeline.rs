@@ -67,7 +67,7 @@ use tribute_passes::evidence;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_trampoline;
 use tribute_passes::wasm::lower::lower_to_wasm;
-use tribute_passes::wasm::type_converter::wasm_type_converter;
+use tribute_passes::wasm::type_converter::salsa_converter::wasm_type_converter;
 use trunk_ir::Span;
 use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::arena::{ArenaModule, IrContext};

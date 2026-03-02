@@ -40,4 +40,5 @@ pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, PatternRewriter, RewriteContext, RewritePattern,
 };
 pub use type_converter::generic_type_converter;
-pub use wasm::type_converter::{closure_adt_type, wasm_type_converter};
+// Arena-based type converter is available via wasm::type_converter::wasm_type_converter
+// Salsa-based type converter for pipeline: wasm::type_converter::salsa_converter::wasm_type_converter
