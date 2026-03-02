@@ -198,11 +198,11 @@ impl PatternApplicator {
             let block_args = ctx.block_args(block).to_vec();
             for (i, arg_val) in block_args.iter().enumerate() {
                 let raw_ty = ctx.value_ty(*arg_val);
-                if let Some(new_ty) = self.type_converter.convert_type(ctx, raw_ty) {
-                    if new_ty != raw_ty {
-                        ctx.set_block_arg_type(block, i as u32, new_ty);
-                        changes += 1;
-                    }
+                if let Some(new_ty) = self.type_converter.convert_type(ctx, raw_ty)
+                    && new_ty != raw_ty
+                {
+                    ctx.set_block_arg_type(block, i as u32, new_ty);
+                    changes += 1;
                 }
             }
         }
@@ -271,16 +271,16 @@ impl PatternApplicator {
         let operands = ctx.op_operands(op).to_vec();
         for (i, &operand) in operands.iter().enumerate() {
             let raw_ty = ctx.value_ty(operand);
-            if let Some(target_ty) = self.type_converter.convert_type(ctx, raw_ty) {
-                if target_ty != raw_ty {
-                    let loc = ctx.op(op).location;
-                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
-                    let cast_ref = cast.op_ref();
-                    let cast_result = cast.result(ctx);
-                    ctx.insert_op_before(block, op, cast_ref);
-                    ctx.set_op_operand(op, i as u32, cast_result);
-                    cast_count += 1;
-                }
+            if let Some(target_ty) = self.type_converter.convert_type(ctx, raw_ty)
+                && target_ty != raw_ty
+            {
+                let loc = ctx.op(op).location;
+                let cast = arena_core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
+                let cast_ref = cast.op_ref();
+                let cast_result = cast.result(ctx);
+                ctx.insert_op_before(block, op, cast_ref);
+                ctx.set_op_operand(op, i as u32, cast_result);
+                cast_count += 1;
             }
         }
         cast_count
