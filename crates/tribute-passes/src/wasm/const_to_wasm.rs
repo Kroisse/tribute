@@ -2,52 +2,51 @@
 //!
 //! This pass uses a two-phase approach:
 //! 1. Analysis: Collect all string/bytes constants and allocate data segment offsets
-//! 2. Transform: Replace const operations with wasm.i32_const (pointer to data)
+//! 2. Transform: Replace const operations with wasm ops
 //!
-//! The analysis is implemented as a salsa::tracked function for incremental computation.
+//! The analysis produces a plain struct (no Salsa tracking).
 
 use std::collections::HashMap;
 
-use trunk_ir::dialect::adt;
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::wasm;
-use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol};
-
-use super::type_converter::wasm_type_converter;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, RegionRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::ir::Symbol;
 
 /// Result of const analysis - maps content to allocated offset.
-#[salsa::tracked]
-pub struct ConstAnalysis<'db> {
+pub struct ConstAnalysis {
     /// String allocations: (content, offset, length) - for active data segments.
-    #[returns(ref)]
     pub string_allocations: Vec<(Vec<u8>, u32, u32)>,
     /// Bytes allocations: (content, data_idx, length) - for passive data segments.
     /// data_idx is the index into the passive data segment array.
-    #[returns(ref)]
     pub bytes_allocations: Vec<(Vec<u8>, u32, u32)>,
     /// Total size of string data segments (for linear memory).
     pub string_total_size: u32,
 }
 
-impl<'db> ConstAnalysis<'db> {
+impl ConstAnalysis {
     /// Legacy accessor for backwards compatibility.
     /// Returns string allocations only.
-    pub fn allocations(&self, db: &'db dyn salsa::Database) -> &[(Vec<u8>, u32, u32)] {
-        self.string_allocations(db)
+    pub fn allocations(&self) -> &[(Vec<u8>, u32, u32)] {
+        &self.string_allocations
     }
 
     /// Legacy accessor for backwards compatibility.
-    pub fn total_size(&self, db: &'db dyn salsa::Database) -> u32 {
-        self.string_total_size(db)
+    pub fn total_size(&self) -> u32 {
+        self.string_total_size
     }
-}
 
-impl<'db> ConstAnalysis<'db> {
     /// Look up the offset for given string content.
     /// Returns (offset, length).
-    pub fn offset_for(&self, db: &'db dyn salsa::Database, content: &[u8]) -> Option<(u32, u32)> {
-        self.string_allocations(db)
+    pub fn offset_for(&self, content: &[u8]) -> Option<(u32, u32)> {
+        self.string_allocations
             .iter()
             .find(|(data, _, _)| data.as_slice() == content)
             .map(|(_, offset, len)| (*offset, *len))
@@ -55,12 +54,8 @@ impl<'db> ConstAnalysis<'db> {
 
     /// Look up the bytes allocation info for given content.
     /// Returns (data_idx, 0, length) where data_idx is the passive data segment index.
-    pub fn bytes_info_for(
-        &self,
-        db: &'db dyn salsa::Database,
-        content: &[u8],
-    ) -> Option<(u32, u32, u32)> {
-        self.bytes_allocations(db)
+    pub fn bytes_info_for(&self, content: &[u8]) -> Option<(u32, u32, u32)> {
+        self.bytes_allocations
             .iter()
             .find(|(data, _, _)| data.as_slice() == content)
             .map(|(_, data_idx, len)| (*data_idx, 0, *len))
@@ -96,29 +91,27 @@ impl ConstCollector {
         value.div_ceil(align) * align
     }
 
-    fn visit_op<'db>(&mut self, db: &'db dyn salsa::Database, op: &Operation<'db>) {
-        let dialect = op.dialect(db);
-        let name = op.name(db);
+    fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
+        let data = ctx.op(op);
 
-        if dialect == adt::DIALECT_NAME() {
-            let attrs = op.attributes(db);
-
-            if name == adt::STRING_CONST()
-                && let Some(Attribute::String(s)) = attrs.get(&Symbol::new("value"))
-            {
-                let bytes = s.clone().into_bytes();
-                if !self.string_seen.contains_key(&bytes) {
-                    let offset = Self::align_to(self.next_string_offset, 4);
-                    let len = bytes.len() as u32;
-                    self.string_seen
-                        .insert(bytes.clone(), self.string_allocations.len());
-                    self.string_allocations.push((bytes, offset, len));
-                    self.next_string_offset = offset + len;
+        if data.dialect == arena_adt::DIALECT_NAME() {
+            if data.name == Symbol::new("string_const") {
+                if let Some(ArenaAttribute::String(s)) = data.attributes.get(&Symbol::new("value"))
+                {
+                    let bytes = s.clone().into_bytes();
+                    if !self.string_seen.contains_key(&bytes) {
+                        let offset = Self::align_to(self.next_string_offset, 4);
+                        let len = bytes.len() as u32;
+                        self.string_seen
+                            .insert(bytes.clone(), self.string_allocations.len());
+                        self.string_allocations.push((bytes, offset, len));
+                        self.next_string_offset = offset + len;
+                    }
                 }
-            } else if name == adt::BYTES_CONST()
-                && let Some(Attribute::Bytes(b)) = attrs.get(&Symbol::new("value"))
+            } else if data.name == Symbol::new("bytes_const")
+                && let Some(ArenaAttribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
             {
-                let bytes = b.clone();
+                let bytes: Vec<u8> = b.to_vec();
                 if !self.bytes_seen.contains_key(&bytes) {
                     let data_idx = self.next_bytes_idx;
                     let len = bytes.len() as u32;
@@ -129,61 +122,52 @@ impl ConstCollector {
                 }
             }
         }
+    }
+}
 
-        // Recurse into regions
-        for region in op.regions(db).iter() {
-            for block in region.blocks(db).iter() {
-                for nested_op in block.operations(db).iter() {
-                    self.visit_op(db, nested_op);
-                }
+/// Walk all operations in a region recursively.
+fn walk_ops_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    callback: &mut impl FnMut(&IrContext, OpRef),
+) {
+    for &block in ctx.region(region).blocks.iter() {
+        for &op in ctx.block(block).ops.iter() {
+            callback(ctx, op);
+            for &nested in ctx.op(op).regions.iter() {
+                walk_ops_in_region(ctx, nested, callback);
             }
         }
     }
 }
 
 /// Analyze a module to collect all string/bytes constants and allocate offsets.
-#[salsa::tracked]
-pub fn analyze_consts<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> ConstAnalysis<'db> {
+pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
-    // Walk all operations in module body
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            collector.visit_op(db, op);
-        }
+    // Walk all operations in module body (recursively into nested regions)
+    if let Some(body) = module.body(ctx) {
+        walk_ops_in_region(ctx, body, &mut |ctx, op| {
+            collector.visit_op(ctx, op);
+        });
     }
 
-    ConstAnalysis::new(
-        db,
-        collector.string_allocations,
-        collector.bytes_allocations,
-        collector.next_string_offset,
-    )
+    ConstAnalysis {
+        string_allocations: collector.string_allocations,
+        bytes_allocations: collector.bytes_allocations,
+        string_total_size: collector.next_string_offset,
+    }
 }
 
 /// Lower const operations using pre-computed analysis.
-pub fn lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    analysis: ConstAnalysis<'db>,
-) -> Module<'db> {
-    // Extract allocations data from salsa-tracked struct for use in 'static patterns
-    let string_allocations = analysis.string_allocations(db).clone();
-    let bytes_allocations = analysis.bytes_allocations(db).clone();
+pub fn lower(ctx: &mut IrContext, module: ArenaModule, analysis: &ConstAnalysis) {
+    let string_allocations = analysis.string_allocations.clone();
+    let bytes_allocations = analysis.bytes_allocations.clone();
 
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_op("adt", "string_const")
-        .illegal_op("adt", "bytes_const");
-    PatternApplicator::new(wasm_type_converter())
+    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
         .add_pattern(StringConstPattern::new(string_allocations))
-        .add_pattern(BytesConstPattern::new(bytes_allocations))
-        .apply_partial(db, module, target)
-        .module
+        .add_pattern(BytesConstPattern::new(bytes_allocations));
+    applicator.apply_partial(ctx, module);
 }
 
 /// Allocation data: (content, offset, length).
@@ -208,32 +192,39 @@ impl StringConstPattern {
     }
 }
 
-impl<'db> RewritePattern<'db> for StringConstPattern {
+impl ArenaRewritePattern for StringConstPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(string_const) = adt::StringConst::from_operation(db, *op) else {
+        let Ok(string_const) = arena_adt::StringConst::from_op(ctx, op) else {
             return false;
         };
 
-        let content = string_const.value(db).clone().into_bytes();
+        let value_str = string_const.value(ctx);
+        let content = value_str.into_bytes();
 
         let Some((offset, _len)) = lookup_offset(&self.allocations, &content) else {
             return false;
         };
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
         // Use typed helper to create wasm.i32_const with just the offset.
         // Length information is available in ConstAnalysis and will be used by emit.rs.
-        let new_op = wasm::i32_const(db, location, i32_ty, offset as i32).as_operation();
+        let new_op = arena_wasm::i32_const(ctx, location, i32_ty, offset as i32);
 
-        rewriter.replace_op(new_op);
+        rewriter.replace_op(new_op.op_ref());
         true
+    }
+
+    fn name(&self) -> &'static str {
+        "StringConstPattern"
     }
 }
 
@@ -259,93 +250,40 @@ impl BytesConstPattern {
     }
 }
 
-impl<'db> RewritePattern<'db> for BytesConstPattern {
+impl ArenaRewritePattern for BytesConstPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        _rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(bytes_const) = adt::BytesConst::from_operation(db, *op) else {
+        let Ok(bytes_const) = arena_adt::BytesConst::from_op(ctx, op) else {
             return false;
         };
 
-        let Attribute::Bytes(value) = bytes_const.value(db) else {
+        let value_attr = bytes_const.value(ctx);
+        let ArenaAttribute::Bytes(b) = value_attr else {
             return false;
         };
-
-        let content = value.clone();
+        let content: Vec<u8> = b.to_vec();
 
         let Some((data_idx, len)) = lookup_bytes_info(&self.allocations, &content) else {
             return false;
         };
 
-        let location = op.location(db);
-        let bytes_ty = core::Bytes::new(db).as_type();
+        let location = ctx.op(op).location;
+        let bytes_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Create wasm.bytes_from_data operation
-        let new_op = wasm::bytes_from_data(db, location, bytes_ty, data_idx, 0, len).as_operation();
+        let new_op = arena_wasm::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
 
-        _rewriter.replace_op(new_op);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, Location, PathId, Region, Span, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_string_const_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let ptr_ty = core::I32::new(db).as_type();
-
-        let string_const =
-            adt::string_const(db, location, ptr_ty, "hello".to_string()).as_operation();
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![string_const],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_string_const_analysis(db: &salsa::DatabaseImpl) {
-        let module = make_string_const_module(db);
-        let analysis = analyze_consts(db, module);
-
-        assert_eq!(analysis.allocations(db).len(), 1);
-        assert_eq!(analysis.allocations(db)[0].0, b"hello".to_vec());
-        assert_eq!(analysis.allocations(db)[0].2, 5); // length
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let analysis = analyze_consts(db, module);
-        let lowered = lower(db, module, analysis);
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter().map(|op| op.full_name(db)).collect()
-    }
-
-    #[salsa_test]
-    fn test_string_const_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_string_const_module(db);
-        let op_names = lower_and_check(db, module);
-
-        assert_eq!(op_names.len(), 1);
-        assert_eq!(op_names[0], "wasm.i32_const");
+    fn name(&self) -> &'static str {
+        "BytesConstPattern"
     }
 }

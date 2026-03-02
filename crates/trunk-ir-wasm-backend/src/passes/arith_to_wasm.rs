@@ -1,4 +1,4 @@
-//! Lower arith dialect operations to wasm dialect.
+//! Lower arith dialect operations to wasm dialect (arena IR).
 //!
 //! This pass converts arithmetic operations to their wasm equivalents:
 //! - `arith.const` -> `wasm.{i32,i64,f32,f64}_const`
@@ -10,25 +10,22 @@
 
 use tracing::warn;
 
-use trunk_ir::dialect::core::Module;
-use trunk_ir::dialect::{arith, core, wasm};
-use trunk_ir::rewrite::{
-    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, Type};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::ir::Symbol;
 
-/// Lower arith dialect to wasm dialect.
+/// Lower arith dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    type_converter: TypeConverter,
-) -> Module<'db> {
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_dialect("arith");
+pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -36,82 +33,76 @@ pub fn lower<'db>(
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern);
-    applicator.apply_partial(db, module, target).module
+    applicator.apply_partial(ctx, module);
 }
 
 /// Pattern for `arith.const` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
-impl<'db> RewritePattern<'db> for ArithConstPattern {
+impl ArenaRewritePattern for ArithConstPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arith::Const::from_operation(db, *op) else {
+        let Ok(_const_op) = arena_arith::Const::from_op(ctx, op) else {
             return false;
         };
 
-        let Some(result_ty) = op.results(db).first().copied() else {
-            // Missing result type - cannot lower, leave unchanged
+        let result_types = ctx.op_result_types(op);
+        let Some(&result_ty) = result_types.first() else {
             return false;
         };
 
         // Handle nil type constants specially
-        let type_name = type_suffix(db, Some(result_ty));
+        let type_name = type_suffix(ctx, Some(result_ty));
         if type_name == "nil" {
-            // Nil constants have no runtime representation, but we need to preserve
-            // SSA form for operations that reference them. Use wasm.nop which has
-            // no runtime effect but maintains the value reference.
-            let nop = wasm::nop(db, op.location(db), result_ty);
-            rewriter.replace_op(nop.as_operation());
+            let loc = ctx.op(op).location;
+            let nop = arena_wasm::nop(ctx, loc, result_ty);
+            rewriter.replace_op(nop.op_ref());
             return true;
         }
 
-        let location = op.location(db);
-        let value = const_op.value(db).clone();
+        let loc = ctx.op(op).location;
+        let value = _const_op.value(ctx);
 
-        let new_op = match type_name {
+        let new_op_ref = match type_name {
             "i32" => {
-                if let Attribute::IntBits(v) = value {
-                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
-                } else {
-                    wasm::i32_const(db, location, result_ty, 0).as_operation()
-                }
+                let ArenaAttribute::IntBits(v) = value else {
+                    warn!("arith.const: expected IntBits for i32, got {:?}", value);
+                    return false;
+                };
+                arena_wasm::i32_const(ctx, loc, result_ty, v as i32).op_ref()
             }
             "i64" => {
-                if let Attribute::IntBits(v) = value {
-                    wasm::i64_const(db, location, result_ty, v as i64).as_operation()
-                } else {
-                    wasm::i64_const(db, location, result_ty, 0).as_operation()
-                }
+                let ArenaAttribute::IntBits(v) = value else {
+                    warn!("arith.const: expected IntBits for i64, got {:?}", value);
+                    return false;
+                };
+                arena_wasm::i64_const(ctx, loc, result_ty, v as i64).op_ref()
             }
             "f32" => {
-                if let Attribute::FloatBits(v) = value {
-                    wasm::f32_const(db, location, result_ty, f32::from_bits(v as u32))
-                        .as_operation()
-                } else {
-                    wasm::f32_const(db, location, result_ty, 0.0).as_operation()
-                }
+                let ArenaAttribute::FloatBits(v) = value else {
+                    warn!("arith.const: expected FloatBits for f32, got {:?}", value);
+                    return false;
+                };
+                arena_wasm::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                if let Attribute::FloatBits(v) = value {
-                    wasm::f64_const(db, location, result_ty, f64::from_bits(v)).as_operation()
-                } else {
-                    wasm::f64_const(db, location, result_ty, 0.0).as_operation()
-                }
+                let ArenaAttribute::FloatBits(v) = value else {
+                    warn!("arith.const: expected FloatBits for f64, got {:?}", value);
+                    return false;
+                };
+                arena_wasm::f64_const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
             }
             _ => {
-                if let Attribute::IntBits(v) = value {
-                    wasm::i32_const(db, location, result_ty, v as i32).as_operation()
-                } else {
-                    wasm::i32_const(db, location, result_ty, 0).as_operation()
-                }
+                warn!("arith.const: unsupported type suffix '{}'", type_name);
+                return false;
             }
         };
 
-        rewriter.replace_op(new_op);
+        rewriter.replace_op(new_op_ref);
         true
     }
 }
@@ -119,77 +110,77 @@ impl<'db> RewritePattern<'db> for ArithConstPattern {
 /// Pattern for `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 struct ArithBinOpPattern;
 
-impl<'db> RewritePattern<'db> for ArithBinOpPattern {
+impl ArenaRewritePattern for ArithBinOpPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != arith::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("arith") {
             return false;
         }
 
-        let name = op.name(db);
-        let is_binop = name == arith::ADD()
-            || name == arith::SUB()
-            || name == arith::MUL()
-            || name == arith::DIV()
-            || name == arith::REM();
+        let name = data.name;
+        let is_binop = name == Symbol::new("add")
+            || name == Symbol::new("sub")
+            || name == Symbol::new("mul")
+            || name == Symbol::new("div")
+            || name == Symbol::new("rem");
 
         if !is_binop {
             return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
-            // Missing result type - cannot lower
+        let result_types = ctx.op_result_types(op);
+        let Some(&result_ty) = result_types.first() else {
             return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
-            // Missing operands - cannot lower
+        let operands = ctx.op_operands(op).to_vec();
+        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
-        let suffix = type_suffix(db, Some(result_ty));
-        let location = op.location(db);
+        let suffix = type_suffix(ctx, Some(result_ty));
+        let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::ADD() {
+        let new_op = if name == Symbol::new("add") {
             match suffix {
-                "i32" => wasm::i32_add(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_add(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_add(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_add(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_add(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::SUB() {
+        } else if name == Symbol::new("sub") {
             match suffix {
-                "i32" => wasm::i32_sub(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_sub(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_sub(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_sub(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_sub(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::MUL() {
+        } else if name == Symbol::new("mul") {
             match suffix {
-                "i32" => wasm::i32_mul(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_mul(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_mul(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_mul(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_mul(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::DIV() {
+        } else if name == Symbol::new("div") {
             match suffix {
-                "i32" => wasm::i32_div_s(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_div_s(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_div(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_div(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_div_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::REM() {
+        } else if name == Symbol::new("rem") {
             match suffix {
-                "i32" => wasm::i32_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_rem_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else {
             return false;
@@ -203,90 +194,92 @@ impl<'db> RewritePattern<'db> for ArithBinOpPattern {
 /// Pattern for `arith.cmp_*` -> `wasm.{type}_{cmp}`
 struct ArithCmpPattern;
 
-impl<'db> RewritePattern<'db> for ArithCmpPattern {
+impl ArenaRewritePattern for ArithCmpPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != arith::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("arith") {
             return false;
         }
 
-        let name = op.name(db);
-        let is_cmp = name == arith::CMP_EQ()
-            || name == arith::CMP_NE()
-            || name == arith::CMP_LT()
-            || name == arith::CMP_LE()
-            || name == arith::CMP_GT()
-            || name == arith::CMP_GE();
+        let name = data.name;
+        let is_cmp = name == Symbol::new("cmp_eq")
+            || name == Symbol::new("cmp_ne")
+            || name == Symbol::new("cmp_lt")
+            || name == Symbol::new("cmp_le")
+            || name == Symbol::new("cmp_gt")
+            || name == Symbol::new("cmp_ge");
 
         if !is_cmp {
             return false;
         }
 
-        // Get operand type from rewriter (handles BlockArg via RewriteContext)
-        let operand_ty = rewriter.operand_type(0);
-        let suffix = type_suffix(db, operand_ty);
+        // Get operand type from first operand
+        let operands = ctx.op_operands(op).to_vec();
+        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
+            return false;
+        };
+        let operand_ty = Some(ctx.value_ty(lhs));
+        let suffix = type_suffix_opt(ctx, operand_ty);
         let is_integer = matches!(suffix, "i32" | "i64");
 
-        let result_ty =
-            op.results(db).first().copied().unwrap_or_else(|| {
-                panic!("arith cmp missing result type at {:?}", op.location(db))
-            });
-        let location = op.location(db);
-        let operands = op.operands(db);
-        let lhs = operands[0];
-        let rhs = operands[1];
+        let result_types = ctx.op_result_types(op);
+        let Some(&result_ty) = result_types.first() else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::CMP_EQ() {
+        let new_op = if name == Symbol::new("cmp_eq") {
             match suffix {
-                "i32" => wasm::i32_eq(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_eq(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_eq(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_eq(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_eq(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::CMP_NE() {
+        } else if name == Symbol::new("cmp_ne") {
             match suffix {
-                "i32" => wasm::i32_ne(db, location, lhs, rhs, result_ty).as_operation(),
-                "i64" => wasm::i64_ne(db, location, lhs, rhs, result_ty).as_operation(),
-                "f32" => wasm::f32_ne(db, location, lhs, rhs, result_ty).as_operation(),
-                "f64" => wasm::f64_ne(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_ne(db, location, lhs, rhs, result_ty).as_operation(),
+                "i32" => arena_wasm::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => arena_wasm::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => arena_wasm::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => arena_wasm::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::CMP_LT() {
+        } else if name == Symbol::new("cmp_lt") {
             match (suffix, is_integer) {
-                ("i32", true) => wasm::i32_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("i64", true) => wasm::i64_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f32", false) => wasm::f32_lt(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f64", false) => wasm::f64_lt(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_lt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i32", true) => arena_wasm::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => arena_wasm::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => arena_wasm::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => arena_wasm::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::CMP_LE() {
+        } else if name == Symbol::new("cmp_le") {
             match (suffix, is_integer) {
-                ("i32", true) => wasm::i32_le_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("i64", true) => wasm::i64_le_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f32", false) => wasm::f32_le(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f64", false) => wasm::f64_le(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_le_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i32", true) => arena_wasm::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => arena_wasm::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => arena_wasm::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => arena_wasm::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::CMP_GT() {
+        } else if name == Symbol::new("cmp_gt") {
             match (suffix, is_integer) {
-                ("i32", true) => wasm::i32_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("i64", true) => wasm::i64_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f32", false) => wasm::f32_gt(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f64", false) => wasm::f64_gt(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_gt_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i32", true) => arena_wasm::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => arena_wasm::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => arena_wasm::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => arena_wasm::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
-        } else if name == arith::CMP_GE() {
+        } else if name == Symbol::new("cmp_ge") {
             match (suffix, is_integer) {
-                ("i32", true) => wasm::i32_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("i64", true) => wasm::i64_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f32", false) => wasm::f32_ge(db, location, lhs, rhs, result_ty).as_operation(),
-                ("f64", false) => wasm::f64_ge(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_ge_s(db, location, lhs, rhs, result_ty).as_operation(),
+                ("i32", true) => arena_wasm::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => arena_wasm::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => arena_wasm::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => arena_wasm::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
             }
         } else {
             return false;
@@ -300,55 +293,45 @@ impl<'db> RewritePattern<'db> for ArithCmpPattern {
 /// Pattern for `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 struct ArithNegPattern;
 
-impl<'db> RewritePattern<'db> for ArithNegPattern {
+impl ArenaRewritePattern for ArithNegPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arith::Neg::from_operation(db, *op) else {
+        let Ok(neg_op) = arena_arith::Neg::from_op(ctx, op) else {
             return false;
         };
 
-        let result_ty = op.results(db).first().copied();
-        let suffix = type_suffix(db, result_ty);
-        let location = op.location(db);
-        let operand = neg_op.operand(db);
+        let result_types = ctx.op_result_types(op);
+        let result_ty = result_types.first().copied();
+        let suffix = type_suffix(ctx, result_ty);
+        let loc = ctx.op(op).location;
+        let operand = neg_op.operand(ctx);
 
         match suffix {
             "f32" => {
-                let f32_ty = result_ty.unwrap_or_else(|| core::F32::new(db).as_type());
-                let new_op = wasm::f32_neg(db, location, operand, f32_ty);
-                rewriter.replace_op(new_op.operation());
+                let f32_ty = result_ty.unwrap_or_else(|| intern_f32_type(ctx));
+                let new_op = arena_wasm::f32_neg(ctx, loc, operand, f32_ty);
+                rewriter.replace_op(new_op.op_ref());
                 true
             }
             "f64" => {
-                let f64_ty = result_ty.unwrap_or_else(|| core::F64::new(db).as_type());
-                let new_op = wasm::f64_neg(db, location, operand, f64_ty);
-                rewriter.replace_op(new_op.operation());
+                let f64_ty = result_ty.unwrap_or_else(|| intern_f64_type(ctx));
+                let new_op = arena_wasm::f64_neg(ctx, loc, operand, f64_ty);
+                rewriter.replace_op(new_op.op_ref());
                 true
             }
             "i64" => {
-                // For i64: 0 - x
-                let i64_ty = core::I64::new(db).as_type();
-                let zero = wasm::i64_const(db, location, i64_ty, 0);
-                let zero_val = zero.result(db);
-                let sub = wasm::i64_sub(db, location, zero_val, operand, i64_ty);
-                rewriter.insert_op(zero.operation());
-                rewriter.replace_op(sub.operation());
+                let i64_ty = intern_i64_type(ctx);
+                let zero = arena_wasm::i64_const(ctx, loc, i64_ty, 0);
+                let sub = arena_wasm::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
+                rewriter.insert_op(zero.op_ref());
+                rewriter.replace_op(sub.op_ref());
                 true
             }
-            _ => {
-                // Default to i32: 0 - x
-                let i32_ty = core::I32::new(db).as_type();
-                let zero = wasm::i32_const(db, location, i32_ty, 0);
-                let zero_val = zero.result(db);
-                let sub = wasm::i32_sub(db, location, zero_val, operand, i32_ty);
-                rewriter.insert_op(zero.operation());
-                rewriter.replace_op(sub.operation());
-                true
-            }
+            _ => false,
         }
     }
 }
@@ -356,72 +339,70 @@ impl<'db> RewritePattern<'db> for ArithNegPattern {
 /// Pattern for `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 struct ArithBitwisePattern;
 
-impl<'db> RewritePattern<'db> for ArithBitwisePattern {
+impl ArenaRewritePattern for ArithBitwisePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != arith::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("arith") {
             return false;
         }
 
-        let name = op.name(db);
-        let is_bitwise = name == arith::AND()
-            || name == arith::OR()
-            || name == arith::XOR()
-            || name == arith::SHL()
-            || name == arith::SHR()
-            || name == arith::SHRU();
+        let name = data.name;
+        let is_bitwise = name == Symbol::new("and")
+            || name == Symbol::new("or")
+            || name == Symbol::new("xor")
+            || name == Symbol::new("shl")
+            || name == Symbol::new("shr")
+            || name == Symbol::new("shru");
 
         if !is_bitwise {
             return false;
         }
 
-        let Some(result_ty) = op.results(db).first().copied() else {
-            // Missing result type - cannot lower
+        let result_types = ctx.op_result_types(op);
+        let Some(&result_ty) = result_types.first() else {
             return false;
         };
-        let operands = op.operands(db);
-        let (Some(lhs), Some(rhs)) = (operands.first().copied(), operands.get(1).copied()) else {
-            // Missing operands - cannot lower
+        let operands = ctx.op_operands(op).to_vec();
+        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
-        let suffix = type_suffix(db, Some(result_ty));
-        let location = op.location(db);
+        let suffix = type_suffix(ctx, Some(result_ty));
+        let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::AND() {
+        let new_op = if name == Symbol::new("and") {
             match suffix {
-                "i64" => wasm::i64_and(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_and(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
-        } else if name == arith::OR() {
+        } else if name == Symbol::new("or") {
             match suffix {
-                "i64" => wasm::i64_or(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_or(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
-        } else if name == arith::XOR() {
+        } else if name == Symbol::new("xor") {
             match suffix {
-                "i64" => wasm::i64_xor(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_xor(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
-        } else if name == arith::SHL() {
+        } else if name == Symbol::new("shl") {
             match suffix {
-                "i64" => wasm::i64_shl(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_shl(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
-        } else if name == arith::SHR() {
-            // Signed shift right
+        } else if name == Symbol::new("shr") {
             match suffix {
-                "i64" => wasm::i64_shr_s(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_shr_s(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
-        } else if name == arith::SHRU() {
-            // Unsigned shift right
+        } else if name == Symbol::new("shru") {
             match suffix {
-                "i64" => wasm::i64_shr_u(db, location, lhs, rhs, result_ty).as_operation(),
-                _ => wasm::i32_shr_u(db, location, lhs, rhs, result_ty).as_operation(),
+                "i64" => arena_wasm::i64_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => arena_wasm::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else {
             return false;
@@ -435,117 +416,78 @@ impl<'db> RewritePattern<'db> for ArithBitwisePattern {
 /// Pattern for `arith.{cast,trunc,extend,convert}` -> wasm conversion ops
 struct ArithConversionPattern;
 
-impl<'db> RewritePattern<'db> for ArithConversionPattern {
+impl ArenaRewritePattern for ArithConversionPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if op.dialect(db) != arith::DIALECT_NAME() {
+        let data = ctx.op(op);
+        if data.dialect != Symbol::new("arith") {
             return false;
         }
 
-        let name = op.name(db);
-        let is_conv = name == arith::CAST()
-            || name == arith::TRUNC()
-            || name == arith::EXTEND()
-            || name == arith::CONVERT();
+        let name = data.name;
+        let is_conv = name == Symbol::new("cast")
+            || name == Symbol::new("trunc")
+            || name == Symbol::new("extend")
+            || name == Symbol::new("convert");
 
         if !is_conv {
             return false;
         }
 
-        // Get source type from rewriter (handles BlockArg via RewriteContext)
-        let src_ty = rewriter.operand_type(0);
-        let src_suffix = type_suffix(db, src_ty);
+        // Get source type from operand
+        let operands = ctx.op_operands(op).to_vec();
+        let Some(&operand) = operands.first() else {
+            return false;
+        };
+        let src_ty = ctx.value_ty(operand);
+        let src_suffix = type_suffix(ctx, Some(src_ty));
 
         // Get destination type from result
-        let dst_ty = op.results(db).first().copied().unwrap_or_else(|| {
-            panic!(
-                "arith conversion missing result type at {:?}",
-                op.location(db)
-            )
-        });
-        let dst_suffix = type_suffix(db, Some(dst_ty));
+        let result_types = ctx.op_result_types(op);
+        let Some(&dst_ty) = result_types.first() else {
+            return false;
+        };
+        let dst_suffix = type_suffix(ctx, Some(dst_ty));
 
-        let location = op.location(db);
-        let operand = op.operands(db)[0];
+        let loc = ctx.op(op).location;
 
-        let new_op = if name == arith::CAST() {
-            // cast: integer sign extension/truncation (i32 <-> i64)
+        let new_op = if name == Symbol::new("cast") {
             match (src_suffix, dst_suffix) {
-                ("i64", "i32") => wasm::i32_wrap_i64(db, location, operand, dst_ty).as_operation(),
-                ("i32", "i64") => {
-                    wasm::i64_extend_i32_s(db, location, operand, dst_ty).as_operation()
-                }
-                _ => return false, // unsupported cast
-            }
-        } else if name == arith::TRUNC() {
-            // trunc: float -> int truncation (signed by default)
-            match (src_suffix, dst_suffix) {
-                ("f32", "i32") => {
-                    wasm::i32_trunc_f32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f64", "i32") => {
-                    wasm::i32_trunc_f64_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f32", "i64") => {
-                    wasm::i64_trunc_f32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f64", "i64") => {
-                    wasm::i64_trunc_f64_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("i64", "i32") => wasm::i32_wrap_i64(db, location, operand, dst_ty).as_operation(), // integer truncation
+                ("i64", "i32") => arena_wasm::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "i64") => arena_wasm::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == arith::EXTEND() {
-            // extend: smaller -> larger type
+        } else if name == Symbol::new("trunc") {
             match (src_suffix, dst_suffix) {
-                ("i32", "i64") => {
-                    wasm::i64_extend_i32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f32", "f64") => {
-                    wasm::f64_promote_f32(db, location, operand, dst_ty).as_operation()
-                }
+                ("f32", "i32") => arena_wasm::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i32") => arena_wasm::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i64") => arena_wasm::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i64") => arena_wasm::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i64", "i32") => arena_wasm::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == arith::CONVERT() {
-            // convert: int <-> float conversion
+        } else if name == Symbol::new("extend") {
             match (src_suffix, dst_suffix) {
-                // int to float (signed by default)
-                ("i32", "f32") => {
-                    wasm::f32_convert_i32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("i32", "f64") => {
-                    wasm::f64_convert_i32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("i64", "f32") => {
-                    wasm::f32_convert_i64_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("i64", "f64") => {
-                    wasm::f64_convert_i64_s(db, location, operand, dst_ty).as_operation()
-                }
-                // float to int (signed by default)
-                ("f32", "i32") => {
-                    wasm::i32_trunc_f32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f64", "i32") => {
-                    wasm::i32_trunc_f64_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f32", "i64") => {
-                    wasm::i64_trunc_f32_s(db, location, operand, dst_ty).as_operation()
-                }
-                ("f64", "i64") => {
-                    wasm::i64_trunc_f64_s(db, location, operand, dst_ty).as_operation()
-                }
-                // float to float
-                ("f32", "f64") => {
-                    wasm::f64_promote_f32(db, location, operand, dst_ty).as_operation()
-                }
-                ("f64", "f32") => {
-                    wasm::f32_demote_f64(db, location, operand, dst_ty).as_operation()
-                }
+                ("i32", "i64") => arena_wasm::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "f64") => arena_wasm::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("convert") {
+            match (src_suffix, dst_suffix) {
+                ("i32", "f32") => arena_wasm::f32_convert_i32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "f64") => arena_wasm::f64_convert_i32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i64", "f32") => arena_wasm::f32_convert_i64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i64", "f64") => arena_wasm::f64_convert_i64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i32") => arena_wasm::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i32") => arena_wasm::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i64") => arena_wasm::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i64") => arena_wasm::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "f64") => arena_wasm::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "f32") => arena_wasm::f32_demote_f64(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
         } else {
@@ -557,11 +499,27 @@ impl<'db> RewritePattern<'db> for ArithConversionPattern {
     }
 }
 
-/// Get the wasm type suffix from a type.
-fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'static str {
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Get the wasm type suffix from a TypeRef.
+pub(crate) fn type_suffix(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
+    match ty {
+        Some(t) => type_suffix_opt(ctx, Some(t)),
+        None => {
+            #[cfg(debug_assertions)]
+            warn!("No type in arith_to_wasm, defaulting to i32");
+            "i32"
+        }
+    }
+}
+
+fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
     match ty {
         Some(t) => {
-            let name = t.name(db);
+            let data = ctx.types.get(t);
+            let name = data.name;
             if name == Symbol::new("i32") {
                 "i32"
             } else if name == Symbol::new("i64") {
@@ -570,17 +528,13 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
                 "f32"
             } else if name == Symbol::new("f64") {
                 "f64"
-            } else if name == Symbol::new("i1") {
-                // Boolean type - represented as i32 in wasm
-                "i32"
-            } else if name == Symbol::new("int")
+            } else if name == Symbol::new("i1")
+                || name == Symbol::new("int")
                 || name == Symbol::new("nat")
                 || name == Symbol::new("bool")
             {
-                // tribute_rt.int/nat/bool are 31-bit values, lowered to i32
                 "i32"
             } else if name == Symbol::new("nil") {
-                // Nil/void type - no runtime value
                 "nil"
             } else {
                 #[cfg(debug_assertions)]
@@ -599,218 +553,23 @@ fn type_suffix<'db>(db: &'db dyn salsa::Database, ty: Option<Type<'db>>) -> &'st
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use insta::assert_snapshot;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::{Block, BlockId, DialectOp, Location, PathId, Region, Span, idvec};
+/// Intern a core.i64 type.
+pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
+    use trunk_ir::arena::types::TypeDataBuilder;
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
+}
 
-    fn test_converter() -> TypeConverter {
-        TypeConverter::new()
-    }
+/// Intern a core.f32 type.
+pub(crate) fn intern_f32_type(ctx: &mut IrContext) -> TypeRef {
+    use trunk_ir::arena::types::TypeDataBuilder;
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f32")).build())
+}
 
-    /// Format module operations for snapshot testing
-    fn format_module_ops(db: &dyn salsa::Database, module: &Module<'_>) -> String {
-        let body = module.body(db);
-        let ops = &body.blocks(db)[0].operations(db);
-        ops.iter()
-            .map(|op| format_op(db, op))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Format a single operation for snapshot testing
-    fn format_op(db: &dyn salsa::Database, op: &trunk_ir::Operation<'_>) -> String {
-        let name = op.full_name(db);
-        let operands = op.operands(db);
-        let results = op.results(db);
-        let attrs = op.attributes(db);
-
-        let mut parts = vec![name];
-
-        // Add key attributes
-        for (key, attr) in attrs.iter() {
-            if *key == "value" {
-                parts.push(format!("value={}", format_attr(attr)));
-            }
-        }
-
-        // Add operand count
-        if !operands.is_empty() {
-            parts.push(format!("operands={}", operands.len()));
-        }
-
-        // Add result types
-        if !results.is_empty() {
-            let result_types: Vec<_> = results.iter().map(|t| t.name(db).to_string()).collect();
-            parts.push(format!("-> {}", result_types.join(", ")));
-        }
-
-        parts.join(" ")
-    }
-
-    fn format_attr(attr: &trunk_ir::Attribute<'_>) -> String {
-        match attr {
-            trunk_ir::Attribute::IntBits(v) => format!("{}", *v as i64),
-            trunk_ir::Attribute::FloatBits(v) => format!("{}", f64::from_bits(*v)),
-            _ => "...".to_string(),
-        }
-    }
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_arith_add_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create arith.const operations for operands
-        let const1 = arith::Const::i32(db, location, 1);
-        let const2 = arith::Const::i32(db, location, 2);
-
-        // Create arith.add
-        let add = trunk_ir::dialect::arith::add(
-            db,
-            location,
-            const1.result(db),
-            const2.result(db),
-            i32_ty,
-        );
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                const1.as_operation(),
-                const2.as_operation(),
-                add.as_operation()
-            ],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn format_lowered_module<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> String {
-        let lowered = lower(db, module, test_converter());
-        format_module_ops(db, &lowered)
-    }
-
-    #[salsa_test]
-    fn test_arith_const_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_arith_add_module(db);
-        let formatted = format_lowered_module(db, module);
-
-        // Snapshot test for visual verification
-        assert_snapshot!(formatted, @r###"
-        wasm.i32_const value=1 -> i32
-        wasm.i32_const value=2 -> i32
-        wasm.i32_add operands=2 -> i32
-        "###);
-    }
-
-    #[salsa::tracked]
-    fn make_convert_i32_to_f64_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let f64_ty = core::F64::new(db).as_type();
-
-        // Create arith.const for i32 operand
-        let int_const = arith::Const::i32(db, location, 42);
-
-        // Create arith.convert to convert i32 -> f64
-        let convert = arith::convert(db, location, int_const.result(db), f64_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![int_const.as_operation(), convert.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_arith_convert_i32_to_f64(db: &salsa::DatabaseImpl) {
-        let module = make_convert_i32_to_f64_module(db);
-        let formatted = format_lowered_module(db, module);
-
-        assert_snapshot!(formatted, @r###"
-        wasm.i32_const value=42 -> i32
-        wasm.f64_convert_i32_s operands=1 -> f64
-        "###);
-    }
-
-    #[salsa::tracked]
-    fn make_extend_i32_to_i64_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i64_ty = core::I64::new(db).as_type();
-
-        // Create arith.const for i32 operand
-        let int_const = arith::Const::i32(db, location, 100);
-
-        // Create arith.extend to extend i32 -> i64
-        let extend = arith::extend(db, location, int_const.result(db), i64_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![int_const.as_operation(), extend.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_arith_extend_i32_to_i64(db: &salsa::DatabaseImpl) {
-        let module = make_extend_i32_to_i64_module(db);
-        let formatted = format_lowered_module(db, module);
-
-        assert_snapshot!(formatted, @r###"
-        wasm.i32_const value=100 -> i32
-        wasm.i64_extend_i32_s operands=1 -> i64
-        "###);
-    }
-
-    #[salsa::tracked]
-    fn make_trunc_f64_to_i32_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create arith.const for f64 operand
-        let float_const = arith::Const::f64(db, location, 3.5);
-
-        // Create arith.trunc to truncate f64 -> i32
-        let trunc = arith::trunc(db, location, float_const.result(db), i32_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![float_const.as_operation(), trunc.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_arith_trunc_f64_to_i32(db: &salsa::DatabaseImpl) {
-        let module = make_trunc_f64_to_i32_module(db);
-        let formatted = format_lowered_module(db, module);
-
-        assert_snapshot!(formatted, @r###"
-        wasm.f64_const value=3.5 -> f64
-        wasm.i32_trunc_f64_s operands=1 -> i32
-        "###);
-    }
+/// Intern a core.f64 type.
+pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
+    use trunk_ir::arena::types::TypeDataBuilder;
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
 }

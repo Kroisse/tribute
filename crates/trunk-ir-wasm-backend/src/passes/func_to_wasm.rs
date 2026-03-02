@@ -1,4 +1,4 @@
-//! Lower func dialect operations to wasm dialect.
+//! Lower func dialect operations to wasm dialect (arena IR).
 //!
 //! This pass converts function-level operations to wasm operations:
 //! - `func.func` -> `wasm.func`
@@ -16,34 +16,31 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::{func, wasm};
-use trunk_ir::rewrite::{
-    ConversionTarget, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::arena::rewrite::{
+    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::{
-    Attribute, Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol,
-};
+use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::arena::{BlockData, RegionData};
+use trunk_ir::ir::Symbol;
 
-/// Lower func dialect to wasm dialect.
+use trunk_ir::smallvec::smallvec;
+
+/// Lower func dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    type_converter: TypeConverter,
-) -> Module<'db> {
+pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
     // 1. Collect all functions referenced by func.constant operations
-    let func_refs = collect_func_constant_refs(db, &module);
-
-    let target = ConversionTarget::new()
-        .legal_dialect("wasm")
-        .illegal_dialect("func");
+    let func_refs = collect_func_constant_refs(ctx, module);
 
     if func_refs.is_empty() {
         // No func.constant operations - just apply patterns without table generation
-        return PatternApplicator::new(type_converter)
+        let applicator = PatternApplicator::new(type_converter)
             .add_pattern(FuncFuncPattern)
             .add_pattern(FuncCallPattern)
             .add_pattern(FuncCallIndirectPattern)
@@ -52,9 +49,9 @@ pub fn lower<'db>(
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
                 table_indices: HashMap::new(),
-            })
-            .apply_partial(db, module, target)
-            .module;
+            });
+        applicator.apply_partial(ctx, module);
+        return;
     }
 
     // 2. Assign table indices (sorted for deterministic ordering)
@@ -70,7 +67,7 @@ pub fn lower<'db>(
     let table_size = sorted_funcs.len() as u32;
 
     // 3. Apply patterns to transform operations
-    let result = PatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
         .add_pattern(FuncCallIndirectPattern)
@@ -79,20 +76,19 @@ pub fn lower<'db>(
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern {
             table_indices: table_indices.clone(),
-        })
-        .apply_partial(db, module, target);
+        });
+    applicator.apply_partial(ctx, module);
 
     // 4. Add wasm.table and wasm.elem to the module
-    add_function_table(db, result.module, &sorted_funcs, table_size)
+    add_function_table(ctx, module, &sorted_funcs, table_size);
 }
 
 /// Collect all function symbols referenced by func.constant operations.
-fn collect_func_constant_refs<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
-) -> Vec<Symbol> {
+fn collect_func_constant_refs(ctx: &IrContext, module: ArenaModule) -> Vec<Symbol> {
     let mut funcs = Vec::new();
-    collect_from_region(db, &module.body(db), &mut funcs);
+    if let Some(body) = module.body(ctx) {
+        collect_refs_in_region(ctx, body, &mut funcs);
+    }
 
     // Deduplicate while preserving order
     let mut seen = std::collections::HashSet::new();
@@ -101,38 +97,34 @@ fn collect_func_constant_refs<'db>(
     funcs
 }
 
-fn collect_from_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    funcs: &mut Vec<Symbol>,
-) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
+fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Symbol>) {
+    for &block in ctx.region(region).blocks.iter() {
+        for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
-            if let Ok(const_op) = func::Constant::from_operation(db, *op) {
-                funcs.push(const_op.func_ref(db));
+            if let Ok(const_op) = arena_func::Constant::from_op(ctx, op) {
+                refs.push(const_op.func_ref(ctx));
             }
 
             // Recurse into nested regions
-            for nested in op.regions(db).iter() {
-                collect_from_region(db, nested, funcs);
+            for &nested in ctx.op(op).regions.iter() {
+                collect_refs_in_region(ctx, nested, refs);
             }
         }
     }
 }
 
 /// Add wasm.table and wasm.elem operations to the module for the function table.
-fn add_function_table<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    funcs: &[Symbol],
-    table_size: u32,
-) -> Module<'db> {
-    let location = module.location(db);
+fn add_function_table(ctx: &mut IrContext, module: ArenaModule, funcs: &[Symbol], table_size: u32) {
+    let Some(first_block) = module.first_block(ctx) else {
+        return;
+    };
+
+    // Use the location from the module op
+    let location = ctx.op(module.op()).location;
 
     // Create wasm.table for closure functions
-    let table_op = wasm::table(
-        db,
+    let table_op = arena_wasm::table(
+        ctx,
         location,
         Symbol::new("funcref"),
         table_size,
@@ -140,89 +132,67 @@ fn add_function_table<'db>(
     );
 
     // Create wasm.ref_func operations for each function in the element segment
-    let func_refs: IdVec<Operation<'db>> = funcs
+    let funcref_ty = intern_funcref_type(ctx);
+    let func_ref_ops: Vec<OpRef> = funcs
         .iter()
-        .map(|func_sym| {
-            let funcref_ty = wasm::Funcref::new(db).as_type();
-            wasm::ref_func(db, location, funcref_ty, *func_sym).as_operation()
-        })
+        .map(|func_sym| arena_wasm::ref_func(ctx, location, funcref_ty, *func_sym).op_ref())
         .collect();
 
     // Create the funcs region for wasm.elem
-    let funcs_block = Block::new(db, BlockId::fresh(), location, IdVec::new(), func_refs);
-    let funcs_region = Region::new(db, location, IdVec::from(vec![funcs_block]));
+    let funcs_block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    for ref_op in &func_ref_ops {
+        ctx.push_op(funcs_block, *ref_op);
+    }
+    let funcs_region = ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![funcs_block],
+        parent_op: None,
+    });
 
     // Create wasm.elem with table 0 and offset 0
-    let elem_op = wasm::elem(db, location, Some(0), Some(0), funcs_region);
+    let elem_op = arena_wasm::elem(ctx, location, Some(0), Some(0), funcs_region);
 
     // Prepend table and elem operations to the module body.
-    // Note: Empty modules are considered malformed IR - we fail fast here.
-    let body = module.body(db);
-    assert!(
-        !body.blocks(db).is_empty(),
-        "module body must have at least one block"
-    );
-    let first_block = &body.blocks(db)[0];
-    let mut new_ops: IdVec<Operation<'db>> = IdVec::new();
-    new_ops.push(table_op.as_operation());
-    new_ops.push(elem_op.as_operation());
-    new_ops.extend(first_block.operations(db).iter().copied());
-
-    let new_block = Block::new(
-        db,
-        first_block.id(db),
-        first_block.location(db),
-        first_block.args(db).clone(),
-        new_ops,
-    );
-
-    // Reconstruct module with other blocks unchanged
-    let mut new_blocks: IdVec<Block<'db>> = IdVec::new();
-    new_blocks.push(new_block);
-    for block in body.blocks(db).iter().skip(1) {
-        new_blocks.push(*block);
+    // We insert before the first op in the block (if any), or push at the end.
+    let existing_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    if let Some(&first_op) = existing_ops.first() {
+        ctx.insert_op_before(first_block, first_op, table_op.op_ref());
+        ctx.insert_op_before(first_block, first_op, elem_op.op_ref());
+    } else {
+        ctx.push_op(first_block, table_op.op_ref());
+        ctx.push_op(first_block, elem_op.op_ref());
     }
-
-    let new_body = Region::new(db, body.location(db), new_blocks);
-    Module::create(db, location, module.sym_name(db), new_body)
 }
 
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
-impl<'db> RewritePattern<'db> for FuncFuncPattern {
+impl ArenaRewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_func_op) = func::Func::from_operation(db, *op) else {
+        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
             return false;
         };
 
-        // wasm.func has the same structure: sym_name, type attributes, body region
-        // PatternApplicator will recursively process the body region
-        let new_op = op.modify(db).dialect_str("wasm").name_str("func").build();
+        let loc = ctx.op(op).location;
+        let sym_name = func_op.sym_name(ctx);
+        let func_type = func_op.r#type(ctx);
+        let body = func_op.body(ctx);
 
-        // Debug: verify type attribute is preserved
-        if let Some(Attribute::Type(ty)) = new_op.attributes(db).get(&trunk_ir::Symbol::new("type"))
-            && let Some(fn_ty) = trunk_ir::dialect::core::Func::from_type(db, *ty)
-        {
-            tracing::debug!(
-                "FuncFuncPattern: {} -> wasm.func with params={:?}, result={}.{}",
-                _func_op.sym_name(db),
-                fn_ty
-                    .params(db)
-                    .iter()
-                    .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
-                    .collect::<Vec<_>>(),
-                fn_ty.result(db).dialect(db),
-                fn_ty.result(db).name(db)
-            );
-        }
+        // Detach body region so it can be reused in the new wasm.func
+        ctx.detach_region(body);
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::func(ctx, loc, sym_name, func_type, body);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -230,27 +200,24 @@ impl<'db> RewritePattern<'db> for FuncFuncPattern {
 /// Pattern for `func.call` -> `wasm.call`
 struct FuncCallPattern;
 
-impl<'db> RewritePattern<'db> for FuncCallPattern {
+impl ArenaRewritePattern for FuncCallPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = func::Call::from_operation(db, *op) else {
+        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
             return false;
         };
 
-        // Build wasm.call with same callee and operands
-        // Note: we use modify() but need to update the callee attribute format
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("call")
-            .attr("callee", Attribute::Symbol(call_op.callee(db)))
-            .build();
+        let loc = ctx.op(op).location;
+        let callee = call_op.callee(ctx);
+        let args: Vec<_> = ctx.op_operands(op).to_vec();
+        let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::call(ctx, loc, args, result_types, callee);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -261,26 +228,25 @@ impl<'db> RewritePattern<'db> for FuncCallPattern {
 /// The callee (i32 table index) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
-impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
+impl ArenaRewritePattern for FuncCallIndirectPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_call_indirect) = func::CallIndirect::from_operation(db, *op) else {
+        let Ok(_call_indirect) = arena_func::CallIndirect::from_op(ctx, op) else {
             return false;
         };
 
+        let loc = ctx.op(op).location;
+        let all_operands: Vec<_> = ctx.op_operands(op).to_vec();
+        let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
+
         // Build wasm.call_indirect with same operands
         // The emit phase will resolve the type_idx and table attributes
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("call_indirect")
-            .build();
-
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -288,20 +254,22 @@ impl<'db> RewritePattern<'db> for FuncCallIndirectPattern {
 /// Pattern for `func.return` -> `wasm.return`
 struct FuncReturnPattern;
 
-impl<'db> RewritePattern<'db> for FuncReturnPattern {
+impl ArenaRewritePattern for FuncReturnPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_return_op) = func::Return::from_operation(db, *op) else {
+        let Ok(_return_op) = arena_func::Return::from_op(ctx, op) else {
             return false;
         };
 
-        let new_op = op.modify(db).dialect_str("wasm").name_str("return").build();
+        let loc = ctx.op(op).location;
+        let values: Vec<_> = ctx.op_operands(op).to_vec();
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::r#return(ctx, loc, values);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -309,26 +277,23 @@ impl<'db> RewritePattern<'db> for FuncReturnPattern {
 /// Pattern for `func.tail_call` -> `wasm.return_call`
 struct FuncTailCallPattern;
 
-impl<'db> RewritePattern<'db> for FuncTailCallPattern {
+impl ArenaRewritePattern for FuncTailCallPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(tail_call_op) = func::TailCall::from_operation(db, *op) else {
+        let Ok(tail_call_op) = arena_func::TailCall::from_op(ctx, op) else {
             return false;
         };
 
-        // Build wasm.return_call with same callee and operands
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("return_call")
-            .attr("callee", Attribute::Symbol(tail_call_op.callee(db)))
-            .build();
+        let loc = ctx.op(op).location;
+        let callee = tail_call_op.callee(ctx);
+        let args: Vec<_> = ctx.op_operands(op).to_vec();
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::return_call(ctx, loc, args, callee);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -336,24 +301,21 @@ impl<'db> RewritePattern<'db> for FuncTailCallPattern {
 /// Pattern for `func.unreachable` -> `wasm.unreachable`
 struct FuncUnreachablePattern;
 
-impl<'db> RewritePattern<'db> for FuncUnreachablePattern {
+impl ArenaRewritePattern for FuncUnreachablePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_unreachable_op) = func::Unreachable::from_operation(db, *op) else {
+        let Ok(_unreachable_op) = arena_func::Unreachable::from_op(ctx, op) else {
             return false;
         };
 
-        let new_op = op
-            .modify(db)
-            .dialect_str("wasm")
-            .name_str("unreachable")
-            .build();
+        let loc = ctx.op(op).location;
 
-        rewriter.replace_op(new_op);
+        let new_op = arena_wasm::unreachable(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
@@ -366,18 +328,18 @@ struct FuncConstantPattern {
     table_indices: HashMap<Symbol, u32>,
 }
 
-impl<'db> RewritePattern<'db> for FuncConstantPattern {
+impl ArenaRewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = func::Constant::from_operation(db, *op) else {
+        let Ok(const_op) = arena_func::Constant::from_op(ctx, op) else {
             return false;
         };
 
-        let func_ref = const_op.func_ref(db);
+        let func_ref = const_op.func_ref(ctx);
 
         // All func.constant operations must be registered in the function table.
         // They are collected by collect_func_constant_refs before pattern application.
@@ -387,202 +349,27 @@ impl<'db> RewritePattern<'db> for FuncConstantPattern {
             .copied()
             .expect("All func.constant must be registered in table");
 
-        // Transform to wasm.i32_const with table index
-        let i32_ty = core::I32::new(db).as_type();
-        let new_op = wasm::i32_const(db, op.location(db), i32_ty, table_idx as i32);
+        let loc = ctx.op(op).location;
+        let i32_ty = intern_i32_type(ctx);
+        let new_op = arena_wasm::i32_const(ctx, loc, i32_ty, table_idx as i32);
 
-        rewriter.replace_op(new_op.as_operation());
+        rewriter.replace_op(new_op.op_ref());
         true
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{arith, core};
-    use trunk_ir::{
-        Attribute, Block, BlockId, DialectType, Location, PathId, Region, Span, Symbol, idvec,
-    };
+// ============================================================================
+// Helpers
+// ============================================================================
 
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
+/// Intern a core.i32 type.
+fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+}
 
-    fn test_converter() -> TypeConverter {
-        TypeConverter::new()
-    }
-
-    #[salsa::tracked]
-    fn make_func_call_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create a simple func.call
-        let func_call = func::call(db, location, vec![], i32_ty, Symbol::new("foo"));
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![func_call.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn make_func_func_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let nil_ty = core::Nil::new(db).as_type();
-        let func_ty = core::Func::new(db, idvec![], nil_ty).as_type();
-
-        // Create func.return inside func.func body
-        let func_return = func::r#return(db, location, vec![]);
-
-        let body_block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![func_return.as_operation()],
-        );
-        let body_region = Region::new(db, location, idvec![body_block]);
-
-        // Create func.func using typed helper
-        let func_func =
-            func::func(db, location, Symbol::new("test_fn"), func_ty, body_region).as_operation();
-
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![func_func]);
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check_names(db: &dyn salsa::Database, module: Module<'_>) -> Vec<String> {
-        let lowered = lower(db, module, test_converter());
-        let body = lowered.body(db);
-        let ops = body.blocks(db)[0].operations(db);
-        ops.iter().map(|op| op.full_name(db)).collect()
-    }
-
-    #[salsa::tracked]
-    fn lower_and_check_nested(db: &dyn salsa::Database, module: Module<'_>) -> (String, String) {
-        let lowered = lower(db, module, test_converter());
-        let body = lowered.body(db);
-        let func_op = &body.blocks(db)[0].operations(db)[0];
-        let func_name = func_op.full_name(db);
-
-        // Get the operation inside the function body
-        let func_body = func_op.regions(db)[0].blocks(db)[0].operations(db);
-        let inner_name = func_body[0].full_name(db);
-
-        (func_name, inner_name)
-    }
-
-    #[salsa_test]
-    fn test_func_call_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_func_call_module(db);
-        let op_names = lower_and_check_names(db, module);
-
-        assert!(op_names.iter().any(|n| n == "wasm.call"));
-        assert!(!op_names.iter().any(|n| n == "func.call"));
-    }
-
-    #[salsa_test]
-    fn test_func_func_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_func_func_module(db);
-        let (func_name, inner_name) = lower_and_check_nested(db, module);
-
-        // func.func should become wasm.func
-        assert_eq!(func_name, "wasm.func");
-        // func.return inside should become wasm.return
-        assert_eq!(inner_name, "wasm.return");
-    }
-
-    #[salsa::tracked]
-    fn make_call_indirect_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i32_ty = core::I32::new(db).as_type();
-
-        // Create dummy values using arith.const
-        let callee_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(0));
-        let callee_val = callee_op.result(db);
-
-        let arg_op = arith::r#const(db, location, i32_ty, Attribute::IntBits(42));
-        let arg_val = arg_op.result(db);
-
-        // Create func.call_indirect
-        let call_indirect = func::call_indirect(db, location, callee_val, vec![arg_val], i32_ty);
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![
-                callee_op.as_operation(),
-                arg_op.as_operation(),
-                call_indirect.as_operation()
-            ],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_call_indirect_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_call_indirect_module(db);
-        let op_names = lower_and_check_names(db, module);
-
-        // func.call_indirect should become wasm.call_indirect
-        assert!(op_names.iter().any(|n| n == "wasm.call_indirect"));
-        assert!(!op_names.iter().any(|n| n == "func.call_indirect"));
-    }
-
-    #[salsa::tracked]
-    fn make_func_constant_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let func_ty = core::Func::new(db, idvec![], core::Nil::new(db).as_type()).as_type();
-
-        // Create func.constant
-        let func_constant = func::constant(db, location, func_ty, Symbol::new("test_func"));
-
-        let block = Block::new(
-            db,
-            BlockId::fresh(),
-            location,
-            idvec![],
-            idvec![func_constant.as_operation()],
-        );
-        let region = Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_func_constant_to_wasm(db: &salsa::DatabaseImpl) {
-        let module = make_func_constant_module(db);
-        let op_names = lower_and_check_names(db, module);
-
-        // func.constant should become wasm.i32_const (table index)
-        // wasm.table and wasm.elem should be added for function table
-        assert!(
-            op_names.iter().any(|n| n == "wasm.table"),
-            "expected wasm.table"
-        );
-        assert!(
-            op_names.iter().any(|n| n == "wasm.elem"),
-            "expected wasm.elem"
-        );
-        assert!(
-            op_names.iter().any(|n| n == "wasm.i32_const"),
-            "expected wasm.i32_const"
-        );
-        assert!(
-            !op_names.iter().any(|n| n == "func.constant"),
-            "func.constant should be lowered"
-        );
-    }
+/// Intern a wasm.funcref type.
+fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("funcref")).build())
 }
