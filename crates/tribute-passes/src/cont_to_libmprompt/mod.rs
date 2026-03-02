@@ -114,6 +114,7 @@ pub fn lower_cont_to_libmprompt_arena(ctx: &mut IrContext, module: ArenaModule) 
     });
 
     let applicator = ArenaPatternApplicator::new(type_converter)
+        .with_auto_type_conversion(true)
         .add_pattern(ArenaLowerShiftPattern)
         .add_pattern(ArenaLowerResumePattern)
         .add_pattern(ArenaLowerDropPattern)
@@ -138,29 +139,29 @@ pub fn lower_cont_to_libmprompt_arena(ctx: &mut IrContext, module: ArenaModule) 
         );
     }
 
-    // Step 4: Convert remaining cont.prompt_tag types to core.i32
+    // Step 4: Convert remaining prompt_tag result types to core.i32
     //
-    // The arena PatternApplicator doesn't yet support automatic type conversion
-    // (the Salsa version does this via virtual type mapping in RewriteContext).
-    // As a workaround, we walk the module and convert types directly.
+    // auto_type_conversion handles block argument types and operand casts,
+    // but does NOT convert operation result types. Non-cont ops (e.g.,
+    // arith.const, adt.struct_get) may still have prompt_tag result types.
     if let Some(body) = module.body(ctx) {
-        convert_types_in_region(ctx, body, prompt_tag_ty, i32_ty);
+        convert_result_types_in_region(ctx, body, prompt_tag_ty, i32_ty);
     }
 }
 
-/// Recursively walk a region and convert all values with `from` type to `to` type.
-fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef, to: TypeRef) {
+/// Recursively walk a region and convert operation result types from `from` to `to`.
+///
+/// Block argument types and operand casts are handled by `auto_type_conversion`
+/// in the pattern applicator; this function only fixes up result types on
+/// operations that were not matched by any pattern.
+fn convert_result_types_in_region(
+    ctx: &mut IrContext,
+    region: RegionRef,
+    from: TypeRef,
+    to: TypeRef,
+) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        // Convert block argument types
-        let num_args = ctx.block(block).args.len();
-        for i in 0..num_args {
-            if ctx.block(block).args[i].ty == from {
-                ctx.set_block_arg_type(block, i as u32, to);
-            }
-        }
-
-        // Walk ops
         let ops: Vec<_> = ctx.block(block).ops.to_vec();
         for op in ops {
             // Convert result types
@@ -173,7 +174,7 @@ fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef
             // Recurse into nested regions
             let regions: Vec<_> = ctx.op(op).regions.to_vec();
             for r in regions {
-                convert_types_in_region(ctx, r, from, to);
+                convert_result_types_in_region(ctx, r, from, to);
             }
         }
     }
