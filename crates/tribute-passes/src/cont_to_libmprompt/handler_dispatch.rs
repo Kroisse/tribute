@@ -519,6 +519,9 @@ fn cast_if_needed(
 ///
 /// Results of the cloned operation are added to the remap so that subsequent
 /// cloned ops pick them up automatically.
+///
+/// Nested regions are deep-cloned so that captured values inside them
+/// are remapped correctly.
 pub(crate) fn clone_op_into_block_with_remap(
     ctx: &mut IrContext,
     dest_block: trunk_ir::arena::refs::BlockRef,
@@ -549,7 +552,8 @@ pub(crate) fn clone_op_into_block_with_remap(
         builder = builder.attr(k, v);
     }
     for r in regions {
-        builder = builder.region(r);
+        let cloned_region = deep_clone_region(ctx, r, value_remap);
+        builder = builder.region(cloned_region);
     }
     for s in successors {
         builder = builder.successor(s);
@@ -558,4 +562,69 @@ pub(crate) fn clone_op_into_block_with_remap(
     let data = builder.build(ctx);
     let new_op = ctx.create_op(data);
     ctx.push_op(dest_block, new_op);
+}
+
+/// Deep-clone a region, recursively remapping values in all nested ops.
+fn deep_clone_region(
+    ctx: &mut IrContext,
+    region: RegionRef,
+    parent_remap: &HashMap<ValueRef, ValueRef>,
+) -> RegionRef {
+    let region_data = ctx.region(region);
+    let loc = region_data.location;
+    let src_blocks: Vec<_> = region_data.blocks.to_vec();
+
+    let mut remap = parent_remap.clone();
+    let mut new_blocks = Vec::with_capacity(src_blocks.len());
+
+    for &src_block in &src_blocks {
+        let src_args = ctx.block_args(src_block).to_vec();
+        let arg_data: Vec<BlockArgData> = src_args
+            .iter()
+            .map(|&v| BlockArgData {
+                ty: ctx.value_ty(v),
+                attrs: Default::default(),
+            })
+            .collect();
+
+        let new_block = ctx.create_block(BlockData {
+            location: ctx.block(src_block).location,
+            args: arg_data,
+            ops: smallvec![],
+            parent_region: None,
+        });
+
+        // Map old block args -> new block args
+        let new_args = ctx.block_args(new_block).to_vec();
+        for (old_arg, new_arg) in src_args.into_iter().zip(new_args) {
+            remap.insert(old_arg, new_arg);
+        }
+
+        new_blocks.push((src_block, new_block));
+    }
+
+    // Clone ops in each block
+    for &(src_block, new_block) in &new_blocks {
+        let src_ops: Vec<OpRef> = ctx.block(src_block).ops.clone().to_vec();
+        for &op in &src_ops {
+            clone_op_into_block_with_remap(ctx, new_block, op, &remap);
+
+            // Map old results -> new results
+            let new_ops_list = ctx.block(new_block).ops.clone();
+            if let Some(&new_op) = new_ops_list.last() {
+                let old_results: Vec<ValueRef> = ctx.op_results(op).to_vec();
+                let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
+                for (old_r, new_r) in old_results.into_iter().zip(new_results) {
+                    remap.insert(old_r, new_r);
+                }
+            }
+        }
+    }
+
+    let block_refs: Vec<_> = new_blocks.into_iter().map(|(_, b)| b).collect();
+    ctx.create_region(RegionData {
+        location: loc,
+        blocks: block_refs.into(),
+        parent_op: None,
+    })
 }

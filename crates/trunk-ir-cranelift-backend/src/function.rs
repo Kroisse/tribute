@@ -54,7 +54,14 @@ fn parse_float_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::FloatCC> {
 }
 
 /// Translate a TrunkIR type to a Cranelift IR type.
-pub(crate) fn translate_type(ctx: &IrContext, ty: TypeRef) -> CompilationResult<cl_types::Type> {
+///
+/// `ptr_ty` is the platform pointer type (e.g. I64 on 64-bit, I32 on 32-bit),
+/// obtained from `target_config().pointer_type()`.
+pub(crate) fn translate_type(
+    ctx: &IrContext,
+    ty: TypeRef,
+    ptr_ty: cl_types::Type,
+) -> CompilationResult<cl_types::Type> {
     let td = ctx.types.get(ty);
     let core_dialect = Symbol::new("core");
     if td.dialect == core_dialect {
@@ -65,7 +72,7 @@ pub(crate) fn translate_type(ctx: &IrContext, ty: TypeRef) -> CompilationResult<
             "i64" => Ok(cl_types::I64),
             "f32" => Ok(cl_types::F32),
             "f64" => Ok(cl_types::F64),
-            "ptr" => Ok(cl_types::I64),
+            "ptr" => Ok(ptr_ty),
             other => Err(CompilationError::type_error(format!(
                 "unsupported type for Cranelift: core.{other}"
             ))),
@@ -78,10 +85,13 @@ pub(crate) fn translate_type(ctx: &IrContext, ty: TypeRef) -> CompilationResult<
 }
 
 /// Translate a TrunkIR `core.func` type to a Cranelift `Signature`.
+///
+/// `ptr_ty` is the platform pointer type, obtained from `target_config().pointer_type()`.
 pub(crate) fn translate_signature(
     ctx: &IrContext,
     func_ty_ref: TypeRef,
     call_conv: CallConv,
+    ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_ir::Signature> {
     let td = ctx.types.get(func_ty_ref);
     if td.dialect != Symbol::new("core") || td.name != Symbol::new("func") {
@@ -103,14 +113,14 @@ pub(crate) fn translate_signature(
     let param_types = &td.params[1..];
 
     for &param_ty in param_types {
-        let cl_ty = translate_type(ctx, param_ty)?;
+        let cl_ty = translate_type(ctx, param_ty, ptr_ty)?;
         sig.params.push(cl_ir::AbiParam::new(cl_ty));
     }
 
     // Nil return type means void — no return values.
     let ret_td = ctx.types.get(ret_type);
     if !(ret_td.dialect == Symbol::new("core") && ret_td.name == Symbol::new("nil")) {
-        let cl_ty = translate_type(ctx, ret_type)?;
+        let cl_ty = translate_type(ctx, ret_type, ptr_ty)?;
         sig.returns.push(cl_ir::AbiParam::new(cl_ty));
     }
 
@@ -128,6 +138,10 @@ pub(crate) struct FunctionTranslator<'a> {
     func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
     /// Maps TrunkIR block refs to Cranelift blocks.
     pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
+    /// The ISA calling convention (used for indirect calls).
+    call_conv: CallConv,
+    /// The platform pointer type (e.g. I64 on 64-bit).
+    ptr_ty: cl_types::Type,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -135,6 +149,8 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
         func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
+        call_conv: CallConv,
+        ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
             ctx,
@@ -142,6 +158,8 @@ impl<'a> FunctionTranslator<'a> {
             values: HashMap::new(),
             func_refs,
             block_map: HashMap::new(),
+            call_conv,
+            ptr_ty,
         }
     }
 
@@ -179,7 +197,7 @@ impl<'a> FunctionTranslator<'a> {
             if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
                 return Ok(());
             }
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.builder.ins().iconst(ty, c.value(ctx));
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
@@ -357,7 +375,7 @@ impl<'a> FunctionTranslator<'a> {
             }
             let operands = ctx.op_operands(op);
             let addr = self.lookup(operands[0])?;
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self
                 .builder
                 .ins()
@@ -387,7 +405,7 @@ impl<'a> FunctionTranslator<'a> {
                 .get(&sym)
                 .copied()
                 .ok_or_else(|| CompilationError::function_not_found(&sym.to_string()))?;
-            let val = self.builder.ins().func_addr(cl_types::I64, func_ref);
+            let val = self.builder.ins().func_addr(self.ptr_ty, func_ref);
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
             return Ok(());
@@ -409,7 +427,7 @@ impl<'a> FunctionTranslator<'a> {
                 .collect::<CompilationResult<_>>()?;
 
             let sig_ty = call_ind.sig(ctx);
-            let sig = translate_signature(ctx, sig_ty, CallConv::SystemV)?;
+            let sig = translate_signature(ctx, sig_ty, self.call_conv, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
             let inst = self.builder.ins().call_indirect(sig_ref, callee, &args);
@@ -425,7 +443,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::Ireduce::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().ireduce(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -434,7 +452,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::Uextend::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().uextend(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -443,7 +461,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::Sextend::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().sextend(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -452,7 +470,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::Fpromote::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fpromote(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -461,7 +479,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::Fdemote::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fdemote(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -470,7 +488,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::FcvtToSint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fcvt_to_sint(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -479,7 +497,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::FcvtFromSint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fcvt_from_sint(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -488,7 +506,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::FcvtToUint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fcvt_to_uint(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -497,7 +515,7 @@ impl<'a> FunctionTranslator<'a> {
         if arena_clif::FcvtFromUint::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let result_ty = ctx.op_result_types(op)[0];
-            let ty = translate_type(ctx, result_ty)?;
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
             let val = self.lookup(operands[0])?;
             let cl_val = self.builder.ins().fcvt_from_uint(ty, val);
             self.values.insert(ctx.op_result(op, 0), cl_val);
@@ -589,10 +607,22 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let i64_ty = make_core_type(&mut ctx, "i64");
 
-        assert_eq!(translate_type(&ctx, i8_ty).unwrap(), cl_types::I8);
-        assert_eq!(translate_type(&ctx, i16_ty).unwrap(), cl_types::I16);
-        assert_eq!(translate_type(&ctx, i32_ty).unwrap(), cl_types::I32);
-        assert_eq!(translate_type(&ctx, i64_ty).unwrap(), cl_types::I64);
+        assert_eq!(
+            translate_type(&ctx, i8_ty, cl_types::I64).unwrap(),
+            cl_types::I8
+        );
+        assert_eq!(
+            translate_type(&ctx, i16_ty, cl_types::I64).unwrap(),
+            cl_types::I16
+        );
+        assert_eq!(
+            translate_type(&ctx, i32_ty, cl_types::I64).unwrap(),
+            cl_types::I32
+        );
+        assert_eq!(
+            translate_type(&ctx, i64_ty, cl_types::I64).unwrap(),
+            cl_types::I64
+        );
     }
 
     #[test]
@@ -601,15 +631,21 @@ mod tests {
         let f32_ty = make_core_type(&mut ctx, "f32");
         let f64_ty = make_core_type(&mut ctx, "f64");
 
-        assert_eq!(translate_type(&ctx, f32_ty).unwrap(), cl_types::F32);
-        assert_eq!(translate_type(&ctx, f64_ty).unwrap(), cl_types::F64);
+        assert_eq!(
+            translate_type(&ctx, f32_ty, cl_types::I64).unwrap(),
+            cl_types::F32
+        );
+        assert_eq!(
+            translate_type(&ctx, f64_ty, cl_types::I64).unwrap(),
+            cl_types::F64
+        );
     }
 
     #[test]
     fn test_translate_type_unsupported() {
         let mut ctx = IrContext::new();
         let nil_ty = make_core_type(&mut ctx, "nil");
-        assert!(translate_type(&ctx, nil_ty).is_err());
+        assert!(translate_type(&ctx, nil_ty, cl_types::I64).is_err());
     }
 
     #[test]
@@ -626,7 +662,7 @@ mod tests {
             attrs: Default::default(),
         });
 
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV).unwrap();
+        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 2);
         assert_eq!(sig.params[0].value_type, cl_types::I32);
         assert_eq!(sig.params[1].value_type, cl_types::I32);
@@ -647,7 +683,7 @@ mod tests {
             attrs: Default::default(),
         });
 
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV).unwrap();
+        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 1);
         assert_eq!(sig.params[0].value_type, cl_types::I64);
         assert_eq!(sig.returns.len(), 0);
@@ -665,7 +701,7 @@ mod tests {
             attrs: Default::default(),
         });
 
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV).unwrap();
+        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.params.len(), 0);
         assert_eq!(sig.returns.len(), 1);
         assert_eq!(sig.returns[0].value_type, cl_types::I64);

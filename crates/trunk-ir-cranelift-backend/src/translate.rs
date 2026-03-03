@@ -342,6 +342,7 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
     let obj_builder = ObjectBuilder::new(isa, module_name, default_libcall_names())
         .map_err(|e| CompilationError::codegen(format!("{e}")))?;
     let mut obj_module = ObjectModule::new(obj_builder);
+    let ptr_ty = obj_module.target_config().pointer_type();
 
     // 3. First pass — declare all functions
     let mut func_ids: HashMap<Symbol, cranelift_module::FuncId> = HashMap::new();
@@ -353,7 +354,7 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
 
-        let sig = translate_signature(ctx, func_type_ref, call_conv)?;
+        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
 
         let op_data = ctx.op(func_op);
         let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
@@ -398,7 +399,7 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
 
-        let sig = translate_signature(ctx, func_type_ref, call_conv)?;
+        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
         let func_id = func_ids[&name_sym];
 
         let mut cl_func =
@@ -414,7 +415,8 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
         // Build the function body
         {
             let builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
-            let mut translator = FunctionTranslator::new(ctx, builder, &func_refs);
+            let mut translator =
+                FunctionTranslator::new(ctx, builder, &func_refs, call_conv, ptr_ty);
 
             let func_body = func_wrapped.body(ctx);
             let body_region = ctx.region(func_body);
@@ -436,7 +438,7 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
                 let ir_args = ctx.block_args(ir_block);
                 for &arg_val in ir_args {
                     let arg_ty = ctx.value_ty(arg_val);
-                    let cl_ty = translate_type(ctx, arg_ty)?;
+                    let cl_ty = translate_type(ctx, arg_ty, ptr_ty)?;
                     translator.builder.append_block_param(cl_block, cl_ty);
                 }
                 translator.block_map.insert(ir_block, cl_block);

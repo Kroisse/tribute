@@ -109,12 +109,16 @@ impl ArenaRewritePattern for StructGetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset = layout.field_offsets[field_idx] as i32;
+        let offset =
+            i32::try_from(layout.field_offsets[field_idx]).expect("field offset exceeds i32");
         let ref_val = struct_get.r#ref(ctx);
 
         // Convert result type through type converter (e.g. tribute_rt.any -> core.ptr)
         let result_types = ctx.op_result_types(op);
-        let result_ty = result_types.first().copied().unwrap();
+        let Some(result_ty) = result_types.first().copied() else {
+            warn!("adt_to_clif arena: struct_get has no result type");
+            return false;
+        };
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
         let load_op = arena_clif::load(ctx, loc, ref_val, result_ty, offset);
@@ -150,7 +154,8 @@ impl ArenaRewritePattern for StructSetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset = layout.field_offsets[field_idx] as i32;
+        let offset =
+            i32::try_from(layout.field_offsets[field_idx]).expect("field offset exceeds i32");
         let ref_val = struct_set.r#ref(ctx);
         let value_val = struct_set.value(ctx);
 
@@ -265,7 +270,9 @@ impl ArenaRewritePattern for VariantGetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset = (enum_layout.fields_offset + variant_layout.field_offsets[field_idx]) as i32;
+        let offset =
+            i32::try_from(enum_layout.fields_offset + variant_layout.field_offsets[field_idx])
+                .expect("field offset exceeds i32");
         let ref_val = variant_get.r#ref(ctx);
 
         // Determine the load type from the enum type definition.
@@ -283,11 +290,16 @@ impl ArenaRewritePattern for VariantGetPattern {
                 // Convert the field type to native (e.g., tribute_rt.any -> core.ptr).
                 tc.convert_type_or_identity(ctx, field_ty)
             })
-            .unwrap_or_else(|| {
+            .or_else(|| {
                 let result_types = ctx.op_result_types(op);
-                let result_ty = result_types.first().copied().unwrap();
-                tc.convert_type_or_identity(ctx, result_ty)
+                let result_ty = result_types.first().copied()?;
+                Some(tc.convert_type_or_identity(ctx, result_ty))
             });
+
+        let Some(load_ty) = load_ty else {
+            warn!("adt_to_clif arena: variant_get has no result type");
+            return false;
+        };
 
         let load_op = arena_clif::load(ctx, loc, ref_val, load_ty, offset);
         rewriter.replace_op(load_op.op_ref());

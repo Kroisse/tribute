@@ -35,6 +35,8 @@ pub fn validate_clif_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResu
 
     if let Some(body) = module.body(ctx) {
         validate_region(ctx, body, &mut errors);
+    } else {
+        errors.push("Module has no body region".to_string());
     }
 
     if errors.is_empty() {
