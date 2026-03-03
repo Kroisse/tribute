@@ -365,3 +365,74 @@ impl ArenaRewritePattern for RefIsNullPattern {
         true
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use trunk_ir::arena::context::IrContext;
+    use trunk_ir::arena::parser::parse_test_module;
+    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::arena::rewrite::ArenaTypeConverter;
+
+    fn run_pass(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let type_converter = ArenaTypeConverter::new();
+        super::lower(&mut ctx, module, type_converter);
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn test_struct_get_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  %0 = clif.iconst {value = 0} : core.ptr
+  %1 = adt.struct_get %0 {field = 1, type = adt.struct(core.i32, core.i32) {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_struct_set_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  %0 = clif.iconst {value = 0} : core.ptr
+  %1 = clif.iconst {value = 42} : core.i32
+  adt.struct_set %0, %1 {field = 0, type = adt.struct(core.i32, core.i32) {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}}
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_ref_null_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  %0 = adt.ref_null {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_ref_cast_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  %0 = clif.iconst {value = 100} : core.ptr
+  %1 = adt.ref_cast %0 {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn test_ref_is_null_to_clif() {
+        let result = run_pass(
+            r#"core.module @test {
+  %0 = clif.iconst {value = 42} : core.ptr
+  %1 = adt.ref_is_null %0 : core.i1
+}"#,
+        );
+        insta::assert_snapshot!(result);
+    }
+}

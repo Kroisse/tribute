@@ -1,0 +1,10 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
+assertion_line: 471
+expression: result
+---
+core.module @test {
+  clif.func {sym_name = @test_fn, type = core.func(core.nil)} {
+      clif.return
+  }
+}
