@@ -101,7 +101,7 @@ use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
 use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif};
 use trunk_ir_cranelift_backend::{
-    CompilationResult as NativeCompilationResult, emit_module_to_native_arena,
+    CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
@@ -370,7 +370,7 @@ fn stage_cont_to_trampoline<'db>(
 /// Returns an error if any `cont.*` operations remain after conversion.
 fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     with_arena_session(db, module, |ctx, m| {
-        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt_arena(ctx, m);
+        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
     })
 }
 
@@ -702,14 +702,14 @@ fn compile_module_to_native<'db>(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        func_to_clif::lower_arena(&mut ctx, arena_module, type_converter);
+        func_to_clif::lower(&mut ctx, arena_module, type_converter);
     }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        cf_to_clif::lower_arena(&mut ctx, arena_module, type_converter);
+        cf_to_clif::lower(&mut ctx, arena_module, type_converter);
     }
 
     // Phase 1.9-1.95 - RTTI + ADT RC header
@@ -730,14 +730,14 @@ fn compile_module_to_native<'db>(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        adt_to_clif::lower_arena(&mut ctx, arena_module, type_converter);
+        adt_to_clif::lower(&mut ctx, arena_module, type_converter);
     }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        arith_to_clif::lower_arena(&mut ctx, arena_module, type_converter);
+        arith_to_clif::lower(&mut ctx, arena_module, type_converter);
     }
 
     // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC
@@ -780,9 +780,9 @@ fn compile_module_to_native<'db>(
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     tribute_passes::native::rc_lowering::lower_rc(&mut ctx, arena_module);
 
-    // Phase 4 - Validate and emit directly from arena (no export to Salsa)
+    // Phase 4 - Validate and emit
     let _emit_span = tracing::info_span!("emit_module_to_native").entered();
-    emit_module_to_native_arena(&ctx, arena_module)
+    emit_module_to_native(&ctx, arena_module)
 }
 
 /// Compile to native object bytes.
