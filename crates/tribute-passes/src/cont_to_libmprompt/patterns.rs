@@ -230,7 +230,9 @@ impl ArenaRewritePattern for LowerDropPattern {
             nil_ty,
             Symbol::new("__tribute_resume_drop"),
         );
-        rewriter.replace_op(call.op_ref());
+        // cont.drop has 0 results, so use insert_op + erase_op instead of replace_op
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![]);
         true
     }
 

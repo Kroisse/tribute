@@ -1,0 +1,76 @@
+---
+source: crates/tribute-passes/src/cont_to_libmprompt/tests.rs
+assertion_line: 275
+expression: result
+---
+core.module @test {
+  func.func @__tribute_prompt(%0: core.i32, %1: core.ptr, %2: core.ptr) -> core.ptr {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @__tribute_yield(%0: core.i32, %1: core.i32, %2: core.ptr) -> core.ptr {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @__tribute_resume(%0: core.ptr, %1: core.ptr) -> core.ptr {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @__tribute_resume_drop(%0: core.ptr) -> core.nil {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @__tribute_yield_active() -> core.i1 {
+      func.unreachable
+  }
+  func.func @__tribute_get_yield_op_idx() -> core.i32 {
+      func.unreachable
+  }
+  func.func @__tribute_get_yield_continuation() -> core.ptr {
+      func.unreachable
+  }
+  func.func @__tribute_get_yield_shift_value() -> core.ptr {
+      func.unreachable
+  }
+  func.func @__tribute_reset_yield_state() -> core.nil {
+      func.unreachable
+  }
+  func.func @__tribute_yield_set_rc_roots(%0: core.ptr, %1: core.i32) -> core.nil {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @__tribute_cont_wrap_from_tls(%0: core.ptr) -> core.ptr {
+    ^bb0:
+      func.unreachable
+  }
+  func.func @test_done_only() -> core.i32 {
+      %0 = arith.const {value = 0} : core.ptr
+      %1 = func.constant {func_ref = @__prompt_body_0} : core.ptr
+      %2 = arith.const {value = 1} : core.i32
+      %3 = func.call %2, %1, %0 {callee = @__tribute_prompt} : core.ptr
+      %4 = core.unrealized_conversion_cast %3 : core.i32
+      %5 = scf.loop %4 : core.i32 {
+        ^bb1(%6: core.ptr):
+          %7 = func.call {callee = @__tribute_yield_active} : core.i1
+          %8 = scf.if %7 : core.nil {
+              %9 = func.call {callee = @__tribute_get_yield_op_idx} : core.i32
+              %10 = func.call {callee = @__tribute_get_yield_continuation} : core.ptr
+              %11 = func.call {callee = @__tribute_get_yield_shift_value} : core.ptr
+              %12 = func.call {callee = @__tribute_reset_yield_state} : core.nil
+              %13 = arith.const {value = 0} : core.ptr
+              func.unreachable
+              scf.continue %13
+          } {
+              %14 = core.unrealized_conversion_cast %6 : core.i32
+              scf.break %14
+          }
+      }
+      func.return %5
+  }
+  func.func @__prompt_body_0(%0: core.ptr) -> core.ptr {
+    ^bb0:
+      %1 = arith.const {value = 42} : core.i32
+      %2 = core.unrealized_conversion_cast %1 : core.ptr
+      func.return %2
+  }
+}

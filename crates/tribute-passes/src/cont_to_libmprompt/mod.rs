@@ -89,29 +89,36 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: ArenaModule) {
         );
     }
 
-    // Step 4: Convert remaining prompt_tag result types to core.i32
+    // Step 4: Convert remaining prompt_tag types to core.i32
     //
-    // auto_type_conversion handles block argument types and operand casts,
-    // but does NOT convert operation result types. Non-cont ops (e.g.,
-    // arith.const, adt.struct_get) may still have prompt_tag result types.
+    // auto_type_conversion handles block argument types and operand casts
+    // during pattern application, but does NOT convert operation result
+    // types. Additionally, patterns create new ops (outlined functions,
+    // scf.loop regions) whose block args may retain the old type.
+    // This post-pass ensures all prompt_tag types are fully converted.
     if let Some(body) = module.body(ctx) {
-        convert_result_types_in_region(ctx, body, prompt_tag_ty, i32_ty);
+        convert_types_in_region(ctx, body, prompt_tag_ty, i32_ty);
     }
 }
 
-/// Recursively walk a region and convert operation result types from `from` to `to`.
+/// Recursively walk a region and convert types from `from` to `to`.
 ///
-/// Block argument types and operand casts are handled by `auto_type_conversion`
-/// in the pattern applicator; this function only fixes up result types on
-/// operations that were not matched by any pattern.
-fn convert_result_types_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    from: TypeRef,
-    to: TypeRef,
-) {
+/// Converts both operation result types and block argument types.
+/// `auto_type_conversion` handles block args and operand casts during
+/// pattern application, but newly created ops (e.g., outlined functions,
+/// scf.loop regions) may have block args or result types that still use
+/// the old type. This post-pass ensures complete conversion.
+fn convert_types_in_region(ctx: &mut IrContext, region: RegionRef, from: TypeRef, to: TypeRef) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
+        // Convert block argument types
+        let num_args = ctx.block(block).args.len();
+        for i in 0..num_args {
+            if ctx.block(block).args[i].ty == from {
+                ctx.set_block_arg_type(block, i as u32, to);
+            }
+        }
+
         let ops: Vec<_> = ctx.block(block).ops.to_vec();
         for op in ops {
             // Convert result types
@@ -124,7 +131,7 @@ fn convert_result_types_in_region(
             // Recurse into nested regions
             let regions: Vec<_> = ctx.op(op).regions.to_vec();
             for r in regions {
-                convert_result_types_in_region(ctx, r, from, to);
+                convert_types_in_region(ctx, r, from, to);
             }
         }
     }

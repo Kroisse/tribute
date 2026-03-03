@@ -165,7 +165,7 @@ impl ArenaRewritePattern for LowerPushPromptPattern {
 /// A value is a live-in if it is used (as an operand) inside the region
 /// but defined outside (not a block arg or operation result within the region,
 /// including nested sub-regions).
-fn compute_live_ins(ctx: &IrContext, region: RegionRef) -> Vec<(ValueRef, TypeRef)> {
+pub(super) fn compute_live_ins(ctx: &IrContext, region: RegionRef) -> Vec<(ValueRef, TypeRef)> {
     let mut defined: HashSet<ValueRef> = HashSet::new();
     let mut used: Vec<ValueRef> = Vec::new();
     let mut seen_used: HashSet<ValueRef> = HashSet::new();
