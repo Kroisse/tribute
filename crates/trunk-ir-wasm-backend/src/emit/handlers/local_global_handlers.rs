@@ -4,56 +4,55 @@
 //! - wasm.local_get, wasm.local_set, wasm.local_tee
 //! - wasm.global_get, wasm.global_set
 
-use trunk_ir::dialect::wasm;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
 use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;
 
-use super::super::{FunctionEmitContext, ModuleInfo, emit_operands, set_result_local};
+use super::super::helpers;
+use super::super::value_emission::emit_operands;
+use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
 
 /// Handle wasm.local_get operation
-pub(crate) fn handle_local_get<'db>(
-    db: &'db dyn salsa::Database,
-    local_op: wasm::LocalGet<'db>,
-    ctx: &FunctionEmitContext<'db>,
+pub(crate) fn handle_local_get(
+    ctx: &IrContext,
+    local_op: arena_wasm::LocalGet,
+    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let index = local_op.index(db);
+    let index = local_op.index(ctx);
     function.instruction(&Instruction::LocalGet(index));
-    set_result_local(db, &local_op.operation(), ctx, function)?;
+    set_result_local(ctx, local_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
 /// Handle wasm.local_set operation
-pub(crate) fn handle_local_set<'db>(
-    db: &'db dyn salsa::Database,
-    local_op: wasm::LocalSet<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_local_set(
+    ctx: &IrContext,
+    local_op: arena_wasm::LocalSet,
+    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = local_op.operation();
-    let operands = op.operands(db);
-    let index = local_op.index(db);
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+    let operands = ctx.op_operands(local_op.op_ref());
+    let index = local_op.index(ctx);
+    emit_operands(ctx, operands, emit_ctx, function)?;
     function.instruction(&Instruction::LocalSet(index));
     Ok(())
 }
 
 /// Handle wasm.local_tee operation
-pub(crate) fn handle_local_tee<'db>(
-    db: &'db dyn salsa::Database,
-    local_op: wasm::LocalTee<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_local_tee(
+    ctx: &IrContext,
+    local_op: arena_wasm::LocalTee,
+    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = local_op.operation();
-    let operands = op.operands(db);
-    let index = local_op.index(db);
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+    let operands = ctx.op_operands(local_op.op_ref());
+    let index = local_op.index(ctx);
+    emit_operands(ctx, operands, emit_ctx, function)?;
     function.instruction(&Instruction::LocalTee(index));
-    set_result_local(db, &op, ctx, function)?;
+    set_result_local(ctx, local_op.op_ref(), emit_ctx, function)?;
     Ok(())
 }
 
@@ -62,14 +61,15 @@ pub(crate) fn handle_local_tee<'db>(
 /// When reading from an anyref global, the result may need to be cast to the
 /// specific type expected by the IR result type. This happens for globals like
 /// $yield_cont which store different continuation types as anyref.
-pub(crate) fn handle_global_get<'db>(
-    db: &'db dyn salsa::Database,
-    global_op: wasm::GlobalGet<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_global_get(
+    ctx: &IrContext,
+    global_op: arena_wasm::GlobalGet,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let index = global_op.index(db);
+    let op = global_op.op_ref();
+    let index = global_op.index(ctx);
     function.instruction(&Instruction::GlobalGet(index));
 
     // Check if the global's actual type is anyref but the IR result type is more specific.
@@ -77,17 +77,17 @@ pub(crate) fn handle_global_get<'db>(
     if let Some(global_def) = module_info.globals.get(index as usize)
         && is_anyref_valtype(&global_def.valtype)
     {
-        let op = global_op.operation();
-        if let Some(result_ty) = op.results(db).first().copied()
+        let result_types = ctx.op_result_types(op);
+        if let Some(&result_ty) = result_types.first()
             && let Ok(result_valtype) =
-                super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
+                helpers::type_to_valtype(ctx, result_ty, &module_info.type_idx_by_type)
             && let Some(heap_type) = concrete_heap_type(&result_valtype)
         {
             function.instruction(&Instruction::RefCastNullable(heap_type));
         }
     }
 
-    set_result_local(db, &global_op.operation(), ctx, function)?;
+    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
@@ -117,17 +117,15 @@ fn concrete_heap_type(vt: &wasm_encoder::ValType) -> Option<wasm_encoder::HeapTy
 }
 
 /// Handle wasm.global_set operation
-pub(crate) fn handle_global_set<'db>(
-    db: &'db dyn salsa::Database,
-    global_op: wasm::GlobalSet<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_global_set(
+    ctx: &IrContext,
+    global_op: arena_wasm::GlobalSet,
+    emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = global_op.operation();
-    let operands = op.operands(db);
-    let index = global_op.index(db);
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+    let operands = ctx.op_operands(global_op.op_ref());
+    let index = global_op.index(ctx);
+    emit_operands(ctx, operands, emit_ctx, function)?;
     function.instruction(&Instruction::GlobalSet(index));
     Ok(())
 }

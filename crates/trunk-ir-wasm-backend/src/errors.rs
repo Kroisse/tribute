@@ -63,6 +63,11 @@ impl CompilationError {
     pub fn unresolved_casts(msg: impl std::fmt::Display) -> Self {
         CompilationErrorKind::UnresolvedCasts(msg.to_string()).into()
     }
+
+    /// Returns true if this error indicates a missing attribute (vs. an invalid one).
+    pub fn is_missing_attribute(&self) -> bool {
+        matches!(&*self.kind, CompilationErrorKind::MissingAttribute(_))
+    }
 }
 
 #[derive(Clone, Display, Debug, PartialEq)]

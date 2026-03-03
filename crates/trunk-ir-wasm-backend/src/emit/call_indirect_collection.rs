@@ -3,18 +3,64 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations, ref_func declarations, and related type inference.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::debug;
-use trunk_ir::dialect::{core, func, wasm};
-use trunk_ir::{Attribute, BlockId, DialectOp, DialectType, IdVec, Region, Symbol, Type};
+use trunk_ir::Symbol;
+use trunk_ir::arena::ArenaModule;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{RegionRef, TypeRef};
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
+use trunk_ir::smallvec::SmallVec;
 
 use crate::errors::CompilationResult;
 
-use super::helpers::{is_closure_struct_type, is_step_type, value_type};
+use super::helpers;
 
-trunk_ir::symbols! {
-    ATTR_FUNC_NAME => "func_name",
+/// Intern a core.func type from params and result type.
+fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], result_ty: TypeRef) -> TypeRef {
+    let mut all_params: SmallVec<[TypeRef; 4]> = params.into();
+    all_params.push(result_ty); // last param is the return type
+    ctx.types.intern(TypeData {
+        dialect: Symbol::new("core"),
+        name: Symbol::new("func"),
+        params: all_params,
+        attrs: Default::default(),
+    })
+}
+
+/// Intern a simple wasm type with no params or attrs.
+fn intern_simple_wasm_type(ctx: &mut IrContext, name: &str) -> TypeRef {
+    ctx.types.intern(TypeData {
+        dialect: Symbol::new("wasm"),
+        name: Symbol::from_dynamic(name),
+        params: Default::default(),
+        attrs: Default::default(),
+    })
+}
+
+/// Intern an adt.struct type with the given name attribute.
+fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
+    let mut attrs = BTreeMap::new();
+    attrs.insert(
+        Symbol::new("name"),
+        ArenaAttribute::Symbol(Symbol::new(name)),
+    );
+    ctx.types.intern(TypeData {
+        dialect: Symbol::new("adt"),
+        name: Symbol::new("struct"),
+        params: Default::default(),
+        attrs,
+    })
+}
+
+/// Format a TypeRef as "dialect.name" for debug logging.
+fn fmt_type(ctx: &IrContext, ty: TypeRef) -> String {
+    let data = ctx.types.get(ty);
+    format!("{}.{}", data.dialect, data.name)
 }
 
 /// Collect function types used in call_indirect operations.
@@ -22,63 +68,60 @@ trunk_ir::symbols! {
 /// This function walks the IR to find all call_indirect operations and registers
 /// their function types in the type section. It handles:
 /// - Polymorphic function types (anyref params/results)
-/// - Result type upgrade (anyref → funcref/Step based on enclosing function)
+/// - Result type upgrade (anyref -> funcref/Step based on enclosing function)
 ///
 /// Returns a vector of (type_idx, func_type) pairs sorted by type index.
-pub(crate) fn collect_call_indirect_types<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-    type_idx_by_type: &mut HashMap<Type<'db>, u32>,
-    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
+pub(crate) fn collect_call_indirect_types(
+    ctx: &mut IrContext,
+    module: ArenaModule,
+    type_idx_by_type: &mut HashMap<TypeRef, u32>,
     gc_type_count: usize,
     func_type_count: usize,
-) -> CompilationResult<Vec<(u32, core::Func<'db>)>> {
-    fn collect_from_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: &Region<'db>,
-        type_idx_by_type: &mut HashMap<Type<'db>, u32>,
+) -> CompilationResult<Vec<(u32, TypeRef)>> {
+    fn collect_from_region(
+        ctx: &mut IrContext,
+        region_ref: RegionRef,
+        type_idx_by_type: &mut HashMap<TypeRef, u32>,
         next_type_idx: &mut u32,
-        new_types: &mut Vec<(u32, core::Func<'db>)>,
-        block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-        enclosing_func_return_ty: Option<Type<'db>>,
+        new_types: &mut Vec<(u32, TypeRef)>,
+        enclosing_func_return_ty: Option<TypeRef>,
     ) -> CompilationResult<()> {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                debug!(
-                    "collect_call_indirect_types: visiting op {}.{}, enclosing_func_return_ty={:?}",
-                    op.dialect(db),
-                    op.name(db),
-                    enclosing_func_return_ty.map(|t| {
-                        t.dialect(db)
-                            .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n)))
-                    })
-                );
+        let blocks: SmallVec<[_; 4]> = ctx.region(region_ref).blocks.clone();
+        for &block_ref in &blocks {
+            let ops: SmallVec<[_; 4]> = ctx.block(block_ref).ops.clone();
+            for &op in &ops {
+                {
+                    let op_data = ctx.op(op);
+                    debug!(
+                        "collect_call_indirect_types: visiting op {}.{}, enclosing_func_return_ty={:?}",
+                        op_data.dialect,
+                        op_data.name,
+                        enclosing_func_return_ty.map(|t| fmt_type(ctx, t))
+                    );
+                }
                 // Check if this is a function definition to track return type
                 // NOTE: In lowered wasm IR, functions are wasm.func, not func.func
-                let func_return_ty = if let Ok(wasm_fn) = wasm::Func::from_operation(db, *op) {
+                let func_return_ty = if let Ok(wasm_fn) = arena_wasm::Func::from_op(ctx, op) {
                     // Get the function's return type from wasm.func
-                    let func_type = wasm_fn.r#type(db);
+                    let func_type = wasm_fn.r#type(ctx);
                     debug!(
-                        "collect_call_indirect_types: found wasm.func, type={}.{}",
-                        func_type.dialect(db),
-                        func_type.name(db)
+                        "collect_call_indirect_types: found wasm.func, type={}",
+                        fmt_type(ctx, func_type)
                     );
-                    if let Some(func_ty) = core::Func::from_type(db, func_type) {
-                        let ret_ty = func_ty.result(db);
+                    if let Some((_, ret_ty)) = helpers::func_type_parts(ctx, func_type) {
                         debug!(
-                            "collect_call_indirect_types: wasm.func return type={}.{}",
-                            ret_ty.dialect(db),
-                            ret_ty.name(db)
+                            "collect_call_indirect_types: wasm.func return type={}",
+                            fmt_type(ctx, ret_ty)
                         );
                         Some(ret_ty)
                     } else {
                         debug!("collect_call_indirect_types: wasm.func r#type is not core.func");
                         None
                     }
-                } else if let Ok(func) = func::Func::from_operation(db, *op) {
+                } else if let Ok(func) = arena_func::Func::from_op(ctx, op) {
                     // Also check for func.func (in case IR isn't fully lowered)
-                    let func_type = func.r#type(db);
-                    core::Func::from_type(db, func_type).map(|func_ty| func_ty.result(db))
+                    let func_type = func.r#type(ctx);
+                    helpers::func_type_parts(ctx, func_type).map(|(_, ret_ty)| ret_ty)
                 } else {
                     None
                 };
@@ -88,22 +131,22 @@ pub(crate) fn collect_call_indirect_types<'db>(
                 let current_func_return_ty = func_return_ty.or(enclosing_func_return_ty);
 
                 // Recursively process nested regions
-                for nested in op.regions(db).iter() {
+                let regions: SmallVec<[_; 4]> = ctx.op(op).regions.clone();
+                for &nested in &regions {
                     collect_from_region(
-                        db,
+                        ctx,
                         nested,
                         type_idx_by_type,
                         next_type_idx,
                         new_types,
-                        block_arg_types,
                         current_func_return_ty,
                     )?;
                 }
 
                 // Check if this is a call_indirect
-                if wasm::CallIndirect::matches(db, *op) {
+                if arena_wasm::CallIndirect::matches(ctx, op) {
                     // Build function type from operands and results
-                    let operands = op.operands(db);
+                    let operands: Vec<_> = ctx.op_operands(op).to_vec();
 
                     if operands.is_empty() {
                         continue; // Skip invalid call_indirect
@@ -111,50 +154,48 @@ pub(crate) fn collect_call_indirect_types<'db>(
 
                     // The callee (i32 table index) is the FIRST operand, followed by args.
                     // All indirect calls use table-based call_indirect.
-                    let first_operand = operands.first().copied().unwrap();
-                    let first_operand_ty = value_type(db, first_operand, block_arg_types);
-                    let callee_is_first = first_operand_ty.is_some_and(|ty| {
+                    let first_operand = operands[0];
+                    let first_operand_ty = helpers::value_type(ctx, first_operand);
+                    let callee_is_first = {
                         // First operand should be i32 table index or closure struct
                         // (closure struct's first field is the i32 table index)
-                        core::I32::from_type(db, ty).is_some() || is_closure_struct_type(db, ty)
-                    });
+                        helpers::is_type(ctx, first_operand_ty, "core", "i32")
+                            || helpers::is_closure_struct_type(ctx, first_operand_ty)
+                    };
 
-                    // Helper to normalize IR types to wasm types for call_indirect.
+                    // Normalize IR types to wasm types for call_indirect.
                     // Types that are already anyref (after normalize_primitive_types pass)
                     // should remain anyref in the signature.
-                    let anyref_ty = wasm::Anyref::new(db).as_type();
-                    let normalize_param_type = |ty: Type<'db>| -> Type<'db> {
-                        // After normalize_primitive_types pass:
-                        // - tribute_rt.any → wasm.anyref
-                        // So we only need to check for wasm.anyref
-                        if wasm::Anyref::from_type(db, ty).is_some() {
-                            anyref_ty
-                        } else {
-                            ty
-                        }
-                    };
+                    let anyref_ty = intern_simple_wasm_type(ctx, "anyref");
 
                     // Callee (i32 table index) is FIRST operand, params are operands[1..]
                     assert!(
                         callee_is_first,
                         "call_indirect first operand must be i32 table index or closure struct, got {:?}",
-                        first_operand_ty.map(|ty| {
-                            ty.dialect(db)
-                                .with_str(|d| ty.name(db).with_str(|n| format!("{}.{}", d, n)))
-                        })
+                        fmt_type(ctx, first_operand_ty)
                     );
-                    let param_types: IdVec<Type<'db>> = operands
+                    let param_types: Vec<TypeRef> = operands
                         .iter()
                         .skip(1)
-                        .filter_map(|v| value_type(db, *v, block_arg_types))
-                        .map(normalize_param_type)
+                        .map(|v| {
+                            let ty = helpers::value_type(ctx, *v);
+                            // After normalize_primitive_types pass:
+                            // - tribute_rt.any -> wasm.anyref
+                            // So we only need to check for wasm.anyref
+                            if helpers::is_type(ctx, ty, "wasm", "anyref") {
+                                anyref_ty
+                            } else {
+                                ty
+                            }
+                        })
                         .collect();
 
                     // Result type - use enclosing function's return type if it's funcref
                     // and the call_indirect has anyref result. This is needed because
                     // WebAssembly GC has separate type hierarchies for anyref and funcref,
                     // so we can't cast between them.
-                    let mut result_ty = match op.results(db).first().copied() {
+                    let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
+                    let mut result_ty = match result_types.first().copied() {
                         Some(ty) => ty,
                         None => continue, // Skip if no result
                     };
@@ -162,25 +203,21 @@ pub(crate) fn collect_call_indirect_types<'db>(
                     // If result type is anyref but enclosing function returns funcref,
                     // use funcref as the result type. This is needed because WebAssembly GC has
                     // separate type hierarchies for anyref and funcref - you can't cast between them.
-                    let funcref_ty = wasm::Funcref::new(db).as_type();
+                    let funcref_ty = intern_simple_wasm_type(ctx, "funcref");
                     debug!(
-                        "collect_call_indirect_types: result_ty={}.{}, enclosing_func_return_ty={:?}",
-                        result_ty.dialect(db),
-                        result_ty.name(db),
-                        enclosing_func_return_ty.map(|t| {
-                            t.dialect(db)
-                                .with_str(|d| t.name(db).with_str(|n| format!("{}.{}", d, n)))
-                        })
+                        "collect_call_indirect_types: result_ty={}, enclosing_func_return_ty={:?}",
+                        fmt_type(ctx, result_ty),
+                        enclosing_func_return_ty.map(|t| fmt_type(ctx, t))
                     );
                     if let Some(func_ret_ty) = enclosing_func_return_ty {
                         // Check if result is anyref (polymorphic type)
                         // Note: type variables are resolved at AST level before IR generation
-                        let is_anyref_result = wasm::Anyref::from_type(db, result_ty).is_some();
-                        let func_returns_funcref = wasm::Funcref::from_type(db, func_ret_ty)
-                            .is_some()
-                            || core::Func::from_type(db, func_ret_ty).is_some();
+                        let is_anyref_result = helpers::is_type(ctx, result_ty, "wasm", "anyref");
+                        let func_returns_funcref =
+                            helpers::is_type(ctx, func_ret_ty, "wasm", "funcref")
+                                || helpers::is_type(ctx, func_ret_ty, "core", "func");
                         // Check for Step type (trampoline-based effect system)
-                        let func_returns_step = is_step_type(db, func_ret_ty);
+                        let func_returns_step = helpers::is_step_type(ctx, func_ret_ty);
                         debug!(
                             "collect_call_indirect_types: is_anyref={}, func_returns_funcref={}, func_returns_step={}",
                             is_anyref_result, func_returns_funcref, func_returns_step
@@ -199,25 +236,22 @@ pub(crate) fn collect_call_indirect_types<'db>(
                                 "collect_call_indirect_types: upgrading polymorphic result to Step \
                                  for enclosing function that returns Step"
                             );
-                            result_ty = crate::gc_types::step_marker_type(db);
+                            result_ty = intern_named_adt_struct(ctx, "_Step");
                         }
                     }
 
                     // Normalize result type: anyref stays as anyref for polymorphic dispatch
                     // This must match the normalization done in call_handlers for emit
-                    if crate::emit::helpers::should_normalize_to_anyref(db, result_ty) {
+                    if helpers::should_normalize_to_anyref(ctx, result_ty) {
                         debug!(
                             "collect_call_indirect_types: normalizing result {} to anyref",
-                            result_ty.dialect(db).with_str(|d| result_ty
-                                .name(db)
-                                .with_str(|n| format!("{}.{}", d, n)))
+                            fmt_type(ctx, result_ty)
                         );
                         result_ty = anyref_ty;
                     }
 
                     // Create function type
-                    let func_ty = core::Func::new(db, param_types, result_ty);
-                    let func_type = func_ty.as_type();
+                    let func_type = intern_func_type(ctx, &param_types, result_ty);
 
                     // Register if not already registered, and collect new types
                     if let std::collections::hash_map::Entry::Vacant(e) =
@@ -226,17 +260,15 @@ pub(crate) fn collect_call_indirect_types<'db>(
                         let idx = *next_type_idx;
                         *next_type_idx += 1;
                         e.insert(idx);
-                        new_types.push((idx, func_ty));
+                        new_types.push((idx, func_type));
                         debug!(
-                            "collect_call_indirect_types: registered new func type idx={}, params={:?}, result={}.{}",
+                            "collect_call_indirect_types: registered new func type idx={}, params={:?}, result={}",
                             idx,
-                            func_ty
-                                .params(db)
+                            param_types
                                 .iter()
-                                .map(|t| format!("{}.{}", t.dialect(db), t.name(db)))
+                                .map(|t| fmt_type(ctx, *t))
                                 .collect::<Vec<_>>(),
-                            result_ty.dialect(db),
-                            result_ty.name(db)
+                            fmt_type(ctx, result_ty)
                         );
                     }
                 }
@@ -252,13 +284,13 @@ pub(crate) fn collect_call_indirect_types<'db>(
     let mut next_type_idx = (gc_type_count + func_type_count) as u32;
     let mut new_types = Vec::new();
 
+    let body = module.body(ctx).unwrap();
     collect_from_region(
-        db,
-        &module.body(db),
+        ctx,
+        body,
         type_idx_by_type,
         &mut next_type_idx,
         &mut new_types,
-        block_arg_types,
         None, // No enclosing function at module level
     )?;
 
@@ -271,55 +303,47 @@ pub(crate) fn collect_call_indirect_types<'db>(
 /// Collect function names referenced via wasm.ref_func.
 ///
 /// These functions need to be declared in a declarative elem segment.
-pub(crate) fn collect_ref_funcs<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> HashSet<Symbol> {
-    fn collect_from_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: &Region<'db>,
+pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet<Symbol> {
+    fn collect_from_region(
+        ctx: &IrContext,
+        region_ref: RegionRef,
         ref_funcs: &mut HashSet<Symbol>,
     ) {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
+        for &block_ref in &ctx.region(region_ref).blocks {
+            for &op in &ctx.block(block_ref).ops {
                 // Recursively process nested regions
-                for nested in op.regions(db).iter() {
-                    collect_from_region(db, nested, ref_funcs);
+                for &nested in &ctx.op(op).regions {
+                    collect_from_region(ctx, nested, ref_funcs);
                 }
 
                 // Check if this is a ref_func
-                if wasm::RefFunc::matches(db, *op)
-                    && let Some(Attribute::Symbol(func_name)) =
-                        op.attributes(db).get(&ATTR_FUNC_NAME())
-                {
-                    ref_funcs.insert(*func_name);
+                if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, op) {
+                    ref_funcs.insert(ref_func_op.func_name(ctx));
                 }
             }
         }
     }
 
     let mut ref_funcs = HashSet::new();
-    collect_from_region(db, &module.body(db), &mut ref_funcs);
+    let body = module.body(ctx).unwrap();
+    collect_from_region(ctx, body, &mut ref_funcs);
     ref_funcs
 }
 
 /// Check if the module contains any call_indirect operations.
-pub(crate) fn has_call_indirect<'db>(
-    db: &'db dyn salsa::Database,
-    module: core::Module<'db>,
-) -> bool {
-    fn check_region<'db>(db: &'db dyn salsa::Database, region: &Region<'db>) -> bool {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
+pub(crate) fn has_call_indirect(ctx: &IrContext, module: ArenaModule) -> bool {
+    fn check_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
+        for &block_ref in &ctx.region(region_ref).blocks {
+            for &op in &ctx.block(block_ref).ops {
                 // Check nested regions first
-                for nested in op.regions(db).iter() {
-                    if check_region(db, nested) {
+                for &nested in &ctx.op(op).regions {
+                    if check_region(ctx, nested) {
                         return true;
                     }
                 }
 
                 // Check if this is a call_indirect
-                if wasm::CallIndirect::matches(db, *op) {
+                if arena_wasm::CallIndirect::matches(ctx, op) {
                     return true;
                 }
             }
@@ -327,5 +351,6 @@ pub(crate) fn has_call_indirect<'db>(
         false
     }
 
-    check_region(db, &module.body(db))
+    let body = module.body(ctx).unwrap();
+    check_region(ctx, body)
 }

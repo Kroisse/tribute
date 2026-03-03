@@ -3,32 +3,40 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
-use trunk_ir::dialect::{adt, cont, core, trampoline, wasm};
-use trunk_ir::{Attribute, Attrs, BlockId, DialectType, Symbol, Type, Value, ValueDef};
+use trunk_ir::Symbol;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::refs::{TypeRef, ValueRef};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
-// Re-export is_closure_struct_type for use by handlers via emit.rs
-pub(crate) use crate::gc_types::is_closure_struct_type;
+use crate::gc_types::{BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, STEP_IDX};
 use crate::{CompilationError, CompilationResult};
+
+// ============================================================================
+// Type checking helpers (arena)
+// ============================================================================
+
+/// Check if a TypeRef matches a specific dialect and name.
+pub(crate) fn is_type(
+    ctx: &IrContext,
+    ty: TypeRef,
+    dialect: &'static str,
+    name: &'static str,
+) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+}
 
 // ============================================================================
 // Value type helpers
 // ============================================================================
 
-/// Get the type of a value from its definition.
-pub(crate) fn value_type<'db>(
-    db: &'db dyn salsa::Database,
-    value: Value<'db>,
-    block_arg_types: &HashMap<(BlockId, usize), Type<'db>>,
-) -> Option<Type<'db>> {
-    match value.def(db) {
-        ValueDef::OpResult(op) => op.results(db).get(value.index(db)).copied(),
-        ValueDef::BlockArg(block_id) => block_arg_types.get(&(block_id, value.index(db))).copied(),
-    }
+/// Get the type of a value from its definition (arena version).
+pub(crate) fn value_type(ctx: &IrContext, value: ValueRef) -> TypeRef {
+    ctx.value_ty(value)
 }
 
 // ============================================================================
@@ -36,85 +44,96 @@ pub(crate) fn value_type<'db>(
 // ============================================================================
 
 /// Check if a type is the nil type (core.nil).
-pub(crate) fn is_nil_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    core::Nil::from_type(db, ty).is_some()
+pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_type(ctx, ty, "core", "nil")
 }
 
-// Note: is_closure_struct_type is imported from gc_types
+/// Check if a type is a closure struct type (adt.struct with name "_closure").
+pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_named_adt_struct(ctx, ty, "_closure")
+}
+
+/// Check if a type is a continuation struct (adt.struct with name "_Continuation").
+pub(crate) fn is_continuation_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_named_adt_struct(ctx, ty, "_Continuation")
+}
+
+/// Check if a type is a resume wrapper struct (adt.struct with name "_ResumeWrapper").
+pub(crate) fn is_resume_wrapper_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_named_adt_struct(ctx, ty, "_ResumeWrapper")
+}
+
+/// Check if a type is an adt.struct with the given name.
+fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str) -> bool {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
+        return false;
+    }
+    match data.attrs.get(&Symbol::new("name")) {
+        Some(ArenaAttribute::Symbol(name)) => name.with_str(|s| s == expected_name),
+        _ => false,
+    }
+}
 
 /// Check if a type is the Step type (for trampoline-based effect system).
-/// Step is an ADT struct with name "_Step".
-pub(crate) fn is_step_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    ty == crate::gc_types::step_marker_type(db)
+pub(crate) fn is_step_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_named_adt_struct(ctx, ty, "_Step")
 }
 
 /// Check if a type should be normalized to anyref in polymorphic contexts.
-///
-/// This is used during call_indirect type signature construction where
-/// types that need boxing at runtime should be normalized to anyref.
-///
-/// After normalize_primitive_types pass, tribute_rt types are already converted:
-/// - tribute_rt.int/nat/bool → core.i32
-/// - tribute_rt.float → core.f64
-/// - tribute_rt.any → wasm.anyref
-///
-/// So we only need to check for the anyref type itself.
-pub(crate) fn should_normalize_to_anyref<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    // wasm.anyref is already the normalized form - this is what we expect after
-    // normalize_primitive_types converts tribute_rt.any → wasm.anyref
-    wasm::Anyref::from_type(db, ty).is_some()
-    // Note: core::Nil is NOT normalized to anyref. Nil uses (ref null none) which is
-    // a subtype of anyref, so it can be passed where anyref is expected without boxing.
+pub(crate) fn should_normalize_to_anyref(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_type(ctx, ty, "wasm", "anyref")
 }
 
 // ============================================================================
 // Type conversion
 // ============================================================================
 
+/// Get the params and return type of a core.func TypeRef.
+/// Returns (param_types, return_type) or None if not a core.func.
+pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], TypeRef)> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        return None;
+    }
+    if data.params.is_empty() {
+        return None;
+    }
+    let (params, ret) = data.params.split_at(data.params.len() - 1);
+    Some((params, ret[0]))
+}
+
 /// Convert an IR type to a WebAssembly value type.
-pub(crate) fn type_to_valtype<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
+pub(crate) fn type_to_valtype(
+    ctx: &IrContext,
+    ty: TypeRef,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<ValType> {
-    if core::I32::from_type(db, ty).is_some()
-        || core::I1::from_type(db, ty).is_some()
-        || cont::PromptTag::from_type(db, ty).is_some()
+    if is_type(ctx, ty, "core", "i32")
+        || is_type(ctx, ty, "core", "i1")
+        || is_type(ctx, ty, "cont", "prompt_tag")
     {
-        // cont.prompt_tag is represented as i32 at runtime (prompt tag index)
         Ok(ValType::I32)
-    } else if core::I64::from_type(db, ty).is_some() {
+    } else if is_type(ctx, ty, "core", "i64") {
         Ok(ValType::I64)
-    } else if core::F32::from_type(db, ty).is_some() {
+    } else if is_type(ctx, ty, "core", "f32") {
         Ok(ValType::F32)
-    } else if core::F64::from_type(db, ty).is_some() {
+    } else if is_type(ctx, ty, "core", "f64") {
         Ok(ValType::F64)
-    } else if core::Bytes::from_type(db, ty).is_some() {
-        // Bytes uses WasmGC struct representation
+    } else if is_type(ctx, ty, "core", "bytes") {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
-    } else if core::String::from_type(db, ty).is_some()
-        || (ty.dialect(db) == core::DIALECT_NAME() && ty.name(db) == Symbol::new("ptr"))
-    {
-        // String and ptr still use linear memory (i32 pointer)
+    } else if is_type(ctx, ty, "core", "string") || is_type(ctx, ty, "core", "ptr") {
         Ok(ValType::I32)
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
-        // Registry lookup: types registered in type_idx_by_type get concrete GC type references.
-        // This covers wasm.arrayref (EVIDENCE_IDX), step marker type (STEP_IDX), and ADT types.
-        // Must be checked BEFORE the wasm dialect fallback to ensure registered wasm types
-        // (like wasm.arrayref) get concrete indices instead of abstract heap types.
-        // wasm.structref is safe here because it is NOT registered in type_idx_by_type
-        // (it uses placeholder_struct_type_idx instead).
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(type_idx),
         }))
-    } else if ty.dialect(db) == wasm::DIALECT_NAME() {
-        // WASM dialect types that are NOT in the registry fall back to abstract types.
-        // wasm.structref is the main case here (placeholder types for continuation frames).
-        let name = ty.name(db);
+    } else if ctx.types.get(ty).dialect == Symbol::new("wasm") {
+        let name = ctx.types.get(ty).name;
         if name == Symbol::new("structref") {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -128,8 +147,6 @@ pub(crate) fn type_to_valtype<'db>(
         } else if name == Symbol::new("anyref") {
             Ok(ValType::Ref(RefType::ANYREF))
         } else if name == Symbol::new("i31ref") {
-            // i31ref is the nullable form (ref null i31)
-            // This matches the output of ref.cast i31ref
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -138,8 +155,6 @@ pub(crate) fn type_to_valtype<'db>(
                 },
             }))
         } else if name == Symbol::new("arrayref") {
-            // Abstract array reference type (ref null array)
-            // This is the fallback for wasm.arrayref not registered in type_idx_by_type
             Ok(ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -153,9 +168,7 @@ pub(crate) fn type_to_valtype<'db>(
                 name
             )))
         }
-    } else if core::Array::from_type(db, ty).is_some() {
-        // core.array maps to abstract array reference type
-        // This handles array types that reach emit phase without conversion
+    } else if is_type(ctx, ty, "core", "array") {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -163,21 +176,14 @@ pub(crate) fn type_to_valtype<'db>(
                 ty: AbstractHeapType::Array,
             },
         }))
-    } else if core::Func::from_type(db, ty).is_some() {
-        // Function types map to funcref for call_indirect operations.
-        // The function signature is preserved in the IR and registered
-        // in the type section by collect_call_indirect_types.
+    } else if is_type(ctx, ty, "core", "func") {
         Ok(ValType::Ref(RefType::FUNCREF))
-    } else if is_closure_struct_type(db, ty) {
-        // ADT struct named "_closure" maps to builtin CLOSURE_STRUCT_IDX.
-        // Note: closure::Closure types are converted to adt.struct(name="_closure")
-        // by TypeConverter before emit, so we only check for the ADT form here.
+    } else if is_closure_struct_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
         }))
-    } else if cont::Continuation::from_type(db, ty).is_some() {
-        // Continuation types are represented as GC structs at runtime
+    } else if is_type(ctx, ty, "cont", "continuation") {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -185,14 +191,15 @@ pub(crate) fn type_to_valtype<'db>(
                 ty: AbstractHeapType::Struct,
             },
         }))
-    } else if trampoline::Step::from_type(db, ty).is_some() {
-        // trampoline.step is the same as wasm.step - uses STEP_IDX
+    } else if is_type(ctx, ty, "trampoline", "step") {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(STEP_IDX),
         }))
-    } else if trampoline::Continuation::from_type(db, ty).is_some() {
-        // trampoline.continuation is represented as GC struct at runtime
+    } else if is_type(ctx, ty, "trampoline", "continuation")
+        || is_type(ctx, ty, "trampoline", "state")
+        || is_type(ctx, ty, "trampoline", "resume_wrapper")
+    {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -200,30 +207,9 @@ pub(crate) fn type_to_valtype<'db>(
                 ty: AbstractHeapType::Struct,
             },
         }))
-    } else if trampoline::State::from_type(db, ty).is_some() {
-        // trampoline.state is represented as GC struct at runtime
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            },
-        }))
-    } else if trampoline::ResumeWrapper::from_type(db, ty).is_some() {
-        // trampoline.resume_wrapper is represented as GC struct at runtime
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            },
-        }))
-    } else if ty.dialect(db) == adt::DIALECT_NAME() {
-        // ADT base types (e.g., adt.Expr) without specific variant type_idx
-        // These represent "any variant of this enum" and use anyref
+    } else if ctx.types.get(ty).dialect == Symbol::new("adt") {
         Ok(ValType::Ref(RefType::ANYREF))
-    } else if core::Nil::from_type(db, ty).is_some() {
-        // Nil type - use (ref null none) for empty environments
+    } else if is_nil_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Abstract {
@@ -232,25 +218,25 @@ pub(crate) fn type_to_valtype<'db>(
             },
         }))
     } else {
+        let data = ctx.types.get(ty);
         Err(CompilationError::type_error(format!(
             "unsupported wasm value type: {}.{}",
-            ty.dialect(db),
-            ty.name(db)
+            data.dialect, data.name
         )))
     }
 }
 
 /// Convert an IR return type to WebAssembly result types.
 /// Returns an empty vector for nil types (void functions).
-pub(crate) fn result_types<'db>(
-    db: &'db dyn salsa::Database,
-    ty: Type<'db>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
+pub(crate) fn result_types(
+    ctx: &IrContext,
+    ty: TypeRef,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<Vec<ValType>> {
-    if is_nil_type(db, ty) {
+    if is_nil_type(ctx, ty) {
         Ok(Vec::new())
     } else {
-        Ok(vec![type_to_valtype(db, ty, type_idx_by_type)?])
+        Ok(vec![type_to_valtype(ctx, ty, type_idx_by_type)?])
     }
 }
 
@@ -259,27 +245,26 @@ pub(crate) fn result_types<'db>(
 // ============================================================================
 
 /// Extract a heap type from operation attributes.
-///
-/// This function handles three formats:
-/// - IntBits: concrete type index
-/// - Symbol: abstract heap type name (e.g., "any", "func", "struct")
-/// - Type: wasm dialect type (e.g., wasm.i31ref, wasm.step)
-pub(crate) fn attr_heap_type<'db>(
-    db: &'db dyn salsa::Database,
-    attrs: &Attrs<'db>,
+pub(crate) fn attr_heap_type(
+    ctx: &IrContext,
+    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
     key: Symbol,
 ) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => Ok(HeapType::Concrete(*bits as u32)),
-        Some(Attribute::Symbol(sym)) => {
-            // Handle abstract heap types specified by name
-            sym.with_str(symbol_to_abstract_heap_type)
+        Some(ArenaAttribute::IntBits(bits)) => {
+            let idx = u32::try_from(*bits).map_err(|_| {
+                CompilationError::invalid_attribute(format!(
+                    "heap type index {} out of u32 range",
+                    bits
+                ))
+            })?;
+            Ok(HeapType::Concrete(idx))
         }
-        Some(Attribute::Type(ty)) => {
-            // Handle wasm abstract heap types like wasm.i31ref, wasm.anyref, etc.
-            if ty.dialect(db) == Symbol::new("wasm") {
-                let name = ty.name(db);
-                // Handle step as a concrete builtin type (STEP_IDX = 3)
+        Some(ArenaAttribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
+        Some(ArenaAttribute::Type(ty)) => {
+            let data = ctx.types.get(*ty);
+            if data.dialect == Symbol::new("wasm") {
+                let name = data.name;
                 if name == Symbol::new("step") {
                     return Ok(HeapType::Concrete(STEP_IDX));
                 }
@@ -344,28 +329,33 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// Get type_idx from attributes or inferred type.
 ///
 /// Priority: type_idx attr > type attr > inferred_type (from result/operand)
-pub(crate) fn get_type_idx_from_attrs<'db>(
-    db: &'db dyn salsa::Database,
-    attrs: &Attrs<'db>,
-    inferred_type: Option<Type<'db>>,
-    type_idx_by_type: &HashMap<Type<'db>, u32>,
+pub(crate) fn get_type_idx_from_attrs(
+    ctx: &IrContext,
+    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
+    inferred_type: Option<TypeRef>,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> Option<u32> {
     // First try type_idx attribute
-    if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        return Some(*idx as u32);
+    match attrs.get(&Symbol::new("type_idx")) {
+        Some(ArenaAttribute::IntBits(idx)) => {
+            return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
+        }
+        Some(_) => {
+            // type_idx present but wrong variant — this is an invariant violation
+            panic!("type_idx attribute has unexpected variant (expected IntBits)");
+        }
+        None => {} // not present, continue to fallback
     }
-    // Fall back to type attribute (legacy, will be removed)
-    if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-        if is_closure_struct_type(db, *ty) {
+    // Fall back to type attribute
+    if let Some(ArenaAttribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
+        if is_closure_struct_type(ctx, *ty) {
             return Some(CLOSURE_STRUCT_IDX);
         }
         return type_idx_by_type.get(ty).copied();
     }
     // Fall back to inferred type
     if let Some(ty) = inferred_type {
-        // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-        if is_closure_struct_type(db, ty) {
+        if is_closure_struct_type(ctx, ty) {
             return Some(CLOSURE_STRUCT_IDX);
         }
         return type_idx_by_type.get(&ty).copied();
@@ -373,215 +363,43 @@ pub(crate) fn get_type_idx_from_attrs<'db>(
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::core;
+// ============================================================================
+// Attribute extraction helpers
+// ============================================================================
 
-    // ========================================
-    // Test: type_to_valtype primitives
-    // ========================================
-
-    #[salsa_test]
-    fn test_type_to_valtype_i32(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let result = type_to_valtype(db, i32_ty, &HashMap::new());
-        assert!(matches!(result, Ok(ValType::I32)));
+/// Get attribute value as u32 (checked conversion).
+///
+/// Distinguishes three cases:
+/// - Key absent → `missing_attribute` error
+/// - Key present but wrong variant → `invalid_attribute` error
+/// - Key present and IntBits → checked u32 conversion
+pub(crate) fn attr_u32(
+    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    key: Symbol,
+) -> CompilationResult<u32> {
+    match attrs.get(&key) {
+        Some(ArenaAttribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "attribute '{}' value {} out of u32 range",
+                key, bits
+            ))
+        }),
+        Some(other) => Err(CompilationError::invalid_attribute(format!(
+            "attribute '{}' expected IntBits, got {:?}",
+            key, other
+        ))),
+        None => Err(CompilationError::missing_attribute("u32")),
     }
+}
 
-    #[salsa_test]
-    fn test_type_to_valtype_i64(db: &salsa::DatabaseImpl) {
-        let i64_ty = core::I64::new(db).as_type();
-        let result = type_to_valtype(db, i64_ty, &HashMap::new());
-        assert!(matches!(result, Ok(ValType::I64)));
-    }
-
-    #[salsa_test]
-    fn test_type_to_valtype_f32(db: &salsa::DatabaseImpl) {
-        let f32_ty = core::F32::new(db).as_type();
-        let result = type_to_valtype(db, f32_ty, &HashMap::new());
-        assert!(matches!(result, Ok(ValType::F32)));
-    }
-
-    #[salsa_test]
-    fn test_type_to_valtype_f64(db: &salsa::DatabaseImpl) {
-        let f64_ty = core::F64::new(db).as_type();
-        let result = type_to_valtype(db, f64_ty, &HashMap::new());
-        assert!(matches!(result, Ok(ValType::F64)));
-    }
-
-    #[salsa_test]
-    fn test_type_to_valtype_nil(db: &salsa::DatabaseImpl) {
-        let nil_ty = core::Nil::new(db).as_type();
-        let result = type_to_valtype(db, nil_ty, &HashMap::new());
-        assert!(result.is_ok());
-        let val_type = result.unwrap();
-        assert!(matches!(
-            val_type,
-            ValType::Ref(RefType {
-                nullable: true,
-                heap_type: HeapType::Abstract {
-                    shared: false,
-                    ty: AbstractHeapType::None,
-                },
-            })
-        ));
-    }
-
-    // ========================================
-    // Test: is_nil_type
-    // ========================================
-
-    #[salsa_test]
-    fn test_is_nil_type_true(db: &salsa::DatabaseImpl) {
-        let nil_ty = core::Nil::new(db).as_type();
-        assert!(is_nil_type(db, nil_ty));
-    }
-
-    #[salsa_test]
-    fn test_is_nil_type_false_for_i32(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        assert!(!is_nil_type(db, i32_ty));
-    }
-
-    // ========================================
-    // Test: symbol_to_abstract_heap_type
-    // ========================================
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_any() {
-        let result = symbol_to_abstract_heap_type("any");
-        assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Any,
-            }
-        ));
-    }
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_anyref() {
-        let result = symbol_to_abstract_heap_type("anyref");
-        assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Any,
-            }
-        ));
-    }
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_func() {
-        let result = symbol_to_abstract_heap_type("func");
-        assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Func,
-            }
-        ));
-    }
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_struct() {
-        let result = symbol_to_abstract_heap_type("struct");
-        assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            }
-        ));
-    }
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_i31() {
-        let result = symbol_to_abstract_heap_type("i31");
-        assert!(result.is_ok());
-        assert!(matches!(
-            result.unwrap(),
-            HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::I31,
-            }
-        ));
-    }
-
-    #[test]
-    fn test_symbol_to_abstract_heap_type_unknown() {
-        let result = symbol_to_abstract_heap_type("unknown");
-        assert!(result.is_err());
-    }
-
-    // ========================================
-    // Test: result_types
-    // ========================================
-
-    #[salsa_test]
-    fn test_result_types_nil_returns_empty(db: &salsa::DatabaseImpl) {
-        let nil_ty = core::Nil::new(db).as_type();
-        let result = result_types(db, nil_ty, &HashMap::new());
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_empty());
-    }
-
-    #[salsa_test]
-    fn test_result_types_i32_returns_i32(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let result = result_types(db, i32_ty, &HashMap::new());
-        assert!(result.is_ok());
-        let types = result.unwrap();
-        assert_eq!(types.len(), 1);
-        assert!(matches!(types[0], ValType::I32));
-    }
-
-    // ========================================
-    // Test: get_type_idx_from_attrs
-    // ========================================
-
-    #[salsa_test]
-    fn test_get_type_idx_from_attrs_with_type_idx(db: &salsa::DatabaseImpl) {
-        let mut attrs = trunk_ir::Attrs::new();
-        attrs.insert(ATTR_TYPE_IDX(), Attribute::IntBits(42));
-        let result = get_type_idx_from_attrs(db, &attrs, None, &HashMap::new());
-        assert_eq!(result, Some(42));
-    }
-
-    #[salsa_test]
-    fn test_get_type_idx_from_attrs_with_type_map(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let mut type_map = HashMap::new();
-        type_map.insert(i32_ty, 100u32);
-
-        let mut attrs = trunk_ir::Attrs::new();
-        attrs.insert(ATTR_TYPE(), Attribute::Type(i32_ty));
-
-        let result = get_type_idx_from_attrs(db, &attrs, None, &type_map);
-        assert_eq!(result, Some(100));
-    }
-
-    #[salsa_test]
-    fn test_get_type_idx_from_attrs_inferred(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let mut type_map = HashMap::new();
-        type_map.insert(i32_ty, 50u32);
-
-        let attrs = trunk_ir::Attrs::new();
-        let result = get_type_idx_from_attrs(db, &attrs, Some(i32_ty), &type_map);
-        assert_eq!(result, Some(50));
-    }
-
-    #[salsa_test]
-    fn test_get_type_idx_from_attrs_none_when_not_found(db: &salsa::DatabaseImpl) {
-        let attrs = trunk_ir::Attrs::new();
-        let result = get_type_idx_from_attrs(db, &attrs, None, &HashMap::new());
-        assert_eq!(result, None);
+/// Get field index from attributes, trying both `field_idx` and `field` attribute names.
+///
+/// Only falls back to `field` when `field_idx` is missing. If `field_idx` is present
+/// but has a wrong variant or out-of-range value, that error is propagated immediately.
+pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, ArenaAttribute>) -> CompilationResult<u32> {
+    match attr_u32(attrs, Symbol::new("field_idx")) {
+        Ok(v) => Ok(v),
+        Err(e) if e.is_missing_attribute() => attr_u32(attrs, Symbol::new("field")),
+        Err(e) => Err(e),
     }
 }

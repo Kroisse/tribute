@@ -2,49 +2,61 @@
 //!
 //! This module handles WebAssembly GC struct operations (struct.new, struct.get, struct.set).
 
+use std::collections::BTreeMap;
+
 use tracing::debug;
-use trunk_ir::dialect::{adt, cont, wasm};
-use trunk_ir::{Attribute, DialectOp, DialectType, Operation, Symbol, ValueDef};
+use trunk_ir::Symbol;
+use trunk_ir::arena::IrContext;
+use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
-use crate::gc_types::{ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX};
+use crate::gc_types::{
+    ATTR_FIELD_COUNT, ATTR_TYPE, ATTR_TYPE_IDX, CLOSURE_STRUCT_IDX, GcTypeDef, STEP_IDX,
+};
 use crate::{CompilationError, CompilationResult};
 
-use super::super::{
-    ATTR_TARGET_TYPE, FunctionEmitContext, ModuleInfo, attr_field_idx, emit_operands,
-    get_type_idx_from_attrs, is_closure_struct_type, set_result_local, value_type,
-};
+use super::super::helpers::{self, get_type_idx_from_attrs, is_closure_struct_type, value_type};
+use super::super::value_emission::emit_operands;
+use super::super::{ATTR_TARGET_TYPE, FunctionEmitContext, ModuleInfo, set_result_local};
 
 /// Handle struct.new operation
-pub(crate) fn handle_struct_new<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_struct_new(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = op.operands(db);
+    let operands = ctx.op_operands(op);
     // struct_new needs all field values on the stack, including nil types.
     // emit_operands handles nil types by emitting ref.null none.
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+    emit_operands(ctx, operands, emit_ctx, function)?;
 
-    let attrs = op.attributes(db);
+    let attrs = &ctx.op(op).attributes;
     let field_count = operands.len();
-    let result_type = op.results(db).first().copied();
+    let result_type = ctx.op_result_types(op).first().copied();
 
     // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
     // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
-    let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-        Some(*idx as u32)
-    } else if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
-        if wasm::Structref::from_type(db, *ty).is_some() {
+    let type_idx = if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+        Some(u32::try_from(*idx).map_err(|_| {
+            CompilationError::invalid_attribute(format!(
+                "struct_new: type_idx value {} out of u32 range",
+                idx
+            ))
+        })?)
+    } else if let Some(ArenaAttribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+        if helpers::is_type(ctx, *ty, "wasm", "structref") {
             // Use placeholder map for wasm.structref
             // All (type, field_count) pairs are registered by collect_gc_types upfront
             module_info
                 .placeholder_struct_type_idx
                 .get(&(*ty, field_count))
                 .copied()
-        } else if is_closure_struct_type(db, *ty) {
+        } else if is_closure_struct_type(ctx, *ty) {
             // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
             Some(CLOSURE_STRUCT_IDX)
         } else {
@@ -52,7 +64,7 @@ pub(crate) fn handle_struct_new<'db>(
             module_info.type_idx_by_type.get(ty).copied()
         }
     } else if let Some(ty) = result_type
-        && wasm::Structref::from_type(db, ty).is_some()
+        && helpers::is_type(ctx, ty, "wasm", "structref")
     {
         // Result type is a placeholder (wasm.structref) - use placeholder map
         module_info
@@ -61,7 +73,7 @@ pub(crate) fn handle_struct_new<'db>(
             .copied()
     } else if let Some(ty) = result_type {
         // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-        if is_closure_struct_type(db, ty) {
+        if is_closure_struct_type(ctx, ty) {
             Some(CLOSURE_STRUCT_IDX)
         } else {
             // Infer type from result type (non-placeholder)
@@ -73,21 +85,21 @@ pub(crate) fn handle_struct_new<'db>(
     .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
 
     function.instruction(&Instruction::StructNew(type_idx));
-    set_result_local(db, op, ctx, function)?;
+    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
 /// Handle struct.get operation
-pub(crate) fn handle_struct_get<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_struct_get(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let operands = op.operands(db);
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
-    let attrs = op.attributes(db);
+    let operands = ctx.op_operands(op);
+    emit_operands(ctx, operands, emit_ctx, function)?;
+    let attrs = &ctx.op(op).attributes;
 
     // Check if operand is abstract type (anyref/structref/continuation) and needs casting to concrete struct type
     // This happens when:
@@ -95,12 +107,12 @@ pub(crate) fn handle_struct_get<'db>(
     // - A continuation field is typed as structref but needs access to concrete struct fields
     // - cont::Continuation type is stored as structref in wasm but accessed with concrete struct ops
     let operand_abstract_type = operands.first().and_then(|op_val| {
-        let ty = value_type(db, *op_val, &module_info.block_arg_types)?;
-        if wasm::Anyref::from_type(db, ty).is_some() {
+        let ty = value_type(ctx, *op_val);
+        if helpers::is_type(ctx, ty, "wasm", "anyref") {
             Some("anyref")
-        } else if wasm::Structref::from_type(db, ty).is_some() {
+        } else if helpers::is_type(ctx, ty, "wasm", "structref") {
             Some("structref")
-        } else if cont::Continuation::from_type(db, ty).is_some() {
+        } else if helpers::is_type(ctx, ty, "cont", "continuation") {
             // cont::Continuation is stored as structref in wasm
             Some("cont.continuation")
         } else {
@@ -113,7 +125,7 @@ pub(crate) fn handle_struct_get<'db>(
     // We need to trace through ref.cast operations to find the actual type,
     // because the IR type might be different from the wasm type after casting.
     let operand = operands.first().copied();
-    let type_idx = resolve_struct_get_type_idx(db, op, operand, attrs, module_info)?;
+    let type_idx = resolve_struct_get_type_idx(ctx, op, operand, attrs, module_info)?;
 
     let field_idx = attr_field_idx(attrs)?;
     debug!(
@@ -139,7 +151,8 @@ pub(crate) fn handle_struct_get<'db>(
     // Check if boxing is needed: result local expects anyref but struct field is i64
     // This happens when extracting values from structs where the IR uses generic/wrapper
     // types but the actual struct field contains a primitive (i64).
-    let needs_boxing = check_struct_get_needs_boxing(db, op, ctx, module_info, type_idx, field_idx);
+    let needs_boxing =
+        check_struct_get_needs_boxing(ctx, op, emit_ctx, module_info, type_idx, field_idx);
 
     if needs_boxing {
         debug!("struct_get: boxing i64 to i31ref for anyref local");
@@ -177,9 +190,9 @@ pub(crate) fn handle_struct_get<'db>(
 
         if field_is_anyref
             && !is_step_value_field
-            && let Some(result_ty) = op.results(db).first().copied()
+            && let Some(&result_ty) = ctx.op_result_types(op).first()
             && let Ok(result_valtype) =
-                super::super::type_to_valtype(db, result_ty, &module_info.type_idx_by_type)
+                helpers::type_to_valtype(ctx, result_ty, &module_info.type_idx_by_type)
             && let ValType::Ref(rt) = &result_valtype
             && let ht @ HeapType::Concrete(_) = &rt.heap_type
         {
@@ -188,60 +201,59 @@ pub(crate) fn handle_struct_get<'db>(
         }
     }
 
-    set_result_local(db, op, ctx, function)?;
+    set_result_local(ctx, op, emit_ctx, function)?;
     Ok(())
 }
 
 /// Resolve the type_idx for struct.get operation by tracing through ref.cast operations
-fn resolve_struct_get_type_idx<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    operand: Option<trunk_ir::Value<'db>>,
-    attrs: &trunk_ir::Attrs<'db>,
-    module_info: &ModuleInfo<'db>,
+fn resolve_struct_get_type_idx(
+    ctx: &IrContext,
+    op: OpRef,
+    operand: Option<ValueRef>,
+    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
     let Some(op_val) = operand else {
         debug!("struct_get: no operand, using fallback");
-        return get_type_idx_from_attrs(db, attrs, None, &module_info.type_idx_by_type)
+        return get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"));
     };
 
     // Check if the operand was defined by a ref.cast - if so, use its target type
-    if let ValueDef::OpResult(def_op) = op_val.def(db) {
+    if let ValueDef::OpResult(def_op, _) = ctx.value_def(op_val) {
+        let op_data = ctx.op(def_op);
         debug!(
-            "struct_get: operand defined by {}.{} at index {}",
-            def_op.dialect(db),
-            def_op.name(db),
-            op_val.index(db)
+            "struct_get: operand defined by {}.{}",
+            op_data.dialect, op_data.name
         );
-        if wasm::RefCast::matches(db, def_op) {
-            return resolve_from_ref_cast(db, op, def_op, attrs, module_info);
+        if arena_wasm::RefCast::matches(ctx, def_op) {
+            return resolve_from_ref_cast(ctx, op, def_op, attrs, module_info);
         }
         // Not a ref_cast, use normal lookup
-        let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
-        return resolve_type_idx_from_inferred(db, inferred_type, attrs, module_info, "_closure");
+        let inferred_type = Some(value_type(ctx, op_val));
+        return resolve_type_idx_from_inferred(ctx, inferred_type, attrs, module_info, "_closure");
     }
 
     // Block arg - use normal lookup
-    let inferred_type = value_type(db, op_val, &module_info.block_arg_types);
-    resolve_type_idx_from_inferred(db, inferred_type, attrs, module_info, "block arg _closure")
+    let inferred_type = Some(value_type(ctx, op_val));
+    resolve_type_idx_from_inferred(ctx, inferred_type, attrs, module_info, "block arg _closure")
 }
 
 /// Helper to resolve type_idx from inferred type
-fn resolve_type_idx_from_inferred<'db>(
-    db: &'db dyn salsa::Database,
-    inferred_type: Option<trunk_ir::Type<'db>>,
-    attrs: &trunk_ir::Attrs<'db>,
-    module_info: &ModuleInfo<'db>,
+fn resolve_type_idx_from_inferred(
+    ctx: &IrContext,
+    inferred_type: Option<TypeRef>,
+    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    module_info: &ModuleInfo,
     closure_debug_label: &str,
 ) -> CompilationResult<u32> {
     let Some(inferred) = inferred_type else {
-        return get_type_idx_from_attrs(db, attrs, None, &module_info.type_idx_by_type)
+        return get_type_idx_from_attrs(ctx, attrs, None, &module_info.type_idx_by_type)
             .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"));
     };
 
     // Special case: _closure struct type uses builtin CLOSURE_STRUCT_IDX
-    if is_closure_struct_type(db, inferred) {
+    if is_closure_struct_type(ctx, inferred) {
         debug!(
             "struct_get: using CLOSURE_STRUCT_IDX for {} type",
             closure_debug_label
@@ -250,69 +262,76 @@ fn resolve_type_idx_from_inferred<'db>(
     }
 
     if let Some(&idx) = module_info.type_idx_by_type.get(&inferred) {
+        let data = ctx.types.get(inferred);
         debug!(
             "struct_get: using type_idx={} for {}.{}",
-            idx,
-            inferred.dialect(db),
-            inferred.name(db)
+            idx, data.dialect, data.name
         );
         return Ok(idx);
     }
 
-    get_type_idx_from_attrs(db, attrs, Some(inferred), &module_info.type_idx_by_type)
+    get_type_idx_from_attrs(ctx, attrs, Some(inferred), &module_info.type_idx_by_type)
         .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))
 }
 
 /// Resolve type_idx from a ref.cast operation
-fn resolve_from_ref_cast<'db>(
-    db: &'db dyn salsa::Database,
-    struct_get_op: &Operation<'db>,
-    ref_cast_op: Operation<'db>,
-    struct_get_attrs: &trunk_ir::Attrs<'db>,
-    module_info: &ModuleInfo<'db>,
+fn resolve_from_ref_cast(
+    ctx: &IrContext,
+    struct_get_op: OpRef,
+    ref_cast_op: OpRef,
+    struct_get_attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
-    let def_attrs = ref_cast_op.attributes(db);
-    if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
+    let def_attrs = &ctx.op(ref_cast_op).attributes;
+    if let Some(ArenaAttribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
         // For placeholder types like wasm.structref, we MUST use field_count
         // to distinguish between different concrete types with same abstract type.
-        let is_placeholder = wasm::Structref::from_type(db, *target_ty).is_some();
+        let is_placeholder = helpers::is_type(ctx, *target_ty, "wasm", "structref");
 
         if is_placeholder {
             // For placeholder types like wasm.structref, try to find the concrete type
             // from struct_get's type attribute first (this has the actual adt.struct/typeref type)
-            if let Some(Attribute::Type(struct_ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+            if let Some(ArenaAttribute::Type(struct_ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
                 // Try direct lookup with the concrete struct type
                 if let Some(&idx) = module_info.type_idx_by_type.get(struct_ty) {
+                    let data = ctx.types.get(*struct_ty);
                     debug!(
                         "struct_get: using struct_get type attr for type_idx={} ({}.{})",
-                        idx,
-                        struct_ty.dialect(db),
-                        struct_ty.name(db)
+                        idx, data.dialect, data.name
                     );
                     return Ok(idx);
                 }
             }
 
             // Use placeholder lookup with field_count as fallback
-            let field_count =
-                if let Some(Attribute::IntBits(fc)) = def_attrs.get(&Symbol::new("field_count")) {
-                    debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
-                    *fc as usize
-                } else {
-                    debug!("struct_get: ref_cast (placeholder) has NO field_count!");
-                    // Last resort - use struct_get's type attr
-                    if let Some(Attribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
-                        adt::get_struct_fields(db, *ty)
-                            .map(|f| f.len())
-                            .unwrap_or(0)
-                    } else {
-                        0
-                    }
-                };
+            let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
+                def_attrs.get(&ATTR_FIELD_COUNT())
+            {
+                debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
+                usize::try_from(*fc).map_err(|_| {
+                    CompilationError::invalid_attribute(format!(
+                        "struct_get: field_count value {} out of usize range",
+                        fc
+                    ))
+                })?
+            } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+                debug!(
+                    "struct_get: ref_cast (placeholder) has NO field_count, inferring from type attr"
+                );
+                get_struct_field_count(ctx, *ty).ok_or_else(|| {
+                    CompilationError::invalid_attribute(
+                        "struct_get: placeholder structref requires field_count but type attr has no field info",
+                    )
+                })?
+            } else {
+                return Err(CompilationError::missing_attribute(
+                    "field_count or type on placeholder structref ref_cast",
+                ));
+            };
             debug!(
                 "struct_get: looking up placeholder ({}.{}, field_count={})",
-                target_ty.dialect(db),
-                target_ty.name(db),
+                ctx.types.get(*target_ty).dialect,
+                ctx.types.get(*target_ty).name,
                 field_count
             );
             let result = module_info
@@ -323,25 +342,34 @@ fn resolve_from_ref_cast<'db>(
             result.ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))
         } else if let Some(&idx) = module_info.type_idx_by_type.get(target_ty) {
             // Non-placeholder concrete type - use direct lookup
+            let data = ctx.types.get(*target_ty);
             debug!(
                 "struct_get: using ref_cast direct type_idx={} for {}.{}",
-                idx,
-                target_ty.dialect(db),
-                target_ty.name(db)
+                idx, data.dialect, data.name
             );
             Ok(idx)
         } else {
             // Non-placeholder but not found - try placeholder lookup as fallback
-            let field_count =
-                if let Some(Attribute::IntBits(fc)) = def_attrs.get(&Symbol::new("field_count")) {
-                    *fc as usize
-                } else if let Some(Attribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
-                    adt::get_struct_fields(db, *ty)
-                        .map(|f| f.len())
-                        .unwrap_or(0)
-                } else {
-                    0
-                };
+            let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
+                def_attrs.get(&ATTR_FIELD_COUNT())
+            {
+                usize::try_from(*fc).map_err(|_| {
+                    CompilationError::invalid_attribute(format!(
+                        "struct_get: field_count value {} out of usize range",
+                        fc
+                    ))
+                })?
+            } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+                get_struct_field_count(ctx, *ty).ok_or_else(|| {
+                    CompilationError::invalid_attribute(
+                        "struct_get: placeholder structref requires field_count but type attr has no field info",
+                    )
+                })?
+            } else {
+                return Err(CompilationError::missing_attribute(
+                    "field_count or type on placeholder structref ref_cast",
+                ));
+            };
             module_info
                 .placeholder_struct_type_idx
                 .get(&(*target_ty, field_count))
@@ -351,9 +379,9 @@ fn resolve_from_ref_cast<'db>(
     } else {
         // No target_type attr on ref_cast, fall back
         debug!("struct_get: ref_cast has NO target_type attribute!");
-        let inferred_type = struct_get_op.results(db).first().copied();
+        let inferred_type = ctx.op_result_types(struct_get_op).first().copied();
         get_type_idx_from_attrs(
-            db,
+            ctx,
             struct_get_attrs,
             inferred_type,
             &module_info.type_idx_by_type,
@@ -362,32 +390,54 @@ fn resolve_from_ref_cast<'db>(
     }
 }
 
+/// Get the number of fields in an adt.struct type (arena version).
+/// Returns None if the type is not an adt.struct or has no field info.
+fn get_struct_field_count(ctx: &IrContext, ty: TypeRef) -> Option<usize> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
+        return None;
+    }
+    // In arena types, the "fields" attribute stores field information
+    match data.attrs.get(&Symbol::new("fields")) {
+        Some(ArenaAttribute::List(fields)) => Some(fields.len()),
+        _ => {
+            // Field types are stored as type params in arena adt.struct types
+            if !data.params.is_empty() {
+                Some(data.params.len())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Check if struct.get result needs boxing (i64 to i31ref)
-fn check_struct_get_needs_boxing<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+fn check_struct_get_needs_boxing(
+    ctx: &IrContext,
+    op: OpRef,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     type_idx: u32,
     field_idx: u32,
 ) -> bool {
-    if op.results(db).is_empty() {
+    let result_types = ctx.op_result_types(op);
+    if result_types.is_empty() {
         return false;
     }
 
-    let result_value = op.result(db, 0);
+    let result_value = ctx.op_result(op, 0);
 
     // Check if the result local would be anyref by examining the effective type
-    let local_type = ctx
+    let local_type = emit_ctx
         .effective_types
         .get(&result_value)
         .copied()
-        .or_else(|| op.results(db).first().copied());
+        .or_else(|| result_types.first().copied());
 
     // Check if the result expects anyref
     // Note: type variables are resolved at AST level before IR generation
     let expects_anyref = local_type
-        .map(|ty| wasm::Anyref::from_type(db, ty).is_some())
+        .map(|ty| helpers::is_type(ctx, ty, "wasm", "anyref"))
         .unwrap_or(false);
 
     // Check if the struct field is i64
@@ -415,29 +465,27 @@ fn check_struct_get_needs_boxing<'db>(
 }
 
 /// Handle struct.set operation
-pub(crate) fn handle_struct_set<'db>(
-    db: &'db dyn salsa::Database,
-    struct_set_op: wasm::StructSet<'db>,
-    ctx: &FunctionEmitContext<'db>,
-    module_info: &ModuleInfo<'db>,
+pub(crate) fn handle_struct_set(
+    ctx: &IrContext,
+    struct_set_op: arena_wasm::StructSet,
+    emit_ctx: &FunctionEmitContext,
+    module_info: &ModuleInfo,
     function: &mut Function,
 ) -> CompilationResult<()> {
-    let op = struct_set_op.operation();
-    let operands = op.operands(db);
-    emit_operands(db, operands, ctx, &module_info.block_arg_types, function)?;
+    let op = struct_set_op.op_ref();
+    let operands = ctx.op_operands(op);
+    emit_operands(ctx, operands, emit_ctx, function)?;
 
     // Infer type from operand[0] (the struct ref)
-    let inferred_type = operands
-        .first()
-        .and_then(|v| value_type(db, *v, &module_info.block_arg_types));
+    let inferred_type = operands.first().map(|v| value_type(ctx, *v));
     let type_idx = get_type_idx_from_attrs(
-        db,
-        op.attributes(db),
+        ctx,
+        &ctx.op(op).attributes,
         inferred_type,
         &module_info.type_idx_by_type,
     )
     .ok_or_else(|| CompilationError::missing_attribute("type or type_idx"))?;
-    let field_idx = struct_set_op.field_idx(db);
+    let field_idx = struct_set_op.field_idx(ctx);
 
     function.instruction(&Instruction::StructSet {
         struct_type_index: type_idx,
@@ -445,3 +493,9 @@ pub(crate) fn handle_struct_set<'db>(
     });
     Ok(())
 }
+
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+use super::super::helpers::attr_field_idx;
