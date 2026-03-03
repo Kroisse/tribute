@@ -31,6 +31,6 @@ pub use data_registry::{DataEntry, DataRegistry};
 pub use emit::emit_wasm;
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
 pub use plan::{MainExports, MemoryPlan};
-pub use translate::{WasmBinaryOutput, emit_module_to_wasm, emit_module_to_wasm_arena};
+pub use translate::{WasmBinaryOutput, emit_module_to_wasm_arena};
 pub use validation::{ValidationError, validate_wasm_ir};
 pub use wasm_binary::WasmBinary;

@@ -6,7 +6,6 @@
 
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
-use trunk_ir::DialectOp;
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -21,27 +20,10 @@ use trunk_ir::smallvec::smallvec;
 use super::const_to_wasm::ConstAnalysis;
 use super::intrinsic_to_wasm::IntrinsicAnalysis;
 use super::type_converter::{self, wasm_type_converter};
-use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
-use trunk_ir::dialect::core::Module;
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE};
 
-/// Entry point for lowering mid-level IR to wasm dialect.
-#[salsa::tracked]
-#[tracing::instrument(skip_all)]
-pub fn lower_to_wasm<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    // Import Salsa module into a fresh arena context
-    let (mut ctx, arena_module) = import_salsa_module(db, module.operation());
-
-    // Run the entire WASM lowering pipeline in a single arena session
-    lower_to_wasm_arena(&mut ctx, arena_module);
-
-    // Export back to Salsa
-    let salsa_op = export_to_salsa(db, &ctx, arena_module);
-    Module::from_operation(db, salsa_op).expect("exported operation should be core.module")
-}
-
 /// Run the full WASM lowering pipeline on arena IR.
-fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();

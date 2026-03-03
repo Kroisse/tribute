@@ -64,14 +64,12 @@ use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
-use tribute_passes::generic_type_converter;
+use tribute_passes::generic_type_converter_arena;
 use tribute_passes::lower_cont_to_trampoline;
-use tribute_passes::wasm::lower::lower_to_wasm;
-use tribute_passes::wasm::type_converter::salsa_converter::wasm_type_converter;
 use trunk_ir::Span;
 use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::arena::{ArenaModule, IrContext};
-use trunk_ir::conversion::resolve_unrealized_casts;
+use trunk_ir::conversion::resolve_unrealized_casts_arena;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
@@ -413,47 +411,75 @@ fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'
 ///
 /// Casts that cannot be resolved with the generic converter will be left for
 /// backend-specific converters to handle.
-#[salsa::tracked]
 fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let type_converter = generic_type_converter();
-    let result = resolve_unrealized_casts(db, module, &type_converter);
-    // Always use the partially-resolved module; unresolved casts are left for
-    // backend-specific converters to handle.
-    result.module
+    with_arena_session(db, module, |ctx, arena_module| {
+        let tc = generic_type_converter_arena(ctx);
+        let result = resolve_unrealized_casts_arena(ctx, arena_module, &tc);
+        // Unresolved casts are left for backend-specific converters to handle.
+        tracing::debug!(
+            "stage_resolve_casts: resolved={}, unresolved={}",
+            result.resolved_count,
+            result.unresolved.len()
+        );
+    })
 }
 
 /// Compile a TrunkIR module to WebAssembly binary.
 ///
-/// This is a Salsa tracked function that:
+/// Runs all WASM backend passes in a single arena session:
 /// 1. Lowers the module from func/scf/arith dialects to wasm dialect operations
-/// 2. Resolves unrealized conversion casts using Tribute-specific type converter
+/// 2. Resolves unrealized conversion casts using WASM-specific type converter
 /// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
-#[salsa::tracked]
 fn compile_to_wasm<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> WasmCompilationResult<WasmBinary<'db>> {
+    let _span = tracing::info_span!("compile_to_wasm").entered();
+
+    // Import into arena once
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+
     // Phase 1 - Lower to wasm dialect (Tribute-specific)
-    let lowered = lower_to_wasm(db, module);
+    {
+        let _span = tracing::info_span!("lower_to_wasm").entered();
+        tribute_passes::wasm::lower::lower_to_wasm_arena(&mut ctx, arena_module);
+    }
 
-    // Phase 2 - Resolve unrealized_conversion_cast operations (Tribute-specific type converter)
-    let lowered = {
+    // Phase 2 - Resolve unrealized_conversion_cast operations (WASM type converter)
+    {
         let _span = tracing::info_span!("resolve_unrealized_casts").entered();
-        let type_converter = wasm_type_converter();
-        let result = resolve_unrealized_casts(db, lowered, &type_converter);
+        let tc = tribute_passes::wasm::type_converter::wasm_type_converter(&mut ctx);
+        let result = resolve_unrealized_casts_arena(&mut ctx, arena_module, &tc);
         if !result.unresolved.is_empty() {
-            return Err(CompilationError::unresolved_casts(
-                trunk_ir::conversion::UnresolvedCastError {
-                    unresolved: result.unresolved,
-                },
-            ));
+            let details: Vec<String> = result
+                .unresolved
+                .iter()
+                .map(|c| {
+                    let from_td = ctx.types.get(c.from_type);
+                    let to_td = ctx.types.get(c.to_type);
+                    format!(
+                        "{}.{} -> {}.{}",
+                        from_td.dialect, from_td.name, to_td.dialect, to_td.name,
+                    )
+                })
+                .collect();
+            return Err(CompilationError::unresolved_casts(format!(
+                "{} unresolved cast(s) remain after WASM type conversion: [{}]",
+                result.unresolved.len(),
+                details.join(", "),
+            )));
         }
-        result.module
-    };
+    }
 
-    // Phase 3 - Validate and emit (language-agnostic, delegated to trunk-ir-wasm-backend)
+    // Phase 3 - Emit WASM binary
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
-    trunk_ir_wasm_backend::emit_module_to_wasm(db, lowered)
+    let output = trunk_ir_wasm_backend::emit_module_to_wasm_arena(&mut ctx, arena_module)?;
+    Ok(WasmBinary::new(
+        db,
+        output.bytes,
+        output.exports,
+        output.imports,
+    ))
 }
 
 /// Lower to WebAssembly binary.
