@@ -202,11 +202,13 @@ fn build_done_branch(
     for &done_op in &done_ops {
         if arena_scf::Yield::matches(ctx, done_op) {
             let yielded_operands: Vec<ValueRef> = ctx.op_operands(done_op).to_vec();
-            if let Some(&result) = yielded_operands.first() {
-                let remapped = value_remap.get(&result).copied().unwrap_or(result);
-                let brk = arena_scf::r#break(ctx, loc, remapped);
-                ctx.push_op(new_block, brk.op_ref());
-            }
+            let break_val = if let Some(&result) = yielded_operands.first() {
+                value_remap.get(&result).copied().unwrap_or(result)
+            } else {
+                done_value
+            };
+            let brk = arena_scf::r#break(ctx, loc, break_val);
+            ctx.push_op(new_block, brk.op_ref());
             continue;
         }
         // Clone op into the new block with remapping
@@ -452,12 +454,17 @@ fn build_arm_region(
     for &op in &arm_ops {
         if arena_scf::Yield::matches(ctx, op) {
             let yielded_operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-            if let Some(&result) = yielded_operands.first() {
-                let remapped = value_remap.get(&result).copied().unwrap_or(result);
-                let y = arena_scf::r#yield(ctx, loc, [remapped]);
+            let remapped_operands: Vec<ValueRef> = yielded_operands
+                .iter()
+                .map(|v| value_remap.get(v).copied().unwrap_or(*v))
+                .collect();
+            if !remapped_operands.is_empty() {
+                let y = arena_scf::r#yield(ctx, loc, remapped_operands);
                 ctx.push_op(new_block, y.op_ref());
                 has_yield = true;
             }
+            // Zero-operand yields fall through to the !has_yield fallback below,
+            // which emits a dummy value yield to satisfy scf.if's result requirement.
             continue;
         }
         clone_op_into_block_with_remap(ctx, new_block, op, &value_remap);

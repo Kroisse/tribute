@@ -66,6 +66,7 @@ pub(crate) fn translate_type(
     let core_dialect = Symbol::new("core");
     if td.dialect == core_dialect {
         return td.name.with_str(|n| match n {
+            "i1" => Ok(cl_types::I8),
             "i8" => Ok(cl_types::I8),
             "i16" => Ok(cl_types::I16),
             "i32" => Ok(cl_types::I32),

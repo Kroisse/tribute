@@ -109,8 +109,10 @@ impl ArenaRewritePattern for StructGetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset =
-            i32::try_from(layout.field_offsets[field_idx]).expect("field offset exceeds i32");
+        let Ok(offset) = i32::try_from(layout.field_offsets[field_idx]) else {
+            warn!("adt_to_clif arena: field offset exceeds i32");
+            return false;
+        };
         let ref_val = struct_get.r#ref(ctx);
 
         // Convert result type through type converter (e.g. tribute_rt.any -> core.ptr)
@@ -154,8 +156,10 @@ impl ArenaRewritePattern for StructSetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset =
-            i32::try_from(layout.field_offsets[field_idx]).expect("field offset exceeds i32");
+        let Ok(offset) = i32::try_from(layout.field_offsets[field_idx]) else {
+            warn!("adt_to_clif arena: field offset exceeds i32");
+            return false;
+        };
         let ref_val = struct_set.r#ref(ctx);
         let value_val = struct_set.value(ctx);
 
@@ -270,9 +274,17 @@ impl ArenaRewritePattern for VariantGetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset =
-            i32::try_from(enum_layout.fields_offset + variant_layout.field_offsets[field_idx])
-                .expect("field offset exceeds i32");
+        let Some(total_offset) = enum_layout
+            .fields_offset
+            .checked_add(variant_layout.field_offsets[field_idx])
+        else {
+            warn!("adt_to_clif arena: variant field offset overflow");
+            return false;
+        };
+        let Ok(offset) = i32::try_from(total_offset) else {
+            warn!("adt_to_clif arena: variant field offset exceeds i32");
+            return false;
+        };
         let ref_val = variant_get.r#ref(ctx);
 
         // Determine the load type from the enum type definition.

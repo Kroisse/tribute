@@ -66,14 +66,11 @@ fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
 
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::arena::types::TypeDataBuilder;
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
     let ptr_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
-    builder = builder.param(i64_ty).param(ptr_ty);
+    builder = builder.param(ptr_ty).param(ptr_ty);
     builder = builder.attr(
         "name",
         ArenaAttribute::Symbol(Symbol::new(CLOSURE_STRUCT_NAME_STR)),
@@ -83,7 +80,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
         ArenaAttribute::List(vec![
             ArenaAttribute::List(vec![
                 ArenaAttribute::Symbol(Symbol::new("func_ptr")),
-                ArenaAttribute::Type(i64_ty),
+                ArenaAttribute::Type(ptr_ty),
             ]),
             ArenaAttribute::List(vec![
                 ArenaAttribute::Symbol(Symbol::new("env")),
@@ -98,12 +95,6 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
     use trunk_ir::arena::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
-}
-
-fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
 }
 
 /// Pattern: `func.func` -> `clif.func`
@@ -429,10 +420,7 @@ impl ArenaRewritePattern for ClosureStructAdaptPattern {
             ctx.op_mut(new_op)
                 .attributes
                 .insert(Symbol::new("type"), ArenaAttribute::Type(native_ty));
-            if field_idx == 0 {
-                let i64_ty = intern_i64_type(ctx);
-                ctx.set_op_result_type(new_op, 0, i64_ty);
-            } else if field_idx == 1 {
+            if field_idx == 0 || field_idx == 1 {
                 let ptr_ty = intern_ptr_type(ctx);
                 ctx.set_op_result_type(new_op, 0, ptr_ty);
             }
