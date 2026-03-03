@@ -1,11 +1,16 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
-assertion_line: 775
-expression: formatted
+assertion_line: 522
+expression: result
 ---
-clif.symbol_addr sym=lifted_fn -> ptr
-arith.const -> anyref
-adt.struct_new type=struct operands=2 -> struct
-adt.struct_get field=0 type=struct operands=1 -> i64
-adt.struct_get field=1 type=struct operands=1 -> ptr
-clif.call_indirect sig=func operands=2 -> i32
+core.module @test {
+  clif.func {sym_name = @test_fn, type = core.func(core.i32)} {
+      %0 = clif.symbol_addr {sym = @lifted_fn} : core.ptr
+      %1 = arith.const {value = 0} : wasm.anyref
+      %2 = adt.struct_new %0, %1 {type = adt.struct(core.i64, core.ptr) {fields = [[@func_ptr, core.i64], [@env, core.ptr]], name = @_closure}} : adt.struct(core.i64, core.ptr) {fields = [[@func_ptr, core.i64], [@env, core.ptr]], name = @_closure}
+      %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i64, core.ptr) {fields = [[@func_ptr, core.i64], [@env, core.ptr]], name = @_closure}} : core.i64
+      %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i64, core.ptr) {fields = [[@func_ptr, core.i64], [@env, core.ptr]], name = @_closure}} : core.ptr
+      %5 = clif.call_indirect %3, %4 {sig = core.func(core.i32, core.ptr)} : core.i32
+      clif.return %5
+  }
+}

@@ -5,11 +5,13 @@
 //! `parent_block` validity to skip deleted ops.
 
 use super::ArenaModule;
-use super::conversion_target::{ArenaConversionTarget, IllegalOp};
+use super::conversion_target::{ArenaConversionTarget, IllegalOp, LegalityCheck};
 use super::pattern::ArenaRewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::ArenaTypeConverter;
 use crate::arena::context::IrContext;
+use crate::arena::dialect::core as arena_core;
+use crate::arena::ops::ArenaDialectOp;
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 
 /// Result of applying rewrite patterns.
@@ -48,6 +50,17 @@ pub struct PatternApplicator {
     patterns: Vec<Box<dyn ArenaRewritePattern>>,
     max_iterations: usize,
     type_converter: ArenaTypeConverter,
+    /// Optional conversion target for legality checks.
+    /// When set, legal operations are skipped for cast insertion and pattern matching.
+    target: Option<ArenaConversionTarget>,
+    /// Whether to automatically convert block argument types and insert
+    /// `unrealized_conversion_cast` for operand type mismatches.
+    ///
+    /// This is automatically enabled when a conversion target is set via
+    /// `with_target()`, since dialect conversion always implies type conversion.
+    /// Non-conversion passes that only use the type converter for pattern queries
+    /// should leave this disabled (the default).
+    auto_type_conversion: bool,
 }
 
 impl PatternApplicator {
@@ -57,12 +70,39 @@ impl PatternApplicator {
             patterns: Vec::new(),
             max_iterations: 10,
             type_converter,
+            target: None,
+            auto_type_conversion: false,
         }
+    }
+
+    /// Set the conversion target for legality-aware processing.
+    ///
+    /// When a target is set, the applicator skips cast insertion and
+    /// pattern matching for operations that are already legal.
+    /// Also enables automatic type conversion (block arg conversion +
+    /// cast insertion).
+    pub fn with_target(mut self, target: ArenaConversionTarget) -> Self {
+        self.target = Some(target);
+        self.auto_type_conversion = true;
+        self
     }
 
     /// Add a rewrite pattern.
     pub fn add_pattern(mut self, pattern: impl ArenaRewritePattern + 'static) -> Self {
         self.patterns.push(Box::new(pattern));
+        self
+    }
+
+    /// Enable or disable automatic type conversion.
+    ///
+    /// When enabled, block argument types are converted and
+    /// `unrealized_conversion_cast` ops are inserted for operand type
+    /// mismatches before pattern matching.  This is automatically enabled
+    /// by [`with_target()`](Self::with_target), but can also be set
+    /// independently for passes that need type conversion without a
+    /// conversion target.
+    pub fn with_auto_type_conversion(mut self, enable: bool) -> Self {
+        self.auto_type_conversion = enable;
         self
     }
 
@@ -151,6 +191,22 @@ impl PatternApplicator {
     ) -> usize {
         let mut changes = 0;
 
+        // Step 1: Convert block argument types before processing ops.
+        // Only do this when auto_type_conversion is enabled (dialect conversion
+        // passes), so that non-conversion passes don't inadvertently change types.
+        if self.auto_type_conversion && !self.type_converter.is_empty() {
+            let block_args = ctx.block_args(block).to_vec();
+            for (i, arg_val) in block_args.iter().enumerate() {
+                let raw_ty = ctx.value_ty(*arg_val);
+                if let Some(new_ty) = self.type_converter.convert_type(ctx, raw_ty)
+                    && new_ty != raw_ty
+                {
+                    ctx.set_block_arg_type(block, i as u32, new_ty);
+                    changes += 1;
+                }
+            }
+        }
+
         // Snapshot the ops in this block
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
@@ -171,20 +227,63 @@ impl PatternApplicator {
                 continue;
             }
 
-            // Try each pattern
-            for pattern in &self.patterns {
-                let mut rw = PatternRewriter::new(&self.type_converter);
-                let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
-                if matched && rw.has_mutations() {
-                    let mutations = rw.take_mutations();
-                    rewriter::apply_mutations(ctx, op, mutations, module_first_block);
-                    changes += 1;
-                    break; // Only apply one pattern per op per iteration
+            // Skip cast insertion and pattern matching for legal operations
+            let is_legal = self.target.as_ref().is_some_and(|t| {
+                t.has_constraints() && t.is_legal(ctx, op) == LegalityCheck::Legal
+            });
+
+            if !is_legal {
+                // Step 2: Insert conversion casts for operand type mismatches.
+                // Only insert casts when auto_type_conversion is enabled, so that
+                // non-conversion passes don't accidentally box/cast operands of
+                // unrelated ops.
+                if self.auto_type_conversion && !self.type_converter.is_empty() {
+                    changes += self.insert_conversion_casts(ctx, block, op);
+                }
+
+                // Try each pattern
+                for pattern in &self.patterns {
+                    let mut rw = PatternRewriter::new(&self.type_converter);
+                    let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
+                    if matched && rw.has_mutations() {
+                        let mutations = rw.take_mutations();
+                        rewriter::apply_mutations(ctx, op, mutations, module_first_block);
+                        changes += 1;
+                        break; // Only apply one pattern per op per iteration
+                    }
                 }
             }
         }
 
         changes
+    }
+
+    /// Insert `core.unrealized_conversion_cast` for operands whose types
+    /// need conversion. Skips `unrealized_conversion_cast` itself to avoid
+    /// infinite loops.
+    fn insert_conversion_casts(&self, ctx: &mut IrContext, block: BlockRef, op: OpRef) -> usize {
+        // Skip unrealized_conversion_cast itself to avoid infinite loops
+        if arena_core::UnrealizedConversionCast::from_op(ctx, op).is_ok() {
+            return 0;
+        }
+
+        let mut cast_count = 0;
+        let operands = ctx.op_operands(op).to_vec();
+        for (i, &operand) in operands.iter().enumerate() {
+            let raw_ty = ctx.value_ty(operand);
+            if let Some(target_ty) = self.type_converter.convert_type(ctx, raw_ty)
+                && target_ty != raw_ty
+            {
+                let loc = ctx.op(op).location;
+                let cast = arena_core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
+                let cast_ref = cast.op_ref();
+                let cast_result = cast.result(ctx);
+                ctx.insert_op_before(block, op, cast_ref);
+                ctx.set_op_operand(op, i as u32, cast_result);
+                cast_count += 1;
+            }
+        }
+        cast_count
     }
 }
 

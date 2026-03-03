@@ -5,8 +5,10 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use trunk_ir::dialect::core::Module;
-use trunk_ir::{DialectOp, Operation, Region, Symbol};
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
+use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::ir::Symbol;
 
 use crate::{CompilationError, CompilationResult};
 
@@ -28,14 +30,14 @@ impl std::fmt::Display for ValidationError {
 /// (except allowed exceptions like `core.module`).
 ///
 /// Returns an error if validation fails, preventing emission.
-pub fn validate_clif_ir<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> CompilationResult<()> {
+pub fn validate_clif_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResult<()> {
     let mut errors: Vec<String> = Vec::new();
 
-    let body = module.body(db);
-    validate_region(db, body, &mut errors);
+    if let Some(body) = module.body(ctx) {
+        validate_region(ctx, body, &mut errors);
+    } else {
+        errors.push("Module has no body region".to_string());
+    }
 
     if errors.is_empty() {
         Ok(())
@@ -49,107 +51,49 @@ pub fn validate_clif_ir<'db>(
     }
 }
 
-/// Validate a region recursively.
-fn validate_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
-    errors: &mut Vec<String>,
-) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            validate_operation(db, op, errors);
-        }
+fn validate_region(ctx: &IrContext, region: RegionRef, errors: &mut Vec<String>) {
+    let region_data = ctx.region(region);
+    for &block in &region_data.blocks {
+        validate_block(ctx, block, errors);
     }
 }
 
-/// Validate a single operation.
-fn validate_operation<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    errors: &mut Vec<String>,
-) {
-    let dialect = op.dialect(db);
-    let name = op.name(db);
+fn validate_block(ctx: &IrContext, block: BlockRef, errors: &mut Vec<String>) {
+    let block_data = ctx.block(block);
+    for &op in &block_data.ops {
+        validate_operation(ctx, op, errors);
+    }
+}
 
-    // Check dialect - must be clif (with specific exceptions)
-    if !is_allowed_dialect(db, op) {
+fn validate_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+    let op_data = ctx.op(op);
+    let dialect = op_data.dialect;
+    let name = op_data.name;
+
+    if !is_allowed_dialect(ctx, op) {
         errors.push(format!("Non-clif operation found: {}.{}", dialect, name));
     }
 
     // Recursively validate nested regions
-    for region in op.regions(db).iter() {
-        validate_region(db, *region, errors);
+    for &region in &op_data.regions {
+        validate_region(ctx, region, errors);
     }
 }
 
-/// Check if an operation's dialect is allowed in the emit phase.
-fn is_allowed_dialect<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
+fn is_allowed_dialect(ctx: &IrContext, op: OpRef) -> bool {
     let clif_dialect = Symbol::new("clif");
-    let dialect = op.dialect(db);
+    let core_dialect = Symbol::new("core");
+    let module_name = Symbol::new("module");
+    let op_data = ctx.op(op);
 
-    if dialect == clif_dialect {
+    if op_data.dialect == clif_dialect {
         return true;
     }
 
     // Allow core.module at the top level
-    if trunk_ir::dialect::core::Module::matches(db, *op) {
+    if op_data.dialect == core_dialect && op_data.name == module_name {
         return true;
     }
 
     false
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use salsa_test_macros::salsa_test;
-    use trunk_ir::dialect::{clif, core};
-    use trunk_ir::{Block, BlockId, DialectOp, DialectType, Location, PathId, Span, Symbol, idvec};
-
-    fn test_location(db: &dyn salsa::Database) -> Location<'_> {
-        let path = PathId::new(db, "file:///test.trb".to_owned());
-        Location::new(path, Span::new(0, 0))
-    }
-
-    #[salsa::tracked]
-    fn make_valid_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i64_ty = core::I64::new(db).as_type();
-
-        let iconst_op = clif::iconst(db, location, i64_ty, 42).as_operation();
-
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![iconst_op]);
-        let region = trunk_ir::Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_validate_valid_module(db: &salsa::DatabaseImpl) {
-        let module = make_valid_module(db);
-        assert!(validate_clif_ir(db, module).is_ok());
-    }
-
-    #[salsa::tracked]
-    fn make_invalid_module(db: &dyn salsa::Database) -> Module<'_> {
-        let location = test_location(db);
-        let i64_ty = core::I64::new(db).as_type();
-
-        // Use a func.constant (non-clif) operation
-        let const_op =
-            trunk_ir::dialect::func::constant(db, location, i64_ty, Symbol::new("some_func"))
-                .as_operation();
-
-        let block = Block::new(db, BlockId::fresh(), location, idvec![], idvec![const_op]);
-        let region = trunk_ir::Region::new(db, location, idvec![block]);
-        Module::create(db, location, "test".into(), region)
-    }
-
-    #[salsa_test]
-    fn test_validate_rejects_non_clif_ops(db: &salsa::DatabaseImpl) {
-        let module = make_invalid_module(db);
-        let result = validate_clif_ir(db, module);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Non-clif operation found"));
-    }
 }

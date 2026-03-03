@@ -32,5 +32,6 @@
 mod resolve_unrealized_casts;
 
 pub use resolve_unrealized_casts::{
-    ResolveResult, UnresolvedCast, UnresolvedCastError, resolve_unrealized_casts,
+    ArenaResolveResult, ArenaUnresolvedCast, ResolveResult, UnresolvedCast, UnresolvedCastError,
+    resolve_unrealized_casts, resolve_unrealized_casts_arena,
 };

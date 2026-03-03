@@ -4,7 +4,7 @@
 //! no value remapping is needed — RAUW handles that directly on the context.
 
 use crate::arena::context::IrContext;
-use crate::arena::refs::{OpRef, ValueRef};
+use crate::arena::refs::{OpRef, TypeRef, ValueRef};
 use crate::arena::rewrite::type_converter::ArenaTypeConverter;
 
 /// Accumulated mutations from a pattern rewrite.
@@ -109,6 +109,29 @@ impl<'a> PatternRewriter<'a> {
             erase_values: self.erase_values,
             module_ops: self.module_ops,
         }
+    }
+
+    // === Type access (type conversion applied) ===
+
+    /// Get the result type at the given index with automatic type conversion applied.
+    pub fn result_type(&self, ctx: &IrContext, op: OpRef, index: usize) -> Option<TypeRef> {
+        ctx.op_result_types(op)
+            .get(index)
+            .map(|&ty| self.type_converter.convert_type_or_identity(ctx, ty))
+    }
+
+    /// Get all result types with automatic type conversion applied.
+    pub fn result_types(&self, ctx: &IrContext, op: OpRef) -> Vec<TypeRef> {
+        ctx.op_result_types(op)
+            .iter()
+            .map(|&ty| self.type_converter.convert_type_or_identity(ctx, ty))
+            .collect()
+    }
+
+    /// Get the type of a value with automatic type conversion applied.
+    pub fn get_value_type(&self, ctx: &IrContext, value: ValueRef) -> TypeRef {
+        let raw_ty = ctx.value_ty(value);
+        self.type_converter.convert_type_or_identity(ctx, raw_ty)
     }
 
     // === Convenience helpers ===

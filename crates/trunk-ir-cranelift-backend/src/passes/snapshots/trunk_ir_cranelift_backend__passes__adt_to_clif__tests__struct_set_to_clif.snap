@@ -1,9 +1,13 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
-expression: do_lower_struct_set(db)
+assertion_line: 410
+expression: result
 ---
 core.module @test {
-  %0 = clif.iconst {value = 0} : core.ptr
-  %1 = clif.iconst {value = 42} : core.i32
-  clif.store %1, %0 {offset = 0}
+  func.func @test_fn() -> core.nil {
+      %0 = clif.iconst {value = 0} : core.ptr
+      %1 = clif.iconst {value = 42} : core.i32
+      clif.store %1, %0 {offset = 0}
+      func.return
+  }
 }

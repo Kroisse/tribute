@@ -370,7 +370,7 @@ fn stage_cont_to_trampoline<'db>(
 /// Returns an error if any `cont.*` operations remain after conversion.
 fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
     with_arena_session(db, module, |ctx, m| {
-        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt_arena(ctx, m);
+        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
     })
 }
 
@@ -669,83 +669,101 @@ pub fn compile_to_wasm_binary<'db>(
 
 /// Compile a TrunkIR module to a native object file.
 ///
-/// This function:
-/// 1. Lowers `func.*` operations to `clif.*`
-/// 2. Lowers `arith.*` operations to `clif.*`
-/// 3. Resolves unrealized conversion casts using native type converter
-/// 4. Validates and emits the native object file via Cranelift
+/// This function runs all backend passes in a single arena session:
+/// 1. Generates native entrypoint
+/// 2. Lowers scf/func/cf/adt/arith dialects to `clif.*`
+/// 3. Runs RTTI, RC insertion, and RC lowering passes
+/// 4. Resolves unrealized conversion casts
+/// 5. Validates and emits the native object file via Cranelift
 fn compile_module_to_native<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
     sanitize: bool,
 ) -> NativeCompilationResult<Vec<u8>> {
-    use tribute_passes::native_type_converter;
-    use trunk_ir::transforms::lower_scf_to_cf;
+    use trunk_ir::arena::bridge::import_salsa_module;
+    use trunk_ir::conversion::resolve_unrealized_casts_arena;
 
-    // Phase -1 - Generate native entrypoint (arena)
-    let module = with_arena_session(db, module, |ctx, m| {
-        tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, m, sanitize);
-    });
+    let _span = tracing::info_span!("compile_module_to_native").entered();
+
+    // Import into arena once
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+
+    // Phase -1 - Generate native entrypoint
+    tribute_passes::native::entrypoint::generate_native_entrypoint(
+        &mut ctx,
+        arena_module,
+        sanitize,
+    );
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
-    let module = lower_scf_to_cf(db, module);
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_scf_to_cf");
+    trunk_ir::arena::transforms::scf_to_cf::lower_scf_to_cf(&mut ctx, arena_module);
 
     // Phase 1 - Lower func dialect to clif dialect
-    let module = func_to_clif::lower(db, module, native_type_converter())
-        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
-
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "func_to_clif");
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        func_to_clif::lower(&mut ctx, arena_module, type_converter);
+    }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
-    let module = cf_to_clif::lower(db, module, native_type_converter())
-        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "cf_to_clif");
-
-    // Phase 1.9-1.95 - RTTI + ADT RC header (arena session)
-    let module = with_arena_session(db, module, |ctx, m| {
+    {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
-        let rtti_map = tribute_passes::native::rtti::generate_rtti(ctx, m, &type_converter);
-        tribute_passes::native::adt_rc_header::lower(ctx, m, type_converter, &rtti_map.type_to_idx);
-    });
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "rtti+adt_rc_header");
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        cf_to_clif::lower(&mut ctx, arena_module, type_converter);
+    }
 
-    // Phase 2 - Lower ADT struct access operations to clif dialect (struct_get/struct_set)
-    let module = adt_to_clif::lower(db, module, native_type_converter())
-        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "adt_to_clif");
+    // Phase 1.9-1.95 - RTTI + ADT RC header
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        let rtti_map =
+            tribute_passes::native::rtti::generate_rtti(&mut ctx, arena_module, &type_converter);
+        tribute_passes::native::adt_rc_header::lower(
+            &mut ctx,
+            arena_module,
+            type_converter,
+            &rtti_map.type_to_idx,
+        );
+    }
+
+    // Phase 2 - Lower ADT struct access operations to clif dialect
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        adt_to_clif::lower(&mut ctx, arena_module, type_converter);
+    }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
-    let module = arith_to_clif::lower(db, module, native_type_converter())
-        .map_err(trunk_ir_cranelift_backend::CompilationError::ir_validation)?;
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "arith_to_clif");
-
-    // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC (arena session)
-    let module = with_arena_session(db, module, |ctx, m| {
+    {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
-        tribute_passes::native::tribute_rt_to_clif::lower(ctx, m, type_converter);
-        tribute_passes::native::rc_insertion::insert_rc(ctx, m);
-        tribute_passes::native::cont_rc::rewrite_cont_rc(ctx, m);
-    });
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "tribute_rt+rc+cont_rc");
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        arith_to_clif::lower(&mut ctx, arena_module, type_converter);
+    }
+
+    // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        tribute_passes::native::tribute_rt_to_clif::lower(&mut ctx, arena_module, type_converter);
+        tribute_passes::native::rc_insertion::insert_rc(&mut ctx, arena_module);
+        tribute_passes::native::cont_rc::rewrite_cont_rc(&mut ctx, arena_module);
+    }
 
     // Phase 3 - Resolve unrealized_conversion_cast operations
-    let module = {
-        let type_converter = native_type_converter();
-        let result = resolve_unrealized_casts(db, module, &type_converter);
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+        let result = resolve_unrealized_casts_arena(&mut ctx, arena_module, &type_converter);
         if !result.unresolved.is_empty() {
             let details: Vec<String> = result
                 .unresolved
                 .iter()
                 .map(|c| {
+                    let from_td = ctx.types.get(c.from_type);
+                    let to_td = ctx.types.get(c.to_type);
                     format!(
                         "{}.{} -> {}.{}",
-                        c.from_type.dialect(db),
-                        c.from_type.name(db),
-                        c.to_type.dialect(db),
-                        c.to_type.name(db),
+                        from_td.dialect, from_td.name, to_td.dialect, to_td.name,
                     )
                 })
                 .collect();
@@ -757,19 +775,14 @@ fn compile_module_to_native<'db>(
                 ),
             ));
         }
-        result.module
-    };
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "resolve_unrealized_casts");
+    }
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
-    let module = with_arena_session(db, module, |ctx, m| {
-        tribute_passes::native::rc_lowering::lower_rc(ctx, m);
-    });
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "lower_rc");
+    tribute_passes::native::rc_lowering::lower_rc(&mut ctx, arena_module);
 
-    // Phase 4 - Validate and emit (delegated to trunk-ir-cranelift-backend)
-    let _span = tracing::info_span!("emit_module_to_native").entered();
-    emit_module_to_native(db, module)
+    // Phase 4 - Validate and emit
+    let _emit_span = tracing::info_span!("emit_module_to_native").entered();
+    emit_module_to_native(&ctx, arena_module)
 }
 
 /// Compile to native object bytes.

@@ -1,92 +1,83 @@
-//! Tests for cont_to_libmprompt pass.
+//! Tests for cont_to_libmprompt pass (arena-based).
 
-use salsa_test_macros::salsa_test;
-use trunk_ir::dialect::core::{self};
-use trunk_ir::dialect::func::{self};
-use trunk_ir::dialect::scf;
-use trunk_ir::parser::parse_test_module;
-use trunk_ir::{DialectOp, Operation, Region, Type, Value};
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::scf as arena_scf;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::parser::parse_test_module;
+use trunk_ir::arena::printer::print_module;
 
-use super::lower_cont_to_libmprompt;
-use super::push_prompt::compute_live_ins;
+fn run_pass(ir: &str) -> String {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    super::lower_cont_to_libmprompt(&mut ctx, module);
+    print_module(&ctx, module.op())
+}
 
 // ============================================================================
-// FFI declarations
+// Test 1: FFI declarations
 // ============================================================================
 
-#[salsa::tracked]
-fn run_ffi_declarations_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
-        r#"core.module @test {
+#[test]
+fn test_ffi_declarations() {
+    let ir = r#"core.module @test {
   func.func @_placeholder() -> core.nil {
     func.return
   }
-}"#,
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    super::lower_cont_to_libmprompt(&mut ctx, module);
+    let output = print_module(&ctx, module.op());
+
+    // Check all expected FFI function declarations are present
+    let expected_ffi = [
+        "@__tribute_prompt",
+        "@__tribute_yield",
+        "@__tribute_resume",
+        "@__tribute_resume_drop",
+        "@__tribute_yield_active",
+        "@__tribute_get_yield_op_idx",
+        "@__tribute_get_yield_continuation",
+        "@__tribute_get_yield_shift_value",
+        "@__tribute_reset_yield_state",
+    ];
+    for name in &expected_ffi {
+        assert!(
+            output.contains(name),
+            "Expected FFI declaration {} not found in output:\n{}",
+            name,
+            output
+        );
+    }
+
+    // Test idempotency: calling ensure_libmprompt_ffi again shouldn't duplicate
+    let count_before = expected_ffi
+        .iter()
+        .map(|name| output.matches(name).count())
+        .sum::<usize>();
+
+    super::ffi::ensure_libmprompt_ffi(&mut ctx, module);
+    let output_after = print_module(&ctx, module.op());
+    let count_after = expected_ffi
+        .iter()
+        .map(|name| output_after.matches(name).count())
+        .sum::<usize>();
+
+    assert_eq!(
+        count_before, count_after,
+        "FFI declaration count changed after second ensure_libmprompt_ffi call.\nBefore: {}\nAfter: {}",
+        count_before, count_after
     );
-
-    let module = super::ffi::ensure_libmprompt_ffi(db, module);
-
-    // Verify all FFI functions are declared
-    let body = module.body(db);
-    let blocks = body.blocks(db);
-    let entry = blocks.first().ok_or("no entry block")?;
-
-    let mut declared: Vec<String> = Vec::new();
-    for op in entry.operations(db).iter() {
-        if let Ok(func_op) = func::Func::from_operation(db, *op) {
-            declared.push(func_op.sym_name(db).to_string());
-        }
-    }
-
-    for name in super::ffi::FFI_NAMES {
-        if !declared.contains(&name.to_string()) {
-            return Err(format!("Missing FFI declaration: {name}"));
-        }
-    }
-
-    // Verify idempotency: count should not change on second call
-    let func_count_before = entry
-        .operations(db)
-        .iter()
-        .filter(|op| func::Func::from_operation(db, **op).is_ok())
-        .count();
-
-    let module2 = super::ffi::ensure_libmprompt_ffi(db, module);
-    let body2 = module2.body(db);
-    let blocks2 = body2.blocks(db);
-    let entry2 = blocks2.first().ok_or("no entry block after second call")?;
-    let func_count_after = entry2
-        .operations(db)
-        .iter()
-        .filter(|op| func::Func::from_operation(db, **op).is_ok())
-        .count();
-
-    if func_count_after != func_count_before {
-        return Err(format!(
-            "Idempotency failed: expected {func_count_before} funcs, got {func_count_after}",
-        ));
-    }
-
-    Ok(())
-}
-
-#[salsa_test]
-fn test_ffi_declarations(db: &salsa::DatabaseImpl) {
-    let result = run_ffi_declarations_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
 }
 
 // ============================================================================
-// Shift lowering
+// Test 2: Lower cont.shift -> func.call @__tribute_yield
 // ============================================================================
 
-#[salsa::tracked]
-fn run_shift_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_lower_shift_basic() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @test_fn() -> core.ptr {
     %tag = arith.const {value = 42} : core.i32
@@ -98,35 +89,16 @@ fn run_shift_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            if !find_call_in_module(db, &lowered, "__tribute_yield") {
-                return Err("Expected func.call @__tribute_yield after lowering".into());
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_lower_shift_basic(db: &salsa::DatabaseImpl) {
-    let result = run_shift_lowering_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    insta::assert_snapshot!(result);
 }
 
 // ============================================================================
-// Resume lowering
+// Test 3: Lower cont.resume -> func.call @__tribute_resume
 // ============================================================================
 
-#[salsa::tracked]
-fn run_resume_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_lower_resume_basic() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @test_resume(%k: core.ptr, %val: core.ptr) -> core.ptr {
     %result = cont.resume %k, %val : core.ptr
@@ -134,35 +106,16 @@ fn run_resume_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            if !find_call_in_module(db, &lowered, "__tribute_resume") {
-                return Err("Expected func.call @__tribute_resume after lowering".into());
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_lower_resume_basic(db: &salsa::DatabaseImpl) {
-    let result = run_resume_lowering_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    insta::assert_snapshot!(result);
 }
 
 // ============================================================================
-// Drop lowering
+// Test 4: Lower cont.drop -> func.call @__tribute_resume_drop
 // ============================================================================
 
-#[salsa::tracked]
-fn run_drop_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_lower_drop_basic() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @test_drop(%k: core.ptr) -> core.nil {
     cont.drop %k
@@ -170,110 +123,18 @@ fn run_drop_lowering_test(db: &dyn salsa::Database) -> Result<(), String> {
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            if !find_call_in_module(db, &lowered, "__tribute_resume_drop") {
-                return Err("Expected func.call @__tribute_resume_drop after lowering".into());
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_lower_drop_basic(db: &salsa::DatabaseImpl) {
-    let result = run_drop_lowering_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    insta::assert_snapshot!(result);
 }
 
 // ============================================================================
-// Helper: find func.call in module
+// Test 5: compute_live_ins excludes nested defs
 // ============================================================================
 
-fn find_call_in_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: &core::Module<'db>,
-    callee_name: &str,
-) -> bool {
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if find_call_in_op(db, op, callee_name) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn find_call_in_op<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    callee_name: &str,
-) -> bool {
-    // Check if this op is the target call
-    if let Ok(call) = func::Call::from_operation(db, *op)
-        && call.callee(db) == callee_name
-    {
-        return true;
-    }
-
-    // Check nested regions
-    for region in op.regions(db).iter() {
-        for block in region.blocks(db).iter() {
-            for nested_op in block.operations(db).iter() {
-                if find_call_in_op(db, nested_op, callee_name) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-// ============================================================================
-// Live-in analysis: nested region definitions excluded
-// ============================================================================
-
-/// Helper: find the first scf.if operation inside a function, return its regions.
-fn find_scf_if_regions<'db>(
-    db: &'db dyn salsa::Database,
-    module: &core::Module<'db>,
-) -> Option<(Region<'db>, Region<'db>)> {
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let func_body = func_op.body(db);
-                for fblock in func_body.blocks(db).iter() {
-                    for fop in fblock.operations(db).iter() {
-                        if let Ok(if_op) = scf::If::from_operation(db, *fop) {
-                            return Some((if_op.then(db), if_op.r#else(db)));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-#[salsa::tracked]
-fn run_live_ins_excludes_nested_defs_test(db: &dyn salsa::Database) -> Result<(), String> {
-    // Parse a module with nested scf.if inside the then-branch.
-    // The then-branch uses %x (func param, defined outside) and has
-    // nested regions with inner-defined values that must NOT appear as live-ins.
-    let module = parse_test_module(
-        db,
-        r#"core.module @test {
+#[test]
+fn test_live_ins_excludes_nested_defs() {
+    let ir = r#"core.module @test {
   func.func @test_fn(%x: core.i32) -> core.i32 {
-    %cond = arith.const {value = true} : core.i1
+    %cond = arith.const {value = 1} : core.i1
     %r = scf.if %cond : core.i32 {
       %inner = arith.const {value = 42} : core.i32
       scf.yield %inner
@@ -282,60 +143,65 @@ fn run_live_ins_excludes_nested_defs_test(db: &dyn salsa::Database) -> Result<()
     }
     func.return %r
   }
-}"#,
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+
+    // Find the func.func op
+    let body = module.body(&ctx).unwrap();
+    let first_block = ctx.region(body).blocks[0];
+    let mut scf_if_op = None;
+    for &op in &ctx.block(first_block).ops.clone() {
+        if let Ok(func_op) = arena_func::Func::from_op(&ctx, op) {
+            let func_body = func_op.body(&ctx);
+            let func_block = ctx.region(func_body).blocks[0];
+            for &inner_op in &ctx.block(func_block).ops.clone() {
+                if arena_scf::If::from_op(&ctx, inner_op).is_ok() {
+                    scf_if_op = Some(inner_op);
+                    break;
+                }
+            }
+        }
+    }
+    let scf_if_op = scf_if_op.expect("should find scf.if op");
+
+    let regions = ctx.op(scf_if_op).regions.clone();
+    assert_eq!(
+        regions.len(),
+        2,
+        "scf.if should have 2 regions (then, else)"
+    );
+    let then_region = regions[0];
+    let else_region = regions[1];
+
+    // Then region: %inner is defined inside, so 0 live-ins
+    let then_live_ins = super::push_prompt::compute_live_ins(&ctx, then_region);
+    assert_eq!(
+        then_live_ins.len(),
+        0,
+        "then region should have 0 live-ins (all values defined inside), got: {:?}",
+        then_live_ins
     );
 
-    // Extract the else-region of scf.if: it uses %x (defined in func, not in the region)
-    let (_, else_region) = find_scf_if_regions(db, &module).ok_or("Could not find scf.if")?;
-
-    let no_lookup = &(|_: &dyn salsa::Database, _: Value<'_>| -> Option<Type<'_>> { None });
-    let live_ins = compute_live_ins(db, &else_region, no_lookup);
-
-    // %x should be the only live-in (used in else branch via scf.yield)
-    if live_ins.len() != 1 {
-        return Err(format!(
-            "Expected exactly 1 live-in (%x), got {}",
-            live_ins.len()
-        ));
-    }
-
-    // Now test that the THEN-region has NO live-ins
-    // (all values used inside are also defined inside)
-    let (then_region, _) = find_scf_if_regions(db, &module).ok_or("Could not find scf.if")?;
-    let then_live_ins = compute_live_ins(db, &then_region, no_lookup);
-    if !then_live_ins.is_empty() {
-        return Err(format!(
-            "Expected 0 live-ins in then-region, got {}",
-            then_live_ins.len()
-        ));
-    }
-
-    Ok(())
-}
-
-#[salsa_test]
-fn test_live_ins_excludes_nested_defs(db: &salsa::DatabaseImpl) {
-    let result = run_live_ins_excludes_nested_defs_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    // Else region: %x is used but defined outside, so 1 live-in
+    let else_live_ins = super::push_prompt::compute_live_ins(&ctx, else_region);
+    assert_eq!(
+        else_live_ins.len(),
+        1,
+        "else region should have 1 live-in (%x), got: {:?}",
+        else_live_ins
+    );
 }
 
 // ============================================================================
-// Live-in analysis: nested scf.if defs not leaked
+// Test 6: Nested defs not leaked in compute_live_ins
 // ============================================================================
 
-#[salsa::tracked]
-fn run_live_ins_nested_defs_not_leaked_test(db: &dyn salsa::Database) -> Result<(), String> {
-    // Parse a module where the then-branch has a NESTED scf.if.
-    // Without the recursive definition collection fix, values defined
-    // inside the inner scf.if would incorrectly appear as live-ins of
-    // the outer then-region.
-    let module = parse_test_module(
-        db,
-        r#"core.module @test {
+#[test]
+fn test_live_ins_nested_defs_not_leaked() {
+    let ir = r#"core.module @test {
   func.func @test_fn(%x: core.i32) -> core.i32 {
-    %cond = arith.const {value = true} : core.i1
+    %cond = arith.const {value = 1} : core.i1
     %outer_r = scf.if %cond : core.i32 {
       %inner_r = scf.if %cond : core.i32 {
         %deep = arith.const {value = 99} : core.i32
@@ -349,43 +215,49 @@ fn run_live_ins_nested_defs_not_leaked_test(db: &dyn salsa::Database) -> Result<
     }
     func.return %outer_r
   }
-}"#,
+}"#;
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+
+    // Find the outer scf.if op
+    let body = module.body(&ctx).unwrap();
+    let first_block = ctx.region(body).blocks[0];
+    let mut outer_scf_if = None;
+    for &op in &ctx.block(first_block).ops.clone() {
+        if let Ok(func_op) = arena_func::Func::from_op(&ctx, op) {
+            let func_body = func_op.body(&ctx);
+            let func_block = ctx.region(func_body).blocks[0];
+            for &inner_op in &ctx.block(func_block).ops.clone() {
+                if arena_scf::If::from_op(&ctx, inner_op).is_ok() {
+                    outer_scf_if = Some(inner_op);
+                    break;
+                }
+            }
+        }
+    }
+    let outer_scf_if = outer_scf_if.expect("should find outer scf.if op");
+
+    let regions = ctx.op(outer_scf_if).regions.clone();
+    let then_region = regions[0];
+
+    // Then region uses %cond (for the inner scf.if) and %x (in the inner else),
+    // both defined outside. Inner-defined values (%deep, %inner_r) should NOT appear.
+    let live_ins = super::push_prompt::compute_live_ins(&ctx, then_region);
+    assert_eq!(
+        live_ins.len(),
+        2,
+        "outer then region should have 2 live-ins (%cond and %x), got: {:?}",
+        live_ins
     );
-
-    // Extract the outer then-region (contains nested scf.if)
-    let (outer_then, _) = find_scf_if_regions(db, &module).ok_or("Could not find outer scf.if")?;
-
-    let no_lookup = &(|_: &dyn salsa::Database, _: Value<'_>| -> Option<Type<'_>> { None });
-    let live_ins = compute_live_ins(db, &outer_then, no_lookup);
-
-    // Live-ins should be: %cond (scf.if condition) and %x (used in inner else).
-    // %deep and other inner-defined values must NOT appear.
-    if live_ins.len() != 2 {
-        return Err(format!(
-            "Expected 2 live-ins (%cond, %x), got {}",
-            live_ins.len()
-        ));
-    }
-
-    Ok(())
-}
-
-#[salsa_test]
-fn test_live_ins_nested_defs_not_leaked(db: &salsa::DatabaseImpl) {
-    let result = run_live_ins_nested_defs_not_leaked_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
 }
 
 // ============================================================================
-// Handler dispatch: done-only (no suspend arms, triggers unreachable)
+// Test 7: handler_dispatch with done only
 // ============================================================================
 
-#[salsa::tracked]
-fn run_handler_dispatch_done_only_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_handler_dispatch_done_only() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @test_done_only() -> core.i32 {
     %0 = cont.push_prompt {tag = 1} : core.i32 {
@@ -403,40 +275,16 @@ fn run_handler_dispatch_done_only_test(db: &dyn salsa::Database) -> Result<(), S
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            // Verify __tribute_prompt call exists (from push_prompt)
-            if !find_call_in_module(db, &lowered, "__tribute_prompt") {
-                return Err("Expected __tribute_prompt call".into());
-            }
-            // Verify __tribute_yield_active call exists (from handler_dispatch)
-            if !find_call_in_module(db, &lowered, "__tribute_yield_active") {
-                return Err("Expected __tribute_yield_active call".into());
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_handler_dispatch_done_only(db: &salsa::DatabaseImpl) {
-    let result = run_handler_dispatch_done_only_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    insta::assert_snapshot!(result);
 }
 
 // ============================================================================
-// Handler dispatch: single suspend arm
+// Test 8: handler_dispatch with single suspend arm
 // ============================================================================
 
-#[salsa::tracked]
-fn run_handler_dispatch_single_suspend_arm_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_handler_dispatch_single_suspend_arm() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @__tribute_resume(%k: core.ptr, %sv: core.ptr) -> core.ptr {
     func.return %k
@@ -462,41 +310,16 @@ fn run_handler_dispatch_single_suspend_arm_test(db: &dyn salsa::Database) -> Res
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            if !find_call_in_module(db, &lowered, "__tribute_yield_active") {
-                return Err("Expected __tribute_yield_active call (dispatch loop)".into());
-            }
-            if !find_call_in_module(db, &lowered, "__tribute_get_yield_op_idx") {
-                return Err("Expected __tribute_get_yield_op_idx call (shift branch)".into());
-            }
-            if !find_call_in_module(db, &lowered, "__tribute_resume") {
-                return Err("Expected __tribute_resume call (suspend arm body)".into());
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_handler_dispatch_single_suspend_arm(db: &salsa::DatabaseImpl) {
-    let result = run_handler_dispatch_single_suspend_arm_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
+    insta::assert_snapshot!(result);
 }
 
 // ============================================================================
-// Handler dispatch: multiple suspend arms
+// Test 9: handler_dispatch with multiple suspend arms
 // ============================================================================
 
-#[salsa::tracked]
-fn run_handler_dispatch_multi_suspend_arms_test(db: &dyn salsa::Database) -> Result<(), String> {
-    let module = parse_test_module(
-        db,
+#[test]
+fn test_handler_dispatch_multi_suspend_arms() {
+    let result = run_pass(
         r#"core.module @test {
   func.func @__tribute_resume(%k: core.ptr, %sv: core.ptr) -> core.ptr {
     func.return %k
@@ -527,73 +350,5 @@ fn run_handler_dispatch_multi_suspend_arms_test(db: &dyn salsa::Database) -> Res
   }
 }"#,
     );
-
-    let result = lower_cont_to_libmprompt(db, module);
-    match result {
-        Ok(lowered) => {
-            if !find_call_in_module(db, &lowered, "__tribute_get_yield_op_idx") {
-                return Err(
-                    "Expected __tribute_get_yield_op_idx call (dispatch needs op_idx)".into(),
-                );
-            }
-            // With multiple arms, nested if-else dispatch uses arith.cmp_eq
-            if !find_op_in_module(db, &lowered, "arith", "cmp_eq") {
-                return Err(
-                    "Expected arith.cmp_eq (nested if-else dispatch for op_idx comparison)".into(),
-                );
-            }
-            Ok(())
-        }
-        Err(e) => Err(format!("Lowering failed: {e:?}")),
-    }
-}
-
-#[salsa_test]
-fn test_handler_dispatch_multi_suspend_arms(db: &salsa::DatabaseImpl) {
-    let result = run_handler_dispatch_multi_suspend_arms_test(db);
-    if let Err(msg) = result {
-        panic!("{msg}");
-    }
-}
-
-// ============================================================================
-// Helper: find operation by dialect and name in module
-// ============================================================================
-
-fn find_op_in_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: &core::Module<'db>,
-    dialect: &str,
-    name: &str,
-) -> bool {
-    let body = module.body(db);
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if find_op_recursive(db, op, dialect, name) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn find_op_recursive<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-    dialect: &str,
-    name: &str,
-) -> bool {
-    if op.dialect(db) == dialect && op.name(db) == name {
-        return true;
-    }
-    for region in op.regions(db).iter() {
-        for block in region.blocks(db).iter() {
-            for nested_op in block.operations(db).iter() {
-                if find_op_recursive(db, nested_op, dialect, name) {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    insta::assert_snapshot!(result);
 }
