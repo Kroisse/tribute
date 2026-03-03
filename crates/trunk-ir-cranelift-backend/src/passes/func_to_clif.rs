@@ -475,9 +475,12 @@ mod tests {
     fn test_call_indirect_to_clif() {
         let result = run_pass(
             r#"core.module @test {
-  %0 = arith.const {value = 0} : core.i32
-  %1 = arith.const {value = 42} : core.i32
-  %2 = func.call_indirect %0, %1 : core.i32
+  func.func @test_fn() -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    %1 = arith.const {value = 42} : core.i32
+    %2 = func.call_indirect %0, %1 : core.i32
+    func.return %2
+  }
 }"#,
         );
         insta::assert_snapshot!(result);
@@ -487,12 +490,15 @@ mod tests {
     fn test_closure_struct_adaptation() {
         let result = run_pass(
             r#"core.module @test {
-  %0 = func.constant {func_ref = @lifted_fn} : core.i32
-  %1 = arith.const {value = 0} : core.ptr
-  %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}
-  %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
-  %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.ptr
-  %5 = func.call_indirect %3, %4 : core.i32
+  func.func @test_fn() -> core.i32 {
+    %0 = func.constant {func_ref = @lifted_fn} : core.i32
+    %1 = arith.const {value = 0} : core.ptr
+    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.ptr
+    %5 = func.call_indirect %3, %4 : core.i32
+    func.return %5
+  }
 }"#,
         );
         insta::assert_snapshot!(result);
@@ -502,12 +508,15 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = run_pass(
             r#"core.module @test {
-  %0 = func.constant {func_ref = @lifted_fn} : core.i32
-  %1 = arith.const {value = 0} : wasm.anyref
-  %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}
-  %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
-  %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : wasm.anyref
-  %5 = func.call_indirect %3, %4 : core.i32
+  func.func @test_fn() -> core.i32 {
+    %0 = func.constant {func_ref = @lifted_fn} : core.i32
+    %1 = arith.const {value = 0} : wasm.anyref
+    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : wasm.anyref
+    %5 = func.call_indirect %3, %4 : core.i32
+    func.return %5
+  }
 }"#,
         );
         insta::assert_snapshot!(result);

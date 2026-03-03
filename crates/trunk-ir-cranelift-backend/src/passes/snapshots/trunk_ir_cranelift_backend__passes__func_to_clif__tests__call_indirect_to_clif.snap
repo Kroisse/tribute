@@ -1,10 +1,13 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
-assertion_line: 483
+assertion_line: 486
 expression: result
 ---
 core.module @test {
-  %0 = arith.const {value = 0} : core.i32
-  %0 = arith.const {value = 42} : core.i32
-  %0 = clif.call_indirect %?, %? {sig = core.func(core.i32, core.i32)} : core.i32
+  clif.func {sym_name = @test_fn, type = core.func(core.i32)} {
+      %0 = arith.const {value = 0} : core.i32
+      %1 = arith.const {value = 42} : core.i32
+      %2 = clif.call_indirect %0, %1 {sig = core.func(core.i32, core.i32)} : core.i32
+      clif.return %2
+  }
 }

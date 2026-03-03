@@ -1,8 +1,11 @@
 ---
 source: crates/trunk-ir-cranelift-backend/src/passes/adt_to_clif.rs
-assertion_line: 414
+assertion_line: 423
 expression: result
 ---
 core.module @test {
-  %0 = clif.iconst {value = 0} : core.ptr
+  func.func @test_fn() -> core.ptr {
+      %0 = clif.iconst {value = 0} : core.ptr
+      func.return %0
+  }
 }
