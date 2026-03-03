@@ -194,13 +194,16 @@ impl ArenaRewritePattern for ArithBinOpPattern {
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
+        // Use raw (pre-conversion) result type for signedness check, since
+        // the type converter maps nat/bool → core.i32/i8, losing unsigned info.
+        let raw_result_ty = ctx.op_result_types(op).first().copied();
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
         let category = type_category(ctx, Some(result_ty));
         let loc = ctx.op(op).location;
-        let is_unsigned = is_unsigned_int(ctx, Some(result_ty));
+        let is_unsigned = is_unsigned_int(ctx, raw_result_ty);
 
         let new_op = if name == Symbol::new("add") {
             match category {
@@ -450,6 +453,8 @@ impl ArenaRewritePattern for ArithConversionPattern {
         let Some(dst_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
+        // Use raw (pre-conversion) result type for signedness checks.
+        let raw_dst_ty = ctx.op_result_types(op).first().copied();
         let dst_cat = type_category(ctx, Some(dst_ty));
 
         let loc = ctx.op(op).location;
@@ -490,7 +495,7 @@ impl ArenaRewritePattern for ArithConversionPattern {
                 ("int", "f32" | "f64") => {
                     arena_clif::fcvt_from_sint(ctx, loc, operand, dst_ty).op_ref()
                 }
-                ("f32" | "f64", "int") if is_unsigned_int(ctx, Some(dst_ty)) => {
+                ("f32" | "f64", "int") if is_unsigned_int(ctx, raw_dst_ty) => {
                     arena_clif::fcvt_to_uint(ctx, loc, operand, dst_ty).op_ref()
                 }
                 ("f32" | "f64", "int") => {
