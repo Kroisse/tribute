@@ -392,7 +392,7 @@ impl ArenaRewritePattern for ClosureStructAdaptPattern {
         // Handle adt.struct_new on _closure
         if let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) {
             let ty = struct_new.r#type(ctx);
-            if !is_closure_struct(ctx, ty) {
+            if !is_closure_struct(ctx, ty) || ty == native_ty {
                 return false;
             }
             let new_op = crate::passes::cf_to_clif::rebuild_op_as(
@@ -416,7 +416,7 @@ impl ArenaRewritePattern for ClosureStructAdaptPattern {
         // Handle adt.struct_get on _closure
         if let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) {
             let ty = struct_get.r#type(ctx);
-            if !is_closure_struct(ctx, ty) {
+            if !is_closure_struct(ctx, ty) || ty == native_ty {
                 return false;
             }
             let field_idx = struct_get.field(ctx);
