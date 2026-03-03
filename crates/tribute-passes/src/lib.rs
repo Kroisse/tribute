@@ -39,6 +39,4 @@ pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{
     ApplyResult, PatternApplicator, PatternRewriter, RewriteContext, RewritePattern,
 };
-pub use type_converter::generic_type_converter;
-// Arena-based type converter is available via wasm::type_converter::wasm_type_converter
-// Salsa-based type converter for pipeline: wasm::type_converter::salsa_converter::wasm_type_converter
+pub use type_converter::generic_type_converter_arena;

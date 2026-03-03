@@ -7,8 +7,8 @@
 //!
 //! See:
 //! - `crates/tribute-front/src/ast_to_ir/lower.rs`: `cast_if_needed()`
-//! - `crates/tribute-passes/src/type_converter.rs`: boxing materializers in `generic_type_converter()` closures
-//! - `trunk-ir/src/conversion.rs`: `resolve_unrealized_casts()`
+//! - `crates/tribute-passes/src/type_converter.rs`: boxing materializers in `generic_type_converter_arena()`
+//! - `trunk-ir/src/conversion.rs`: `resolve_unrealized_casts_arena()`
 
 use trunk_ir::dialect::core::Module;
 

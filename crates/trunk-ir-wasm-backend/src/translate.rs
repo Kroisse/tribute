@@ -45,23 +45,6 @@ pub fn emit_module_to_wasm_arena(
     })
 }
 
-/// Salsa-tracked wrapper: imports Salsa module to arena and emits.
-#[salsa::tracked]
-pub fn emit_module_to_wasm<'db>(
-    db: &'db dyn salsa::Database,
-    module: trunk_ir::dialect::core::Module<'db>,
-) -> CompilationResult<crate::WasmBinary<'db>> {
-    let (mut ctx, arena_module) =
-        trunk_ir::arena::bridge::import_salsa_module(db, module.operation());
-    let output = emit_module_to_wasm_arena(&mut ctx, arena_module)?;
-    Ok(crate::WasmBinary::new(
-        db,
-        output.bytes,
-        output.exports,
-        output.imports,
-    ))
-}
-
 /// Extract metadata (exports and imports) from a compiled module.
 fn extract_metadata(ctx: &IrContext, module: ArenaModule) -> (Vec<Symbol>, Vec<(Symbol, Symbol)>) {
     let mut exports = Vec::new();
