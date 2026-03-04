@@ -106,7 +106,7 @@ pub fn print_type(ctx: &IrContext, ty: TypeRef) -> String {
 pub fn print_module(ctx: &IrContext, root: OpRef) -> String {
     let mut state = PrintState::new(ctx);
     let mut out = String::new();
-    print_module_op(&mut state, &mut out, root).expect("fmt::Write to String never fails");
+    print_module_op(&mut state, &mut out, root, 0).expect("fmt::Write to String never fails");
     out
 }
 
@@ -247,7 +247,7 @@ fn print_operation(
     let is_module = dialect == crate::Symbol::new("core") && name == crate::Symbol::new("module");
 
     if is_module {
-        return print_module_op(state, f, op);
+        return print_module_op(state, f, op, indent);
     }
     if is_func {
         return print_func_op(state, f, op, indent);
@@ -408,9 +408,15 @@ fn print_region(
 // Special operation printers
 // ============================================================================
 
-fn print_module_op(state: &mut PrintState<'_>, f: &mut impl Write, op: OpRef) -> fmt::Result {
+fn print_module_op(
+    state: &mut PrintState<'_>,
+    f: &mut impl Write,
+    op: OpRef,
+    indent: usize,
+) -> fmt::Result {
+    let indent_str = " ".repeat(indent);
     let data = state.ctx.op(op);
-    write!(f, "core.module")?;
+    write!(f, "{indent_str}core.module")?;
 
     // Module name
     if let Some(Attribute::Symbol(name)) = data.attributes.get(&crate::Symbol::new("sym_name")) {
@@ -436,13 +442,13 @@ fn print_module_op(state: &mut PrintState<'_>, f: &mut impl Write, op: OpRef) ->
             for &child_op in &ops {
                 let saved = state.save_counters();
                 state.reset_numbering();
-                print_operation(state, f, child_op, 2)?;
+                print_operation(state, f, child_op, indent + 2)?;
                 state.reset_numbering();
                 state.restore_counters(saved);
             }
         }
 
-        f.write_str("}\n")?;
+        writeln!(f, "{indent_str}}}")?;
     } else {
         f.write_char('\n')?;
     }
@@ -758,6 +764,92 @@ mod tests {
         assert!(output.contains("func.func @main"));
         assert!(output.contains("arith.const {value = 42}"));
         assert!(output.contains("func.return %0"));
+    }
+
+    #[test]
+    fn test_print_nested_module() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
+
+        // Inner function: fn get_x(%0: i32) -> i32 { return %0; }
+        let inner_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let x = ctx.block_arg(inner_entry, 0);
+        let ret_inner = func::r#return(&mut ctx, loc, [x]);
+        ctx.push_op(inner_entry, ret_inner.op_ref());
+
+        let inner_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![inner_entry],
+            parent_op: None,
+        });
+        let inner_func = func::func(&mut ctx, loc, Symbol::new("get_x"), func_ty, inner_body);
+
+        // Inner module: core.module @Point { func.func @get_x ... }
+        let inner_mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        ctx.push_op(inner_mod_block, inner_func.op_ref());
+
+        let inner_mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![inner_mod_block],
+            parent_op: None,
+        });
+        let inner_module = core::module(&mut ctx, loc, Symbol::new("Point"), inner_mod_region);
+
+        // Outer function: fn make() -> i32 { return 1; }
+        let outer_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let one = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        ctx.push_op(outer_entry, one.op_ref());
+        let one_val = one.result(&ctx);
+        let ret_outer = func::r#return(&mut ctx, loc, [one_val]);
+        ctx.push_op(outer_entry, ret_outer.op_ref());
+
+        let outer_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![outer_entry],
+            parent_op: None,
+        });
+        let make_func_ty = make_func_type(&mut ctx, &[], i32_ty);
+        let outer_func = func::func(&mut ctx, loc, Symbol::new("make"), make_func_ty, outer_body);
+
+        // Outer module: core.module @test { core.module @Point { ... }  func.func @make ... }
+        let outer_mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        ctx.push_op(outer_mod_block, inner_module.op_ref());
+        ctx.push_op(outer_mod_block, outer_func.op_ref());
+
+        let outer_mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![outer_mod_block],
+            parent_op: None,
+        });
+        let outer_module = core::module(&mut ctx, loc, Symbol::new("test"), outer_mod_region);
+
+        let output = print_module(&ctx, outer_module.op_ref());
+        insta::assert_snapshot!(output);
     }
 
     #[test]
