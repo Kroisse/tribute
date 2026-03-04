@@ -237,6 +237,7 @@ fn emit_literal_check<'db>(
 }
 
 /// Build a then-region for a guarded arm (nested scf.if for guard).
+#[allow(clippy::too_many_arguments)]
 fn build_guarded_arm_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,

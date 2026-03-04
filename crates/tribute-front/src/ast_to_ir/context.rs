@@ -591,7 +591,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// core.func stores params as: [result, param1, param2, ...] (result first).
     pub fn func_type_param_count(&self, ir: &IrContext, ty: TypeRef) -> usize {
         let td = ir.types.get(ty);
-        if td.params.len() > 0 {
+        if !td.params.is_empty() {
             td.params.len() - 1 // first param is the result type, rest are param types
         } else {
             0

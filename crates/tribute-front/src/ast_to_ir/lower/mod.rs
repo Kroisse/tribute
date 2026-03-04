@@ -271,8 +271,6 @@ pub(super) fn convert_annotation_to_ir_type<'db>(
                 ctx.bytes_type(ir)
             } else if *name == "Rune" {
                 ctx.i32_type(ir)
-            } else if *name == "Nil" {
-                ctx.nil_type(ir)
             } else {
                 ctx.nil_type(ir)
             }

@@ -480,14 +480,13 @@ pub(super) fn lower_expr<'db>(
                 .map(|ty| builder.ctx.convert_type(builder.ir, ty))
                 .unwrap_or(any_ty);
 
-            if result_ty == any_ty {
-                if let Some(first_arm) = arms.first() {
-                    if let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id).copied() {
-                        let converted = builder.ctx.convert_type(builder.ir, arm_ty);
-                        if converted != any_ty {
-                            result_ty = converted;
-                        }
-                    }
+            if result_ty == any_ty
+                && let Some(first_arm) = arms.first()
+                && let Some(arm_ty) = builder.ctx.get_node_type(first_arm.body.id).copied()
+            {
+                let converted = builder.ctx.convert_type(builder.ir, arm_ty);
+                if converted != any_ty {
+                    result_ty = converted;
                 }
             }
 
