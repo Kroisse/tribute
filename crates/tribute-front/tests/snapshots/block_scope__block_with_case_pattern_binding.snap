@@ -1,15 +1,21 @@
 ---
 source: crates/tribute-front/tests/block_scope.rs
-expression: ir_module
+expression: ir_text
 ---
-Module(test) {
-    operations: [
-        func @example(tribute_rt.any) -> core.i32 {
-            body: [
-                "adt.variant_is",
-                "scf.if",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @example(%0: tribute_rt.any) -> core.i32 {
+    ^bb0:
+      %1 = adt.variant_is %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}} : core.i1
+      %2 = scf.if %1 : core.i32 {
+          %3 = adt.variant_cast %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}
+          %4 = adt.variant_get %3 {field = 0, tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}} : tribute_rt.any
+          %5 = core.unrealized_conversion_cast %4 : core.i32
+          scf.yield %5
+      } {
+          %6 = adt.variant_cast %0 {tag = @None, type = adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [core.nil]], [@None, []]]}
+          %7 = arith.const {value = 0} : core.i32
+          scf.yield %7
+      }
+      func.return %2
+  }
 }

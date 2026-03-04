@@ -1,32 +1,47 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 144
-expression: ir_module
+expression: ir_text
 ---
-Module(test) {
-    operations: [
-        func @run_with_state(core.func) -> core.i32 {
-            body: [
-                "cont.push_prompt",
-                "cont.handler_dispatch",
-                "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "arith.const",
-                "cont.shift",
-                "func.return",
-            ],
-        },
-        func @main() -> core.i32 {
-            body: [
-                "arith.const",
-                "closure.new",
-                "func.call",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @run_with_state(%0: core.func(core.i32)) -> core.i32 {
+    ^bb0:
+      %1 = cont.push_prompt {tag = 0} : tribute_rt.any {
+          %2 = func.call_indirect %0 : core.i32
+          scf.yield %2
+      } {
+      }
+      %3 = cont.handler_dispatch %1 {result_type = tribute_rt.any, tag = 0} : tribute_rt.any {
+          cont.done {
+            ^bb3(%4: tribute_rt.any):
+              scf.yield %4
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+            ^bb4(%5: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %6: tribute_rt.any):
+              %7 = arith.const {value = 42} : core.i32
+              %8 = cont.resume %5, %7 : tribute_rt.any
+              scf.yield %8
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+            ^bb5(%9: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %10: tribute_rt.any):
+              %11 = arith.const {value = unit} : core.nil
+              %12 = cont.resume %9, %11 : tribute_rt.any
+              scf.yield %12
+          }
+      }
+      %13 = core.unrealized_conversion_cast %3 : core.i32
+      func.return %13
+  }
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+    ^bb0:
+      %2 = arith.const {value = 4294967295} : cont.prompt_tag
+      %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.any {
+      }
+      func.return %3
+  }
+  func.func @main() -> core.i32 {
+      %0 = arith.const {value = unit} : core.nil
+      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.any))
+      %2 = func.call %1 {callee = @run_with_state} : core.i32
+      func.return %2
+  }
 }

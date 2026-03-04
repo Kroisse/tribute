@@ -1,64 +1,78 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 291
-expression: ir_module
+expression: ir_text
 ---
-Module(test) {
-    operations: [
-        func @counter() -> core.i32 {
-            body: [
-                "arith.const",
-                "cont.shift",
-                "arith.const",
-                "arith.add",
-                "arith.const",
-                "cont.shift",
-                "func.return",
-            ],
-        },
-        func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "adt.ref_cast",
-                "adt.struct_get",
-                "adt.struct_get",
-                "cont.resume",
-                "func.return",
-            ],
-        },
-        func @test::__lambda_1(core.array, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "adt.ref_cast",
-                "adt.struct_get",
-                "arith.const",
-                "cont.resume",
-                "func.return",
-            ],
-        },
-        func @run_state(core.func, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "cont.push_prompt",
-                "cont.handler_dispatch",
-                "func.return",
-            ],
-        },
-        func @test::__lambda_2(core.array, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "func.call",
-                "func.call",
-                "func.call",
-                "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @main() -> core.i32 {
-            body: [
-                "arith.const",
-                "closure.new",
-                "arith.const",
-                "core.unrealized_conversion_cast",
-                "func.call",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @counter() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %0 = arith.const {value = 4294967295} : cont.prompt_tag
+      %1 = cont.shift %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.i32 {
+      }
+      %2 = arith.const {value = 1} : core.i32
+      %3 = arith.add %1, %2 : core.i32
+      %4 = arith.const {value = 4294967295} : cont.prompt_tag
+      %5 = cont.shift %4, %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : core.nil {
+      }
+      func.return %1
+  }
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 8} {
+    ^bb0:
+      %2 = adt.ref_cast %1 {type = adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}
+      %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : tribute_rt.any
+      %4 = adt.struct_get %2 {field = 1, type = adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : tribute_rt.any
+      %5 = cont.resume %3, %4 : tribute_rt.any
+      func.return %5
+  }
+  func.func @"test::__lambda_1"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 17} {
+    ^bb0:
+      %2 = adt.ref_cast %1 {type = adt.struct() {fields = [[@_0, tribute_rt.any]], name = @"test::__lambda_1::env"}} : adt.struct() {fields = [[@_0, tribute_rt.any]], name = @"test::__lambda_1::env"}
+      %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [[@_0, tribute_rt.any]], name = @"test::__lambda_1::env"}} : tribute_rt.any
+      %4 = arith.const {value = unit} : core.nil
+      %5 = cont.resume %3, %4 : tribute_rt.any
+      func.return %5
+  }
+  func.func @run_state(%0: core.func(tribute_rt.any), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 1013} {
+    ^bb0:
+      %2 = cont.push_prompt {tag = 0} : tribute_rt.any {
+          %3 = func.call_indirect %0 : tribute_rt.any
+          scf.yield %3
+      } {
+      }
+      %4 = cont.handler_dispatch %2 {result_type = tribute_rt.any, tag = 0} : tribute_rt.any {
+          cont.done {
+            ^bb3(%5: tribute_rt.any):
+              scf.yield %5
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+            ^bb4(%6: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %7: tribute_rt.any):
+              %8 = adt.struct_new %6, %1 {type = adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : adt.struct() {fields = [[@_0, tribute_rt.any], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}
+              %9 = closure.new %8 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.any))
+              %10 = func.call %9, %1 {callee = @run_state} : tribute_rt.any
+              scf.yield %10
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+            ^bb5(%11: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %12: tribute_rt.any):
+              %13 = adt.struct_new %11 {type = adt.struct() {fields = [[@_0, tribute_rt.any]], name = @"test::__lambda_1::env"}} : adt.struct() {fields = [[@_0, tribute_rt.any]], name = @"test::__lambda_1::env"}
+              %14 = closure.new %13 {func_ref = @"test::__lambda_1"} : closure.closure(core.func(tribute_rt.any))
+              %15 = func.call %14, %12 {callee = @run_state} : tribute_rt.any
+              scf.yield %15
+          }
+      }
+      func.return %4
+  }
+  func.func @"test::__lambda_2"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3} {
+    ^bb0:
+      %2 = func.call {callee = @counter} : core.i32
+      %3 = func.call {callee = @counter} : core.i32
+      %4 = func.call {callee = @counter} : core.i32
+      %5 = core.unrealized_conversion_cast %4 : tribute_rt.any
+      func.return %5
+  }
+  func.func @main() -> core.i32 {
+      %0 = arith.const {value = unit} : core.nil
+      %1 = closure.new %0 {func_ref = @"test::__lambda_2"} : closure.closure(core.func(tribute_rt.any))
+      %2 = arith.const {value = 0} : core.i32
+      %3 = core.unrealized_conversion_cast %2 : tribute_rt.any
+      %4 = func.call %1, %3 {callee = @run_state} : tribute_rt.any
+      func.return %4
+  }
 }

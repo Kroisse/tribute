@@ -3,12 +3,12 @@
 //! These tests verify that case expressions properly unify
 //! scrutinee types with pattern types and arm body types.
 
-use insta::assert_debug_snapshot;
+use insta::assert_snapshot;
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
-use trunk_ir::DialectOp;
-use trunk_ir::dialect::core::Module;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::printer::print_module;
 
 fn source_from_str(path: &str, text: &str) -> SourceCst {
     use tree_sitter::Parser;
@@ -29,10 +29,9 @@ fn source_from_str(path: &str, text: &str) -> SourceCst {
     .expect("attached db")
 }
 
-/// Helper tracked function to run the AST pipeline and return the IR module.
+/// Helper tracked function to run the AST pipeline and return the IR text.
 #[salsa::tracked]
-fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    // Parse and process through AST pipeline
+fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -40,22 +39,18 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
     let ast = parsed.module(db).clone();
     let span_map = parsed.span_map(db).clone();
 
-    // Build env and resolve
     let env = tribute_front::resolve::build_env(db, &ast);
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
-    // Type check - this is where case expression types are unified
     let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(resolved);
 
-    // TDNR
     let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module);
 
-    // Lower to IR
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    let mut ir = trunk_ir::arena::context::IrContext::new();
+    let mut ir = IrContext::new();
     let arena_module = tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
         &mut ir,
@@ -65,8 +60,7 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
         function_types_map,
         node_types_map,
     );
-    let exported = trunk_ir::arena::bridge::export_to_salsa(db, &ir, arena_module);
-    Module::from_operation(db, exported).unwrap()
+    print_module(&ir, arena_module.op())
 }
 
 // ========================================================================
@@ -90,8 +84,8 @@ fn classify(x: Nat) -> Nat {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test case expression with Int literals (negative numbers).
@@ -111,8 +105,8 @@ fn sign(x: Int) -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test case expression with Bool patterns.
@@ -130,8 +124,8 @@ fn invert(x: Bool) -> Bool {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test case expression with enum variant patterns.
@@ -154,8 +148,8 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test case expression result type unification.
@@ -174,8 +168,8 @@ fn to_nat(b: Bool) -> Nat {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test nested case expressions.
@@ -196,6 +190,6 @@ fn nested(x: Nat, y: Bool) -> Nat {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
