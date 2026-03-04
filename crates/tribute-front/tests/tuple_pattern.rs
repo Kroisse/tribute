@@ -51,8 +51,10 @@ fn run_ast_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) {
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
+    let mut ir = trunk_ir::arena::context::IrContext::new();
     let _module = tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
+        &mut ir,
         tdnr_ast,
         span_map,
         source.uri(db).as_str(),

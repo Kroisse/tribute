@@ -1,9 +1,21 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 291
 expression: ir_module
 ---
 Module(test) {
     operations: [
+        func @counter() -> core.i32 {
+            body: [
+                "arith.const",
+                "cont.shift",
+                "arith.const",
+                "arith.add",
+                "arith.const",
+                "cont.shift",
+                "func.return",
+            ],
+        },
         func @test::__lambda_0(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "adt.ref_cast",
@@ -22,30 +34,19 @@ Module(test) {
                 "func.return",
             ],
         },
+        func @run_state(core.func, tribute_rt.any) -> tribute_rt.any {
+            body: [
+                "cont.push_prompt",
+                "cont.handler_dispatch",
+                "func.return",
+            ],
+        },
         func @test::__lambda_2(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "func.call",
                 "func.call",
                 "func.call",
                 "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @counter() -> core.i32 {
-            body: [
-                "arith.const",
-                "cont.shift",
-                "arith.const",
-                "arith.add",
-                "arith.const",
-                "cont.shift",
-                "func.return",
-            ],
-        },
-        func @run_state(core.func, tribute_rt.any) -> tribute_rt.any {
-            body: [
-                "cont.push_prompt",
-                "cont.handler_dispatch",
                 "func.return",
             ],
         },

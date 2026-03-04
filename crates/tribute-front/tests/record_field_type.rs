@@ -7,6 +7,7 @@ use insta::assert_debug_snapshot;
 use ropey::Rope;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
+use trunk_ir::DialectOp;
 use trunk_ir::dialect::core::Module;
 
 fn source_from_str(path: &str, text: &str) -> SourceCst {
@@ -60,14 +61,18 @@ fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    tribute_front::ast_to_ir::lower_ast_to_ir(
+    let mut ir = trunk_ir::arena::context::IrContext::new();
+    let arena_module = tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
+        &mut ir,
         tdnr_ast,
         span_map,
         source.uri(db).as_str(),
         function_types_map,
         node_types_map,
-    )
+    );
+    let exported = trunk_ir::arena::bridge::export_to_salsa(db, &ir, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Test basic record construction with correct field types.

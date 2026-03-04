@@ -1,9 +1,24 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 326
 expression: ir_module
 ---
 Module(test) {
     operations: [
+        func @run_with_state(core.func) -> core.i32 {
+            body: [
+                "cont.push_prompt",
+                "cont.handler_dispatch",
+                "core.unrealized_conversion_cast",
+                "func.return",
+            ],
+        },
+        func @apply_thunk(core.func) -> core.i32 {
+            body: [
+                "func.call_indirect",
+                "func.return",
+            ],
+        },
         func @test::__lambda_1(core.array, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "arith.const",
@@ -17,20 +32,6 @@ Module(test) {
                 "closure.new",
                 "func.call",
                 "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @run_with_state(core.func) -> core.i32 {
-            body: [
-                "cont.push_prompt",
-                "cont.handler_dispatch",
-                "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @apply_thunk(core.func) -> core.i32 {
-            body: [
-                "func.call_indirect",
                 "func.return",
             ],
         },

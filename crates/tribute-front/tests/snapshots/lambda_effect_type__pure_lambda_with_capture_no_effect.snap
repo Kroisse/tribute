@@ -1,21 +1,22 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 108
 expression: ir_module
 ---
 Module(test) {
     operations: [
+        func @apply(core.func, core.i32) -> core.i32 {
+            body: [
+                "func.call_indirect",
+                "func.return",
+            ],
+        },
         func @test::__lambda_0(core.array, tribute_rt.any, tribute_rt.any) -> tribute_rt.any {
             body: [
                 "adt.ref_cast",
                 "adt.struct_get",
                 "arith.add",
                 "core.unrealized_conversion_cast",
-                "func.return",
-            ],
-        },
-        func @apply(core.func, core.i32) -> core.i32 {
-            body: [
-                "func.call_indirect",
                 "func.return",
             ],
         },

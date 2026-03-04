@@ -170,14 +170,18 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
         result.function_types.into_iter().collect();
     let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let source_uri = prelude_source.uri(db).as_str();
-    Some(ast_to_ir::lower_ast_to_ir(
+    let mut ir = IrContext::new();
+    let arena_module = ast_to_ir::lower_ast_to_ir(
         db,
+        &mut ir,
         tdnr_ast,
         span_map,
         source_uri,
         function_types,
         node_types,
-    ))
+    );
+    let exported = export_to_salsa(db, &ir, arena_module);
+    Some(Module::from_operation(db, exported).unwrap())
 }
 
 /// Create a SourceCst for the prelude.
@@ -923,14 +927,21 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
         result.function_types.into_iter().collect();
     let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let source_uri = source.uri(db).as_str();
-    let user_module = ast_to_ir::lower_ast_to_ir(
+    let mut ir = IrContext::new();
+    let user_arena = ast_to_ir::lower_ast_to_ir(
         db,
+        &mut ir,
         tdnr_ast,
         span_map,
         source_uri,
         function_types,
         node_types,
     );
+
+    // Export to Salsa Module for downstream pipeline compatibility.
+    // TODO(#449): Eventually restructure pipeline to pass (IrContext, ArenaModule) directly.
+    let exported = export_to_salsa(db, &ir, user_arena);
+    let user_module = Module::from_operation(db, exported).unwrap();
 
     // DEBUG: List user module functions before prelude merge
     {
