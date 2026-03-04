@@ -1,9 +1,10 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 271
 expression: ir_text
 ---
 core.module @test {
-  func.func @run_with_state(%0: core.func(core.i32)) -> core.i32 {
+  func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
     ^bb0:
       %1 = cont.push_prompt {tag = 0} : tribute_rt.any {
           %2 = func.call_indirect %0 : core.i32
@@ -25,7 +26,7 @@ core.module @test {
       %9 = core.unrealized_conversion_cast %3 : core.i32
       func.return %9
   }
-  func.func @apply_thunk(%0: core.func(core.i32)) -> core.i32 {
+  func.func @apply_thunk(%0: core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1001}}) -> core.i32 {
     ^bb0:
       %1 = func.call_indirect %0 : core.i32
       func.return %1

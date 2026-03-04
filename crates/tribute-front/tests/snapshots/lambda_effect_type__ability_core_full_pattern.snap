@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 236
 expression: ir_text
 ---
 core.module @test {
@@ -30,7 +31,7 @@ core.module @test {
       %5 = cont.resume %3, %4 : tribute_rt.any
       func.return %5
   }
-  func.func @run_state(%0: core.func(tribute_rt.any), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 1013} {
+  func.func @run_state(%0: core.func(tribute_rt.any) {effect = core.effect_row(core.ability_ref(tribute_rt.any) {name = @State}) {tail_var_id = 1013}}, %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 1013} {
     ^bb0:
       %2 = cont.push_prompt {tag = 0} : tribute_rt.any {
           %3 = func.call_indirect %0 : tribute_rt.any

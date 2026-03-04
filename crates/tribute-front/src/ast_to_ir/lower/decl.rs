@@ -280,17 +280,26 @@ fn lower_extern_function<'db>(
     let location = ctx.location(func_decl.id);
     let func_name = func_decl.name;
 
-    let (param_ir_types, return_ty) = {
+    let (param_ir_types, return_ty, effect_ir) = {
         let scheme = ctx
             .lookup_function_type(func_name)
             .cloned()
             .expect("extern function should have TypeScheme from type checking");
         let body = scheme.body(ctx.db);
         match body.kind(ctx.db) {
-            TypeKind::Func { params, result, .. } => {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
                 let p: Vec<TypeRef> = params.iter().map(|t| ctx.convert_type(ir, *t)).collect();
                 let r = ctx.convert_type(ir, *result);
-                (p, r)
+                let e = if effect.is_pure(ctx.db) {
+                    None
+                } else {
+                    Some(ctx.convert_effect_row(ir, *effect))
+                };
+                (p, r, e)
             }
             other => {
                 unreachable!("extern function `{func_name}` has non-function TypeScheme: {other:?}")
@@ -325,7 +334,7 @@ fn lower_extern_function<'db>(
     ir.push_op(entry_block, unreachable_op.op_ref());
 
     // Build function type and create func op
-    let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, None);
+    let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, effect_ir);
 
     let body_region = ir.create_region(RegionData {
         location,
@@ -370,7 +379,12 @@ fn lower_struct_decl<'db>(
         let ctor_id = CtorId::new(ctx.db, prescan_path, name);
         qualified_type_name(ctx.db, &ctor_id)
     };
-    let struct_get_ty = ctx.get_type(qualified_key).unwrap_or(struct_ty);
+    let struct_get_ty = ctx.get_type(qualified_key).unwrap_or_else(|| {
+        panic!(
+            "ICE: struct type `{}` not registered during prescan",
+            qualified_key
+        )
+    });
 
     let module_path = ctx.module_path().clone();
 

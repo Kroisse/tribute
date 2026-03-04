@@ -321,11 +321,20 @@ impl<'db> IrLoweringCtx<'db> {
                 // Type erasure: struct/enum → tribute_rt.any
                 self.any_type(ir)
             }
-            TypeKind::Func { params, result, .. } => {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => {
                 let param_refs: Vec<TypeRef> =
                     params.iter().map(|p| self.convert_type(ir, *p)).collect();
                 let result_ref = self.convert_type(ir, *result);
-                self.func_type(ir, &param_refs, result_ref)
+                let effect_ref = if effect.is_pure(self.db) {
+                    None
+                } else {
+                    Some(self.convert_effect_row(ir, *effect))
+                };
+                self.func_type_with_effect(ir, &param_refs, result_ref, effect_ref)
             }
             TypeKind::Tuple(_) => {
                 // Type erasure: tuple → tribute_rt.any

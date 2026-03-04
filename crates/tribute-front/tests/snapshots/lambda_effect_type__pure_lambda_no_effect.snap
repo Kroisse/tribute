@@ -1,9 +1,10 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 34
 expression: ir_text
 ---
 core.module @test {
-  func.func @apply(%0: core.func(core.i32, core.i32), %1: core.i32) -> core.i32 {
+  func.func @apply(%0: core.func(core.i32, core.i32) {effect = core.effect_row() {tail_var_id = 1001}}, %1: core.i32) -> core.i32 {
     ^bb0:
       %2 = func.call_indirect %0, %1 : core.i32
       func.return %2

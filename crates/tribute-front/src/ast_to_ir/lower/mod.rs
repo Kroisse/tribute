@@ -76,18 +76,16 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
     }
 
     /// Get the result type from a function type, or use the type directly.
-    pub fn call_result_type(&self, ty: &crate::ast::Type<'db>) -> TypeRef {
+    pub fn call_result_type(&mut self, ty: &crate::ast::Type<'db>) -> TypeRef {
         match ty.kind(self.db()) {
-            TypeKind::Func { result, .. } => self.ctx.convert_type(
-                // SAFETY: we need a mutable ref to ir, but we only read ctx here.
-                // This is safe because convert_type only mutates ir.types (interning).
-                unsafe { &mut *(self.ir as *const IrContext as *mut IrContext) },
-                *result,
-            ),
-            _ => self.ctx.convert_type(
-                unsafe { &mut *(self.ir as *const IrContext as *mut IrContext) },
-                *ty,
-            ),
+            TypeKind::Func { result, .. } => {
+                let result = *result;
+                self.ctx.convert_type(self.ir, result)
+            }
+            _ => {
+                let ty = *ty;
+                self.ctx.convert_type(self.ir, ty)
+            }
         }
     }
 
