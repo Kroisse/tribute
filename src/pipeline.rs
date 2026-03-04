@@ -66,6 +66,7 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::evidence;
 use tribute_passes::generic_type_converter_arena;
 use tribute_passes::lower_cont_to_trampoline;
+use trunk_ir::DialectOp;
 use trunk_ir::Span;
 use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
 use trunk_ir::arena::{ArenaModule, IrContext};
@@ -73,7 +74,6 @@ use trunk_ir::conversion::resolve_unrealized_casts_arena;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::transforms::eliminate_dead_functions;
-use trunk_ir::{Block, BlockId, DialectOp, IdVec, Region};
 
 // =============================================================================
 // Compilation configuration
@@ -145,18 +145,16 @@ fn resolve_prelude(
     Some((resolved, span_map, prelude_source))
 }
 
-/// Load and cache the prelude module using the AST pipeline.
+/// Load and cache the prelude's typed AST using the AST pipeline.
 ///
 /// This is a Salsa tracked function, so the prelude is parsed only once
 /// and cached for all subsequent compilations.
 ///
-/// Unlike the legacy tirgen-based approach, this uses the AST pipeline:
-/// parse → resolve → typecheck → TDNR → ast_to_ir
-/// This properly handles case expressions, tuple patterns, and other features
-/// that tirgen doesn't support.
+/// Returns the typed AST (parse → resolve → typecheck → TDNR) without
+/// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
 #[salsa::tracked]
-fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
-    let (resolved, span_map, prelude_source) = resolve_prelude(db)?;
+fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'db>> {
+    let (resolved, span_map, _prelude_source) = resolve_prelude(db)?;
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -165,23 +163,13 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<Module<'db>> {
     // TDNR
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
 
-    // AST → TrunkIR
-    let function_types: std::collections::HashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    let source_uri = prelude_source.uri(db).as_str();
-    let mut ir = IrContext::new();
-    let arena_module = ast_to_ir::lower_ast_to_ir(
+    Some(ast_typeck::TypeCheckOutput::new(
         db,
-        &mut ir,
         tdnr_ast,
+        result.function_types,
+        result.node_types,
         span_map,
-        source_uri,
-        function_types,
-        node_types,
-    );
-    let exported = export_to_salsa(db, &ir, arena_module);
-    Some(Module::from_operation(db, exported).unwrap())
+    ))
 }
 
 /// Create a SourceCst for the prelude.
@@ -227,64 +215,100 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
     Some(prelude_exports)
 }
 
-/// Merge prelude definitions into a user module.
+/// Merge prelude decls into user's typed AST and lower to TrunkIR.
 ///
-/// This prepends all prelude operations (type definitions, etc.) to the
-/// user module's body, making prelude types available for name resolution.
-fn merge_with_prelude<'db>(db: &'db dyn salsa::Database, user_module: Module<'db>) -> Module<'db> {
-    let Some(prelude) = prelude_module(db) else {
-        return user_module;
+/// This performs AST-level prelude merge (prepending prelude decls to user decls),
+/// then runs `ast_to_ir` on the merged module.
+///
+/// Returns a Salsa `Module` ready for downstream passes.
+fn merge_and_lower_to_ir<'db>(
+    db: &'db dyn salsa::Database,
+    typed: &ast_typeck::TypeCheckOutput<'db>,
+    source: SourceCst,
+) -> Module<'db> {
+    use tribute_front::ast::TypedRef;
+
+    let user_module = typed.module(db);
+    let user_fn_types = typed.function_types(db);
+    let user_node_types = typed.node_types(db);
+    let user_span_map = typed.span_map(db);
+
+    // Merge prelude at AST level
+    let (merged_module, merged_fn_types, merged_node_types, merged_span_map) =
+        if let Some(prelude) = prelude_module(db) {
+            let prelude_module_ast = prelude.module(db);
+            let prelude_fn_types = prelude.function_types(db);
+            let prelude_node_types = prelude.node_types(db);
+            let prelude_span_map = prelude.span_map(db);
+
+            // Prepend prelude decls before user decls
+            let mut merged_decls = prelude_module_ast.decls.clone();
+            merged_decls.extend(user_module.decls.iter().cloned());
+
+            let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
+                user_module.id,
+                user_module.name,
+                merged_decls,
+            );
+
+            // Merge function_types: prelude first, user overrides
+            let mut fn_types: std::collections::HashMap<_, _> =
+                prelude_fn_types.iter().cloned().collect();
+            fn_types.extend(user_fn_types.iter().cloned());
+
+            // Merge node_types: prelude first, user overrides
+            let mut node_types: std::collections::HashMap<_, _> =
+                prelude_node_types.iter().cloned().collect();
+            node_types.extend(user_node_types.iter().cloned());
+
+            // Merge span maps (user overrides prelude on conflict)
+            let merged_span_map = user_span_map.merge(&prelude_span_map);
+
+            (merged_ast, fn_types, node_types, merged_span_map)
+        } else {
+            let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
+            let node_types: std::collections::HashMap<_, _> =
+                user_node_types.iter().cloned().collect();
+            (
+                user_module.clone(),
+                fn_types,
+                node_types,
+                user_span_map.clone(),
+            )
+        };
+
+    // AST → TrunkIR
+    let source_uri = source.uri(db).as_str();
+    let mut ir = IrContext::new();
+    let arena_module = ast_to_ir::lower_ast_to_ir(
+        db,
+        &mut ir,
+        merged_module,
+        merged_span_map,
+        source_uri,
+        merged_fn_types,
+        merged_node_types,
+    );
+
+    // Export to Salsa Module
+    let exported = export_to_salsa(db, &ir, arena_module);
+    Module::from_operation(db, exported).unwrap()
+}
+
+/// Compile frontend: parse → resolve → typecheck → TDNR → merge prelude → ast_to_ir.
+///
+/// This is the primary entry point that produces a TrunkIR `Module<'db>`,
+/// replacing the old `parse_and_lower_ast` for callers that need IR output.
+#[salsa::tracked]
+pub fn compile_frontend<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let Some(typed) = parse_and_lower_ast(db, source) else {
+        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
+        let module_name = derive_module_name_from_path(db, path);
+        return Module::build(db, location, module_name, |_| {});
     };
 
-    // Get operations from both modules
-    let prelude_body = prelude.body(db);
-    let user_body = user_module.body(db);
-
-    // Merge blocks: prepend prelude operations to user operations
-    let prelude_blocks = prelude_body.blocks(db);
-    let user_blocks = user_body.blocks(db);
-
-    // If both have a single block (common case), merge their operations
-    if prelude_blocks.len() == 1 && user_blocks.len() == 1 {
-        let prelude_block = &prelude_blocks[0];
-        let user_block = &user_blocks[0];
-
-        // Combine operations: prelude first, then user
-        let mut combined_ops: IdVec<_> = prelude_block.operations(db).iter().copied().collect();
-        combined_ops.extend(user_block.operations(db).iter().copied());
-
-        let merged_block = Block::new(
-            db,
-            BlockId::fresh(),
-            user_block.location(db),
-            user_block.args(db).clone(),
-            combined_ops,
-        );
-
-        let merged_body = Region::new(db, user_body.location(db), IdVec::from(vec![merged_block]));
-
-        return Module::create(
-            db,
-            user_module.location(db),
-            user_module.name(db),
-            merged_body,
-        );
-    }
-
-    // Fallback: emit diagnostic if structure doesn't match
-    Diagnostic {
-        message: format!(
-            "Prelude merge failed: expected single block in both modules, got {} prelude blocks and {} user blocks",
-            prelude_blocks.len(),
-            user_blocks.len()
-        ),
-        span: Span::new(0, 0),
-        severity: DiagnosticSeverity::Warning,
-        phase: CompilationPhase::NameResolution,
-    }
-    .accumulate(db);
-
-    user_module
+    merge_and_lower_to_ir(db, &typed, source)
 }
 
 /// Result of the full compilation pipeline.
@@ -520,18 +544,18 @@ fn stage_lower_to_wasm<'db>(
 
 /// Compile for LSP: minimal pipeline preserving source structure.
 pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    parse_and_lower_ast(db, source)
+    compile_frontend(db, source)
 }
 
 /// Run pipeline through evidence params (for testing).
 ///
-/// Runs `parse_and_lower_ast` then `add_evidence_params` in a single arena session.
+/// Runs `compile_frontend` then `add_evidence_params` in a single arena session.
 #[salsa::tracked]
 pub fn run_through_evidence_params<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Module<'db> {
-    let module = parse_and_lower_ast(db, source);
+    let module = compile_frontend(db, source);
     with_arena_session(db, module, |ctx, m| {
         evidence::add_evidence_params(ctx, m);
     })
@@ -539,14 +563,14 @@ pub fn run_through_evidence_params<'db>(
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs `parse_and_lower_ast` then `add_evidence_params` + `lower_closures_arena`
+/// Runs `compile_frontend` then `add_evidence_params` + `lower_closures_arena`
 /// in a single arena session.
 #[salsa::tracked]
 pub fn run_through_closure_lower<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Module<'db> {
-    let module = parse_and_lower_ast(db, source);
+    let module = compile_frontend(db, source);
     with_arena_session(db, module, |ctx, m| {
         evidence::add_evidence_params(ctx, m);
         tribute_passes::closure_lower::lower_closures_arena(ctx, m);
@@ -567,7 +591,7 @@ pub fn run_through_closure_lower<'db>(
 /// pipelines then lower.
 #[salsa::tracked]
 fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = parse_and_lower_ast(db, source);
+    let module = compile_frontend(db, source);
 
     with_arena_session(db, module, |ctx, m| {
         evidence::add_evidence_params(ctx, m);
@@ -864,10 +888,10 @@ pub fn compile_to_native_binary<'db>(
 //
 // This replaces the legacy tirgen-based pipeline that worked directly with IR.
 
-/// Parse and lower source to TrunkIR using the AST pipeline.
+/// Parse source and run the frontend pipeline (parse → resolve → typecheck → TDNR).
 ///
-/// This is the AST-based alternative to `parse_and_lower`.
-/// Returns a module with resolved types, ready for further lowering passes.
+/// Returns the typed AST with span map, ready for `ast_to_ir` lowering.
+/// Does NOT call `ast_to_ir` — that is the caller's responsibility.
 ///
 /// Uses the Type Info Injection approach to make prelude types available:
 /// 1. Parse user code to AST
@@ -876,17 +900,13 @@ pub fn compile_to_native_binary<'db>(
 /// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types
 /// 6. Run TDNR
-/// 7. Lower to TrunkIR
-/// 8. Merge prelude IR for implementations (still needed for now)
 #[salsa::tracked]
-pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+pub fn parse_and_lower_ast<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<ast_typeck::TypeCheckOutput<'db>> {
     // Phase 1: Parse user code to AST
-    let Some(parsed) = ast_query::parsed_ast(db, source) else {
-        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        let module_name = derive_module_name_from_path(db, path);
-        return Module::build(db, location, module_name, |_| {});
-    };
+    let parsed = ast_query::parsed_ast(db, source)?;
 
     let user_ast = parsed.module(db).clone();
     let span_map = parsed.span_map(db).clone();
@@ -922,56 +942,13 @@ pub fn parse_and_lower_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst)
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
     tracing::debug!("Phase 5: after TDNR, {} declarations", tdnr_ast.decls.len());
 
-    // Phase 6: AST → TrunkIR
-    let function_types: std::collections::HashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let node_types: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    let source_uri = source.uri(db).as_str();
-    let mut ir = IrContext::new();
-    let user_arena = ast_to_ir::lower_ast_to_ir(
+    Some(ast_typeck::TypeCheckOutput::new(
         db,
-        &mut ir,
         tdnr_ast,
+        result.function_types,
+        result.node_types,
         span_map,
-        source_uri,
-        function_types,
-        node_types,
-    );
-
-    // Export to Salsa Module for downstream pipeline compatibility.
-    // TODO(#449): Eventually restructure pipeline to pass (IrContext, ArenaModule) directly.
-    let exported = export_to_salsa(db, &ir, user_arena);
-    let user_module = Module::from_operation(db, exported).unwrap();
-
-    // DEBUG: List user module functions before prelude merge
-    {
-        use trunk_ir::DialectOp;
-        use trunk_ir::dialect::func;
-        let body = user_module.body(db);
-        let mut func_names = Vec::new();
-        let mut all_ops = Vec::new();
-        for block in body.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                let d = op.dialect(db);
-                let n = op.name(db);
-                all_ops.push(format!("{}.{}", d, n));
-                if let Ok(f) = func::Func::from_operation(db, *op) {
-                    func_names.push(format!("{}", f.sym_name(db)));
-                }
-            }
-        }
-        tracing::debug!(
-            "User module before merge: {} ops, {} funcs",
-            all_ops.len(),
-            func_names.len()
-        );
-        tracing::debug!("  All ops: {:?}", &all_ops[..all_ops.len().min(20)]);
-        tracing::debug!("  Functions: {:?}", func_names);
-    }
-
-    // Phase 7: Merge prelude at TrunkIR level
-    // Still needed for prelude implementations (function bodies, struct layouts)
-    merge_with_prelude(db, user_module)
+    ))
 }
 
 /// Compile using the AST-based pipeline.
@@ -1349,7 +1326,7 @@ mod tests {
         // Test that AST pipeline can parse and lower a simple function
         let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
-        let module = parse_and_lower_ast(db, source);
+        let module = compile_frontend(db, source);
         assert_eq!(module.name(db), "test");
     }
 
@@ -1358,7 +1335,7 @@ mod tests {
         // Test that AST pipeline handles function parameters
         let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
-        let module = parse_and_lower_ast(db, source);
+        let module = compile_frontend(db, source);
         assert_eq!(module.name(db), "test");
     }
 
@@ -1376,7 +1353,7 @@ mod tests {
             "#,
         );
 
-        let module = parse_and_lower_ast(db, source);
+        let module = compile_frontend(db, source);
         assert_eq!(module.name(db), "test");
     }
 
@@ -1395,7 +1372,7 @@ mod tests {
             "#,
         );
 
-        let module = parse_and_lower_ast(db, source);
+        let module = compile_frontend(db, source);
         assert_eq!(module.name(db), "test");
     }
 

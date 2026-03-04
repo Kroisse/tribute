@@ -3,7 +3,7 @@
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, parse_and_lower_ast};
+use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use trunk_ir::DialectOp;
 use trunk_ir::dialect::func;
 
@@ -61,7 +61,7 @@ fn main() {
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let module = parse_and_lower_ast(db, source_file);
+        let module = compile_frontend(db, source_file);
 
         // Verify that expected user functions exist
         for func_name in expected_funcs {
@@ -88,7 +88,7 @@ fn test_salsa_incremental_computation_detailed() {
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let module1 = parse_and_lower_ast(&db, source_file);
+    let module1 = compile_frontend(&db, source_file);
     assert!(
         find_func_by_name(&db, &module1, "main"),
         "Should have main function"
@@ -101,14 +101,14 @@ fn test_salsa_incremental_computation_detailed() {
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - should recompute
-    let module2 = parse_and_lower_ast(&db, source_file);
+    let module2 = compile_frontend(&db, source_file);
     assert!(
         find_func_by_name(&db, &module2, "main"),
         "Should have main function after update"
     );
 
     // Lower again without changes - should use cached result
-    let module3 = parse_and_lower_ast(&db, source_file);
+    let module3 = compile_frontend(&db, source_file);
 
     // Verify that cached results are the same
     assert_eq!(
@@ -131,7 +131,7 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let module = parse_and_lower_ast(db, source);
+    let module = compile_frontend(db, source);
 
     // Verify all user functions exist
     assert!(
@@ -159,7 +159,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let module1 = parse_and_lower_ast(db, source1);
+        let module1 = compile_frontend(db, source1);
         module1.name(db).to_string()
     });
 
@@ -171,7 +171,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let module2 = parse_and_lower_ast(db, source2);
+        let module2 = compile_frontend(db, source2);
         module2.name(db).to_string()
     });
 
@@ -189,7 +189,7 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let module = parse_and_lower_ast(db, source_file);
+    let module = compile_frontend(db, source_file);
 
     // Verify the main function exists
     assert!(

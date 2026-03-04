@@ -22,6 +22,6 @@ pub mod pipeline;
 
 pub use pipeline::{
     CompilationConfig, CompilationResult, LinkError, compile_ast, compile_for_lsp,
-    compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, link_native_binary,
-    parse_and_lower_ast, run_native_pipeline, run_wasm_pipeline,
+    compile_frontend, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
+    link_native_binary, parse_and_lower_ast, run_native_pipeline, run_wasm_pipeline,
 };

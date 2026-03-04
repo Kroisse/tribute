@@ -74,6 +74,17 @@ impl Hash for SpanMap {
 }
 
 impl SpanMap {
+    /// Merge another SpanMap into this one, returning a new SpanMap.
+    ///
+    /// Entries from `other` are included first, then entries from `self`
+    /// override any conflicting keys (in practice NodeIds don't collide
+    /// across separate parse trees).
+    pub fn merge(&self, other: &SpanMap) -> SpanMap {
+        let mut merged = other.0.as_ref().clone();
+        merged.extend(self.0.iter().map(|(&k, &v)| (k, v)));
+        SpanMap(Arc::new(merged))
+    }
+
     /// Look up a span by NodeId.
     pub fn get(&self, id: NodeId) -> Option<Span> {
         self.0.get(&id).copied()

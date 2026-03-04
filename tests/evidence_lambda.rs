@@ -28,7 +28,7 @@ fn compile_to_ir(code: &str, name: &str) -> impl FnOnce(&dyn salsa::Database) ->
     move |db: &dyn salsa::Database| {
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, &name, source_code.clone(), tree);
-        tribute::pipeline::parse_and_lower_ast(db, source_file)
+        tribute::pipeline::compile_frontend(db, source_file)
     }
 }
 

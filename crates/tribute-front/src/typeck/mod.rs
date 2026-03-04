@@ -44,6 +44,8 @@ use crate::ast::{
 ///
 /// Bundles the typed AST module with function type schemes so that
 /// both can be derived from a single type checking invocation.
+/// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
+/// can look up source spans without a separate plumbing path.
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
@@ -58,6 +60,8 @@ pub struct TypeCheckOutput<'db> {
     /// Stored as Vec for Salsa compatibility (HashMap doesn't implement Hash).
     #[returns(ref)]
     pub node_types: Vec<(NodeId, Type<'db>)>,
+    /// Source span information for AST nodes.
+    pub span_map: SpanMap,
 }
 
 /// Prelude's exported type information.
@@ -100,7 +104,13 @@ pub fn typecheck_module<'db>(
     module: Module<ResolvedRef<'db>>,
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
-    let checker = TypeChecker::new(db, span_map);
+    let checker = TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(module);
-    TypeCheckOutput::new(db, result.module, result.function_types, result.node_types)
+    TypeCheckOutput::new(
+        db,
+        result.module,
+        result.function_types,
+        result.node_types,
+        span_map,
+    )
 }
