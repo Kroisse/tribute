@@ -297,8 +297,8 @@ fn merge_and_lower_to_ir<'db>(
 ///
 /// Returns `None` if parsing fails. Otherwise returns arena IR ready
 /// for in-place passes, avoiding unnecessary Salsa↔Arena round-trips.
-fn compile_frontend_to_arena<'db>(
-    db: &'db dyn salsa::Database,
+fn compile_frontend_to_arena(
+    db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<(IrContext, ArenaModule)> {
     let typed = parse_and_lower_ast(db, source)?;
