@@ -6,65 +6,10 @@
 //! This is critical for the evidence pass to correctly identify which
 //! lifted lambdas need evidence parameters.
 
+mod common;
+
 use insta::assert_snapshot;
-use ropey::Rope;
 use salsa_test_macros::salsa_test;
-use tribute_front::SourceCst;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::printer::print_module;
-
-fn source_from_str(path: &str, text: &str) -> SourceCst {
-    use tree_sitter::Parser;
-    salsa::with_attached_database(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let text: Rope = text.into();
-        let tree = parser.parse(text.to_string().as_str(), None);
-        SourceCst::new(
-            db,
-            fluent_uri::Uri::parse_from(format!("test:///{}", path)).unwrap(),
-            text,
-            tree,
-        )
-    })
-    .expect("attached db")
-}
-
-/// Helper tracked function to run the AST pipeline and return the IR text.
-#[salsa::tracked]
-fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    let env = tribute_front::resolve::build_env(db, &ast);
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
-
-    let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module(resolved);
-
-    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module);
-
-    let function_types_map: std::collections::HashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    let mut ir = IrContext::new();
-    let arena_module = tribute_front::ast_to_ir::lower_ast_to_ir(
-        db,
-        &mut ir,
-        tdnr_ast,
-        span_map,
-        source.uri(db).as_str(),
-        function_types_map,
-        node_types_map,
-    );
-    print_module(&ir, arena_module.op())
-}
 
 // ========================================================================
 // Pure Lambda Tests - No Effect Expected
@@ -73,7 +18,7 @@ fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> Stri
 /// Test that a pure lambda (no effects) is lifted without effect type.
 #[salsa_test]
 fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
@@ -84,14 +29,14 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test that a pure lambda capturing a variable has no effect type.
 #[salsa_test]
 fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
@@ -103,7 +48,7 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -117,7 +62,7 @@ fn main() -> Int {
 /// in its lifted function type.
 #[salsa_test]
 fn test_effectful_lambda_direct_ability_call(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -139,7 +84,7 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -149,7 +94,7 @@ fn main() -> Int {
 /// because `counter` has that effect.
 #[salsa_test]
 fn test_effectful_lambda_indirect_effect_call(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -177,14 +122,14 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test that multiple ability operations in lambda accumulate effects.
 #[salsa_test]
 fn test_effectful_lambda_multiple_operations(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -210,7 +155,7 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -227,7 +172,7 @@ fn main() -> Int {
 /// from the outer handler context.
 #[salsa_test]
 fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -247,14 +192,14 @@ fn main() -> Int { 0 }
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test the full ability_core pattern with multiple counter calls.
 #[salsa_test]
 fn test_ability_core_full_pattern(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -286,7 +231,7 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -297,7 +242,7 @@ fn main() -> Int {
 /// Test nested lambdas where inner lambda has effect.
 #[salsa_test]
 fn test_nested_lambda_inner_effectful(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -321,7 +266,7 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -335,7 +280,7 @@ fn main() -> Int {
 /// the lambda's effect should include State(s) with the row variable e.
 #[salsa_test]
 fn test_lambda_effect_row_unification(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = common::source_from_str(
         "test.trb",
         r#"
 ability State(s) {
@@ -359,6 +304,6 @@ fn main() -> Nat {
 "#,
     );
 
-    let ir_text = run_ast_pipeline_with_ir(db, source);
+    let ir_text = common::run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
