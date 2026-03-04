@@ -13,7 +13,7 @@ cc = "1"
 clap = { version = "4.5", features = ["derive"] }
 cranelift-codegen = "0.128.3"
 cranelift-entity = "0.128.3"
-cranelift-frontend = "0.128.3"
+cranelift-frontend = "0.129.1"
 cranelift-module = "0.128.3"
 cranelift-object = "0.128.3"
 dashmap = "6.1"
