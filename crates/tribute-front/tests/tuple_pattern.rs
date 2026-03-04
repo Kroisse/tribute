@@ -4,13 +4,14 @@
 
 mod common;
 
+use self::common::{run_ast_pipeline, source_from_str};
 use salsa_test_macros::salsa_test;
 
 /// Test basic tuple pattern matching in case expression.
 /// This should infer types correctly without UniVar leakage.
 #[salsa_test]
 fn test_tuple_pattern_basic(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn test(x: Bool, y: Bool) -> Int {
@@ -23,13 +24,13 @@ fn test(x: Bool, y: Bool) -> Int {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test tuple pattern with nested structure.
 #[salsa_test]
 fn test_tuple_pattern_nested(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn test(a: Bool, b: Bool, c: Bool) -> Int {
@@ -42,13 +43,13 @@ fn test(a: Bool, b: Bool, c: Bool) -> Int {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test tuple pattern in generic function context.
 #[salsa_test]
 fn test_tuple_pattern_generic(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn first(pair: #(a, b)) -> a {
@@ -63,5 +64,5 @@ fn test() -> Int {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }

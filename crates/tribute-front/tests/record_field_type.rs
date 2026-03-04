@@ -5,6 +5,7 @@
 
 mod common;
 
+use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir, source_from_str};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 
@@ -12,7 +13,7 @@ use salsa_test_macros::salsa_test;
 /// This should compile successfully.
 #[salsa_test]
 fn test_record_field_type_correct(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -23,13 +24,13 @@ fn make_point() -> Point {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test record construction with multiple field types.
 #[salsa_test]
 fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Person { name: String, age: Int, active: Bool }
@@ -40,14 +41,14 @@ fn make_person() -> Person {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test record construction with spread operator.
 /// The spread expression should be constrained to the struct type.
 #[salsa_test]
 fn test_record_spread_same_type(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -58,13 +59,13 @@ fn update_x(p: Point) -> Point {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test record construction with only spread (no explicit fields).
 #[salsa_test]
 fn test_record_spread_only(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Config { debug: Bool, verbose: Bool }
@@ -75,13 +76,13 @@ fn copy_config(c: Config) -> Config {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test record with generic type parameter.
 #[salsa_test]
 fn test_record_generic_type(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Pair(a, b) { first: a, second: b }
@@ -92,13 +93,13 @@ fn make_pair() -> Pair(Int, Bool) {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 /// Test record field type inference in let binding.
 #[salsa_test]
 fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -110,7 +111,7 @@ fn test() -> Int {
 "#,
     );
 
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }
 
 // ========================================================================
@@ -120,7 +121,7 @@ fn test() -> Int {
 /// Snapshot test for basic record construction IR.
 #[salsa_test]
 fn test_snapshot_record_construction(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -131,14 +132,14 @@ fn make_point() -> Point {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Snapshot test for record with spread operator.
 #[salsa_test]
 fn test_snapshot_record_spread(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -149,14 +150,14 @@ fn update_x(p: Point) -> Point {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Snapshot test for generic record construction.
 #[salsa_test]
 fn test_snapshot_record_generic(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 struct Pair(a, b) { first: a, second: b }
@@ -167,7 +168,7 @@ fn make_pair() -> Pair(Int, Bool) {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -182,7 +183,7 @@ fn make_pair() -> Pair(Int, Bool) {
 /// before lowering, regardless of declaration order in the source.
 #[salsa_test]
 fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn make_point() -> Point {
@@ -194,5 +195,5 @@ struct Point { x: Int, y: Int }
     );
 
     // Should compile without ICE, emitting adt.struct_new
-    common::run_ast_pipeline(db, source);
+    run_ast_pipeline(db, source);
 }

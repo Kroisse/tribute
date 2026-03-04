@@ -5,6 +5,7 @@
 
 mod common;
 
+use self::common::{run_ast_pipeline_with_ir, source_from_str};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
 
@@ -16,7 +17,7 @@ use salsa_test_macros::salsa_test;
 /// Pattern type (Nat) should unify with scrutinee type (Nat).
 #[salsa_test]
 fn test_case_nat_literal(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn classify(x: Nat) -> Nat {
@@ -29,7 +30,7 @@ fn classify(x: Nat) -> Nat {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -37,7 +38,7 @@ fn classify(x: Nat) -> Nat {
 /// Pattern type (Int) should unify with scrutinee type (Int).
 #[salsa_test]
 fn test_case_int_literal(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn sign(x: Int) -> Int {
@@ -50,14 +51,14 @@ fn sign(x: Int) -> Int {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test case expression with Bool patterns.
 #[salsa_test]
 fn test_case_bool_literal(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn invert(x: Bool) -> Bool {
@@ -69,14 +70,14 @@ fn invert(x: Bool) -> Bool {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test case expression with enum variant patterns.
 #[salsa_test]
 fn test_case_enum_variant(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 enum Option(a) {
@@ -93,7 +94,7 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
@@ -101,7 +102,7 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
 /// All arm body types should unify with the case expression's result type.
 #[salsa_test]
 fn test_case_result_type_unification(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn to_nat(b: Bool) -> Nat {
@@ -113,14 +114,14 @@ fn to_nat(b: Bool) -> Nat {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
 
 /// Test nested case expressions.
 #[salsa_test]
 fn test_case_nested(db: &salsa::DatabaseImpl) {
-    let source = common::source_from_str(
+    let source = source_from_str(
         "test.trb",
         r#"
 fn nested(x: Nat, y: Bool) -> Nat {
@@ -135,6 +136,6 @@ fn nested(x: Nat, y: Bool) -> Nat {
 "#,
     );
 
-    let ir_text = common::run_ast_pipeline_with_ir(db, source);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
