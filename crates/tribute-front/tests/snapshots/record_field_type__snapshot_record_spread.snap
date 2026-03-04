@@ -1,20 +1,21 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 153
 expression: ir_text
 ---
 core.module @test {
-core.module @Point {
-  func.func @"test::Point::x"(%0: adt.typeref() {name = @Point}) -> core.i32 {
-    ^bb0:
-      %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
-      func.return %1
+  core.module @Point {
+    func.func @"test::Point::x"(%0: adt.typeref() {name = @Point}) -> core.i32 {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+        func.return %1
+    }
+    func.func @"test::Point::y"(%0: adt.typeref() {name = @Point}) -> core.i32 {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+        func.return %1
+    }
   }
-  func.func @"test::Point::y"(%0: adt.typeref() {name = @Point}) -> core.i32 {
-    ^bb0:
-      %1 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
-      func.return %1
-  }
-}
   func.func @update_x(%0: tribute_rt.any) -> tribute_rt.any {
     ^bb0:
       %1 = arith.const {value = 100} : core.i32
