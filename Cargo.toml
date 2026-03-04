@@ -11,7 +11,7 @@ license = "MIT"
 ariadne = "0.6"
 cc = "1"
 clap = { version = "4.5", features = ["derive"] }
-cranelift-codegen = "0.128.3"
+cranelift-codegen = "0.129.1"
 cranelift-entity = "0.128.3"
 cranelift-frontend = "0.128.3"
 cranelift-module = "0.128.3"
