@@ -215,17 +215,17 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
     Some(prelude_exports)
 }
 
-/// Merge prelude decls into user's typed AST and lower to TrunkIR.
+/// Merge prelude decls into user's typed AST and lower to arena IR.
 ///
 /// This performs AST-level prelude merge (prepending prelude decls to user decls),
 /// then runs `ast_to_ir` on the merged module.
 ///
-/// Returns a Salsa `Module` ready for downstream passes.
+/// Returns `(IrContext, ArenaModule)` — arena IR ready for in-place passes.
 fn merge_and_lower_to_ir<'db>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> Module<'db> {
+) -> (IrContext, ArenaModule) {
     use tribute_front::ast::TypedRef;
 
     let user_module = typed.module(db);
@@ -277,7 +277,7 @@ fn merge_and_lower_to_ir<'db>(
             )
         };
 
-    // AST → TrunkIR
+    // AST → TrunkIR (arena)
     let source_uri = source.uri(db).as_str();
     let mut ir = IrContext::new();
     let arena_module = ast_to_ir::lower_ast_to_ir(
@@ -290,25 +290,42 @@ fn merge_and_lower_to_ir<'db>(
         merged_node_types,
     );
 
-    // Export to Salsa Module
-    let exported = export_to_salsa(db, &ir, arena_module);
-    Module::from_operation(db, exported).unwrap()
+    (ir, arena_module)
+}
+
+/// Run frontend (parse → typecheck → TDNR) and lower to arena IR.
+///
+/// Returns `None` if parsing fails. Otherwise returns arena IR ready
+/// for in-place passes, avoiding unnecessary Salsa↔Arena round-trips.
+fn compile_frontend_to_arena<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<(IrContext, ArenaModule)> {
+    let typed = parse_and_lower_ast(db, source)?;
+    Some(merge_and_lower_to_ir(db, &typed, source))
+}
+
+/// Build an empty Salsa `Module` for error/fallback cases.
+fn empty_module<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
+    let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
+    let module_name = derive_module_name_from_path(db, path);
+    Module::build(db, location, module_name, |_| {})
 }
 
 /// Compile frontend: parse → resolve → typecheck → TDNR → merge prelude → ast_to_ir.
 ///
-/// This is the primary entry point that produces a TrunkIR `Module<'db>`,
-/// replacing the old `parse_and_lower_ast` for callers that need IR output.
+/// Returns a Salsa `Module<'db>` for callers that need Salsa-interned IR
+/// (LSP, tests). Pipeline functions should prefer `compile_frontend_to_arena`
+/// to avoid an extra Salsa↔Arena round-trip.
 #[salsa::tracked]
 pub fn compile_frontend<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let Some(typed) = parse_and_lower_ast(db, source) else {
-        let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-        let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-        let module_name = derive_module_name_from_path(db, path);
-        return Module::build(db, location, module_name, |_| {});
+    let Some((ir, arena_module)) = compile_frontend_to_arena(db, source) else {
+        return empty_module(db, source);
     };
 
-    merge_and_lower_to_ir(db, &typed, source)
+    let exported = export_to_salsa(db, &ir, arena_module);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Result of the full compilation pipeline.
@@ -549,32 +566,36 @@ pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
 
 /// Run pipeline through evidence params (for testing).
 ///
-/// Runs `compile_frontend` then `add_evidence_params` in a single arena session.
+/// Runs frontend + `add_evidence_params` in a single arena session.
 #[salsa::tracked]
 pub fn run_through_evidence_params<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Module<'db> {
-    let module = compile_frontend(db, source);
-    with_arena_session(db, module, |ctx, m| {
-        evidence::add_evidence_params(ctx, m);
-    })
+    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
+        return empty_module(db, source);
+    };
+    evidence::add_evidence_params(&mut ctx, m);
+    let exported = export_to_salsa(db, &ctx, m);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs `compile_frontend` then `add_evidence_params` + `lower_closures_arena`
+/// Runs frontend + `add_evidence_params` + `lower_closures_arena`
 /// in a single arena session.
 #[salsa::tracked]
 pub fn run_through_closure_lower<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Module<'db> {
-    let module = compile_frontend(db, source);
-    with_arena_session(db, module, |ctx, m| {
-        evidence::add_evidence_params(ctx, m);
-        tribute_passes::closure_lower::lower_closures_arena(ctx, m);
-    })
+    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
+        return empty_module(db, source);
+    };
+    evidence::add_evidence_params(&mut ctx, m);
+    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, m);
+    let exported = export_to_salsa(db, &ctx, m);
+    Module::from_operation(db, exported).unwrap()
 }
 
 // =============================================================================
@@ -591,14 +612,17 @@ pub fn run_through_closure_lower<'db>(
 /// pipelines then lower.
 #[salsa::tracked]
 fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let module = compile_frontend(db, source);
+    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
+        return empty_module(db, source);
+    };
 
-    with_arena_session(db, module, |ctx, m| {
-        evidence::add_evidence_params(ctx, m);
-        tribute_passes::closure_lower::lower_closures_arena(ctx, m);
-        evidence::transform_evidence_calls(ctx, m);
-        tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(ctx, m);
-    })
+    evidence::add_evidence_params(&mut ctx, m);
+    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, m);
+    evidence::transform_evidence_calls(&mut ctx, m);
+    tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(&mut ctx, m);
+
+    let exported = export_to_salsa(db, &ctx, m);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Run the WASM pipeline: shared passes + cont_to_trampoline + DCE + resolve_casts.
