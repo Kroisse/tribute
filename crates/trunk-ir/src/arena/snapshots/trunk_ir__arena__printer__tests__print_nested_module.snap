@@ -1,0 +1,17 @@
+---
+source: crates/trunk-ir/src/arena/printer.rs
+assertion_line: 852
+expression: output
+---
+core.module @test {
+  core.module @Point {
+    func.func @get_x(%0: core.i32) -> core.i32 {
+      ^bb0:
+        func.return %0
+    }
+  }
+  func.func @make() -> core.i32 {
+      %0 = arith.const {value = 1} : core.i32
+      func.return %0
+  }
+}
