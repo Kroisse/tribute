@@ -19,8 +19,8 @@ use trunk_ir::arena::types::{Attribute, Location};
 use super::context::IrLoweringCtx;
 
 use crate::ast::{
-    CtorId, Expr, ExprKind, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypedRef,
+    CtorId, Expr, NodeId, Pattern, PatternKind, ResolvedRef, TypeAnnotation, TypeAnnotationKind,
+    TypeKind, TypedRef,
 };
 
 // Re-export lower_module as the public entry point
@@ -180,18 +180,6 @@ pub(super) fn resolve_enum_type_attr<'db>(
         .unwrap_or_else(|| ctx.any_type(ir))
 }
 
-/// Check if an expression evaluates to a float type.
-pub(super) fn is_float_expr<'db>(db: &'db dyn salsa::Database, expr: &Expr<TypedRef<'db>>) -> bool {
-    match &*expr.kind {
-        ExprKind::FloatLit(_) => true,
-        ExprKind::NatLit(_) | ExprKind::IntLit(_) => false,
-        ExprKind::Var(typed_ref) => matches!(typed_ref.ty.kind(db), TypeKind::Float),
-        ExprKind::BinOp { lhs, rhs, .. } => is_float_expr(db, lhs) || is_float_expr(db, rhs),
-        ExprKind::Block { value, .. } => is_float_expr(db, value),
-        _ => false,
-    }
-}
-
 /// Extract the type name from a ResolvedRef.
 pub(super) fn extract_type_name<'db>(
     db: &'db dyn salsa::Database,
@@ -272,6 +260,8 @@ pub(super) fn convert_annotation_to_ir_type<'db>(
                 ctx.bytes_type(ir)
             } else if *name == "Rune" {
                 ctx.i32_type(ir)
+            } else if *name == "Nil" {
+                ctx.nil_type(ir)
             } else {
                 ctx.any_type(ir)
             }

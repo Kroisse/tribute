@@ -157,9 +157,8 @@ fn emit_pattern_check<'db>(
                 builder.ir.push_op(builder.block, elem_op.op_ref());
                 let elem_val = elem_op.result(builder.ir);
 
-                if let Some(cond) = emit_pattern_check(builder, location, elem_val, elem_pat) {
-                    conditions.push(cond);
-                }
+                let cond = emit_pattern_check(builder, location, elem_val, elem_pat)?;
+                conditions.push(cond);
             }
 
             // Combine all conditions with AND

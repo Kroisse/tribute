@@ -14,8 +14,8 @@ use trunk_ir::arena::types::{Attribute, Location};
 use crate::ast::{BinOpKind, Expr, ExprKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 
 use super::{
-    IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, is_float_expr,
-    qualified_type_name, resolve_enum_type_attr,
+    IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, qualified_type_name,
+    resolve_enum_type_attr,
 };
 
 /// Lower an expression to arena TrunkIR.
@@ -169,7 +169,11 @@ pub(super) fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            let is_float = is_float_expr(builder.db(), &lhs) || is_float_expr(builder.db(), &rhs);
+            let is_float = builder
+                .ctx
+                .get_node_type(expr_node_id)
+                .map(|ty| matches!(ty.kind(builder.db()), TypeKind::Float))
+                .unwrap_or(false);
             let lhs_val = lower_expr(builder, lhs)?;
             let rhs_val = lower_expr(builder, rhs)?;
             lower_binop(builder, op, lhs_val, rhs_val, is_float, location)
