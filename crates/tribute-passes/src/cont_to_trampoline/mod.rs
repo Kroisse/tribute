@@ -32,33 +32,74 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use tribute_ir::dialect::tribute_rt;
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::rewrite::{ConversionError, ConversionTarget, PatternApplicator, TypeConverter};
-use trunk_ir::{Block, DialectType, IdVec, Location, Operation, Region, Span, Symbol, Type, Value};
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::{
+    ArenaConversionTarget, ArenaTypeConverter, PatternApplicator as ArenaPatternApplicator,
+};
+use trunk_ir::location::Span;
 
 // Re-export shared utilities from cont_util so existing internal callers still work.
-pub(crate) use crate::cont_util::{collect_suspend_arms, compute_op_idx, get_region_result_value};
+pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value_arena};
 
 // ============================================================================
 // Public API
 // ============================================================================
 
-/// Create a TypeConverter with standard tribute_rt -> core type conversions.
-fn standard_type_converter() -> TypeConverter {
-    TypeConverter::new()
-        .add_conversion(|db, ty| {
-            tribute_rt::Int::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Nat::from_type(db, ty).map(|_| core::I32::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Bool::from_type(db, ty).map(|_| core::I::<1>::new(db).as_type())
-        })
-        .add_conversion(|db, ty| {
-            tribute_rt::Float::from_type(db, ty).map(|_| core::F64::new(db).as_type())
-        })
+/// Create an ArenaTypeConverter with standard tribute_rt -> core type conversions.
+fn standard_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+    use trunk_ir::arena::types::TypeDataBuilder;
+
+    let int_dialect = Symbol::new("tribute_rt");
+    let core_dialect = Symbol::new("core");
+
+    // Pre-intern target types
+    let i32_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(core_dialect, Symbol::new("i32")).build());
+    let i1_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(core_dialect, Symbol::new("i1")).build());
+    let f64_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(core_dialect, Symbol::new("f64")).build());
+
+    let mut converter = ArenaTypeConverter::new();
+    converter.add_conversion(move |ctx, ty| {
+        let data = ctx.types.get(ty);
+        if data.dialect == int_dialect && data.name == Symbol::new("Int") {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+    converter.add_conversion(move |ctx, ty| {
+        let data = ctx.types.get(ty);
+        if data.dialect == int_dialect && data.name == Symbol::new("Nat") {
+            Some(i32_ty)
+        } else {
+            None
+        }
+    });
+    converter.add_conversion(move |ctx, ty| {
+        let data = ctx.types.get(ty);
+        if data.dialect == int_dialect && data.name == Symbol::new("Bool") {
+            Some(i1_ty)
+        } else {
+            None
+        }
+    });
+    converter.add_conversion(move |ctx, ty| {
+        let data = ctx.types.get(ty);
+        if data.dialect == int_dialect && data.name == Symbol::new("Float") {
+            Some(f64_ty)
+        } else {
+            None
+        }
+    });
+    converter
 }
 
 // ============================================================================
@@ -66,59 +107,58 @@ fn standard_type_converter() -> TypeConverter {
 // ============================================================================
 
 /// Metadata for generating resume functions with continuation code.
-pub(crate) struct ResumeFuncSpec<'db> {
+pub(crate) struct ResumeFuncSpec {
     /// Name of the resume function
     pub(crate) name: String,
     /// State struct type (used to extract captured values)
-    pub(crate) state_type: Type<'db>,
+    pub(crate) state_type: TypeRef,
     /// Fields in the state struct (field_name, field_type) — field types are anyref
-    /// to match the WASM lowering (LowerBuildStatePattern converts all fields to anyref).
-    pub(crate) state_fields: Vec<(Symbol, Type<'db>)>,
+    pub(crate) state_fields: Vec<(Symbol, TypeRef)>,
     /// Original (pre-anyref) field types for casting extracted values back
-    pub(crate) original_field_types: Vec<Type<'db>>,
+    pub(crate) original_field_types: Vec<TypeRef>,
     /// Original values that were captured (for value remapping)
-    pub(crate) original_live_values: Vec<Value<'db>>,
+    pub(crate) original_live_values: Vec<ValueRef>,
     /// The original shift result value (maps to resume_value)
-    pub(crate) shift_result_value: Option<Value<'db>>,
+    pub(crate) shift_result_value: Option<ValueRef>,
     /// The type of the shift result (used to cast resume_value)
-    pub(crate) shift_result_type: Option<Type<'db>>,
+    pub(crate) shift_result_type: Option<TypeRef>,
     /// Operations that form the continuation (ops after shift)
-    pub(crate) continuation_ops: Vec<Operation<'db>>,
+    pub(crate) continuation_ops: Vec<OpRef>,
     /// Name of next resume function (if not last)
     pub(crate) next_resume_name: Option<String>,
     /// Location for generating code
-    pub(crate) location: Location<'db>,
+    pub(crate) location: trunk_ir::arena::types::Location,
     /// Shift analysis for handling nested shifts in continuation
-    pub(crate) shift_analysis: ShiftAnalysis<'db>,
+    pub(crate) shift_analysis: ShiftAnalysis,
     /// Module name for generating unique state type names (for dynamic shifts)
     pub(crate) module_name: Symbol,
 }
 
 /// Shared storage for resume function specs during pattern matching.
-pub(crate) type ResumeSpecs<'db> = Rc<RefCell<Vec<ResumeFuncSpec<'db>>>>;
+pub(crate) type ResumeSpecs = Rc<RefCell<Vec<ResumeFuncSpec>>>;
 
 /// Shared counter for generating unique resume function names.
 pub(crate) type ResumeCounter = Rc<RefCell<u32>>;
 
 /// Analysis results for shift points, keyed by shift operation's span.
 /// Using Span as key because Operation identity may not be stable across phases.
-pub(crate) type ShiftAnalysis<'db> = Rc<HashMap<Span, ShiftPointInfo<'db>>>;
+pub(crate) type ShiftAnalysis = Rc<HashMap<Span, ShiftPointInfo>>;
 
 /// Information about a shift point for code generation.
 #[derive(Clone)]
-pub(crate) struct ShiftPointInfo<'db> {
+pub(crate) struct ShiftPointInfo {
     /// Index of this shift point in the function (0, 1, 2, ...)
     pub(crate) index: usize,
     /// Total number of shift points in the function
     pub(crate) total_shifts: usize,
     /// Live values at this shift point (defined before, used after) with their types
-    pub(crate) live_values: Vec<(Value<'db>, Type<'db>)>,
+    pub(crate) live_values: Vec<(ValueRef, TypeRef)>,
     /// The result value of the shift operation (maps to resume_value)
-    pub(crate) shift_result_value: Option<Value<'db>>,
+    pub(crate) shift_result_value: Option<ValueRef>,
     /// The type of the shift result (for casting resume_value)
-    pub(crate) shift_result_type: Option<Type<'db>>,
+    pub(crate) shift_result_type: Option<TypeRef>,
     /// Operations after this shift until next shift or function end
-    pub(crate) continuation_ops: Vec<Operation<'db>>,
+    pub(crate) continuation_ops: Vec<OpRef>,
 }
 
 // ============================================================================
@@ -133,36 +173,35 @@ pub(crate) struct ShiftPointInfo<'db> {
 /// - `cont.push_prompt` → yield check + dispatch
 /// - `cont.handler_dispatch` → yield check + multi-arm dispatch
 /// - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
-///
-/// Returns an error if any `cont.*` operations (except `cont.drop`, `cont.done`,
-/// `cont.suspend`) remain after conversion.
-pub fn lower_cont_to_trampoline<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Result<Module<'db>, ConversionError> {
+pub fn lower_cont_to_trampoline(
+    ctx: &mut IrContext,
+    module: ArenaModule,
+) -> Result<(), Vec<trunk_ir::arena::rewrite::conversion_target::IllegalOp>> {
+    let module_body = module.body(ctx).expect("module should have a body");
+    let module_name = module.name(ctx).unwrap_or_else(|| Symbol::new(""));
+
     // Shared state for resume function generation (no global state!)
-    let resume_specs: ResumeSpecs<'db> = Rc::new(RefCell::new(Vec::new()));
+    let resume_specs: ResumeSpecs = Rc::new(RefCell::new(Vec::new()));
     let resume_counter: ResumeCounter = Rc::new(RefCell::new(0));
 
     // Step 1: Identify effectful functions
-    let effectful_funcs = identify_effectful_functions(db, &module);
+    let effectful_funcs = identify_effectful_functions(ctx, module_body);
 
     // Step 2: Analyze shift points in effectful functions
-    let shift_analysis = analyze_shift_points(db, &module, &effectful_funcs);
+    let shift_analysis = analyze_shift_points(ctx, module_body, &effectful_funcs);
 
     // Step 2.5: Collect handler_dispatch ops that are inside effectful functions
-    // These handlers should return Step type (for propagation up the call stack)
     let handlers_in_effectful_funcs =
-        collect_handlers_in_effectful_funcs(db, &module, &effectful_funcs);
+        collect_handlers_in_effectful_funcs(ctx, module_body, &effectful_funcs);
 
     // Step 3: Lower cont.* operations to trampoline.*
-    let empty_target = ConversionTarget::new();
-    let applicator = PatternApplicator::new(standard_type_converter())
+    let type_converter = standard_type_converter(ctx);
+    let applicator = ArenaPatternApplicator::new(type_converter)
         .add_pattern(LowerShiftPattern {
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
             shift_analysis: Rc::clone(&shift_analysis),
-            module_name: module.name(db),
+            module_name,
         })
         .add_pattern(LowerResumePattern)
         .add_pattern(UpdateEffectfulCallResultTypePattern {
@@ -176,45 +215,38 @@ pub fn lower_cont_to_trampoline<'db>(
             handlers_in_effectful_funcs: Rc::new(handlers_in_effectful_funcs),
         });
 
-    let result = applicator.apply_partial(db, module, empty_target.clone());
+    applicator.apply_partial(ctx, module);
 
     // Step 3.5: Truncate effectful function bodies after step_shift
-    // After LowerShiftPattern, continuation ops are stored in ResumeFuncSpec but still
-    // remain in the original function body. Remove them so only step_shift and its
-    // return statement remain.
-    let module = truncate_after_shift(db, result.module, &effectful_funcs);
+    truncate_after_shift(ctx, module, &effectful_funcs);
 
     // Step 4: Wrap returns in effectful functions with step_done
-    let applicator = PatternApplicator::new(standard_type_converter()).add_pattern(
+    let type_converter2 = standard_type_converter(ctx);
+    let applicator2 = ArenaPatternApplicator::new(type_converter2).add_pattern(
         WrapReturnsInEffectfulFuncsPattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
         },
     );
-    let result = applicator.apply_partial(db, module, empty_target);
-    let module = result.module;
+    applicator2.apply_partial(ctx, module);
 
     // Verify all cont.* ops (except cont.drop) are converted.
-    // cont.done and cont.suspend are child ops consumed by handler_dispatch
-    // lowering. They are marked legal here because handler_dispatch itself is
-    // illegal — if a handler_dispatch survives, verification catches it, and
-    // any orphaned done/suspend would indicate a deeper bug (not a missing
-    // lowering pattern).
-    let conversion_target = ConversionTarget::new()
-        .illegal_dialect("cont")
-        .legal_op("cont", "drop")
-        .legal_op("cont", "done")
-        .legal_op("cont", "suspend");
+    let mut conversion_target = ArenaConversionTarget::new();
+    conversion_target.add_illegal_dialect("cont");
+    conversion_target.add_legal_op("cont", "drop");
+    conversion_target.add_legal_op("cont", "done");
+    conversion_target.add_legal_op("cont", "suspend");
 
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();
     if specs.is_empty() {
-        conversion_target.verify(db, &module)?;
-        return Ok(module);
+        let illegal = conversion_target.verify(ctx, module_body);
+        if illegal.is_empty() {
+            return Ok(());
+        }
+        return Err(illegal);
     }
 
-    // Validate next_resume_name references: every referenced name must exist
-    // in the collected specs. A mismatch indicates a resume counter
-    // synchronization bug (see shift_lower.rs next_resume_name invariant).
+    // Validate next_resume_name references
     for spec in specs.iter() {
         if let Some(ref next_name) = spec.next_resume_name {
             debug_assert!(
@@ -229,31 +261,22 @@ pub fn lower_cont_to_trampoline<'db>(
         }
     }
 
-    let resume_funcs: Vec<Operation<'db>> = specs
+    let resume_funcs: Vec<OpRef> = specs
         .iter()
-        .map(|spec| create_resume_function_with_continuation(db, spec))
+        .map(|spec| create_resume_function_with_continuation(ctx, spec))
         .collect();
 
     // Add resume functions to module body
-    let body = module.body(db);
-    let mut blocks: Vec<Block<'db>> = body.blocks(db).iter().copied().collect();
-    if let Some(block) = blocks.first_mut() {
-        let mut ops: Vec<Operation<'db>> = block.operations(db).iter().copied().collect();
-        ops.extend(resume_funcs);
-        *block = Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            IdVec::from(ops),
-        );
+    if let Some(module_block) = module.first_block(ctx) {
+        for func_op in resume_funcs {
+            ctx.push_op(module_block, func_op);
+        }
     }
 
-    let new_body = Region::new(db, body.location(db), IdVec::from(blocks));
-    let module = Module::create(db, module.location(db), module.name(db), new_body);
-
-    conversion_target.verify(db, &module)?;
-    Ok(module)
+    let illegal = conversion_target.verify(ctx, module_body);
+    if illegal.is_empty() {
+        Ok(())
+    } else {
+        Err(illegal)
+    }
 }
-
-// Helpers: see crate::cont_util for shared utilities (compute_op_idx, get_region_result_value, etc.)

@@ -1,10 +1,16 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::rc::Rc;
 
-use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::trampoline;
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::{Block, BlockId, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Value};
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::trampoline as arena_trampoline;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, ValueRef};
+use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+
+use super::patterns::is_step_type;
+use super::shift_lower::step_type;
 
 // ============================================================================
 // Pattern: Wrap returns in effectful functions with step_done
@@ -14,20 +20,18 @@ pub(crate) struct WrapReturnsInEffectfulFuncsPattern {
     pub(crate) effectful_funcs: Rc<HashSet<Symbol>>,
 }
 
-impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
+impl ArenaRewritePattern for WrapReturnsInEffectfulFuncsPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        _rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        // Match func.func operations
-        let Ok(func) = Func::from_operation(db, *op) else {
+        let Ok(func) = arena_func::Func::from_op(ctx, op) else {
             return false;
         };
 
-        // Only process effectful functions
-        let func_name = func.sym_name(db);
+        let func_name = func.sym_name(ctx);
         if !self.effectful_funcs.contains(&func_name) {
             return false;
         }
@@ -37,11 +41,8 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
             func_name
         );
 
-        // Transform the function body - wrap non-Step returns with step_done
-        let body = func.body(db);
-        let mut block_map = HashMap::new();
-        collect_block_map(db, &body, &mut block_map);
-        let (new_body, modified) = wrap_returns_in_region(db, body, &block_map);
+        let body = func.body(ctx);
+        let modified = wrap_returns_in_region(ctx, body);
 
         tracing::debug!(
             "WrapReturnsInEffectfulFuncsPattern: {} modified={}",
@@ -49,167 +50,68 @@ impl<'db> RewritePattern<'db> for WrapReturnsInEffectfulFuncsPattern {
             modified
         );
 
-        if !modified {
-            return false;
-        }
-
-        // Rebuild the function with the transformed body
-        let new_op = op.modify(db).regions(IdVec::from(vec![new_body])).build();
-        rewriter.replace_op(new_op);
-        true
+        // Return false - we mutated in place so no replacement needed
+        false
     }
 }
 
 /// Recursively wrap returns in a region with step_done.
-/// Returns (new_region, was_modified).
-fn wrap_returns_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
-    block_map: &HashMap<BlockId, Block<'db>>,
-) -> (Region<'db>, bool) {
-    let mut new_blocks = Vec::new();
+fn wrap_returns_in_region(ctx: &mut IrContext, region: RegionRef) -> bool {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     let mut any_modified = false;
 
-    for block in region.blocks(db).iter() {
-        let (new_block, modified) = wrap_returns_in_block(db, *block, block_map);
-        new_blocks.push(new_block);
-        any_modified |= modified;
+    for block in blocks {
+        any_modified |= wrap_returns_in_block(ctx, block);
     }
 
-    if !any_modified {
-        return (region, false);
-    }
-
-    (
-        Region::new(db, region.location(db), IdVec::from(new_blocks)),
-        true,
-    )
+    any_modified
 }
 
 /// Wrap returns in a block with step_done.
-/// Returns (new_block, was_modified).
-fn wrap_returns_in_block<'db>(
-    db: &'db dyn salsa::Database,
-    block: Block<'db>,
-    block_map: &HashMap<BlockId, Block<'db>>,
-) -> (Block<'db>, bool) {
-    let mut new_ops = Vec::new();
+fn wrap_returns_in_block(ctx: &mut IrContext, block: BlockRef) -> bool {
+    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let mut modified = false;
 
-    for op in block.operations(db).iter() {
+    for op in ops {
         // First, recursively process nested regions
-        let mut op_modified = false;
-        let op_with_transformed_regions = if !op.regions(db).is_empty() {
-            let mut new_regions = Vec::new();
-            for r in op.regions(db).iter() {
-                let (new_r, r_modified) = wrap_returns_in_region(db, *r, block_map);
-                new_regions.push(new_r);
-                op_modified |= r_modified;
-            }
-            if op_modified {
-                op.modify(db).regions(IdVec::from(new_regions)).build()
-            } else {
-                *op
-            }
-        } else {
-            *op
-        };
-
-        modified |= op_modified;
+        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+        for r in regions {
+            modified |= wrap_returns_in_region(ctx, r);
+        }
 
         // Check if this is a func.return
-        if func::Return::from_operation(db, op_with_transformed_regions).is_ok() {
-            let operands = op_with_transformed_regions.operands(db);
+        if arena_func::Return::from_op(ctx, op).is_ok() {
+            let operands = ctx.op_operands(op).to_vec();
 
             if let Some(&value) = operands.first() {
-                // Check if already returning Step
-                let is_step = is_step_value(db, value, block_map);
+                let is_step = is_step_value(ctx, value);
                 tracing::debug!(
                     "wrap_returns_in_block: found func.return, value is_step={}",
                     is_step
                 );
                 if !is_step {
-                    let location = op_with_transformed_regions.location(db);
-                    let step_ty = trampoline::Step::new(db).as_type();
+                    let location = ctx.op(op).location;
+                    let step_ty = step_type(ctx);
 
                     // Create step_done(value)
-                    let step_done = trampoline::step_done(db, location, value, step_ty);
-                    let step_value = step_done.as_operation().result(db, 0);
-                    new_ops.push(step_done.as_operation());
+                    let step_done = arena_trampoline::step_done(ctx, location, value, step_ty);
+                    let step_value = step_done.result(ctx);
+                    ctx.insert_op_before(block, op, step_done.op_ref());
 
-                    // Create new return with step value
-                    let new_return = func::r#return(db, location, Some(step_value));
-                    new_ops.push(new_return.as_operation());
+                    // Update return operand
+                    ctx.set_op_operand(op, 0, step_value);
                     modified = true;
                     tracing::debug!("wrap_returns_in_block: wrapped return with step_done");
-                    continue;
                 }
             }
         }
-
-        new_ops.push(op_with_transformed_regions);
     }
 
-    if !modified {
-        return (block, false);
-    }
-
-    (
-        Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            IdVec::from(new_ops),
-        ),
-        true,
-    )
+    modified
 }
 
-/// Check if a value is already a Step type (from step_shift, step_done, or check_yield result).
-///
-/// `block_map` maps `BlockId → Block` for resolving block argument types.
-pub(crate) fn is_step_value<'db>(
-    db: &'db dyn salsa::Database,
-    value: Value<'db>,
-    block_map: &HashMap<BlockId, Block<'db>>,
-) -> bool {
-    use trunk_ir::ValueDef;
-
-    match value.def(db) {
-        ValueDef::OpResult(def_op) => {
-            // Check if the defining operation produces Step
-            trampoline::StepShift::from_operation(db, def_op).is_ok()
-                || trampoline::StepDone::from_operation(db, def_op).is_ok()
-                // Check if any operation's result type is Step
-                // This handles trampoline loop results, unrealized_conversion_cast, etc.
-                || def_op
-                    .results(db)
-                    .first()
-                    .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
-        }
-        ValueDef::BlockArg(block_id) => {
-            let index = value.index(db);
-            block_map
-                .get(&block_id)
-                .and_then(|block| block.args(db).get(index).map(|arg| arg.ty(db)))
-                .is_some_and(|ty| trampoline::Step::from_type(db, ty).is_some())
-        }
-    }
-}
-
-/// Collect all blocks in a region (recursively) into a map from BlockId → Block.
-fn collect_block_map<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
-    map: &mut HashMap<BlockId, Block<'db>>,
-) {
-    for block in region.blocks(db).iter() {
-        map.insert(block.id(db), *block);
-        for op in block.operations(db).iter() {
-            for nested in op.regions(db).iter() {
-                collect_block_map(db, nested, map);
-            }
-        }
-    }
+/// Check if a value is already a Step type.
+pub(crate) fn is_step_value(ctx: &IrContext, value: ValueRef) -> bool {
+    let ty = ctx.value_ty(value);
+    is_step_type(ctx, ty)
 }

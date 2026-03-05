@@ -393,12 +393,22 @@ pub fn stage_evidence_params<'db>(
 /// the trampoline (yield-bubbling) implementation strategy.
 ///
 /// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
-#[salsa::tracked]
 fn stage_cont_to_trampoline<'db>(
     db: &'db dyn salsa::Database,
     module: Module<'db>,
 ) -> Result<Module<'db>, ConversionError> {
-    lower_cont_to_trampoline(db, module)
+    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
+    lower_cont_to_trampoline(&mut ctx, arena_module).map_err(|illegal_ops| ConversionError {
+        illegal_ops: illegal_ops
+            .into_iter()
+            .map(|op| trunk_ir::rewrite::IllegalOp {
+                dialect: op.dialect.to_string(),
+                name: op.name.to_string(),
+            })
+            .collect(),
+    })?;
+    let exported = export_to_salsa(db, &ctx, arena_module);
+    Ok(Module::from_operation(db, exported).unwrap())
 }
 
 /// Continuation to libmprompt Lowering (native backend).
