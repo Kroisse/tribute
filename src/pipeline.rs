@@ -582,7 +582,7 @@ pub fn run_through_evidence_params<'db>(
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs frontend + `add_evidence_params` + `lower_closures_arena`
+/// Runs frontend + `add_evidence_params` + `lower_closures`
 /// in a single arena session.
 #[salsa::tracked]
 pub fn run_through_closure_lower<'db>(
@@ -593,7 +593,7 @@ pub fn run_through_closure_lower<'db>(
         return empty_module(db, source);
     };
     evidence::add_evidence_params(&mut ctx, m);
-    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, m);
+    tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     let exported = export_to_salsa(db, &ctx, m);
     Module::from_operation(db, exported).unwrap()
 }
@@ -617,9 +617,9 @@ fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> 
     };
 
     evidence::add_evidence_params(&mut ctx, m);
-    tribute_passes::closure_lower::lower_closures_arena(&mut ctx, m);
+    tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
-    tribute_passes::resolve_evidence::resolve_evidence_dispatch_arena(&mut ctx, m);
+    tribute_passes::resolve_evidence::resolve_evidence_dispatch(&mut ctx, m);
 
     let exported = export_to_salsa(db, &ctx, m);
     Module::from_operation(db, exported).unwrap()
