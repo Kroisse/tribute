@@ -46,7 +46,7 @@ fn prescan_struct_fields<'db>(
                     })
                     .collect();
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
-                let struct_ir_type = ctx.adt_struct_type(ir, s.name, &ir_fields);
+                let struct_ir_type = ctx.adt_struct_type(ir, qualified, &ir_fields);
                 ctx.register_type(qualified, struct_ir_type);
             }
             Decl::Enum(e) => {
@@ -65,7 +65,7 @@ fn prescan_struct_fields<'db>(
                     })
                     .collect();
                 let qualified = qualified_type_name(ctx.db, &ctor_id);
-                let enum_ir_type = ctx.adt_enum_type(ir, e.name, &ir_variants);
+                let enum_ir_type = ctx.adt_enum_type(ir, qualified, &ir_variants);
                 ctx.register_type(qualified, enum_ir_type);
             }
             Decl::Module(m) => {
