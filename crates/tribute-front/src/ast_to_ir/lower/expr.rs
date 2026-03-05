@@ -28,64 +28,33 @@ pub(super) fn lower_expr<'db>(
 
     match *expr.kind {
         ExprKind::NatLit(n) => {
-            const I31_MAX: u64 = (1 << 30) - 1;
-
-            if n > I31_MAX {
-                Diagnostic {
-                    message: format!(
-                        "natural number literal {} exceeds i31 range (max: {})",
-                        n, I31_MAX
-                    ),
-                    span: location.span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::Lowering,
-                }
-                .accumulate(builder.db());
-                None
-            } else {
-                let i32_ty = builder.ctx.i32_type(builder.ir);
-                let op = arith::r#const(
-                    builder.ir,
-                    location,
-                    i32_ty,
-                    Attribute::IntBits(n as i32 as u64),
-                );
-                builder.ir.push_op(builder.block, op.op_ref());
-                let result = op.result(builder.ir);
-                builder.ctx.track_value_type(result, i32_ty);
-                Some(result)
-            }
+            let value = super::validate_nat_i31(builder.db(), location, n)?;
+            let i32_ty = builder.ctx.i32_type(builder.ir);
+            let op = arith::r#const(
+                builder.ir,
+                location,
+                i32_ty,
+                Attribute::IntBits(value as u64),
+            );
+            builder.ir.push_op(builder.block, op.op_ref());
+            let result = op.result(builder.ir);
+            builder.ctx.track_value_type(result, i32_ty);
+            Some(result)
         }
 
         ExprKind::IntLit(n) => {
-            const I31_MIN: i64 = -(1 << 30);
-            const I31_MAX: i64 = (1 << 30) - 1;
-
-            if !(I31_MIN..=I31_MAX).contains(&n) {
-                Diagnostic {
-                    message: format!(
-                        "integer literal {} exceeds i31 range ({} to {})",
-                        n, I31_MIN, I31_MAX
-                    ),
-                    span: location.span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::Lowering,
-                }
-                .accumulate(builder.db());
-                None
-            } else {
-                let i32_ty = builder.ctx.i32_type(builder.ir);
-                let op = arith::r#const(
-                    builder.ir,
-                    location,
-                    i32_ty,
-                    Attribute::IntBits(n as i32 as u64),
-                );
-                builder.ir.push_op(builder.block, op.op_ref());
-                let result = op.result(builder.ir);
-                builder.ctx.track_value_type(result, i32_ty);
-                Some(result)
-            }
+            let value = super::validate_int_i31(builder.db(), location, n)?;
+            let i32_ty = builder.ctx.i32_type(builder.ir);
+            let op = arith::r#const(
+                builder.ir,
+                location,
+                i32_ty,
+                Attribute::IntBits(value as u64),
+            );
+            builder.ir.push_op(builder.block, op.op_ref());
+            let result = op.result(builder.ir);
+            builder.ctx.track_value_type(result, i32_ty);
+            Some(result)
         }
 
         ExprKind::RuneLit(c) => {

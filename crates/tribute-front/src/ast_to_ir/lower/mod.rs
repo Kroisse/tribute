@@ -108,7 +108,10 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
                     };
                     results.get(index).copied()
                 }
-                trunk_ir::arena::refs::ValueDef::BlockArg(_, _) => self.ctx.get_value_type(value),
+                trunk_ir::arena::refs::ValueDef::BlockArg(_, _) => self
+                    .ctx
+                    .get_value_type(value)
+                    .or_else(|| Some(self.ir.value_ty(value))),
             }
         };
 
@@ -270,13 +273,64 @@ pub(super) fn convert_annotation_to_ir_type<'db>(
             } else if *name == "Rune" {
                 ctx.i32_type(ir)
             } else {
-                ctx.nil_type(ir)
+                ctx.any_type(ir)
             }
         }
-        TypeAnnotationKind::Path(_) => ctx.nil_type(ir),
+        TypeAnnotationKind::Path(_) => ctx.any_type(ir),
         TypeAnnotationKind::App { ctor, .. } => convert_annotation_to_ir_type(ctx, ir, Some(ctor)),
-        _ => ctx.nil_type(ir),
+        _ => ctx.any_type(ir),
     }
+}
+
+/// Validate that a natural number literal fits in the i31 range.
+///
+/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
+pub(super) fn validate_nat_i31(
+    db: &dyn salsa::Database,
+    location: Location,
+    n: u64,
+) -> Option<i32> {
+    const I31_MAX: u64 = (1 << 30) - 1;
+    if n > I31_MAX {
+        Diagnostic {
+            message: format!(
+                "natural number literal {} exceeds i31 range (max: {})",
+                n, I31_MAX
+            ),
+            span: location.span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Lowering,
+        }
+        .accumulate(db);
+        return None;
+    }
+    Some(n as i32)
+}
+
+/// Validate that an integer literal fits in the i31 range.
+///
+/// Returns the value as `i32` if valid, or emits a diagnostic and returns `None`.
+pub(super) fn validate_int_i31(
+    db: &dyn salsa::Database,
+    location: Location,
+    n: i64,
+) -> Option<i32> {
+    const I31_MIN: i64 = -(1 << 30);
+    const I31_MAX: i64 = (1 << 30) - 1;
+    if !(I31_MIN..=I31_MAX).contains(&n) {
+        Diagnostic {
+            message: format!(
+                "integer literal {} exceeds i31 range ({} to {})",
+                n, I31_MIN, I31_MAX
+            ),
+            span: location.span,
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Lowering,
+        }
+        .accumulate(db);
+        return None;
+    }
+    Some(n as i32)
 }
 
 /// Check if a pattern is unconditional (always matches without runtime checks).

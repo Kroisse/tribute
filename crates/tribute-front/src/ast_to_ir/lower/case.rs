@@ -195,7 +195,7 @@ fn emit_literal_check<'db>(
 
     match lit {
         LiteralPattern::Nat(n) => {
-            let value = i32::try_from(*n).expect("literal pattern Nat value exceeds i32 range");
+            let value = super::validate_nat_i31(builder.db(), location, *n)?;
             let const_op = arith::r#const(
                 builder.ir,
                 location,
@@ -209,7 +209,7 @@ fn emit_literal_check<'db>(
             Some(cmp_op.result(builder.ir))
         }
         LiteralPattern::Int(n) => {
-            let value = i32::try_from(*n).expect("literal pattern Int value exceeds i32 range");
+            let value = super::validate_int_i31(builder.db(), location, *n)?;
             let const_op = arith::r#const(
                 builder.ir,
                 location,
