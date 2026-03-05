@@ -1,33 +1,25 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 230
-expression: ir_module
+assertion_line: 172
+expression: ir_text
 ---
-Module(test) {
-    operations: [
-        Module(Pair) {
-            operations: [
-                func @test::Pair::first(adt.typeref) -> core.nil {
-                    body: [
-                        "adt.struct_get",
-                        "func.return",
-                    ],
-                },
-                func @test::Pair::second(adt.typeref) -> core.nil {
-                    body: [
-                        "adt.struct_get",
-                        "func.return",
-                    ],
-                },
-            ],
-        },
-        func @make_pair() -> tribute_rt.any {
-            body: [
-                "arith.const",
-                "arith.const",
-                "adt.struct_new",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  core.module @Pair {
+    func.func @"test::Pair::first"(%0: adt.typeref() {name = @Pair}) -> tribute_rt.any {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@first, tribute_rt.any], [@second, tribute_rt.any]], name = @Pair}} : tribute_rt.any
+        func.return %1
+    }
+    func.func @"test::Pair::second"(%0: adt.typeref() {name = @Pair}) -> tribute_rt.any {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@first, tribute_rt.any], [@second, tribute_rt.any]], name = @Pair}} : tribute_rt.any
+        func.return %1
+    }
+  }
+  func.func @make_pair() -> tribute_rt.any {
+      %0 = arith.const {value = 42} : core.i32
+      %1 = arith.const {value = true} : core.i1
+      %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@first, tribute_rt.any], [@second, tribute_rt.any]], name = @Pair}} : adt.typeref() {name = @Pair}
+      func.return %2
+  }
 }

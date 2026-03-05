@@ -1,15 +1,21 @@
 ---
 source: crates/tribute-front/tests/case_type.rs
-expression: ir_module
+assertion_line: 98
+expression: ir_text
 ---
-Module(test) {
-    operations: [
-        func @unwrap_or(tribute_rt.any, core.i32) -> core.i32 {
-            body: [
-                "adt.variant_is",
-                "scf.if",
-                "func.return",
-            ],
-        },
-    ],
+core.module @test {
+  func.func @unwrap_or(%0: tribute_rt.any, %1: core.i32) -> core.i32 {
+    ^bb0:
+      %2 = adt.variant_is %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}} : core.i1
+      %3 = scf.if %2 : core.i32 {
+          %4 = adt.variant_cast %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}
+          %5 = adt.variant_get %4 {field = 0, tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}} : tribute_rt.any
+          %6 = core.unrealized_conversion_cast %5 : core.i32
+          scf.yield %6
+      } {
+          %7 = adt.variant_cast %0 {tag = @None, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.any]], [@None, []]]}
+          scf.yield %1
+      }
+      func.return %3
+  }
 }

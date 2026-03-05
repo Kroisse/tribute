@@ -6,61 +6,11 @@
 //! This is critical for the evidence pass to correctly identify which
 //! lifted lambdas need evidence parameters.
 
-use insta::assert_debug_snapshot;
-use ropey::Rope;
+mod common;
+
+use self::common::{run_ast_pipeline_with_ir, source_from_str};
+use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
-use tribute_front::SourceCst;
-use trunk_ir::dialect::core::Module;
-
-fn source_from_str(path: &str, text: &str) -> SourceCst {
-    use tree_sitter::Parser;
-    salsa::with_attached_database(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let text: Rope = text.into();
-        let tree = parser.parse(text.to_string().as_str(), None);
-        SourceCst::new(
-            db,
-            fluent_uri::Uri::parse_from(format!("test:///{}", path)).unwrap(),
-            text,
-            tree,
-        )
-    })
-    .expect("attached db")
-}
-
-/// Helper tracked function to run the AST pipeline and return the IR module.
-#[salsa::tracked]
-fn run_ast_pipeline_with_ir<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let parsed = tribute_front::query::parsed_ast(db, source);
-    assert!(parsed.is_some(), "Should parse successfully");
-
-    let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
-    let span_map = parsed.span_map(db).clone();
-
-    let env = tribute_front::resolve::build_env(db, &ast);
-    let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
-
-    let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module(resolved);
-
-    let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module);
-
-    let function_types_map: std::collections::HashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    tribute_front::ast_to_ir::lower_ast_to_ir(
-        db,
-        tdnr_ast,
-        span_map,
-        source.uri(db).as_str(),
-        function_types_map,
-        node_types_map,
-    )
-}
 
 // ========================================================================
 // Pure Lambda Tests - No Effect Expected
@@ -80,8 +30,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test that a pure lambda capturing a variable has no effect type.
@@ -99,8 +49,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 // ========================================================================
@@ -135,8 +85,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test that a lambda calling an effectful function inherits the effect.
@@ -173,8 +123,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test that multiple ability operations in lambda accumulate effects.
@@ -206,8 +156,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 // ========================================================================
@@ -243,8 +193,8 @@ fn main() -> Int { 0 }
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 /// Test the full ability_core pattern with multiple counter calls.
@@ -282,8 +232,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 // ========================================================================
@@ -317,8 +267,8 @@ fn main() -> Int {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
 
 // ========================================================================
@@ -355,6 +305,6 @@ fn main() -> Nat {
 "#,
     );
 
-    let ir_module = run_ast_pipeline_with_ir(db, source);
-    assert_debug_snapshot!(ir_module);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
 }
