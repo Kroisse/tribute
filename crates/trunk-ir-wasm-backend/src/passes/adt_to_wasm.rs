@@ -44,10 +44,10 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
@@ -55,7 +55,7 @@ use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
@@ -77,7 +77,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
 struct StructNewPattern;
 
-impl ArenaRewritePattern for StructNewPattern {
+impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -107,7 +107,7 @@ impl ArenaRewritePattern for StructNewPattern {
 /// is handled by the emit stage in `struct_handlers.rs`, not here.
 struct StructGetPattern;
 
-impl ArenaRewritePattern for StructGetPattern {
+impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -134,7 +134,7 @@ impl ArenaRewritePattern for StructGetPattern {
 /// Pattern for `adt.struct_set` -> `wasm.struct_set`
 struct StructSetPattern;
 
-impl ArenaRewritePattern for StructSetPattern {
+impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -164,7 +164,7 @@ impl ArenaRewritePattern for StructSetPattern {
 /// without an explicit tag field. The type itself serves as the discriminant.
 struct VariantNewPattern;
 
-impl ArenaRewritePattern for VariantNewPattern {
+impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -241,7 +241,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
 /// Tests if a variant reference is of a specific variant type.
 struct VariantIsPattern;
 
-impl ArenaRewritePattern for VariantIsPattern {
+impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -282,7 +282,7 @@ impl ArenaRewritePattern for VariantIsPattern {
 /// Casts a variant reference to a specific variant type after pattern matching.
 struct VariantCastPattern;
 
-impl ArenaRewritePattern for VariantCastPattern {
+impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -325,7 +325,7 @@ impl ArenaRewritePattern for VariantCastPattern {
 /// The type for struct.get comes from the operand (the variant_cast result).
 struct VariantGetPattern;
 
-impl ArenaRewritePattern for VariantGetPattern {
+impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -352,7 +352,7 @@ impl ArenaRewritePattern for VariantGetPattern {
 /// Pattern for `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
 struct ArrayNewPattern;
 
-impl ArenaRewritePattern for ArrayNewPattern {
+impl RewritePattern for ArrayNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -396,7 +396,7 @@ impl ArenaRewritePattern for ArrayNewPattern {
 /// Pattern for `adt.array_get` -> `wasm.array_get`
 struct ArrayGetPattern;
 
-impl ArenaRewritePattern for ArrayGetPattern {
+impl RewritePattern for ArrayGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -421,7 +421,7 @@ impl ArenaRewritePattern for ArrayGetPattern {
 /// Pattern for `adt.array_set` -> `wasm.array_set`
 struct ArraySetPattern;
 
-impl ArenaRewritePattern for ArraySetPattern {
+impl RewritePattern for ArraySetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -446,7 +446,7 @@ impl ArenaRewritePattern for ArraySetPattern {
 /// Pattern for `adt.array_len` -> `wasm.array_len`
 struct ArrayLenPattern;
 
-impl ArenaRewritePattern for ArrayLenPattern {
+impl RewritePattern for ArrayLenPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -470,7 +470,7 @@ impl ArenaRewritePattern for ArrayLenPattern {
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
 struct RefNullPattern;
 
-impl ArenaRewritePattern for RefNullPattern {
+impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -497,7 +497,7 @@ impl ArenaRewritePattern for RefNullPattern {
 /// Pattern for `adt.ref_is_null` -> `wasm.ref_is_null`
 struct RefIsNullPattern;
 
-impl ArenaRewritePattern for RefIsNullPattern {
+impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -521,7 +521,7 @@ impl ArenaRewritePattern for RefIsNullPattern {
 /// Pattern for `adt.ref_cast` -> `wasm.ref_cast`
 struct RefCastPattern;
 
-impl ArenaRewritePattern for RefCastPattern {
+impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

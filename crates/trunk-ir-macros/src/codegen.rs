@@ -79,7 +79,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         pub struct #sname(#crate_path::arena::OpRef);
 
-        impl #crate_path::arena::ops::ArenaDialectOp for #sname {
+        impl #crate_path::arena::ops::DialectOp for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const OP_NAME: &'static str = #op_name;
 

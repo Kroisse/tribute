@@ -18,9 +18,9 @@ use target_lexicon::Triple;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 
 use crate::function::{FunctionTranslator, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
@@ -316,12 +316,12 @@ fn build_dispatching_deep_release(
 ///
 /// For Tribute-specific compilation (including lowering from high-level IR),
 /// use the orchestration in the main crate's pipeline.
-pub fn emit_module_to_native(ctx: &IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
+pub fn emit_module_to_native(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
     validate_clif_ir(ctx, module)?;
     emit_module_impl(ctx, module)
 }
 
-fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
+fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
     let triple = Triple::host();
     let mut flag_builder = settings::builder();
@@ -501,8 +501,8 @@ fn emit_module_impl(ctx: &IrContext, module: ArenaModule) -> CompilationResult<V
     Ok(bytes)
 }
 
-/// Collect all `clif.func` operations from an ArenaModule.
-fn collect_clif_funcs(ctx: &IrContext, module: ArenaModule) -> Vec<OpRef> {
+/// Collect all `clif.func` operations from an Module.
+fn collect_clif_funcs(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
         collect_clif_funcs_from_region(ctx, body, &mut funcs);

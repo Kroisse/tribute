@@ -1,6 +1,6 @@
 //! Lower trampoline dialect operations to WASM and ADT operations.
 //!
-//! This pass converts all trampoline operations using ArenaRewritePattern infrastructure:
+//! This pass converts all trampoline operations using RewritePattern infrastructure:
 //!
 //! ## Struct operations -> ADT operations
 //! - `trampoline.build_continuation` -> `adt.struct_new` (Continuation type)
@@ -20,7 +20,7 @@
 //! - `trampoline.get_yield_shift_value` -> wasm.global_get + adt.struct_get
 //! - `trampoline.check_yield` -> wasm.global_get
 //!
-//! This pass uses ArenaTypeConverter to consistently convert trampoline types to ADT types.
+//! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
@@ -28,10 +28,10 @@ use trunk_ir::arena::dialect::{
     adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
     wasm as arena_wasm,
 };
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
 
@@ -57,8 +57,8 @@ pub mod yield_globals {
     pub const OP_IDX: u32 = 3;
 }
 
-/// Lower all trampoline operations to WASM/ADT using ArenaRewritePattern infrastructure.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
+/// Lower all trampoline operations to WASM/ADT using RewritePattern infrastructure.
+pub fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = create_type_converter(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
@@ -174,8 +174,8 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
 // Type Converter
 // ============================================================================
 
-/// Create an ArenaTypeConverter that converts trampoline types to ADT types.
-fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+/// Create an TypeConverter that converts trampoline types to ADT types.
+fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-compute types
     let step_ty = step_adt_type(ctx);
     let cont_ty = continuation_adt_type(ctx);
@@ -186,7 +186,7 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
     let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
     let boxed_f64_ty = boxed_f64_type(ctx);
 
-    let mut tc = ArenaTypeConverter::new();
+    let mut tc = TypeConverter::new();
 
     // Convert trampoline.step -> _Step ADT
     tc.add_conversion(move |ctx, ty| {
@@ -486,7 +486,7 @@ fn convert_trampoline_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerBuildContinuationPattern;
 
-impl ArenaRewritePattern for LowerBuildContinuationPattern {
+impl RewritePattern for LowerBuildContinuationPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -550,7 +550,7 @@ impl ArenaRewritePattern for LowerBuildContinuationPattern {
 /// Lower `trampoline.step_done` -> `adt.struct_new` with tag=0
 struct LowerStepDonePattern;
 
-impl ArenaRewritePattern for LowerStepDonePattern {
+impl RewritePattern for LowerStepDonePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -604,7 +604,7 @@ impl ArenaRewritePattern for LowerStepDonePattern {
 /// Takes prompt tag as first operand (dynamic tag from evidence lookup).
 struct LowerStepShiftPattern;
 
-impl ArenaRewritePattern for LowerStepShiftPattern {
+impl RewritePattern for LowerStepShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -667,7 +667,7 @@ impl ArenaRewritePattern for LowerStepShiftPattern {
 /// - `trampoline.state_get` (all fields are anyref)
 struct LowerTrampolineStructGetPattern;
 
-impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
+impl RewritePattern for LowerTrampolineStructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -760,7 +760,7 @@ impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
 /// Lower `trampoline.build_state` -> `adt.struct_new`
 struct LowerBuildStatePattern;
 
-impl ArenaRewritePattern for LowerBuildStatePattern {
+impl RewritePattern for LowerBuildStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -800,7 +800,7 @@ impl ArenaRewritePattern for LowerBuildStatePattern {
 /// Lower `trampoline.build_resume_wrapper` -> `adt.struct_new`
 struct LowerBuildResumeWrapperPattern;
 
-impl ArenaRewritePattern for LowerBuildResumeWrapperPattern {
+impl RewritePattern for LowerBuildResumeWrapperPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -853,7 +853,7 @@ impl ArenaRewritePattern for LowerBuildResumeWrapperPattern {
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerSetYieldStatePattern;
 
-impl ArenaRewritePattern for LowerSetYieldStatePattern {
+impl RewritePattern for LowerSetYieldStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -904,7 +904,7 @@ impl ArenaRewritePattern for LowerSetYieldStatePattern {
 /// Lower `trampoline.reset_yield_state` -> wasm.global_set ($yield_state = 0)
 struct LowerResetYieldStatePattern;
 
-impl ArenaRewritePattern for LowerResetYieldStatePattern {
+impl RewritePattern for LowerResetYieldStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -933,7 +933,7 @@ impl ArenaRewritePattern for LowerResetYieldStatePattern {
 /// - `trampoline.get_yield_shift_value` -> load, cast, and extract shift_value field
 struct LowerYieldContinuationAccessPattern;
 
-impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
+impl RewritePattern for LowerYieldContinuationAccessPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -990,7 +990,7 @@ impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
 /// - `trampoline.get_yield_op_idx` -> yield_op_idx global
 struct LowerYieldGlobalGetPattern;
 
-impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
+impl RewritePattern for LowerYieldGlobalGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -1029,7 +1029,7 @@ impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
 /// when the return type is trampoline.Step.
 struct ConvertFuncTypePattern;
 
-impl ArenaRewritePattern for ConvertFuncTypePattern {
+impl RewritePattern for ConvertFuncTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -1122,7 +1122,7 @@ impl ArenaRewritePattern for ConvertFuncTypePattern {
 /// Applies to: func.call, func.call_indirect, wasm.if
 struct ConvertTrampolineResultTypePattern;
 
-impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
+impl RewritePattern for ConvertTrampolineResultTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

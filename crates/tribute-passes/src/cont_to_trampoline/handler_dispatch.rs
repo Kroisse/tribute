@@ -9,15 +9,15 @@ use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::scf as arena_scf;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location};
 use trunk_ir::location::Span;
 
 use super::patterns::is_step_type;
 use super::shift_lower::{anyref_type, continuation_type, i32_type, step_type};
-use crate::cont_util::{ArenaSuspendArm, collect_suspend_arms_arena};
+use crate::cont_util::{SuspendArm, collect_suspend_arms_arena};
 
 // ============================================================================
 // Pattern: Lower cont.handler_dispatch
@@ -29,7 +29,7 @@ pub(crate) struct LowerHandlerDispatchPattern {
     pub(crate) handlers_in_effectful_funcs: Rc<HashSet<Span>>,
 }
 
-impl ArenaRewritePattern for LowerHandlerDispatchPattern {
+impl RewritePattern for LowerHandlerDispatchPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -104,7 +104,7 @@ impl LowerHandlerDispatchPattern {
         ctx: &mut IrContext,
         location: Location,
         our_tag: u32,
-        suspend_arms: &[ArenaSuspendArm],
+        suspend_arms: &[SuspendArm],
         user_result_ty: TypeRef,
         step_ty: TypeRef,
         i32_ty: TypeRef,
@@ -234,7 +234,7 @@ impl LowerHandlerDispatchPattern {
         location: Location,
         our_tag: u32,
         current_step: ValueRef,
-        suspend_arms: &[ArenaSuspendArm],
+        suspend_arms: &[SuspendArm],
         step_ty: TypeRef,
         i32_ty: TypeRef,
         i1_ty: TypeRef,
@@ -295,7 +295,7 @@ impl LowerHandlerDispatchPattern {
         &self,
         ctx: &mut IrContext,
         location: Location,
-        suspend_arms: &[ArenaSuspendArm],
+        suspend_arms: &[SuspendArm],
         step_ty: TypeRef,
     ) -> RegionRef {
         build_suspend_dispatch_region(ctx, location, step_ty, suspend_arms, &self.effectful_funcs)
@@ -330,7 +330,7 @@ fn build_suspend_dispatch_region(
     ctx: &mut IrContext,
     location: Location,
     result_ty: TypeRef,
-    suspend_arms: &[ArenaSuspendArm],
+    suspend_arms: &[SuspendArm],
     effectful_funcs: &HashSet<Symbol>,
 ) -> RegionRef {
     let i32_ty = i32_type(ctx);
@@ -393,7 +393,7 @@ pub(crate) fn build_nested_dispatch(
     location: Location,
     result_ty: TypeRef,
     current_op_idx: ValueRef,
-    suspend_arms: &[ArenaSuspendArm],
+    suspend_arms: &[SuspendArm],
     arm_index: usize,
     effectful_funcs: &HashSet<Symbol>,
 ) -> ValueRef {

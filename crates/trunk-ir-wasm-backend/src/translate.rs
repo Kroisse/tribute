@@ -4,10 +4,10 @@
 //! from TrunkIR modules that have already been lowered to the wasm dialect.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 
 use crate::{CompilationResult, emit_wasm, validate_wasm_ir};
 
@@ -30,7 +30,7 @@ pub struct WasmBinary {
 /// 3. Extracts metadata (exports, imports)
 pub fn emit_module_to_wasm_arena(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
 ) -> CompilationResult<WasmBinary> {
     // Validate IR (check for unresolved types and non-wasm ops)
     validate_wasm_ir(ctx, module)?;
@@ -49,7 +49,7 @@ pub fn emit_module_to_wasm_arena(
 }
 
 /// Extract metadata (exports and imports) from a compiled module.
-fn extract_metadata(ctx: &IrContext, module: ArenaModule) -> (Vec<Symbol>, Vec<(Symbol, Symbol)>) {
+fn extract_metadata(ctx: &IrContext, module: Module) -> (Vec<Symbol>, Vec<(Symbol, Symbol)>) {
     let mut exports = Vec::new();
     let mut imports = Vec::new();
 

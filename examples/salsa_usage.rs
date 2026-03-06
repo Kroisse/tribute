@@ -1,7 +1,7 @@
 //! Example showing how to use the arena IR pipeline for the Tribute language.
 //!
 //! This example demonstrates the AST-based compilation pipeline that produces
-//! arena IR (`IrContext` + `ArenaModule`) instead of Salsa-tracked IR.
+//! arena IR (`IrContext` + `Module`) instead of Salsa-tracked IR.
 
 use salsa::Setter;
 use tree_sitter::Parser;

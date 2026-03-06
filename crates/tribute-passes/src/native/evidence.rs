@@ -25,9 +25,9 @@ use std::collections::{HashMap, HashSet};
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::rewrite::helpers::erase_op;
 use trunk_ir::arena::types::{
     Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
@@ -36,7 +36,7 @@ use trunk_ir::arena::types::{
 /// Lower evidence operations for the native backend.
 ///
 /// Must run AFTER `cont_to_libmprompt` and BEFORE DCE.
-pub fn lower_evidence_to_native(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_evidence_to_native(ctx: &mut IrContext, module: Module) {
     replace_stubs_and_add_empty(ctx, module);
     rewrite_evidence_ops_in_module(ctx, module);
 }
@@ -45,7 +45,7 @@ pub fn lower_evidence_to_native(ctx: &mut IrContext, module: ArenaModule) {
 // Phase 1: Replace stubs + add __tribute_evidence_empty declaration
 // =============================================================================
 
-fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: ArenaModule) {
+fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     let first_block = match module.first_block(ctx) {
         Some(b) => b,
         None => return,
@@ -155,7 +155,7 @@ fn is_evidence_runtime_fn(name: Symbol) -> bool {
         || name == Symbol::new("__tribute_evidence_empty")
 }
 
-fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: ArenaModule) {
+fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
     let first_block = match module.first_block(ctx) {
         Some(b) => b,
         None => return,

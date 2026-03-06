@@ -11,10 +11,10 @@ use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::scf as arena_scf;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 
@@ -22,7 +22,7 @@ use trunk_ir::smallvec::smallvec;
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ScfIfPattern)
         .add_pattern(ScfLoopPattern)
@@ -35,7 +35,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 /// Pattern for `scf.if` -> `wasm.if`
 struct ScfIfPattern;
 
-impl ArenaRewritePattern for ScfIfPattern {
+impl RewritePattern for ScfIfPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -81,7 +81,7 @@ impl ArenaRewritePattern for ScfIfPattern {
 /// - `wasm.br(target=2)` branches to the block (break)
 struct ScfLoopPattern;
 
-impl ArenaRewritePattern for ScfLoopPattern {
+impl RewritePattern for ScfLoopPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -146,7 +146,7 @@ impl ArenaRewritePattern for ScfLoopPattern {
 /// local.get, and the wasm.yield itself produces no Wasm instruction.
 struct ScfYieldPattern;
 
-impl ArenaRewritePattern for ScfYieldPattern {
+impl RewritePattern for ScfYieldPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -186,7 +186,7 @@ impl ArenaRewritePattern for ScfYieldPattern {
 /// depth 1 = wasm.loop) within a `scf.loop`.
 struct ScfContinuePattern;
 
-impl ArenaRewritePattern for ScfContinuePattern {
+impl RewritePattern for ScfContinuePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -238,7 +238,7 @@ impl ArenaRewritePattern for ScfContinuePattern {
 /// region's result, then branch without operands.
 struct ScfBreakPattern;
 
-impl ArenaRewritePattern for ScfBreakPattern {
+impl RewritePattern for ScfBreakPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

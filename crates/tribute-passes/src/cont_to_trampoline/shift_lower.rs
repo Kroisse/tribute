@@ -8,7 +8,7 @@ use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::PatternRewriter as ArenaPatternRewriter;
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
@@ -151,7 +151,7 @@ pub(crate) struct LowerShiftPattern {
     pub(crate) module_name: Symbol,
 }
 
-impl trunk_ir::arena::rewrite::ArenaRewritePattern for LowerShiftPattern {
+impl trunk_ir::arena::rewrite::RewritePattern for LowerShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -5,7 +5,7 @@
 
 use crate::arena::context::IrContext;
 use crate::arena::refs::{OpRef, TypeRef, ValueRef};
-use crate::arena::rewrite::type_converter::ArenaTypeConverter;
+use crate::arena::rewrite::type_converter::TypeConverter;
 
 /// Accumulated mutations from a pattern rewrite.
 pub(crate) struct Mutations {
@@ -28,7 +28,7 @@ pub(crate) struct Mutations {
 /// operands are read directly from the context, and value replacements are
 /// done via `IrContext::replace_all_uses`.
 pub struct PatternRewriter<'a> {
-    type_converter: &'a ArenaTypeConverter,
+    type_converter: &'a TypeConverter,
     prefix_ops: Vec<OpRef>,
     replacement: Option<OpRef>,
     erase_values: Option<Vec<ValueRef>>,
@@ -37,7 +37,7 @@ pub struct PatternRewriter<'a> {
 
 impl<'a> PatternRewriter<'a> {
     /// Create a new empty rewriter with a reference to the type converter.
-    pub(crate) fn new(type_converter: &'a ArenaTypeConverter) -> Self {
+    pub(crate) fn new(type_converter: &'a TypeConverter) -> Self {
         Self {
             type_converter,
             prefix_ops: Vec::new(),
@@ -48,7 +48,7 @@ impl<'a> PatternRewriter<'a> {
     }
 
     /// Get a reference to the type converter.
-    pub fn type_converter(&self) -> &ArenaTypeConverter {
+    pub fn type_converter(&self) -> &TypeConverter {
         self.type_converter
     }
 

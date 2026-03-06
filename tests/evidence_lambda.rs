@@ -20,11 +20,11 @@ use tribute_passes::evidence::{collect_effectful_functions_arena, is_effectful_t
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::Module;
 
 /// Helper to compile code through AST pipeline and return arena IR.
-fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, ArenaModule) {
+fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
@@ -33,7 +33,7 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
 }
 
 /// Helper to get all function names and their effectful status.
-fn get_function_effectfulness(ctx: &IrContext, module: &ArenaModule) -> Vec<(String, bool)> {
+fn get_function_effectfulness(ctx: &IrContext, module: &Module) -> Vec<(String, bool)> {
     let mut results = Vec::new();
 
     for op in module.ops(ctx) {
@@ -50,7 +50,7 @@ fn get_function_effectfulness(ctx: &IrContext, module: &ArenaModule) -> Vec<(Str
 
 /// Debug helper to print detailed function effect information.
 #[allow(dead_code)]
-fn debug_function_effects(ctx: &IrContext, module: &ArenaModule) {
+fn debug_function_effects(ctx: &IrContext, module: &Module) {
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx).to_string();
@@ -85,7 +85,7 @@ fn debug_function_effects(ctx: &IrContext, module: &ArenaModule) {
 }
 
 /// Helper to get effectful function names as a set.
-fn get_effectful_function_names(ctx: &IrContext, module: &ArenaModule) -> HashSet<String> {
+fn get_effectful_function_names(ctx: &IrContext, module: &Module) -> HashSet<String> {
     collect_effectful_functions_arena(ctx, *module)
         .into_iter()
         .map(|s| s.to_string())
@@ -461,7 +461,7 @@ fn main() { }
 }
 
 /// Helper to get function parameter counts.
-fn get_function_param_counts(ctx: &IrContext, module: &ArenaModule) -> Vec<(String, usize)> {
+fn get_function_param_counts(ctx: &IrContext, module: &Module) -> Vec<(String, usize)> {
     let mut results = Vec::new();
 
     for op in module.ops(ctx) {

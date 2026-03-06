@@ -17,7 +17,7 @@ mod closure {
 mod tests {
     use trunk_ir::Span;
     use trunk_ir::Symbol;
-    use trunk_ir::arena::ops::ArenaDialectOp;
+    use trunk_ir::arena::ops::DialectOp;
     use trunk_ir::arena::refs::PathRef;
     use trunk_ir::arena::types::Location;
     use trunk_ir::arena::{Attribute, IrContext, TypeDataBuilder, TypeInterner};

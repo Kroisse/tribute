@@ -17,7 +17,7 @@
 //! %result = func.call_indirect %funcref, %env, %args...
 //! ```
 //!
-//! Uses `ArenaRewritePattern` + `PatternApplicator` for declarative transformation.
+//! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use std::collections::HashSet;
 
@@ -28,11 +28,11 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
+use trunk_ir::arena::ops::{DialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
@@ -97,10 +97,7 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
 ///
 /// We use `(span.start, span.end)` instead of `OpRef` because Phase 1 pattern
 /// application destroys original ops and creates new ones with different OpRefs.
-fn collect_all_closure_calls_arena(
-    ctx: &IrContext,
-    module: ArenaModule,
-) -> HashSet<(usize, usize)> {
+fn collect_all_closure_calls_arena(ctx: &IrContext, module: Module) -> HashSet<(usize, usize)> {
     let mut closure_calls = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -152,7 +149,7 @@ fn collect_closure_calls_in_op_arena(
 /// Update function signatures to convert `core.func` params to `closure.closure`.
 struct UpdateFuncSignatureArena;
 
-impl ArenaRewritePattern for UpdateFuncSignatureArena {
+impl RewritePattern for UpdateFuncSignatureArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -228,7 +225,7 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
 /// Lower `closure.new` to `func.constant` + `adt.struct_new`.
 struct LowerClosureNewArena;
 
-impl ArenaRewritePattern for LowerClosureNewArena {
+impl RewritePattern for LowerClosureNewArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -271,7 +268,7 @@ impl ArenaRewritePattern for LowerClosureNewArena {
 /// Lower `func.call_indirect` on closure values.
 struct LowerClosureCallArena;
 
-impl ArenaRewritePattern for LowerClosureCallArena {
+impl RewritePattern for LowerClosureCallArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -350,7 +347,7 @@ impl ArenaRewritePattern for LowerClosureCallArena {
 /// Lower `closure.func` to `adt.struct_get` field 0.
 struct LowerClosureFuncArena;
 
-impl ArenaRewritePattern for LowerClosureFuncArena {
+impl RewritePattern for LowerClosureFuncArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -381,7 +378,7 @@ impl ArenaRewritePattern for LowerClosureFuncArena {
 /// Lower `closure.env` to `adt.struct_get` field 1.
 struct LowerClosureEnvArena;
 
-impl ArenaRewritePattern for LowerClosureEnvArena {
+impl RewritePattern for LowerClosureEnvArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -417,7 +414,7 @@ impl ArenaRewritePattern for LowerClosureEnvArena {
 /// evidence as the first argument to all closure call_indirect operations.
 fn transform_closure_calls_with_evidence_arena(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     effectful_fns: &HashSet<Symbol>,
     closure_calls: &HashSet<(usize, usize)>,
 ) {
@@ -583,7 +580,7 @@ fn transform_closure_calls_in_block_arena(
 ///
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
-pub fn lower_closures(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_closures(ctx: &mut IrContext, module: Module) {
     // Collect effectful functions BEFORE lowering (while closure types are intact)
     let effectful_fns = collect_effectful_functions_arena(ctx, module);
 
@@ -591,7 +588,7 @@ pub fn lower_closures(ctx: &mut IrContext, module: ArenaModule) {
     let all_closure_calls = collect_all_closure_calls_arena(ctx, module);
 
     // Phase 1: Pattern application
-    let applicator = ArenaPatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = ArenaPatternApplicator::new(TypeConverter::new())
         .add_pattern(UpdateFuncSignatureArena)
         .add_pattern(LowerClosureCallArena)
         .add_pattern(LowerClosureNewArena)

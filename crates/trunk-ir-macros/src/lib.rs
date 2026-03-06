@@ -35,7 +35,7 @@ mod parse;
 /// For each operation `fn op_name(...)`:
 /// - `DIALECT_NAME()` / `OP_NAME()` — Symbol helper functions
 /// - `struct OpName(OpRef)` — wrapper struct
-/// - `impl ArenaDialectOp for OpName` — type-safe matching
+/// - `impl DialectOp for OpName` — type-safe matching
 /// - Operand, result, attribute, region/successor accessors
 /// - Constructor function `op_name(ctx, location, ...)`
 #[proc_macro_attribute]

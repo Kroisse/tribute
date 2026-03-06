@@ -7,7 +7,7 @@
 
 use crate::arena::context::IrContext;
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
-use crate::arena::rewrite::ArenaModule;
+use crate::arena::rewrite::Module;
 use crate::op_interface::PureOps;
 
 /// Configuration for dead code elimination.
@@ -39,14 +39,14 @@ pub struct DceResult {
 }
 
 /// Eliminate dead code from a module using default configuration.
-pub fn eliminate_dead_code(ctx: &mut IrContext, module: ArenaModule) -> DceResult {
+pub fn eliminate_dead_code(ctx: &mut IrContext, module: Module) -> DceResult {
     eliminate_dead_code_with_config(ctx, module, DceConfig::default())
 }
 
 /// Eliminate dead code with custom configuration.
 pub fn eliminate_dead_code_with_config(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     config: DceConfig,
 ) -> DceResult {
     let max_iterations = if config.max_iterations == 0 {
@@ -80,7 +80,7 @@ pub fn eliminate_dead_code_with_config(
 
 /// Sweep all top-level functions in a module, removing dead ops.
 /// Returns the number of ops removed in this sweep.
-fn sweep_module(ctx: &mut IrContext, module: ArenaModule, config: &DceConfig) -> usize {
+fn sweep_module(ctx: &mut IrContext, module: Module, config: &DceConfig) -> usize {
     let body = match module.body(ctx) {
         Some(r) => r,
         None => return 0,
@@ -178,7 +178,7 @@ mod tests {
     }
 
     /// Build a minimal module wrapping the given function ops.
-    fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> ArenaModule {
+    fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -199,7 +199,7 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).unwrap()
+        Module::new(ctx, module_op).unwrap()
     }
 
     /// Build a func.func with a body built by the callback.

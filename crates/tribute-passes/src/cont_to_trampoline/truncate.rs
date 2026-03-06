@@ -6,9 +6,9 @@ use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::scf as arena_scf;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
 use super::analysis::calls_effectful_function;
@@ -22,7 +22,7 @@ use super::shift_lower::step_type;
 /// Truncate effectful function bodies after the first effect point.
 pub(crate) fn truncate_after_shift(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     effectful_funcs: &HashSet<Symbol>,
 ) {
     let module_body = match module.body(ctx) {

@@ -14,13 +14,12 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::ValueDef;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::Symbol;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 
@@ -108,7 +107,7 @@ impl StructTypeRegistry {
 /// Collect struct types from struct_new operations.
 fn collect_struct_types(
     ctx: &IrContext,
-    module: ArenaModule,
+    module: Module,
     structref_ty: TypeRef,
 ) -> StructTypeRegistry {
     let mut registry = StructTypeRegistry::new();
@@ -224,7 +223,7 @@ struct UpdateStructNewPattern {
     structref_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UpdateStructNewPattern {
+impl RewritePattern for UpdateStructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -309,7 +308,7 @@ struct UpdateStructGetPattern {
     registry: StructTypeRegistry,
 }
 
-impl ArenaRewritePattern for UpdateStructGetPattern {
+impl RewritePattern for UpdateStructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -398,7 +397,7 @@ struct UpdateRefCastPattern {
     registry: StructTypeRegistry,
 }
 
-impl ArenaRewritePattern for UpdateRefCastPattern {
+impl RewritePattern for UpdateRefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -484,7 +483,7 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
 /// 1. Each distinct struct type gets a unique type_idx
 /// 2. struct_new operations have type_idx attribute set
 /// 3. struct_get operations have correct type_idx and result types
-pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
+pub fn assign_gc_type_indices(ctx: &mut IrContext, module: Module) {
     let structref_ty = arena_wasm::structref(ctx).as_type_ref();
 
     // Phase 1: Collect all struct types and assign type_idx
@@ -497,7 +496,7 @@ pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
 
     // Phase 2: Update struct_new operations
     let applicator =
-        PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(UpdateStructNewPattern {
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateStructNewPattern {
             registry: registry.clone(),
             structref_ty,
         });
@@ -508,13 +507,13 @@ pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
 
     // Phase 4: Update struct_get operations
     let applicator =
-        PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(UpdateStructGetPattern {
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateStructGetPattern {
             registry: registry.clone(),
         });
     applicator.apply_partial(ctx, module);
 
     // Phase 5: Update ref_cast operations
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
-        .add_pattern(UpdateRefCastPattern { registry });
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateRefCastPattern { registry });
     applicator.apply_partial(ctx, module);
 }

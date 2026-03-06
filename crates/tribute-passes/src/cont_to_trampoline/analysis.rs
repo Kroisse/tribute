@@ -6,7 +6,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use trunk_ir::arena::walk;

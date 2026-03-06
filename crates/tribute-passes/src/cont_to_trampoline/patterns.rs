@@ -9,9 +9,9 @@ use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::scf as arena_scf;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 
 use super::get_region_result_value_arena;
@@ -23,7 +23,7 @@ use super::shift_lower::{anyref_type, i32_type, step_type};
 
 pub(crate) struct LowerResumePattern;
 
-impl ArenaRewritePattern for LowerResumePattern {
+impl RewritePattern for LowerResumePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -111,7 +111,7 @@ pub(crate) struct UpdateEffectfulCallResultTypePattern {
     pub(crate) effectful_funcs: Rc<HashSet<Symbol>>,
 }
 
-impl ArenaRewritePattern for UpdateEffectfulCallResultTypePattern {
+impl RewritePattern for UpdateEffectfulCallResultTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -175,7 +175,7 @@ impl ArenaRewritePattern for UpdateEffectfulCallResultTypePattern {
 
 pub(crate) struct UpdateScfIfResultTypePattern;
 
-impl ArenaRewritePattern for UpdateScfIfResultTypePattern {
+impl RewritePattern for UpdateScfIfResultTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -242,7 +242,7 @@ impl ArenaRewritePattern for UpdateScfIfResultTypePattern {
 /// a block that contains effectful operations returning Step.
 pub(crate) struct UpdateScfYieldToStepPattern;
 
-impl ArenaRewritePattern for UpdateScfYieldToStepPattern {
+impl RewritePattern for UpdateScfYieldToStepPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -313,7 +313,7 @@ fn find_step_source(ctx: &IrContext, value: ValueRef) -> Option<ValueRef> {
 
 pub(crate) struct LowerPushPromptPattern;
 
-impl ArenaRewritePattern for LowerPushPromptPattern {
+impl RewritePattern for LowerPushPromptPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -24,10 +24,10 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
 
@@ -81,8 +81,8 @@ fn create_i31_unbox(
 }
 
 /// Lower tribute_rt dialect to wasm dialect.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
+pub fn lower(ctx: &mut IrContext, module: Module) {
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BoxIntPattern)
         .add_pattern(UnboxIntPattern)
         .add_pattern(BoxNatPattern)
@@ -99,7 +99,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
 /// Boxing converts an unboxed i32 to an i31ref via `wasm.ref_i31`.
 struct BoxIntPattern;
 
-impl ArenaRewritePattern for BoxIntPattern {
+impl RewritePattern for BoxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -132,7 +132,7 @@ impl ArenaRewritePattern for BoxIntPattern {
 /// Unboxing extracts the signed i32 from an i31ref.
 struct UnboxIntPattern;
 
-impl ArenaRewritePattern for UnboxIntPattern {
+impl RewritePattern for UnboxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -162,7 +162,7 @@ impl ArenaRewritePattern for UnboxIntPattern {
 /// Boxing converts an unboxed nat (u32) to an i31ref.
 struct BoxNatPattern;
 
-impl ArenaRewritePattern for BoxNatPattern {
+impl RewritePattern for BoxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -192,7 +192,7 @@ impl ArenaRewritePattern for BoxNatPattern {
 /// Unboxing extracts the unsigned i32 from an i31ref.
 struct UnboxNatPattern;
 
-impl ArenaRewritePattern for UnboxNatPattern {
+impl RewritePattern for UnboxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -223,7 +223,7 @@ impl ArenaRewritePattern for UnboxNatPattern {
 /// `adt.struct_new` with `anyref_ty` as the result type.
 struct BoxFloatPattern;
 
-impl ArenaRewritePattern for BoxFloatPattern {
+impl RewritePattern for BoxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -256,7 +256,7 @@ impl ArenaRewritePattern for BoxFloatPattern {
 /// Unboxing extracts the f64 from a BoxedF64 struct.
 struct UnboxFloatPattern;
 
-impl ArenaRewritePattern for UnboxFloatPattern {
+impl RewritePattern for UnboxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -295,7 +295,7 @@ impl ArenaRewritePattern for UnboxFloatPattern {
 /// Boxing converts an i32 boolean to an i31ref.
 struct BoxBoolPattern;
 
-impl ArenaRewritePattern for BoxBoolPattern {
+impl RewritePattern for BoxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -325,7 +325,7 @@ impl ArenaRewritePattern for BoxBoolPattern {
 /// Unboxing extracts the boolean (0 or 1) from an i31ref.
 struct UnboxBoolPattern;
 
-impl ArenaRewritePattern for UnboxBoolPattern {
+impl RewritePattern for UnboxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

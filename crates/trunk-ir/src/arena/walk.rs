@@ -6,7 +6,7 @@
 use std::ops::ControlFlow;
 
 use super::context::IrContext;
-use super::ops::ArenaDialectOp;
+use super::ops::DialectOp;
 use super::refs::{BlockRef, OpRef, RegionRef};
 
 /// Controls whether to descend into children during a walk.
@@ -66,7 +66,7 @@ pub fn walk_typed<T, B>(
     f: &mut dyn FnMut(T) -> ControlFlow<B, WalkAction>,
 ) -> ControlFlow<B, ()>
 where
-    T: ArenaDialectOp,
+    T: DialectOp,
 {
     walk_region(ctx, region, &mut |op| {
         if let Ok(typed) = T::from_op(ctx, op) {

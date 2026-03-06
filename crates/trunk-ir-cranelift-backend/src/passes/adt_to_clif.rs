@@ -32,11 +32,11 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
 
@@ -47,10 +47,10 @@ use trunk_ir::arena::types::TypeDataBuilder;
 ///
 /// The `type_converter` parameter is used to determine field sizes for
 /// layout computation.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
-    use trunk_ir::arena::rewrite::ArenaConversionTarget;
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    use trunk_ir::arena::rewrite::ConversionTarget;
 
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("adt");
 
@@ -79,7 +79,7 @@ fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
 
 struct StructGetPattern;
 
-impl ArenaRewritePattern for StructGetPattern {
+impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -125,7 +125,7 @@ impl ArenaRewritePattern for StructGetPattern {
 
 struct StructSetPattern;
 
-impl ArenaRewritePattern for StructSetPattern {
+impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -163,7 +163,7 @@ impl ArenaRewritePattern for StructSetPattern {
 
 struct VariantIsPattern;
 
-impl ArenaRewritePattern for VariantIsPattern {
+impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -217,7 +217,7 @@ impl ArenaRewritePattern for VariantIsPattern {
 
 struct VariantCastPattern;
 
-impl ArenaRewritePattern for VariantCastPattern {
+impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -235,7 +235,7 @@ impl ArenaRewritePattern for VariantCastPattern {
 
 struct VariantGetPattern;
 
-impl ArenaRewritePattern for VariantGetPattern {
+impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -305,7 +305,7 @@ impl ArenaRewritePattern for VariantGetPattern {
 
 struct RefNullPattern;
 
-impl ArenaRewritePattern for RefNullPattern {
+impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -325,7 +325,7 @@ impl ArenaRewritePattern for RefNullPattern {
 
 struct RefCastPattern;
 
-impl ArenaRewritePattern for RefCastPattern {
+impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -343,7 +343,7 @@ impl ArenaRewritePattern for RefCastPattern {
 
 struct RefIsNullPattern;
 
-impl ArenaRewritePattern for RefIsNullPattern {
+impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -379,12 +379,12 @@ mod tests {
     use trunk_ir::arena::context::IrContext;
     use trunk_ir::arena::parser::parse_test_module;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaTypeConverter;
+    use trunk_ir::arena::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let type_converter = ArenaTypeConverter::new();
+        let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter);
         print_module(&ctx, module.op())
     }

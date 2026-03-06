@@ -26,10 +26,10 @@ use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
@@ -41,19 +41,19 @@ use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 /// 1. Replaces stub function declarations with real binary search implementations
 /// 2. Lowers remaining `ability.evidence_lookup` and `ability.evidence_extend`
 ///    operations to calls to the generated functions.
-pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) {
     // Phase 1: Replace stubs with real implementations
     replace_evidence_function_stubs(ctx, module);
 
     // Phase 2: Pattern-based lowering for remaining ability ops
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
     applicator.apply_partial(ctx, module);
 }
 
 /// Replace evidence runtime function stubs with real implementations.
-fn replace_evidence_function_stubs(ctx: &mut IrContext, module: ArenaModule) {
+fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
     let ops = module.ops(ctx);
 
     for op in ops {
@@ -86,7 +86,7 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: ArenaModule) {
 }
 
 /// Replace a top-level module operation with a new one.
-fn replace_module_op(ctx: &mut IrContext, module: ArenaModule, old_op: OpRef, new_op: OpRef) {
+fn replace_module_op(ctx: &mut IrContext, module: Module, old_op: OpRef, new_op: OpRef) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -105,7 +105,7 @@ fn replace_module_op(ctx: &mut IrContext, module: ArenaModule, old_op: OpRef, ne
 /// `wasm.call @__tribute_evidence_lookup`.
 struct EvidenceLookupPattern;
 
-impl ArenaRewritePattern for EvidenceLookupPattern {
+impl RewritePattern for EvidenceLookupPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -158,7 +158,7 @@ impl ArenaRewritePattern for EvidenceLookupPattern {
 /// `wasm.call @__tribute_evidence_extend`.
 struct EvidenceExtendPattern;
 
-impl ArenaRewritePattern for EvidenceExtendPattern {
+impl RewritePattern for EvidenceExtendPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -8,10 +8,10 @@ use std::collections::HashMap;
 use tracing::debug;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
 use wasm_encoder::{FieldType, StorageType, ValType};
@@ -381,7 +381,7 @@ fn get_adt_struct_field_count(ctx: &IrContext, ty: TypeRef) -> Option<usize> {
 /// placeholder struct mappings.
 pub(crate) fn collect_gc_types(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
 ) -> CompilationResult<GcTypesResult> {
     use std::collections::HashSet;
 

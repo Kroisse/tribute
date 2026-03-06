@@ -1,6 +1,6 @@
 //! WASM type converter for arena IR-level type transformations.
 //!
-//! This module provides an `ArenaTypeConverter` configuration for converting
+//! This module provides an `TypeConverter` configuration for converting
 //! high-level Tribute types to their WASM representations during IR lowering.
 //!
 //! ## Type Conversion Rules
@@ -27,7 +27,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::type_converter::{ArenaTypeConverter, MaterializeResult};
+use trunk_ir::arena::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 // =============================================================================
@@ -319,12 +319,12 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Create an ArenaTypeConverter configured for WASM backend type conversions.
+/// Create an TypeConverter configured for WASM backend type conversions.
 ///
 /// This converter handles the IR-level type transformations needed during
 /// lowering passes. It complements the emit-phase `gc_types::type_to_field_type`
 /// by performing conversions at the IR level.
-pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-compute commonly used types (TypeRef is Copy)
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let f64_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
@@ -339,7 +339,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
     let evidence_ty = evidence_wasm_type(ctx);
     let marker_ty = marker_adt_type(ctx);
 
-    let mut tc = ArenaTypeConverter::new();
+    let mut tc = TypeConverter::new();
 
     // =========================================================================
     // Type conversions

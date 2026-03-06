@@ -37,10 +37,10 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module as IrModule;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{
@@ -254,7 +254,7 @@ struct FunctionEmitContext {
     func_return_type: Option<TypeRef>,
 }
 
-pub fn emit_wasm(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
+pub fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
     debug!("emit_wasm: collecting module info...");
     let module_info = match collect_module_info(ctx, module) {
         Ok(info) => {
@@ -629,7 +629,7 @@ fn collect_wasm_ops_from_region(
     Ok(())
 }
 
-fn collect_module_info(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<ModuleInfo> {
+fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResult<ModuleInfo> {
     let mut info = ModuleInfo::default();
 
     let body = module

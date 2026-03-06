@@ -4,14 +4,14 @@
 //! operations in a module. Uses snapshots of block operations and checks
 //! `parent_block` validity to skip deleted ops.
 
-use super::ArenaModule;
-use super::conversion_target::{ArenaConversionTarget, IllegalOp, LegalityCheck};
-use super::pattern::ArenaRewritePattern;
+use super::Module;
+use super::conversion_target::{ConversionTarget, IllegalOp, LegalityCheck};
+use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
-use super::type_converter::ArenaTypeConverter;
+use super::type_converter::TypeConverter;
 use crate::arena::context::IrContext;
 use crate::arena::dialect::core as arena_core;
-use crate::arena::ops::ArenaDialectOp;
+use crate::arena::ops::DialectOp;
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 
 /// Result of applying rewrite patterns.
@@ -29,8 +29,8 @@ impl ApplyResult {
     pub fn verify(
         &self,
         ctx: &IrContext,
-        module: ArenaModule,
-        target: &ArenaConversionTarget,
+        module: Module,
+        target: &ConversionTarget,
     ) -> Result<(), Vec<IllegalOp>> {
         let body = match module.body(ctx) {
             Some(r) => r,
@@ -47,12 +47,12 @@ impl ApplyResult {
 
 /// Applies rewrite patterns to arena IR using visitor-based fixpoint iteration.
 pub struct PatternApplicator {
-    patterns: Vec<Box<dyn ArenaRewritePattern>>,
+    patterns: Vec<Box<dyn RewritePattern>>,
     max_iterations: usize,
-    type_converter: ArenaTypeConverter,
+    type_converter: TypeConverter,
     /// Optional conversion target for legality checks.
     /// When set, legal operations are skipped for cast insertion and pattern matching.
-    target: Option<ArenaConversionTarget>,
+    target: Option<ConversionTarget>,
     /// Whether to automatically convert block argument types and insert
     /// `unrealized_conversion_cast` for operand type mismatches.
     ///
@@ -65,7 +65,7 @@ pub struct PatternApplicator {
 
 impl PatternApplicator {
     /// Create a new applicator with the given type converter.
-    pub fn new(type_converter: ArenaTypeConverter) -> Self {
+    pub fn new(type_converter: TypeConverter) -> Self {
         Self {
             patterns: Vec::new(),
             max_iterations: 10,
@@ -81,14 +81,14 @@ impl PatternApplicator {
     /// pattern matching for operations that are already legal.
     /// Also enables automatic type conversion (block arg conversion +
     /// cast insertion).
-    pub fn with_target(mut self, target: ArenaConversionTarget) -> Self {
+    pub fn with_target(mut self, target: ConversionTarget) -> Self {
         self.target = Some(target);
         self.auto_type_conversion = true;
         self
     }
 
     /// Add a rewrite pattern.
-    pub fn add_pattern(mut self, pattern: impl ArenaRewritePattern + 'static) -> Self {
+    pub fn add_pattern(mut self, pattern: impl RewritePattern + 'static) -> Self {
         self.patterns.push(Box::new(pattern));
         self
     }
@@ -113,7 +113,7 @@ impl PatternApplicator {
     }
 
     /// Get a reference to the type converter.
-    pub fn type_converter(&self) -> &ArenaTypeConverter {
+    pub fn type_converter(&self) -> &TypeConverter {
         &self.type_converter
     }
 
@@ -121,8 +121,8 @@ impl PatternApplicator {
     pub fn apply(
         &self,
         ctx: &mut IrContext,
-        module: ArenaModule,
-        target: &ArenaConversionTarget,
+        module: Module,
+        target: &ConversionTarget,
     ) -> Result<ApplyResult, Vec<IllegalOp>> {
         let result = self.apply_partial(ctx, module);
         result.verify(ctx, module, target)?;
@@ -130,7 +130,7 @@ impl PatternApplicator {
     }
 
     /// Apply patterns without verification.
-    pub fn apply_partial(&self, ctx: &mut IrContext, module: ArenaModule) -> ApplyResult {
+    pub fn apply_partial(&self, ctx: &mut IrContext, module: Module) -> ApplyResult {
         let mut total_changes = 0;
         let mut iterations = 0;
 
@@ -155,7 +155,7 @@ impl PatternApplicator {
     }
 
     /// Run a single iteration over all operations.
-    fn run_one_iteration(&self, ctx: &mut IrContext, module: ArenaModule) -> usize {
+    fn run_one_iteration(&self, ctx: &mut IrContext, module: Module) -> usize {
         let mut changes = 0;
         let module_first_block = module.first_block(ctx);
 
@@ -290,7 +290,7 @@ impl PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::rewrite::conversion_target::ArenaConversionTarget;
+    use crate::arena::rewrite::conversion_target::ConversionTarget;
     use crate::arena::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
@@ -308,7 +308,7 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> ArenaModule {
+    fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -329,13 +329,13 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).expect("test module should be valid")
+        Module::new(ctx, module_op).expect("test module should be valid")
     }
 
     /// Pattern: rename test.source → test.target
     struct RenamePattern;
 
-    impl ArenaRewritePattern for RenamePattern {
+    impl RewritePattern for RenamePattern {
         fn match_and_rewrite(
             &self,
             ctx: &mut IrContext,
@@ -371,10 +371,9 @@ mod tests {
         let op = ctx.create_op(op_data);
         let module = make_module(&mut ctx, loc, vec![op]);
 
-        let applicator =
-            PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(RenamePattern);
+        let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(RenamePattern);
 
-        let mut target = ArenaConversionTarget::new();
+        let mut target = ConversionTarget::new();
         target.add_legal_dialect("test");
         target.add_illegal_op("test", "source");
 
@@ -408,10 +407,9 @@ mod tests {
 
         let module = make_module(&mut ctx, loc, vec![op1, op2]);
 
-        let applicator =
-            PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(RenamePattern);
+        let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(RenamePattern);
 
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
         applicator.apply(&mut ctx, module, &target).unwrap();
 
         // op2's operand should now point to the replacement op's result

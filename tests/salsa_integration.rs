@@ -5,11 +5,11 @@ use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
 use trunk_ir::Symbol;
-use trunk_ir::arena::{ArenaModule, IrContext};
+use trunk_ir::arena::{IrContext, Module};
 
 /// Helper to check whether a `func.func` with the given `sym_name` exists
 /// among the top-level operations of an arena module.
-fn find_func_by_name(ctx: &IrContext, module: &ArenaModule, name: &str) -> bool {
+fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
     let func_dialect = Symbol::new("func");
     let func_name = Symbol::new("func");
     let sym_name_key = Symbol::new("sym_name");

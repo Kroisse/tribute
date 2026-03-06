@@ -26,7 +26,7 @@ type DynamicCheckFn = dyn Fn(&IrContext, OpRef) -> Option<LegalityCheck>;
 ///
 /// After pattern application, `verify()` walks the module and checks that
 /// no illegal operations remain.
-pub struct ArenaConversionTarget {
+pub struct ConversionTarget {
     /// Entire dialects marked as legal.
     legal_dialects: HashSet<Symbol>,
     /// Entire dialects marked as illegal.
@@ -39,7 +39,7 @@ pub struct ArenaConversionTarget {
     dynamic_checks: Vec<Box<DynamicCheckFn>>,
 }
 
-impl ArenaConversionTarget {
+impl ConversionTarget {
     /// Create a new empty conversion target (everything is legal by default).
     pub fn new() -> Self {
         Self {
@@ -156,7 +156,7 @@ impl ArenaConversionTarget {
     }
 }
 
-impl Default for ArenaConversionTarget {
+impl Default for ConversionTarget {
     fn default() -> Self {
         Self::new()
     }

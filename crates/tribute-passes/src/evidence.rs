@@ -46,10 +46,10 @@ use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, IrContext};
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
@@ -92,7 +92,7 @@ fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
 }
 
 /// Collect names of all effectful functions in the module.
-pub fn collect_effectful_functions_arena(ctx: &IrContext, module: ArenaModule) -> HashSet<Symbol> {
+pub fn collect_effectful_functions_arena(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut effectful = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -106,10 +106,7 @@ pub fn collect_effectful_functions_arena(ctx: &IrContext, module: ArenaModule) -
 }
 
 /// Collect names of functions whose first parameter is evidence type.
-fn collect_functions_with_evidence_param_arena(
-    ctx: &IrContext,
-    module: ArenaModule,
-) -> HashSet<Symbol> {
+fn collect_functions_with_evidence_param_arena(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut fns_with_evidence = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -152,7 +149,7 @@ struct AddEvidenceParamPattern {
     ev_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for AddEvidenceParamPattern {
+impl RewritePattern for AddEvidenceParamPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -203,7 +200,7 @@ impl ArenaRewritePattern for AddEvidenceParamPattern {
 }
 
 /// Phase 1 (arena): Add evidence parameters to effectful function signatures.
-pub fn add_evidence_params(ctx: &mut IrContext, module: ArenaModule) {
+pub fn add_evidence_params(ctx: &mut IrContext, module: Module) {
     let effectful_fns = collect_effectful_functions_arena(ctx, module);
     if effectful_fns.is_empty() {
         return;
@@ -212,7 +209,7 @@ pub fn add_evidence_params(ctx: &mut IrContext, module: ArenaModule) {
     let ev_ty = arena_ability::evidence_adt_type_ref(ctx);
 
     let applicator =
-        PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(AddEvidenceParamPattern {
+        PatternApplicator::new(TypeConverter::new()).add_pattern(AddEvidenceParamPattern {
             effectful_fns,
             ev_ty,
         });
@@ -247,7 +244,7 @@ struct TransformEvidenceCallPattern {
     effectful_fns: HashSet<Symbol>,
 }
 
-impl ArenaRewritePattern for TransformEvidenceCallPattern {
+impl RewritePattern for TransformEvidenceCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -296,7 +293,7 @@ impl ArenaRewritePattern for TransformEvidenceCallPattern {
 }
 
 /// Phase 2 (arena): Transform calls to pass evidence through call sites.
-pub fn transform_evidence_calls(ctx: &mut IrContext, module: ArenaModule) {
+pub fn transform_evidence_calls(ctx: &mut IrContext, module: Module) {
     let effectful_fns = collect_effectful_functions_arena(ctx, module);
     let fns_with_evidence = collect_functions_with_evidence_param_arena(ctx, module);
 
@@ -306,11 +303,10 @@ pub fn transform_evidence_calls(ctx: &mut IrContext, module: ArenaModule) {
 
     let all_effectful: HashSet<Symbol> = effectful_fns.union(&fns_with_evidence).copied().collect();
 
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(
-        TransformEvidenceCallPattern {
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(TransformEvidenceCallPattern {
             effectful_fns: all_effectful,
-        },
-    );
+        });
     applicator.apply_partial(ctx, module);
 }
 
@@ -408,7 +404,7 @@ mod tests {
         ctx: &mut IrContext,
         loc: Location,
         ops: Vec<trunk_ir::arena::refs::OpRef>,
-    ) -> ArenaModule {
+    ) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -429,7 +425,7 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).expect("test module should be valid")
+        Module::new(ctx, module_op).expect("test module should be valid")
     }
 
     // === is_effectful_type_arena tests ===

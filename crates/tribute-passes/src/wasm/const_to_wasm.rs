@@ -13,13 +13,12 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::Symbol;
 
 /// Result of const analysis - maps content to allocated offset.
 pub struct ConstAnalysis {
@@ -143,7 +142,7 @@ fn walk_ops_in_region(
 }
 
 /// Analyze a module to collect all string/bytes constants and allocate offsets.
-pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
+pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
     // Walk all operations in module body (recursively into nested regions)
@@ -161,11 +160,11 @@ pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
 }
 
 /// Lower const operations using pre-computed analysis.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, analysis: &ConstAnalysis) {
+pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
     let string_allocations = analysis.string_allocations.clone();
     let bytes_allocations = analysis.bytes_allocations.clone();
 
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(StringConstPattern::new(string_allocations))
         .add_pattern(BytesConstPattern::new(bytes_allocations));
     applicator.apply_partial(ctx, module);
@@ -193,7 +192,7 @@ impl StringConstPattern {
     }
 }
 
-impl ArenaRewritePattern for StringConstPattern {
+impl RewritePattern for StringConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -251,7 +250,7 @@ impl BytesConstPattern {
     }
 }
 
-impl ArenaRewritePattern for BytesConstPattern {
+impl RewritePattern for BytesConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

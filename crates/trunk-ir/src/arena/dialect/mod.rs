@@ -18,7 +18,7 @@ pub mod wasm;
 mod tests {
     use crate::Span;
     use crate::Symbol;
-    use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
+    use crate::arena::ops::{DialectOp, ArenaDialectType};
     use crate::arena::refs::PathRef;
     use crate::arena::types::Location;
     use crate::arena::{
@@ -281,7 +281,7 @@ mod tests {
     }
 
     // ================================================================
-    // ArenaDialectOp::matches
+    // DialectOp::matches
     // ================================================================
 
     #[test]

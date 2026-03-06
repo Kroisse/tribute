@@ -31,6 +31,6 @@ pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::arena::rewrite::{
-    ApplyResult, ArenaRewritePattern, PatternApplicator, PatternRewriter,
+    ApplyResult, PatternApplicator, PatternRewriter, RewritePattern,
 };
 pub use type_converter::generic_type_converter_arena;

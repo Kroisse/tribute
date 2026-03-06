@@ -12,14 +12,14 @@ pub mod signature_conversion;
 pub mod type_converter;
 
 pub use applicator::{ApplyResult, PatternApplicator};
-pub use conversion_target::{ArenaConversionTarget, LegalityCheck};
+pub use conversion_target::{ConversionTarget, LegalityCheck};
 pub use helpers::{erase_op, inline_region_blocks, split_block};
-pub use pattern::ArenaRewritePattern;
+pub use pattern::RewritePattern;
 pub use rewriter::PatternRewriter;
 pub use signature_conversion::{
     FuncSignatureConversionPattern, WasmFuncSignatureConversionPattern,
 };
-pub use type_converter::ArenaTypeConverter;
+pub use type_converter::TypeConverter;
 
 use super::context::IrContext;
 use super::refs::OpRef;
@@ -28,16 +28,16 @@ use super::refs::OpRef;
 ///
 /// Provides convenience methods for accessing module body and operations.
 #[derive(Clone, Copy, Debug)]
-pub struct ArenaModule(OpRef);
+pub struct Module(OpRef);
 
-impl ArenaModule {
-    /// Create an `ArenaModule` wrapper, verifying it points to a `core.module` op.
+impl Module {
+    /// Create an `Module` wrapper, verifying it points to a `core.module` op.
     pub fn new(ctx: &IrContext, op: OpRef) -> Option<Self> {
         let data = ctx.op(op);
         if data.dialect == crate::symbol::Symbol::new("core")
             && data.name == crate::symbol::Symbol::new("module")
         {
-            Some(ArenaModule(op))
+            Some(Module(op))
         } else {
             None
         }
@@ -106,7 +106,7 @@ mod tests {
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 
-        assert!(ArenaModule::new(&ctx, op).is_none());
+        assert!(Module::new(&ctx, op).is_none());
     }
 
     #[test]
@@ -118,7 +118,7 @@ mod tests {
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 
-        let module = ArenaModule::new(&ctx, op).expect("should accept core.module");
+        let module = Module::new(&ctx, op).expect("should accept core.module");
         assert!(module.body(&ctx).is_none());
         assert!(module.first_block(&ctx).is_none());
         assert!(module.ops(&ctx).is_empty());
@@ -144,7 +144,7 @@ mod tests {
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 
-        let module = ArenaModule::new(&ctx, op).unwrap();
+        let module = Module::new(&ctx, op).unwrap();
         assert_eq!(module.body(&ctx), Some(region));
         assert_eq!(module.first_block(&ctx), Some(block));
     }

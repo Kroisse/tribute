@@ -18,9 +18,9 @@ use trunk_ir::arena::dialect::{
     adt as arena_adt, arith as arena_arith, cont as arena_cont, core as arena_core,
     func as arena_func, scf as arena_scf,
 };
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
@@ -37,7 +37,7 @@ impl LowerPushPromptPattern {
     }
 }
 
-impl ArenaRewritePattern for LowerPushPromptPattern {
+impl RewritePattern for LowerPushPromptPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -8,15 +8,15 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 /// Ensure all libmprompt FFI function declarations are present in the module.
 ///
 /// Idempotent: skips declarations that already exist.
-pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: ArenaModule) {
+pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: Module) {
     let body = module.body(ctx).expect("module has body");
     let first_block = ctx.region(body).blocks[0];
 

@@ -34,7 +34,7 @@
 use crate::Symbol;
 use crate::arena::context::IrContext;
 use crate::arena::refs::TypeRef;
-use crate::arena::rewrite::type_converter::ArenaTypeConverter;
+use crate::arena::rewrite::type_converter::TypeConverter;
 use crate::arena::types::Attribute as ArenaAttribute;
 
 /// Memory layout of a struct type.
@@ -213,12 +213,12 @@ pub fn get_enum_variants_arena(
 
 /// Compute the memory layout for an `adt.struct` type.
 ///
-/// Uses the `ArenaTypeConverter` to determine the native size of each field type.
+/// Uses the `TypeConverter` to determine the native size of each field type.
 /// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
 pub fn compute_struct_layout_arena(
     ctx: &IrContext,
     struct_ty: TypeRef,
-    type_converter: &ArenaTypeConverter,
+    type_converter: &TypeConverter,
 ) -> Option<StructLayout> {
     let fields = get_struct_fields_arena(ctx, struct_ty)?;
 
@@ -247,12 +247,12 @@ pub fn compute_struct_layout_arena(
 
 /// Compute the memory layout for an `adt.enum` type.
 ///
-/// Uses the `ArenaTypeConverter` to determine the native size of each field type.
+/// Uses the `TypeConverter` to determine the native size of each field type.
 /// Returns `None` if the type is not an `adt.enum` or variants cannot be extracted.
 pub fn compute_enum_layout_arena(
     ctx: &IrContext,
     enum_ty: TypeRef,
-    type_converter: &ArenaTypeConverter,
+    type_converter: &TypeConverter,
 ) -> Option<EnumLayout> {
     let variants = get_enum_variants_arena(ctx, enum_ty)?;
 

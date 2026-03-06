@@ -15,10 +15,10 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
@@ -154,11 +154,7 @@ fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
 }
 
 /// Analyze a module to collect intrinsic calls and allocate runtime data segments.
-pub fn analyze_intrinsics(
-    ctx: &IrContext,
-    module: ArenaModule,
-    base_offset: u32,
-) -> IntrinsicAnalysis {
+pub fn analyze_intrinsics(ctx: &IrContext, module: Module, base_offset: u32) -> IntrinsicAnalysis {
     let mut needs_fd_write = false;
     let mut iovec_map: HashMap<(u32, u32), u32> = HashMap::new();
     let mut iovec_allocations: Vec<(u32, u32, u32)> = Vec::new();
@@ -235,8 +231,8 @@ pub fn analyze_intrinsics(
 }
 
 /// Lower intrinsic calls using pre-computed analysis.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, analysis: &IntrinsicAnalysis) {
-    let mut applicator = PatternApplicator::new(ArenaTypeConverter::new());
+pub fn lower(ctx: &mut IrContext, module: Module, analysis: &IntrinsicAnalysis) {
+    let mut applicator = PatternApplicator::new(TypeConverter::new());
 
     // Add __print_line pattern if needed
     if analysis.needs_fd_write {
@@ -278,7 +274,7 @@ impl PrintLinePattern {
     }
 }
 
-impl ArenaRewritePattern for PrintLinePattern {
+impl RewritePattern for PrintLinePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -390,7 +386,7 @@ fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_name: &'static 
 /// Returns i32 directly since Nat is mapped to i32.
 struct BytesLenPattern;
 
-impl ArenaRewritePattern for BytesLenPattern {
+impl RewritePattern for BytesLenPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -435,7 +431,7 @@ impl ArenaRewritePattern for BytesLenPattern {
 /// Index is i32 (Nat), returns i32 (Nat, byte value 0-255).
 struct BytesGetOrPanicPattern;
 
-impl ArenaRewritePattern for BytesGetOrPanicPattern {
+impl RewritePattern for BytesGetOrPanicPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -513,7 +509,7 @@ impl ArenaRewritePattern for BytesGetOrPanicPattern {
 /// Start and end are i32 (Nat), returns Bytes.
 struct BytesSliceOrPanicPattern;
 
-impl ArenaRewritePattern for BytesSliceOrPanicPattern {
+impl RewritePattern for BytesSliceOrPanicPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -598,7 +594,7 @@ impl ArenaRewritePattern for BytesSliceOrPanicPattern {
 /// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both
 struct BytesConcatPattern;
 
-impl ArenaRewritePattern for BytesConcatPattern {
+impl RewritePattern for BytesConcatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

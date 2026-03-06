@@ -1,18 +1,18 @@
 //! Arena-based function signature conversion patterns.
 //!
 //! Provides MLIR-style signature conversion that automatically converts
-//! function parameter and return types using an `ArenaTypeConverter`.
+//! function parameter and return types using an `TypeConverter`.
 //!
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
 use crate::arena::context::IrContext;
 use crate::arena::dialect::{core, func, wasm};
-use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
+use crate::arena::ops::{DialectOp, ArenaDialectType};
 use crate::arena::refs::{OpRef, RegionRef, TypeRef};
-use crate::arena::rewrite::pattern::ArenaRewritePattern;
+use crate::arena::rewrite::pattern::RewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
-use crate::arena::rewrite::type_converter::ArenaTypeConverter;
+use crate::arena::rewrite::type_converter::TypeConverter;
 use crate::arena::types::{Attribute, TypeDataBuilder};
 use crate::Symbol;
 
@@ -33,7 +33,7 @@ struct ConvertedSignature {
 fn convert_func_signature(
     ctx: &IrContext,
     func_type: TypeRef,
-    converter: &ArenaTypeConverter,
+    converter: &TypeConverter,
 ) -> Option<ConvertedSignature> {
     let func = core::Func::from_type_ref(ctx, func_type)?;
 
@@ -146,7 +146,7 @@ fn rewrite_function_signature(
     true
 }
 
-/// Pattern that converts `func.func` operation signatures using an `ArenaTypeConverter`.
+/// Pattern that converts `func.func` operation signatures using an `TypeConverter`.
 ///
 /// This pattern:
 /// 1. Matches `func.func` operations
@@ -155,7 +155,7 @@ fn rewrite_function_signature(
 /// 4. Rebuilds the function with the converted signature
 pub struct FuncSignatureConversionPattern;
 
-impl ArenaRewritePattern for FuncSignatureConversionPattern {
+impl RewritePattern for FuncSignatureConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -181,12 +181,12 @@ impl ArenaRewritePattern for FuncSignatureConversionPattern {
     }
 }
 
-/// Pattern that converts `wasm.func` operation signatures using an `ArenaTypeConverter`.
+/// Pattern that converts `wasm.func` operation signatures using an `TypeConverter`.
 ///
 /// Identical to [`FuncSignatureConversionPattern`] but targets `wasm.func` operations.
 pub struct WasmFuncSignatureConversionPattern;
 
-impl ArenaRewritePattern for WasmFuncSignatureConversionPattern {
+impl RewritePattern for WasmFuncSignatureConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -218,11 +218,9 @@ mod tests {
     use crate::arena::context::{
         BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
     };
-    use crate::arena::rewrite::{
-        ArenaConversionTarget, ArenaModule, ArenaTypeConverter, PatternApplicator,
-    };
+    use crate::arena::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use crate::arena::types::{Attribute, TypeDataBuilder};
-    use crate::ir::Symbol;
+    use crate::Symbol;
     use crate::location::Span;
     use smallvec::smallvec;
     use std::collections::BTreeMap;
@@ -262,7 +260,7 @@ mod tests {
         ctx: &mut IrContext,
         loc: crate::arena::types::Location,
         ops: Vec<OpRef>,
-    ) -> ArenaModule {
+    ) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -283,7 +281,7 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).expect("test module should be valid")
+        Module::new(ctx, module_op).expect("test module should be valid")
     }
 
     /// Create a func.func op with a body region containing an entry block with args.
@@ -345,8 +343,8 @@ mod tests {
     }
 
     /// i32 → i64 converter
-    fn i32_to_i64_converter(i32_ty: TypeRef, i64_ty: TypeRef) -> ArenaTypeConverter {
-        let mut tc = ArenaTypeConverter::new();
+    fn i32_to_i64_converter(i32_ty: TypeRef, i64_ty: TypeRef) -> TypeConverter {
+        let mut tc = TypeConverter::new();
         tc.add_conversion(move |ctx, ty| {
             if ctx
                 .types
@@ -373,7 +371,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         assert!(result.reached_fixpoint);
@@ -412,7 +410,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         assert!(result.reached_fixpoint);
@@ -431,7 +429,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(WasmFuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         assert!(result.reached_fixpoint);
@@ -470,7 +468,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         // 1 block arg converted + 1 pattern match
@@ -498,7 +496,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         // 1 block arg converted + 1 pattern match
@@ -524,7 +522,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(WasmFuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         // Pattern should not match due to arity mismatch.
@@ -550,7 +548,7 @@ mod tests {
 
         let tc = i32_to_i64_converter(i32_ty, i64_ty);
         let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ArenaConversionTarget::new();
+        let target = ConversionTarget::new();
 
         let result = applicator.apply(&mut ctx, module, &target).unwrap();
         // Pattern should not match due to arity mismatch.

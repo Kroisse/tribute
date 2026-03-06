@@ -14,10 +14,10 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 
@@ -25,7 +25,7 @@ use trunk_ir::arena::types::Attribute as ArenaAttribute;
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -39,7 +39,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 /// Pattern for `arith.const` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
-impl ArenaRewritePattern for ArithConstPattern {
+impl RewritePattern for ArithConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -110,7 +110,7 @@ impl ArenaRewritePattern for ArithConstPattern {
 /// Pattern for `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 struct ArithBinOpPattern;
 
-impl ArenaRewritePattern for ArithBinOpPattern {
+impl RewritePattern for ArithBinOpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -194,7 +194,7 @@ impl ArenaRewritePattern for ArithBinOpPattern {
 /// Pattern for `arith.cmp_*` -> `wasm.{type}_{cmp}`
 struct ArithCmpPattern;
 
-impl ArenaRewritePattern for ArithCmpPattern {
+impl RewritePattern for ArithCmpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -293,7 +293,7 @@ impl ArenaRewritePattern for ArithCmpPattern {
 /// Pattern for `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 struct ArithNegPattern;
 
-impl ArenaRewritePattern for ArithNegPattern {
+impl RewritePattern for ArithNegPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -339,7 +339,7 @@ impl ArenaRewritePattern for ArithNegPattern {
 /// Pattern for `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 struct ArithBitwisePattern;
 
-impl ArenaRewritePattern for ArithBitwisePattern {
+impl RewritePattern for ArithBitwisePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -416,7 +416,7 @@ impl ArenaRewritePattern for ArithBitwisePattern {
 /// Pattern for `arith.{cast,trunc,extend,convert}` -> wasm conversion ops
 struct ArithConversionPattern;
 
-impl ArenaRewritePattern for ArithConversionPattern {
+impl RewritePattern for ArithConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

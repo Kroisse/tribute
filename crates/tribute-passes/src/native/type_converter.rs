@@ -36,7 +36,7 @@ use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::ArenaTypeConverter;
+use trunk_ir::arena::rewrite::TypeConverter;
 use trunk_ir::arena::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
@@ -111,14 +111,14 @@ impl NativeTypeRefs {
     }
 }
 
-/// Create an `ArenaTypeConverter` configured for native backend type conversions.
+/// Create an `TypeConverter` configured for native backend type conversions.
 ///
 /// Arena version of `native_type_converter()`. All type checks use pre-interned
 /// `TypeRef` comparisons for efficiency.
-pub fn native_type_converter_arena(ctx: &mut IrContext) -> (ArenaTypeConverter, NativeTypeRefs) {
+pub fn native_type_converter_arena(ctx: &mut IrContext) -> (TypeConverter, NativeTypeRefs) {
     let refs = NativeTypeRefs::new(ctx);
 
-    let mut tc = ArenaTypeConverter::new();
+    let mut tc = TypeConverter::new();
 
     // Capture refs for closures (all fields are Copy)
     let r = refs.clone_refs();
@@ -164,7 +164,7 @@ pub fn native_type_converter_arena(ctx: &mut IrContext) -> (ArenaTypeConverter, 
     });
 
     // === Materializations ===
-    // Note: ArenaTypeConverter uses set_materializer (single function) instead of multiple.
+    // Note: TypeConverter uses set_materializer (single function) instead of multiple.
     tc.set_materializer(move |ctx, location, value, from_ty, to_ty| {
         // Same type: no-op
         if from_ty == to_ty {

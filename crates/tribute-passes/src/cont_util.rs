@@ -9,7 +9,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, ValueRef};
 
 // ============================================================================
@@ -69,7 +69,7 @@ pub fn get_region_result_value_arena(ctx: &IrContext, region: RegionRef) -> Opti
 }
 
 /// Information about a suspend arm for dispatch (arena version).
-pub struct ArenaSuspendArm {
+pub struct SuspendArm {
     /// Expected op_idx for this arm
     pub expected_op_idx: u32,
     /// The body region containing the handler arm code
@@ -80,7 +80,7 @@ pub struct ArenaSuspendArm {
 ///
 /// Uses hash-based dispatch: each arm's op_idx is computed from the ability
 /// name and operation name via `compute_op_idx`.
-pub fn collect_suspend_arms_arena(ctx: &IrContext, body: RegionRef) -> Vec<ArenaSuspendArm> {
+pub fn collect_suspend_arms_arena(ctx: &IrContext, body: RegionRef) -> Vec<SuspendArm> {
     let mut arms = Vec::new();
     let mut seen_op_indices: HashSet<u32> = HashSet::new();
 
@@ -116,7 +116,7 @@ pub fn collect_suspend_arms_arena(ctx: &IrContext, body: RegionRef) -> Vec<Arena
             ability_name,
             op_name,
         );
-        arms.push(ArenaSuspendArm {
+        arms.push(SuspendArm {
             expected_op_idx,
             body: suspend_op.body(ctx),
         });

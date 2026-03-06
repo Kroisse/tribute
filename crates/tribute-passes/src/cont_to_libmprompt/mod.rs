@@ -29,8 +29,7 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaConversionTarget, ArenaModule, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator,
+    ConversionTarget, Module, PatternApplicator as ArenaPatternApplicator, TypeConverter,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
 
@@ -42,7 +41,7 @@ use push_prompt::LowerPushPromptPattern;
 /// Lower cont dialect operations to libmprompt-based FFI calls.
 ///
 /// This is the main entry point for the native backend continuation lowering.
-pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: Module) {
     // Step 1: Ensure FFI function declarations are present
     ensure_libmprompt_ffi(ctx, module);
 
@@ -53,7 +52,7 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: ArenaModule) {
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
-    let mut type_converter = ArenaTypeConverter::new();
+    let mut type_converter = TypeConverter::new();
     type_converter.add_conversion(move |_ctx, ty| {
         if ty == prompt_tag_ty {
             Some(i32_ty)
@@ -73,7 +72,7 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: ArenaModule) {
     applicator.apply_partial(ctx, module);
 
     // Step 3: Verify all cont.* ops are converted
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_illegal_dialect("cont");
     target.add_legal_op("cont", "drop");
     target.add_legal_op("cont", "done");

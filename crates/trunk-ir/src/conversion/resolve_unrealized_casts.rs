@@ -3,21 +3,21 @@
 //! After dialect conversion, `unrealized_conversion_cast` operations may remain
 //! in the IR as placeholders for type mismatches. This pass resolves them by:
 //! 1. Finding all `unrealized_conversion_cast` operations
-//! 2. Using the ArenaTypeConverter's materialization functions to generate actual conversion code
+//! 2. Using the TypeConverter's materialization functions to generate actual conversion code
 //! 3. Replacing the casts with the materialized operations
 //!
 //! If any casts cannot be resolved, the pass returns the unresolved list.
 
 use crate::arena::context::IrContext;
 use crate::arena::dialect::core as arena_core;
-use crate::arena::ops::ArenaDialectOp;
+use crate::arena::ops::DialectOp;
 use crate::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
-use crate::arena::rewrite::{ArenaModule, ArenaTypeConverter};
+use crate::arena::rewrite::{Module, TypeConverter};
 use crate::arena::types::Location as ArenaLocation;
 
 /// Information about an unresolved cast (arena version).
 #[derive(Debug, Clone)]
-pub struct ArenaUnresolvedCast {
+pub struct UnresolvedCast {
     /// Location of the cast operation.
     pub location: ArenaLocation,
     /// Source type.
@@ -28,29 +28,29 @@ pub struct ArenaUnresolvedCast {
 
 /// Result of resolving casts in an arena module.
 #[derive(Debug)]
-pub struct ArenaResolveResult {
+pub struct ResolveResult {
     /// Number of casts that were resolved.
     pub resolved_count: usize,
     /// Casts that could not be resolved.
-    pub unresolved: Vec<ArenaUnresolvedCast>,
+    pub unresolved: Vec<UnresolvedCast>,
 }
 
 /// Resolve all `unrealized_conversion_cast` operations in an arena module.
 ///
-/// Uses the provided ArenaTypeConverter's materialization functions to generate
+/// Uses the provided TypeConverter's materialization functions to generate
 /// actual conversion operations. Mutates the module in place.
 pub fn resolve_unrealized_casts_arena(
     ctx: &mut IrContext,
-    module: ArenaModule,
-    tc: &ArenaTypeConverter,
-) -> ArenaResolveResult {
+    module: Module,
+    tc: &TypeConverter,
+) -> ResolveResult {
     tracing::debug!("resolve_unrealized_casts_arena: starting resolution");
     let mut resolver = ArenaCastResolver::new();
 
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
-            return ArenaResolveResult {
+            return ResolveResult {
                 resolved_count: 0,
                 unresolved: vec![],
             };
@@ -65,7 +65,7 @@ pub fn resolve_unrealized_casts_arena(
         resolver.unresolved.len()
     );
 
-    ArenaResolveResult {
+    ResolveResult {
         resolved_count: resolver.resolved_count,
         unresolved: resolver.unresolved,
     }
@@ -73,7 +73,7 @@ pub fn resolve_unrealized_casts_arena(
 
 /// Internal resolver state for arena IR.
 struct ArenaCastResolver {
-    unresolved: Vec<ArenaUnresolvedCast>,
+    unresolved: Vec<UnresolvedCast>,
     resolved_count: usize,
 }
 
@@ -85,14 +85,14 @@ impl ArenaCastResolver {
         }
     }
 
-    fn resolve_region(&mut self, ctx: &mut IrContext, tc: &ArenaTypeConverter, region: RegionRef) {
+    fn resolve_region(&mut self, ctx: &mut IrContext, tc: &TypeConverter, region: RegionRef) {
         let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
         for block in blocks {
             self.resolve_block(ctx, tc, block);
         }
     }
 
-    fn resolve_block(&mut self, ctx: &mut IrContext, tc: &ArenaTypeConverter, block: BlockRef) {
+    fn resolve_block(&mut self, ctx: &mut IrContext, tc: &TypeConverter, block: BlockRef) {
         // Snapshot ops to iterate over (block may be mutated)
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
@@ -119,7 +119,7 @@ impl ArenaCastResolver {
     fn try_resolve_cast(
         &mut self,
         ctx: &mut IrContext,
-        tc: &ArenaTypeConverter,
+        tc: &TypeConverter,
         block: BlockRef,
         op: OpRef,
     ) {
@@ -170,7 +170,7 @@ impl ArenaCastResolver {
             None => {
                 // Could not materialize - keep the cast and mark as unresolved
                 tracing::debug!("resolve_unrealized_casts_arena: FAILED to materialize cast");
-                self.unresolved.push(ArenaUnresolvedCast {
+                self.unresolved.push(UnresolvedCast {
                     location,
                     from_type,
                     to_type,
@@ -188,7 +188,7 @@ mod tests {
         use crate::arena::dialect::arith as arena_arith;
         use crate::arena::dialect::core as arena_core;
         use crate::arena::refs::{OpRef, TypeRef};
-        use crate::arena::rewrite::{ArenaModule, ArenaTypeConverter};
+        use crate::arena::rewrite::{Module, TypeConverter};
         use crate::arena::types::{Attribute, Location, TypeDataBuilder};
         use crate::conversion::resolve_unrealized_casts_arena;
         use crate::location::Span;
@@ -212,7 +212,7 @@ mod tests {
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
         }
 
-        fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> ArenaModule {
+        fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
             let block = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],
@@ -233,7 +233,7 @@ mod tests {
                     .region(region)
                     .build(ctx);
             let module_op = ctx.create_op(module_data);
-            ArenaModule::new(ctx, module_op).expect("test module should be valid")
+            Module::new(ctx, module_op).expect("test module should be valid")
         }
 
         #[test]
@@ -252,7 +252,7 @@ mod tests {
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
-            let tc = ArenaTypeConverter::new();
+            let tc = TypeConverter::new();
             let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
 
             // Should fail — no materializer registered
@@ -275,7 +275,7 @@ mod tests {
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
-            let tc = ArenaTypeConverter::new();
+            let tc = TypeConverter::new();
             let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
 
             // Same-type casts should be resolved even without a materializer
@@ -317,7 +317,7 @@ mod tests {
             );
 
             // Set up a materializer that creates a sextend op
-            let mut tc = ArenaTypeConverter::new();
+            let mut tc = TypeConverter::new();
             tc.set_materializer(move |ctx, loc, value, _from_ty, to_ty| {
                 use crate::arena::rewrite::type_converter::MaterializeResult;
                 let op_data =

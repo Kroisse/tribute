@@ -66,7 +66,7 @@ use tribute_passes::evidence;
 use tribute_passes::generic_type_converter_arena;
 use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::Span;
-use trunk_ir::arena::{ArenaModule, IrContext};
+use trunk_ir::arena::{IrContext, Module};
 use trunk_ir::conversion::resolve_unrealized_casts_arena;
 /// Error when illegal operations remain after lowering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,12 +235,12 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
 /// This performs AST-level prelude merge (prepending prelude decls to user decls),
 /// then runs `ast_to_ir` on the merged module.
 ///
-/// Returns `(IrContext, ArenaModule)` — arena IR ready for in-place passes.
+/// Returns `(IrContext, Module)` — arena IR ready for in-place passes.
 fn merge_and_lower_to_ir<'db>(
     db: &'db dyn salsa::Database,
     typed: &ast_typeck::TypeCheckOutput<'db>,
     source: SourceCst,
-) -> (IrContext, ArenaModule) {
+) -> (IrContext, Module) {
     use tribute_front::ast::TypedRef;
 
     let user_module = typed.module(db);
@@ -315,7 +315,7 @@ fn merge_and_lower_to_ir<'db>(
 pub fn compile_frontend_to_arena(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, ArenaModule)> {
+) -> Option<(IrContext, Module)> {
     let typed = parse_and_lower_ast(db, source)?;
     Some(merge_and_lower_to_ir(db, &typed, source))
 }
@@ -323,7 +323,7 @@ pub fn compile_frontend_to_arena(
 /// Result of the full compilation pipeline.
 pub struct CompilationResult {
     /// The compiled module as arena IR (None if compilation failed).
-    pub module: Option<(IrContext, ArenaModule)>,
+    pub module: Option<(IrContext, Module)>,
     /// Diagnostics collected during compilation.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -344,7 +344,7 @@ pub struct CompilationResult {
 /// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
 fn compile_to_wasm_arena(
     ctx: &mut IrContext,
-    arena_module: ArenaModule,
+    arena_module: Module,
 ) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("compile_to_wasm").entered();
 
@@ -398,7 +398,7 @@ fn compile_to_wasm_arena(
 pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, ArenaModule)> {
+) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
     evidence::add_evidence_params(&mut ctx, m);
     Some((ctx, m))
@@ -411,7 +411,7 @@ pub fn run_through_evidence_params(
 pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, ArenaModule)> {
+) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
@@ -433,7 +433,7 @@ pub fn run_through_closure_lower(
 fn run_shared_pipeline_arena(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<(IrContext, ArenaModule)> {
+) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
 
     evidence::add_evidence_params(&mut ctx, m);
@@ -445,10 +445,7 @@ fn run_shared_pipeline_arena(
 }
 
 /// Run the WASM target pipeline in arena and return IR text for dump-ir.
-fn run_wasm_target_pipeline_arena(
-    ctx: &mut IrContext,
-    m: ArenaModule,
-) -> Result<(), ConversionError> {
+fn run_wasm_target_pipeline_arena(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
@@ -468,7 +465,7 @@ fn run_wasm_target_pipeline_arena(
 }
 
 /// Run the native target pipeline in arena (shared + native-specific passes).
-fn run_native_target_pipeline_arena(ctx: &mut IrContext, m: ArenaModule) {
+fn run_native_target_pipeline_arena(ctx: &mut IrContext, m: Module) {
     tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::arena::validation::validate_value_integrity(ctx, m);
@@ -589,7 +586,7 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
 /// 5. Validates and emits the native object file via Cranelift
 fn compile_module_to_native_arena(
     ctx: &mut IrContext,
-    arena_module: ArenaModule,
+    arena_module: Module,
     sanitize: bool,
 ) -> NativeCompilationResult<Vec<u8>> {
     let _span = tracing::info_span!("compile_module_to_native").entered();
@@ -838,10 +835,7 @@ fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
 /// resolve-evidence passes) and returns arena IR. Does NOT run
 /// target-specific passes (WASM/native), making it suitable for
 /// diagnostic-only compilation ("none" target).
-pub fn compile_ast(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> Option<(IrContext, ArenaModule)> {
+pub fn compile_ast(db: &dyn salsa::Database, source: SourceCst) -> Option<(IrContext, Module)> {
     run_shared_pipeline_arena(db, source)
 }
 

@@ -9,7 +9,7 @@ use tribute::TributeDatabaseImpl;
 use tribute_front::SourceCst;
 use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
-use trunk_ir::arena::{ArenaModule, IrContext, RegionRef};
+use trunk_ir::arena::{IrContext, Module, RegionRef};
 
 #[test]
 fn test_add_compiles_and_runs() {
@@ -508,7 +508,7 @@ fn main() { }
 }
 
 /// Helper to check for closure.new in a module (arena version)
-fn check_for_closure_new_in_module(ctx: &IrContext, m: ArenaModule) -> bool {
+fn check_for_closure_new_in_module(ctx: &IrContext, m: Module) -> bool {
     for &op_ref in &m.ops(ctx) {
         let op_data = ctx.op(op_ref);
         for &region_ref in &op_data.regions {
@@ -642,7 +642,7 @@ fn main() { }
 }
 
 /// Helper to check for func.call_indirect in a module (arena version)
-fn check_for_call_indirect_in_module(ctx: &IrContext, m: ArenaModule) -> bool {
+fn check_for_call_indirect_in_module(ctx: &IrContext, m: Module) -> bool {
     for &op_ref in &m.ops(ctx) {
         let op_data = ctx.op(op_ref);
         for &region_ref in &op_data.regions {
@@ -742,7 +742,7 @@ struct LoweredClosureOps {
 }
 
 /// Helper to check for lowered closure operations in a module (arena version)
-fn check_for_lowered_closure_ops_in_module(ctx: &IrContext, m: ArenaModule) -> LoweredClosureOps {
+fn check_for_lowered_closure_ops_in_module(ctx: &IrContext, m: Module) -> LoweredClosureOps {
     let mut result = LoweredClosureOps {
         has_func_constant: false,
         has_struct_new: false,

@@ -11,9 +11,9 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::{
     arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
 };
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
 use crate::cont_util::compute_op_idx;
@@ -26,7 +26,7 @@ fn i32_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
 /// Pattern: Lower `cont.shift` -> `func.call @__tribute_yield`
 pub(crate) struct LowerShiftPattern;
 
-impl ArenaRewritePattern for LowerShiftPattern {
+impl RewritePattern for LowerShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -112,7 +112,7 @@ impl ArenaRewritePattern for LowerShiftPattern {
 /// Pattern: Lower `cont.resume` -> `func.call @__tribute_resume`
 pub(crate) struct LowerResumePattern;
 
-impl ArenaRewritePattern for LowerResumePattern {
+impl RewritePattern for LowerResumePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -186,7 +186,7 @@ impl ArenaRewritePattern for LowerResumePattern {
 /// Pattern: Lower `cont.drop` -> `func.call @__tribute_resume_drop`
 pub(crate) struct LowerDropPattern;
 
-impl ArenaRewritePattern for LowerDropPattern {
+impl RewritePattern for LowerDropPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

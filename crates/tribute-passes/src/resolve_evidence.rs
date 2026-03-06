@@ -28,9 +28,9 @@ use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
+use trunk_ir::arena::ops::{DialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::types::{
     Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
 };
@@ -84,7 +84,7 @@ fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
 // ============================================================================
 
 /// Ensure runtime helper functions exist in the module.
-fn ensure_runtime_functions(ctx: &mut IrContext, module: ArenaModule) {
+fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     let ops = module.ops(ctx);
 
     let mut has_lookup = false;
@@ -205,7 +205,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: ArenaModule) {
 }
 
 /// Collect functions with evidence first parameter.
-fn collect_functions_with_evidence(ctx: &IrContext, module: ArenaModule) -> HashSet<Symbol> {
+fn collect_functions_with_evidence(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut fns_with_evidence = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -233,7 +233,7 @@ fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
 /// Collect handler-root functions (contain push_prompt but no evidence param).
 fn collect_handler_root_functions(
     ctx: &IrContext,
-    module: ArenaModule,
+    module: Module,
     fns_with_evidence: &HashSet<Symbol>,
 ) -> HashSet<Symbol> {
     let mut handler_roots = HashSet::new();
@@ -383,7 +383,7 @@ fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
 }
 
 /// Validate ability ID uniqueness.
-fn validate_ability_id_uniqueness(ctx: &IrContext, module: ArenaModule) {
+fn validate_ability_id_uniqueness(ctx: &IrContext, module: Module) {
     let mut seen: HashMap<u32, TypeRef> = HashMap::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -418,7 +418,7 @@ fn collect_ability_ids_in_region(
 }
 
 /// Validate no unresolved shifts remain.
-fn validate_no_unresolved_shifts(ctx: &IrContext, module: ArenaModule) {
+fn validate_no_unresolved_shifts(ctx: &IrContext, module: Module) {
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             validate_no_unresolved_shifts_in_region(ctx, func_op.body(ctx));
@@ -458,7 +458,7 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
 /// Transform handler-root functions (contain push_prompt but no evidence param).
 fn transform_handler_roots(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     handler_root_fns: &HashSet<Symbol>,
     fns_with_evidence: &HashSet<Symbol>,
     registry: &mut OpTableRegistry,
@@ -537,7 +537,7 @@ fn transform_handler_roots(
 /// Transform shifts in all functions that have evidence.
 fn transform_shifts_in_module(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     fns_with_evidence: &HashSet<Symbol>,
     registry: &mut OpTableRegistry,
 ) {
@@ -936,7 +936,7 @@ fn transform_shifts_in_region(
 /// Transforms `cont.shift` with placeholder tags into `cont.shift` with
 /// dynamically resolved tags via evidence lookup. This enables proper
 /// handler dispatch at runtime.
-pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: ArenaModule) {
+pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
     let mut registry = OpTableRegistry::new();
 
     // Ensure runtime helpers exist

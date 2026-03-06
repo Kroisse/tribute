@@ -14,23 +14,23 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 
 /// Lower func dialect to clif dialect.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
-    use trunk_ir::arena::rewrite::ArenaConversionTarget;
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    use trunk_ir::arena::rewrite::ConversionTarget;
 
     // Phase 1: Adapt closure structs for native backend
     adapt_closure_structs(ctx, module);
 
     // Phase 2: Lower func dialect to clif dialect
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("func");
 
@@ -46,9 +46,9 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
     applicator.apply_partial(ctx, module);
 }
 
-fn adapt_closure_structs(ctx: &mut IrContext, module: ArenaModule) {
-    let applicator = ArenaPatternApplicator::new(ArenaTypeConverter::new())
-        .add_pattern(ClosureStructAdaptPattern);
+fn adapt_closure_structs(ctx: &mut IrContext, module: Module) {
+    let applicator =
+        ArenaPatternApplicator::new(TypeConverter::new()).add_pattern(ClosureStructAdaptPattern);
     applicator.apply_partial(ctx, module);
 }
 
@@ -106,7 +106,7 @@ fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
 /// Pattern: `func.func` -> `clif.func`
 struct FuncFuncPattern;
 
-impl ArenaRewritePattern for FuncFuncPattern {
+impl RewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -181,7 +181,7 @@ impl ArenaRewritePattern for FuncFuncPattern {
 /// Pattern: `func.call` -> `clif.call`
 struct FuncCallPattern;
 
-impl ArenaRewritePattern for FuncCallPattern {
+impl RewritePattern for FuncCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -210,7 +210,7 @@ impl ArenaRewritePattern for FuncCallPattern {
 /// Pattern: `func.call_indirect` -> `clif.call_indirect`
 struct FuncCallIndirectPattern;
 
-impl ArenaRewritePattern for FuncCallIndirectPattern {
+impl RewritePattern for FuncCallIndirectPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -255,7 +255,7 @@ impl ArenaRewritePattern for FuncCallIndirectPattern {
 /// Pattern: `func.return` -> `clif.return`
 struct FuncReturnPattern;
 
-impl ArenaRewritePattern for FuncReturnPattern {
+impl RewritePattern for FuncReturnPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -279,7 +279,7 @@ impl ArenaRewritePattern for FuncReturnPattern {
 /// Pattern: `func.tail_call` -> `clif.return_call`
 struct FuncTailCallPattern;
 
-impl ArenaRewritePattern for FuncTailCallPattern {
+impl RewritePattern for FuncTailCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -308,7 +308,7 @@ impl ArenaRewritePattern for FuncTailCallPattern {
 /// Pattern: `func.unreachable` -> `clif.trap`
 struct FuncUnreachablePattern;
 
-impl ArenaRewritePattern for FuncUnreachablePattern {
+impl RewritePattern for FuncUnreachablePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -328,7 +328,7 @@ impl ArenaRewritePattern for FuncUnreachablePattern {
 /// Pattern: `func.constant` -> `clif.symbol_addr`
 struct FuncConstantPattern;
 
-impl ArenaRewritePattern for FuncConstantPattern {
+impl RewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -351,7 +351,7 @@ impl ArenaRewritePattern for FuncConstantPattern {
 /// Pattern: Adapt `_closure` struct ops for native backend
 struct ClosureStructAdaptPattern;
 
-impl ArenaRewritePattern for ClosureStructAdaptPattern {
+impl RewritePattern for ClosureStructAdaptPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -422,12 +422,12 @@ mod tests {
     use trunk_ir::arena::context::IrContext;
     use trunk_ir::arena::parser::parse_test_module;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaTypeConverter;
+    use trunk_ir::arena::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let type_converter = ArenaTypeConverter::new();
+        let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter);
         print_module(&ctx, module.op())
     }

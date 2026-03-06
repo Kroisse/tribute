@@ -35,9 +35,9 @@ use std::rc::Rc;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::rewrite::{
-    ArenaConversionTarget, ArenaTypeConverter, PatternApplicator as ArenaPatternApplicator,
+    ConversionTarget, PatternApplicator as ArenaPatternApplicator, TypeConverter,
 };
 use trunk_ir::location::Span;
 
@@ -48,8 +48,8 @@ pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value_arena}
 // Public API
 // ============================================================================
 
-/// Create an ArenaTypeConverter with standard tribute_rt -> core type conversions.
-fn standard_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+/// Create an TypeConverter with standard tribute_rt -> core type conversions.
+fn standard_type_converter(ctx: &mut IrContext) -> TypeConverter {
     use trunk_ir::arena::types::TypeDataBuilder;
 
     let int_dialect = Symbol::new("tribute_rt");
@@ -66,7 +66,7 @@ fn standard_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         .types
         .intern(TypeDataBuilder::new(core_dialect, Symbol::new("f64")).build());
 
-    let mut converter = ArenaTypeConverter::new();
+    let mut converter = TypeConverter::new();
     converter.add_conversion(move |ctx, ty| {
         let data = ctx.types.get(ty);
         if data.dialect == int_dialect && data.name == Symbol::new("Int") {
@@ -175,7 +175,7 @@ pub(crate) struct ShiftPointInfo {
 /// - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
 pub fn lower_cont_to_trampoline(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
 ) -> Result<(), Vec<trunk_ir::arena::rewrite::conversion_target::IllegalOp>> {
     let module_body = module.body(ctx).expect("module should have a body");
     let module_name = module.name(ctx).unwrap_or_else(|| Symbol::new(""));
@@ -230,7 +230,7 @@ pub fn lower_cont_to_trampoline(
     applicator2.apply_partial(ctx, module);
 
     // Verify all cont.* ops (except cont.drop) are converted.
-    let mut conversion_target = ArenaConversionTarget::new();
+    let mut conversion_target = ConversionTarget::new();
     conversion_target.add_illegal_dialect("cont");
     conversion_target.add_legal_op("cont", "drop");
     conversion_target.add_legal_op("cont", "done");

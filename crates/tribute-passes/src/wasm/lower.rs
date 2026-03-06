@@ -12,9 +12,7 @@ use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
-    ArenaModule, PatternApplicator, WasmFuncSignatureConversionPattern,
-};
+use trunk_ir::arena::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
@@ -24,7 +22,7 @@ use super::type_converter::{self, wasm_type_converter};
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE};
 
 /// Run the full WASM lowering pipeline on arena IR.
-pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: Module) {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();
@@ -133,7 +131,7 @@ pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
 // =============================================================================
 
 /// Debug helper to check if all operations in function bodies are in wasm dialect
-fn check_all_wasm_dialect(ctx: &IrContext, module: ArenaModule) {
+fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
     let Some(body) = module.body(ctx) else {
         return;
     };
@@ -148,7 +146,7 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: ArenaModule) {
 }
 
 /// Debug helper to trace function parameter types through the pipeline.
-fn debug_func_params(ctx: &IrContext, module: ArenaModule, phase: &str) {
+fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
     let Some(body) = module.body(ctx) else {
         return;
     };
@@ -313,7 +311,7 @@ impl<'a> WasmLowerer<'a> {
         }
     }
 
-    fn lower_module(&mut self, ctx: &mut IrContext, module: ArenaModule) {
+    fn lower_module(&mut self, ctx: &mut IrContext, module: Module) {
         let Some(body) = module.body(ctx) else {
             return;
         };

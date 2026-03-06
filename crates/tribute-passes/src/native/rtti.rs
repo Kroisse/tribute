@@ -36,8 +36,8 @@ use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::{ArenaModule, ArenaTypeConverter};
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::{Module, TypeConverter};
 use trunk_ir::arena::types::Location as ArenaLocation;
 use trunk_ir::arena::walk::WalkAction;
 use trunk_ir::arena::{BlockRef, OpRef, TypeRef, ValueRef};
@@ -120,8 +120,8 @@ impl RttiMap {
 /// Run the RTTI pass: scan for struct types, assign indices, generate release functions.
 pub fn generate_rtti(
     ctx: &mut IrContext,
-    module: ArenaModule,
-    type_converter: &ArenaTypeConverter,
+    module: Module,
+    type_converter: &TypeConverter,
 ) -> RttiMap {
     let mut rtti_map = RttiMap::new();
 
@@ -161,7 +161,7 @@ pub fn generate_rtti(
 }
 
 /// Scan module for adt.struct_new and adt.variant_new operations.
-fn collect_types(ctx: &IrContext, module: ArenaModule, rtti_map: &mut RttiMap) {
+fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
     let body = module.body(ctx);
     use std::ops::ControlFlow;
     let Some(body) = body else { return };
@@ -196,7 +196,7 @@ fn generate_release_function_for_struct(
     ctx: &mut IrContext,
     struct_ty: TypeRef,
     rtti_idx: u32,
-    type_converter: &ArenaTypeConverter,
+    type_converter: &TypeConverter,
     loc: ArenaLocation,
 ) -> OpRef {
     let fields = get_struct_fields_arena(ctx, struct_ty)
@@ -411,7 +411,7 @@ fn generate_release_function_for_enum(
     ctx: &mut IrContext,
     enum_ty: TypeRef,
     rtti_idx: u32,
-    type_converter: &ArenaTypeConverter,
+    type_converter: &TypeConverter,
     loc: ArenaLocation,
 ) -> OpRef {
     let layout = compute_enum_layout_arena(ctx, enum_ty, type_converter)
@@ -674,7 +674,7 @@ mod tests {
     use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::arena::dialect::func as arena_func;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::rewrite::Module;
     use trunk_ir::arena::types::Attribute as ArenaAttribute;
 
     fn test_ctx() -> (IrContext, ArenaLocation) {
@@ -695,7 +695,7 @@ mod tests {
         loc: ArenaLocation,
         struct_ty: TypeRef,
         field_types: &[TypeRef],
-    ) -> ArenaModule {
+    ) -> Module {
         // Build function type: (field_types...) -> struct_ty
         let func_ty =
             arena_core::func(ctx, struct_ty, field_types.iter().copied(), None).as_type_ref();
@@ -763,7 +763,7 @@ mod tests {
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
 
-        ArenaModule::new(ctx, module_op).expect("valid arena module")
+        Module::new(ctx, module_op).expect("valid arena module")
     }
 
     #[test]
@@ -916,7 +916,7 @@ mod tests {
                 .region(module_region)
                 .build(&mut ctx);
         let module_op = ctx.create_op(module_data);
-        let module = ArenaModule::new(&ctx, module_op).expect("valid");
+        let module = Module::new(&ctx, module_op).expect("valid");
 
         let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
         let rtti = generate_rtti(&mut ctx, module, &tc);

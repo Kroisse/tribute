@@ -9,9 +9,9 @@ use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::types::{
     Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
 };
@@ -26,7 +26,7 @@ use trunk_ir::smallvec::smallvec;
 /// 3. Ensures `__tribute_init` (and optionally `__asan_init`) declarations exist
 /// 4. Creates a new `func.func @main() -> i32` that calls `_tribute_main()`
 ///    and returns 0
-pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sanitize: bool) {
+pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
     let first_block = match module.first_block(ctx) {
         Some(b) => b,
         None => return,
@@ -262,8 +262,8 @@ mod tests {
     use trunk_ir::arena::context::{BlockData as ArenaBlockData, IrContext, RegionData};
     use trunk_ir::arena::dialect::arith as arena_arith;
     use trunk_ir::arena::dialect::func as arena_func;
-    use trunk_ir::arena::ops::ArenaDialectOp;
-    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::ops::DialectOp;
+    use trunk_ir::arena::rewrite::Module;
     use trunk_ir::arena::types::{
         Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
     };
@@ -285,7 +285,7 @@ mod tests {
     }
 
     /// Build an arena module with a single main function returning i32.
-    fn make_arena_main_module(ctx: &mut IrContext, loc: ArenaLocation) -> ArenaModule {
+    fn make_arena_main_module(ctx: &mut IrContext, loc: ArenaLocation) -> Module {
         let i32_ty = arena_i32_type(ctx);
         let func_ty = arena_core::func(ctx, i32_ty, [], None).as_type_ref();
 
@@ -333,7 +333,7 @@ mod tests {
         .build(ctx);
         let module_op = ctx.create_op(module_data);
 
-        ArenaModule::new(ctx, module_op).expect("valid arena module")
+        Module::new(ctx, module_op).expect("valid arena module")
     }
 
     #[test]
@@ -424,7 +424,7 @@ mod tests {
         .region(module_region)
         .build(&mut ctx);
         let module_op = ctx.create_op(module_data);
-        let module = ArenaModule::new(&ctx, module_op).expect("valid");
+        let module = Module::new(&ctx, module_op).expect("valid");
 
         generate_native_entrypoint(&mut ctx, module, false);
 
@@ -482,7 +482,7 @@ mod tests {
         .region(module_region)
         .build(&mut ctx);
         let module_op = ctx.create_op(module_data);
-        let module = ArenaModule::new(&ctx, module_op).expect("valid");
+        let module = Module::new(&ctx, module_op).expect("valid");
 
         generate_native_entrypoint(&mut ctx, module, false);
 

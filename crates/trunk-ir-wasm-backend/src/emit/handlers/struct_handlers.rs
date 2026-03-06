@@ -8,7 +8,7 @@ use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};

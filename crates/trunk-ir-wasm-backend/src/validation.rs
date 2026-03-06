@@ -6,8 +6,8 @@
 //! Dialect validation errors prevent emission from proceeding.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 
 use crate::{CompilationError, CompilationResult};
@@ -30,7 +30,7 @@ impl std::fmt::Display for ValidationError {
 /// (except allowed exceptions like `core.module`).
 ///
 /// Returns an error if validation fails, preventing emission.
-pub fn validate_wasm_ir(ctx: &IrContext, module: ArenaModule) -> CompilationResult<()> {
+pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()> {
     let mut errors: Vec<String> = Vec::new();
 
     let body = module

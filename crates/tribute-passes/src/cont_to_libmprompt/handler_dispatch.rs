@@ -36,18 +36,18 @@ use trunk_ir::arena::dialect::{
     arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
     scf as arena_scf,
 };
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
-use crate::cont_util::{ArenaSuspendArm, collect_suspend_arms_arena, get_done_region_arena};
+use crate::cont_util::{SuspendArm, collect_suspend_arms_arena, get_done_region_arena};
 
 /// Pattern: Lower `cont.handler_dispatch` -> `scf.loop` with yield dispatch.
 pub(crate) struct LowerHandlerDispatchPattern;
 
-impl ArenaRewritePattern for LowerHandlerDispatchPattern {
+impl RewritePattern for LowerHandlerDispatchPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -82,7 +82,7 @@ fn build_loop_body(
     ctx: &mut IrContext,
     loc: trunk_ir::arena::types::Location,
     body_region: RegionRef,
-    suspend_arms: &[ArenaSuspendArm],
+    suspend_arms: &[SuspendArm],
     user_result_ty: TypeRef,
 ) -> RegionRef {
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
@@ -229,7 +229,7 @@ fn build_done_branch(
 fn build_shift_branch(
     ctx: &mut IrContext,
     loc: trunk_ir::arena::types::Location,
-    suspend_arms: &[ArenaSuspendArm],
+    suspend_arms: &[SuspendArm],
     ptr_ty: TypeRef,
 ) -> RegionRef {
     let i32_ty = ctx
@@ -308,7 +308,7 @@ fn build_nested_dispatch(
     current_op_idx: ValueRef,
     k: ValueRef,
     v: ValueRef,
-    suspend_arms: &[ArenaSuspendArm],
+    suspend_arms: &[SuspendArm],
     arm_index: usize,
 ) -> ValueRef {
     let i1_ty = ctx

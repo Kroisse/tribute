@@ -5,9 +5,9 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
 
 use super::patterns::is_step_type;
 use super::shift_lower::step_type;
@@ -20,7 +20,7 @@ pub(crate) struct WrapReturnsInEffectfulFuncsPattern {
     pub(crate) effectful_funcs: Rc<HashSet<Symbol>>,
 }
 
-impl ArenaRewritePattern for WrapReturnsInEffectfulFuncsPattern {
+impl RewritePattern for WrapReturnsInEffectfulFuncsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

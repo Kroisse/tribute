@@ -7,11 +7,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::debug;
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
 use trunk_ir::smallvec::SmallVec;
@@ -73,7 +73,7 @@ fn fmt_type(ctx: &IrContext, ty: TypeRef) -> String {
 /// Returns a vector of (type_idx, func_type) pairs sorted by type index.
 pub(crate) fn collect_call_indirect_types(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     type_idx_by_type: &mut HashMap<TypeRef, u32>,
     gc_type_count: usize,
     func_type_count: usize,
@@ -303,7 +303,7 @@ pub(crate) fn collect_call_indirect_types(
 /// Collect function names referenced via wasm.ref_func.
 ///
 /// These functions need to be declared in a declarative elem segment.
-pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet<Symbol> {
+pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     fn collect_from_region(
         ctx: &IrContext,
         region_ref: RegionRef,
@@ -331,7 +331,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet
 }
 
 /// Check if the module contains any call_indirect operations.
-pub(crate) fn has_call_indirect(ctx: &IrContext, module: ArenaModule) -> bool {
+pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
     fn check_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {

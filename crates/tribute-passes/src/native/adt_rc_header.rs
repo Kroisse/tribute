@@ -24,11 +24,11 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt;
 use trunk_ir::arena::dialect::clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
-use trunk_ir::arena::rewrite::type_converter::ArenaTypeConverter;
-use trunk_ir::arena::rewrite::{ArenaModule, ArenaRewritePattern, PatternApplicator};
+use trunk_ir::arena::rewrite::type_converter::TypeConverter;
+use trunk_ir::arena::rewrite::{Module, PatternApplicator, RewritePattern};
 use trunk_ir::arena::types::TypeDataBuilder;
 
 /// Name of the runtime allocation function.
@@ -39,8 +39,8 @@ const ALLOC_FN: &str = "__tribute_alloc";
 /// The `rtti_map` maps arena type refs to their RTTI indices.
 pub fn lower(
     ctx: &mut IrContext,
-    module: ArenaModule,
-    type_converter: ArenaTypeConverter,
+    module: Module,
+    type_converter: TypeConverter,
     rtti_map: &HashMap<TypeRef, u32>,
 ) {
     // Pre-intern types
@@ -93,7 +93,7 @@ struct StructNewPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for StructNewPattern {
+impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -217,7 +217,7 @@ struct VariantNewPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for VariantNewPattern {
+impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -341,7 +341,7 @@ mod tests {
     };
     use trunk_ir::arena::dialect::func as arena_func;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaModule;
+    use trunk_ir::arena::rewrite::Module;
     use trunk_ir::arena::types::Attribute as ArenaAttribute;
     use trunk_ir::arena::types::Location as ArenaLocation;
     use trunk_ir::smallvec::smallvec;
@@ -432,7 +432,7 @@ mod tests {
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        let module = ArenaModule::new(ctx, module_op).expect("valid arena module");
+        let module = Module::new(ctx, module_op).expect("valid arena module");
 
         // Run RTTI pass first (needed for rtti_map)
         let (tc, _) = crate::native::type_converter::native_type_converter_arena(ctx);

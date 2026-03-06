@@ -20,10 +20,10 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
 use trunk_ir::arena::{BlockData, RegionData};
@@ -34,7 +34,7 @@ use trunk_ir::smallvec::smallvec;
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     // 1. Collect all functions referenced by func.constant operations
     let func_refs = collect_func_constant_refs(ctx, module);
 
@@ -84,7 +84,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 }
 
 /// Collect all function symbols referenced by func.constant operations.
-fn collect_func_constant_refs(ctx: &IrContext, module: ArenaModule) -> Vec<Symbol> {
+fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
         collect_refs_in_region(ctx, body, &mut funcs);
@@ -114,7 +114,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
 }
 
 /// Add wasm.table and wasm.elem operations to the module for the function table.
-fn add_function_table(ctx: &mut IrContext, module: ArenaModule, funcs: &[Symbol], table_size: u32) {
+fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], table_size: u32) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -172,7 +172,7 @@ fn add_function_table(ctx: &mut IrContext, module: ArenaModule, funcs: &[Symbol]
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
-impl ArenaRewritePattern for FuncFuncPattern {
+impl RewritePattern for FuncFuncPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -200,7 +200,7 @@ impl ArenaRewritePattern for FuncFuncPattern {
 /// Pattern for `func.call` -> `wasm.call`
 struct FuncCallPattern;
 
-impl ArenaRewritePattern for FuncCallPattern {
+impl RewritePattern for FuncCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -228,7 +228,7 @@ impl ArenaRewritePattern for FuncCallPattern {
 /// The callee (i32 table index) is the first operand, followed by arguments.
 struct FuncCallIndirectPattern;
 
-impl ArenaRewritePattern for FuncCallIndirectPattern {
+impl RewritePattern for FuncCallIndirectPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -254,7 +254,7 @@ impl ArenaRewritePattern for FuncCallIndirectPattern {
 /// Pattern for `func.return` -> `wasm.return`
 struct FuncReturnPattern;
 
-impl ArenaRewritePattern for FuncReturnPattern {
+impl RewritePattern for FuncReturnPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -277,7 +277,7 @@ impl ArenaRewritePattern for FuncReturnPattern {
 /// Pattern for `func.tail_call` -> `wasm.return_call`
 struct FuncTailCallPattern;
 
-impl ArenaRewritePattern for FuncTailCallPattern {
+impl RewritePattern for FuncTailCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -301,7 +301,7 @@ impl ArenaRewritePattern for FuncTailCallPattern {
 /// Pattern for `func.unreachable` -> `wasm.unreachable`
 struct FuncUnreachablePattern;
 
-impl ArenaRewritePattern for FuncUnreachablePattern {
+impl RewritePattern for FuncUnreachablePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -328,7 +328,7 @@ struct FuncConstantPattern {
     table_indices: HashMap<Symbol, u32>,
 }
 
-impl ArenaRewritePattern for FuncConstantPattern {
+impl RewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

@@ -22,7 +22,7 @@ use crate::arena::refs::OpRef;
 ///
 /// Return `true` if the pattern matched and recorded mutations via the rewriter.
 /// Return `false` if the pattern does not apply.
-pub trait ArenaRewritePattern {
+pub trait RewritePattern {
     /// Attempt to match and rewrite an operation.
     fn match_and_rewrite(
         &self,

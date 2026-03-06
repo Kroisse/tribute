@@ -12,7 +12,7 @@ use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use crate::{CompilationError, CompilationResult};
