@@ -1,6 +1,6 @@
 //! WASM type converter for arena IR-level type transformations.
 //!
-//! This module provides an `TypeConverter` configuration for converting
+//! This module provides a `TypeConverter` configuration for converting
 //! high-level Tribute types to their WASM representations during IR lowering.
 //!
 //! ## Type Conversion Rules
@@ -319,7 +319,7 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Create an TypeConverter configured for WASM backend type conversions.
+/// Create a TypeConverter configured for WASM backend type conversions.
 ///
 /// This converter handles the IR-level type transformations needed during
 /// lowering passes. It complements the emit-phase `gc_types::type_to_field_type`

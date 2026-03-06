@@ -6,15 +6,15 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
+use crate::Symbol;
 use crate::arena::context::IrContext;
 use crate::arena::dialect::{core, func, wasm};
-use crate::arena::ops::{DialectOp, ArenaDialectType};
+use crate::arena::ops::{ArenaDialectType, DialectOp};
 use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::RewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::TypeConverter;
 use crate::arena::types::{Attribute, TypeDataBuilder};
-use crate::Symbol;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
@@ -215,12 +215,12 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Symbol;
     use crate::arena::context::{
         BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
     };
     use crate::arena::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
     use crate::arena::types::{Attribute, TypeDataBuilder};
-    use crate::Symbol;
     use crate::location::Span;
     use smallvec::smallvec;
     use std::collections::BTreeMap;

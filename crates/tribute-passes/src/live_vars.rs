@@ -14,9 +14,9 @@ use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::walk;
 
-/// Information about a single shift point in a function (arena version).
+/// Information about a single shift point in a function.
 #[derive(Debug, Clone)]
-pub struct ArenaShiftPoint {
+pub struct ShiftPoint {
     /// Index of this shift point (0, 1, 2, ...)
     pub index: usize,
     /// Total number of shift points in the function
@@ -29,14 +29,14 @@ pub struct ArenaShiftPoint {
     pub continuation_ops: Vec<OpRef>,
 }
 
-/// Result of analyzing a function for shift points (arena version).
+/// Result of analyzing a function for shift points.
 #[derive(Debug)]
-pub struct ArenaFunctionAnalysis {
+pub struct FunctionAnalysis {
     /// All shift points in order
-    pub shift_points: Vec<ArenaShiftPoint>,
+    pub shift_points: Vec<ShiftPoint>,
 }
 
-impl ArenaFunctionAnalysis {
+impl FunctionAnalysis {
     /// Analyze a function body for shift points.
     ///
     /// For Phase 1-2, we only support single-block functions (no branches).
@@ -46,7 +46,7 @@ impl ArenaFunctionAnalysis {
 
         // Phase 1-2: Only support single-block functions
         if blocks.len() != 1 {
-            tracing::debug!("ArenaFunctionAnalysis: skipping multi-block function");
+            tracing::debug!("FunctionAnalysis: skipping multi-block function");
             return None;
         }
 
@@ -59,15 +59,13 @@ impl ArenaFunctionAnalysis {
             if arena_cont::Shift::matches(ctx, op) {
                 if has_shift_in_nested_region(ctx, op) {
                     tracing::debug!(
-                        "ArenaFunctionAnalysis: skipping function with shift in nested region"
+                        "FunctionAnalysis: skipping function with shift in nested region"
                     );
                     return None;
                 }
                 shift_indices.push((i, op));
             } else if has_shift_in_nested_region(ctx, op) {
-                tracing::debug!(
-                    "ArenaFunctionAnalysis: skipping function with shift in nested region"
-                );
+                tracing::debug!("FunctionAnalysis: skipping function with shift in nested region");
                 return None;
             }
         }
@@ -90,7 +88,7 @@ impl ArenaFunctionAnalysis {
                 .any(|&op| has_nested_regions(ctx, op))
             {
                 tracing::debug!(
-                    "ArenaFunctionAnalysis: skipping function with nested regions in continuation"
+                    "FunctionAnalysis: skipping function with nested regions in continuation"
                 );
                 return None;
             }
@@ -117,7 +115,7 @@ impl ArenaFunctionAnalysis {
                 }
             }
 
-            shift_points.push(ArenaShiftPoint {
+            shift_points.push(ShiftPoint {
                 index: shift_idx,
                 total_shifts,
                 shift_op,
@@ -130,7 +128,7 @@ impl ArenaFunctionAnalysis {
     }
 }
 
-/// Check if an operation has nested regions (arena version).
+/// Check if an operation has nested regions.
 fn has_nested_regions(ctx: &IrContext, op: OpRef) -> bool {
     // Shift has handler region, but that's not continuation code
     if arena_cont::Shift::matches(ctx, op) {
@@ -139,7 +137,7 @@ fn has_nested_regions(ctx: &IrContext, op: OpRef) -> bool {
     !ctx.op(op).regions.is_empty()
 }
 
-/// Check if an operation has a shift inside any of its nested regions (arena version).
+/// Check if an operation has a shift inside any of its nested regions.
 fn has_shift_in_nested_region(ctx: &IrContext, op: OpRef) -> bool {
     for &region in &ctx.op(op).regions {
         if region_contains_shift(ctx, region) {
@@ -149,7 +147,7 @@ fn has_shift_in_nested_region(ctx: &IrContext, op: OpRef) -> bool {
     false
 }
 
-/// Check if a region contains any shift operation (arena version).
+/// Check if a region contains any shift operation.
 fn region_contains_shift(ctx: &IrContext, region: RegionRef) -> bool {
     walk::walk_region::<()>(ctx, region, &mut |op| {
         if arena_cont::Shift::matches(ctx, op) {
@@ -161,7 +159,7 @@ fn region_contains_shift(ctx: &IrContext, region: RegionRef) -> bool {
     .is_break()
 }
 
-/// Collect all values used as operands by a slice of operations (arena version).
+/// Collect all values used as operands by a slice of operations.
 /// Recursively traverses nested regions.
 fn collect_used_values(ctx: &IrContext, ops: &[OpRef]) -> HashSet<ValueRef> {
     let mut used = HashSet::new();
@@ -232,7 +230,7 @@ mod tests {
             parent_op: None,
         });
 
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
         assert!(analysis.shift_points.is_empty());
     }
 
@@ -258,7 +256,7 @@ mod tests {
         });
 
         assert!(
-            ArenaFunctionAnalysis::analyze(&ctx, region).is_none(),
+            FunctionAnalysis::analyze(&ctx, region).is_none(),
             "Multi-block functions not supported in Phase 1-2"
         );
     }
@@ -328,7 +326,7 @@ mod tests {
     fn arena_single_shift_point_detected() {
         let (mut ctx, loc) = test_ctx();
         let region = create_single_shift_region(&mut ctx, loc);
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
 
         assert_eq!(analysis.shift_points.len(), 1);
         assert_eq!(analysis.shift_points[0].index, 0);
@@ -339,7 +337,7 @@ mod tests {
     fn arena_single_shift_live_values() {
         let (mut ctx, loc) = test_ctx();
         let region = create_single_shift_region(&mut ctx, loc);
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
 
         let shift = &analysis.shift_points[0];
         assert_eq!(
@@ -435,7 +433,7 @@ mod tests {
     fn arena_dual_shift_points_detected() {
         let (mut ctx, loc) = test_ctx();
         let region = create_dual_shift_region(&mut ctx, loc);
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
 
         assert_eq!(analysis.shift_points.len(), 2);
         assert_eq!(analysis.shift_points[0].index, 0);
@@ -448,7 +446,7 @@ mod tests {
     fn arena_dual_shift_live_values() {
         let (mut ctx, loc) = test_ctx();
         let region = create_dual_shift_region(&mut ctx, loc);
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
 
         // Shift 0: tag_val is defined before and used after (in shift 1)
         assert_eq!(
@@ -469,7 +467,7 @@ mod tests {
     fn arena_continuation_ops_include_subsequent_shifts() {
         let (mut ctx, loc) = test_ctx();
         let region = create_dual_shift_region(&mut ctx, loc);
-        let analysis = ArenaFunctionAnalysis::analyze(&ctx, region).unwrap();
+        let analysis = FunctionAnalysis::analyze(&ctx, region).unwrap();
 
         let first_shift_cont_ops = &analysis.shift_points[0].continuation_ops;
         let has_second_shift = first_shift_cont_ops

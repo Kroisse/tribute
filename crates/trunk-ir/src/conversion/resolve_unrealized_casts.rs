@@ -15,7 +15,7 @@ use crate::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::{Module, TypeConverter};
 use crate::arena::types::Location;
 
-/// Information about an unresolved cast (arena version).
+/// Information about an unresolved cast.
 #[derive(Debug, Clone)]
 pub struct UnresolvedCast {
     /// Location of the cast operation.
@@ -26,7 +26,7 @@ pub struct UnresolvedCast {
     pub to_type: TypeRef,
 }
 
-/// Result of resolving casts in an arena module.
+/// Result of resolving casts in a module.
 #[derive(Debug)]
 pub struct ResolveResult {
     /// Number of casts that were resolved.
@@ -35,7 +35,7 @@ pub struct ResolveResult {
     pub unresolved: Vec<UnresolvedCast>,
 }
 
-/// Resolve all `unrealized_conversion_cast` operations in an arena module.
+/// Resolve all `unrealized_conversion_cast` operations in a module.
 ///
 /// Uses the provided TypeConverter's materialization functions to generate
 /// actual conversion operations. Mutates the module in place.
@@ -45,7 +45,7 @@ pub fn resolve_unrealized_casts(
     tc: &TypeConverter,
 ) -> ResolveResult {
     tracing::debug!("resolve_unrealized_casts: starting resolution");
-    let mut resolver = ArenaCastResolver::new();
+    let mut resolver = CastResolver::new();
 
     let body = match module.body(ctx) {
         Some(r) => r,
@@ -71,13 +71,13 @@ pub fn resolve_unrealized_casts(
     }
 }
 
-/// Internal resolver state for arena IR.
-struct ArenaCastResolver {
+/// Internal resolver state.
+struct CastResolver {
     unresolved: Vec<UnresolvedCast>,
     resolved_count: usize,
 }
 
-impl ArenaCastResolver {
+impl CastResolver {
     fn new() -> Self {
         Self {
             unresolved: Vec::new(),

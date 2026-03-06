@@ -19,7 +19,7 @@ use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::arena::types::Attribute;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 

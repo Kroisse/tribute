@@ -501,7 +501,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     Ok(bytes)
 }
 
-/// Collect all `clif.func` operations from an Module.
+/// Collect all `clif.func` operations from a Module.
 fn collect_clif_funcs(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {

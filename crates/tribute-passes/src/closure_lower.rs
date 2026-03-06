@@ -28,7 +28,7 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{DialectOp, ArenaDialectType};
+use trunk_ir::arena::ops::{ArenaDialectType, DialectOp};
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,

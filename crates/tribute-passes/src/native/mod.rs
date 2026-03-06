@@ -28,7 +28,7 @@ use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, Location};
 use trunk_ir::smallvec::smallvec;
 
 /// Build an extern `func.func` with an unreachable body and `abi = "C"`.

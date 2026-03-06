@@ -194,6 +194,9 @@ impl RewritePattern for NormalizeCallIndirectPattern {
 
         let loc = ctx.op(op).location;
         let operands = ctx.op_operands(op).to_vec();
+        if operands.is_empty() {
+            return false;
+        }
         let callee = operands[0];
         let args: Vec<_> = operands[1..].to_vec();
 

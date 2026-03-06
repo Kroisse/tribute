@@ -258,8 +258,8 @@ impl Default for PathInterner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::IrContext;
     use crate::Symbol;
+    use crate::arena::IrContext;
 
     #[test]
     fn type_interner_dedup() {

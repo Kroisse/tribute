@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::live_vars::ArenaFunctionAnalysis;
+use crate::live_vars::FunctionAnalysis;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
@@ -51,7 +51,7 @@ fn analyze_shift_points_in_region(
                 if effectful_funcs.contains(&func_name) {
                     // Analyze this effectful function
                     let body = func.body(ctx);
-                    if let Some(func_analysis) = ArenaFunctionAnalysis::analyze(ctx, body) {
+                    if let Some(func_analysis) = FunctionAnalysis::analyze(ctx, body) {
                         let total_shifts = func_analysis.shift_points.len();
                         for shift_point in func_analysis.shift_points {
                             let span = ctx.op(shift_point.shift_op).location.span;
