@@ -44,9 +44,7 @@ fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let anyref_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build());
+    let anyref_ty = tribute_rt::any(ctx).as_type_ref();
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(i32_ty)
@@ -54,32 +52,6 @@ fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
             .attr("name", ArenaAttribute::Symbol(Symbol::new("_closure")))
             .build(),
     )
-}
-
-/// Create an `i32` type ref in arena.
-fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
-}
-
-/// Create a `tribute_rt.any` (anyref) type ref in arena.
-fn anyref_type_ref(ctx: &mut IrContext) -> TypeRef {
-    tribute_rt::any(ctx).as_type_ref()
-}
-
-/// Check if a TypeRef is a closure.closure type.
-fn is_closure_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    arena_closure::Closure::matches(ctx, ty)
-}
-
-/// Check if a TypeRef is a core.func type.
-fn is_core_func_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    arena_core::Func::matches(ctx, ty)
-}
-
-/// Check if a TypeRef is a cont.continuation type.
-fn is_continuation_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    arena_cont::Continuation::matches(ctx, ty)
 }
 
 /// Check if a TypeRef is an adt.struct with name "_closure".
@@ -94,22 +66,11 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     )
 }
 
-/// Extract the inner func type from a closure.closure TypeRef.
-fn extract_closure_func_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    let closure = arena_closure::Closure::from_type_ref(ctx, ty)?;
-    Some(closure.func_type(ctx))
-}
-
-/// Get the type of an arena value.
-fn arena_value_type(ctx: &IrContext, value: ValueRef) -> TypeRef {
-    ctx.value_ty(value)
-}
-
 /// Check if an arena value is a closure value (for pre-lowering collection).
 fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
     use trunk_ir::arena::refs::ValueDef as ArenaValueDef;
 
-    let ty = arena_value_type(ctx, value);
+    let ty = ctx.value_ty(value);
 
     // Direct check for closure.new result
     if let ArenaValueDef::OpResult(op, _) = ctx.value_def(value)
@@ -119,17 +80,17 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
     }
 
     // Check type
-    if is_closure_type_ref(ctx, ty) {
+    if arena_closure::Closure::matches(ctx, ty) {
         return true;
     }
-    if is_core_func_type_ref(ctx, ty) {
+    if arena_core::Func::matches(ctx, ty) {
         // Only treat core.func as closure if it's a block arg (matching LowerClosureCallArena)
         return matches!(
             ctx.value_def(value),
             trunk_ir::arena::refs::ValueDef::BlockArg(_, _)
         );
     }
-    if is_continuation_type_ref(ctx, ty) {
+    if arena_cont::Continuation::matches(ctx, ty) {
         return true;
     }
     false
@@ -226,7 +187,7 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
         new_params.push(params[0]); // return type
 
         for &param_ty in &params[1..] {
-            if is_core_func_type_ref(ctx, param_ty) {
+            if arena_core::Func::matches(ctx, param_ty) {
                 // Convert core.func to closure.closure wrapping the func type
                 let closure_ty = arena_closure::closure(ctx, param_ty).as_type_ref();
                 new_params.push(closure_ty);
@@ -283,7 +244,8 @@ impl ArenaRewritePattern for LowerClosureNewArena {
 
         // Extract function type from closure.closure result type
         let result_ty = ctx.op_result_types(op)[0];
-        let func_ty = extract_closure_func_type(ctx, result_ty)
+        let func_ty = arena_closure::Closure::from_type_ref(ctx, result_ty)
+            .map(|c| c.func_type(ctx))
             .expect("closure.new result type must contain a valid func type (from func.constant)");
 
         // Generate: %funcref = func.constant @func_ref : func_type
@@ -324,15 +286,15 @@ impl ArenaRewritePattern for LowerClosureCallArena {
             return false;
         }
         let callee = operands[0];
-        let callee_ty = arena_value_type(ctx, callee);
+        let callee_ty = ctx.value_ty(callee);
 
         // Determine if callee is a closure
-        let callee_is_closure = if is_closure_type_ref(ctx, callee_ty) {
+        let callee_is_closure = if arena_closure::Closure::matches(ctx, callee_ty) {
             true
         } else if is_closure_struct_type_ref(ctx, callee_ty) {
             // Already lowered closure struct
             true
-        } else if is_core_func_type_ref(ctx, callee_ty) {
+        } else if arena_core::Func::matches(ctx, callee_ty) {
             // core.func: only treat as closure if it's a block arg
             matches!(
                 ctx.value_def(callee),
@@ -355,8 +317,10 @@ impl ArenaRewritePattern for LowerClosureCallArena {
         let args: Vec<ValueRef> = operands[1..].to_vec();
         let result_ty = ctx.op_result_types(op)[0];
 
-        let i32_ty = i32_type_ref(ctx);
-        let anyref_ty = anyref_type_ref(ctx);
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+        let anyref_ty = tribute_rt::any(ctx).as_type_ref();
 
         // Generate: %table_idx = closure.func %closure
         let table_idx_op = arena_closure::func(ctx, loc, callee, i32_ty);
@@ -398,7 +362,9 @@ impl ArenaRewritePattern for LowerClosureFuncArena {
 
         let loc = ctx.op(op).location;
         let closure_value = ctx.op_operands(op)[0];
-        let i32_ty = i32_type_ref(ctx);
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let struct_ty = closure_struct_type_ref(ctx);
 
         let get_op = arena_adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);

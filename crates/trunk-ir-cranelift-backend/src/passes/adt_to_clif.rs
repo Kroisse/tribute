@@ -30,6 +30,7 @@ use crate::adt_layout::{
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
@@ -74,11 +75,6 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
 fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build())
-}
-
-fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
 }
 
 struct StructGetPattern;
@@ -320,7 +316,7 @@ impl ArenaRewritePattern for RefNullPattern {
             return false;
         }
         let loc = ctx.op(op).location;
-        let ptr_ty = intern_ptr_type(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
         let iconst_op = arena_clif::iconst(ctx, loc, ptr_ty, 0);
         rewriter.replace_op(iconst_op.op_ref());
         true
@@ -359,7 +355,7 @@ impl ArenaRewritePattern for RefIsNullPattern {
         };
 
         let loc = ctx.op(op).location;
-        let ptr_ty = intern_ptr_type(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
         let i1_ty = intern_i1_type(ctx);
         let ref_val = ref_is_null.r#ref(ctx);
 

@@ -79,14 +79,6 @@ fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
-fn nil_type_ref(ctx: &mut IrContext) -> TypeRef {
-    arena_core::nil(ctx).as_type_ref()
-}
-
-fn prompt_tag_type_ref(ctx: &mut IrContext) -> TypeRef {
-    arena_cont::prompt_tag(ctx).as_type_ref()
-}
-
 // ============================================================================
 // Analysis helpers
 // ============================================================================
@@ -654,7 +646,7 @@ fn transform_shifts_in_block(
 
             // Generate evidence_extend calls for each ability
             let i32_ty = i32_type_ref(ctx);
-            let prompt_tag_ty = prompt_tag_type_ref(ctx);
+            let prompt_tag_ty = arena_cont::prompt_tag(ctx).as_type_ref();
             let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
             let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
@@ -747,7 +739,7 @@ fn transform_shifts_in_block(
 
             let marker_ty = arena_ability::marker_adt_type_ref(ctx);
             let i32_ty = i32_type_ref(ctx);
-            let prompt_tag_ty = prompt_tag_type_ref(ctx);
+            let prompt_tag_ty = arena_cont::prompt_tag(ctx).as_type_ref();
 
             // %ability_id_const = arith.const ability_id
             let ability_id_const =
@@ -776,7 +768,7 @@ fn transform_shifts_in_block(
                 .op_result_types(op)
                 .first()
                 .copied()
-                .unwrap_or_else(|| nil_type_ref(ctx));
+                .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
 
             // Transform handler region
             let handler_region = shift_op.handler(ctx);
@@ -832,7 +824,7 @@ fn transform_shifts_in_block(
                         .op_result_types(op)
                         .first()
                         .copied()
-                        .unwrap_or_else(|| nil_type_ref(ctx));
+                        .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
 
                     let new_args = if prepend_evidence {
                         // Handler root: evidence_calls couldn't add evidence,
@@ -874,7 +866,7 @@ fn transform_shifts_in_block(
                         .op_result_types(op)
                         .first()
                         .copied()
-                        .unwrap_or_else(|| nil_type_ref(ctx));
+                        .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
                     let table_idx = current_operands[0];
                     let mut new_args = vec![ev_value];
                     new_args.extend(current_operands[2..].iter().copied());

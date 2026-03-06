@@ -55,7 +55,7 @@ impl ArenaRewritePattern for ScfIfPattern {
         let result_ty = result_types
             .first()
             .copied()
-            .unwrap_or_else(|| intern_nil_type(ctx));
+            .unwrap_or_else(|| trunk_ir::arena::dialect::core::nil(ctx).as_type_ref());
 
         // Get the condition operand
         let cond = scf_if_op.cond(ctx);
@@ -101,7 +101,7 @@ impl ArenaRewritePattern for ScfLoopPattern {
         let result_ty = result_types
             .first()
             .copied()
-            .unwrap_or_else(|| intern_nil_type(ctx));
+            .unwrap_or_else(|| trunk_ir::arena::dialect::core::nil(ctx).as_type_ref());
 
         // Get init operands
         let init: Vec<_> = loop_op.init(ctx).to_vec();
@@ -266,11 +266,3 @@ impl ArenaRewritePattern for ScfBreakPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Intern a core.nil type.
-fn intern_nil_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
-    use trunk_ir::ir::Symbol;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
-}

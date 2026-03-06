@@ -295,7 +295,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     ctx.push_op(body_block, high_init.op_ref());
 
     // Build the search loop
-    let nil_ty = intern_nil(ctx);
+    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
     let loop_region = build_lookup_loop_body(ctx, location, ev_val, target_id_val, i32_ty);
     let loop_op = arena_wasm::r#loop(ctx, location, [], nil_ty, loop_region);
     ctx.push_op(body_block, loop_op.op_ref());
@@ -328,7 +328,7 @@ fn build_lookup_loop_body(
     target_id_val: ValueRef,
     i32_ty: TypeRef,
 ) -> RegionRef {
-    let nil_ty = intern_nil(ctx);
+    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
     let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
@@ -549,7 +549,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let ev_val = ctx.block_arg(body_block, 0);
     let marker_val = ctx.block_arg(body_block, 1);
 
-    let nil_ty = intern_nil(ctx);
+    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
 
     // Get marker's ability_id for binary search
     let marker_id_op = arena_wasm::struct_get(ctx, location, marker_val, i32_ty, MARKER_IDX, 0);
@@ -768,7 +768,7 @@ fn build_extend_search_loop(
     marker_id: ValueRef,
     i32_ty: TypeRef,
 ) -> RegionRef {
-    let nil_ty = intern_nil(ctx);
+    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
     let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
@@ -883,8 +883,7 @@ fn build_extend_search_loop(
 
 /// Get the WASM reference type for Evidence (wasm.arrayref).
 fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("arrayref")).build())
+    trunk_ir::arena::dialect::wasm::arrayref(ctx).as_type_ref()
 }
 
 /// Intern a `core.i32` type.
@@ -893,19 +892,9 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
-/// Intern a `core.nil` type.
-fn intern_nil(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
-}
-
 /// Intern a `core.func` type with the given parameter and return types.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(ret);
-    for &p in params {
-        builder = builder.param(p);
-    }
-    ctx.types.intern(builder.build())
+    trunk_ir::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
 }
 
 /// Compute a stable ability ID hash from an ability type reference.

@@ -42,16 +42,6 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
 }
 
-fn i31ref_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("i31ref")).build())
-}
-
-fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref")).build())
-}
-
 /// Get the BoxedF64 struct type: `adt.struct(f64, name="_BoxedF64")`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
@@ -73,7 +63,7 @@ fn create_i31_unbox(
     value: ValueRef,
     is_signed: bool,
 ) -> (Vec<OpRef>, OpRef) {
-    let i31ref_ty = i31ref_type(ctx);
+    let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
     let i32_ty = i32_type(ctx);
 
     // Cast anyref to i31ref first (abstract type, no type_idx needed)
@@ -123,7 +113,7 @@ impl ArenaRewritePattern for BoxIntPattern {
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
 
-        let i31ref_ty = i31ref_type(ctx);
+        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
 
         // wasm.ref_i31: i32 -> i31ref
         let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
@@ -185,7 +175,7 @@ impl ArenaRewritePattern for BoxNatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = i31ref_type(ctx);
+        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
 
         let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
         rewriter.replace_op(new_op.op_ref());
@@ -246,7 +236,7 @@ impl ArenaRewritePattern for BoxFloatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let anyref_ty = anyref_type(ctx);
+        let anyref_ty = arena_wasm::anyref(ctx).as_type_ref();
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         // adt.struct_new creates BoxedF64 struct with the f64 value
@@ -318,7 +308,7 @@ impl ArenaRewritePattern for BoxBoolPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = i31ref_type(ctx);
+        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
 
         let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
         rewriter.replace_op(new_op.op_ref());
