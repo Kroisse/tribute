@@ -17,8 +17,8 @@ use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
-    CLOSURE_STRUCT_IDX, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
-    GcTypeRegistry, MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
+    self, CLOSURE_STRUCT_IDX, CONTINUATION_IDX, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef,
+    MARKER_IDX, RESUME_WRAPPER_IDX, STEP_IDX,
 };
 use crate::{CompilationError, CompilationResult};
 
@@ -1115,8 +1115,8 @@ pub(crate) fn collect_gc_types(
         }
     }
 
-    // Combine builtin types (from GcTypeRegistry) with user-defined types
-    let mut result = GcTypeRegistry::builtin_types();
+    // Combine builtin types with user-defined types
+    let mut result = gc_types::builtin_types();
     result.extend(user_types);
 
     Ok((result, type_idx_by_type, placeholder_struct_type_idx))
