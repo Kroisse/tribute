@@ -12,6 +12,8 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 /// Context for lowering CST to AST.
 pub struct AstLoweringCtx {
     pub source: Rope,
+    /// Source hash for distinguishing parse sessions (derived from source URI).
+    source_hash: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
     /// Diagnostics collected during lowering.
@@ -20,9 +22,13 @@ pub struct AstLoweringCtx {
 
 impl AstLoweringCtx {
     /// Create a new lowering context.
-    pub fn new(source: Rope) -> Self {
+    ///
+    /// `source_hash` distinguishes parse sessions (derived from source URI via
+    /// [`crate::ast::node_id::source_hash`]).
+    pub fn new(source: Rope, source_hash: u64) -> Self {
         Self {
             source,
+            source_hash,
             span_builder: SpanMapBuilder::new(),
             diagnostics: Vec::new(),
         }
@@ -34,7 +40,7 @@ impl AstLoweringCtx {
     /// given a byte offset, Tree-sitter can find the CST node, and if
     /// that node's ID is in the SpanMap, it corresponds to an AST node.
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
-        let id = NodeId::from_cst(node);
+        let id = NodeId::from_cst(node, self.source_hash);
         let span = Span::new(node.start_byte(), node.end_byte());
         self.span_builder.insert(id, span);
         id
