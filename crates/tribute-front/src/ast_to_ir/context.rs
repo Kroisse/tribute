@@ -55,9 +55,7 @@ pub struct IrLoweringCtx<'db> {
     /// Stack of active prompt tags for nested handlers.
     /// The top of the stack is the currently active prompt tag.
     active_prompt_tag_stack: Vec<u32>,
-    /// Track IR types of SSA values for cast insertion.
-    /// Maps each generated Value to its IR type.
-    value_types: HashMap<ValueRef, TypeRef>,
+
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
@@ -87,7 +85,7 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: im::HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
-            value_types: HashMap::new(),
+
             node_types,
         }
     }
@@ -259,20 +257,6 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Named { name, .. } => self.get_type(*name),
             _ => None,
         }
-    }
-
-    /// Track the IR type of a generated SSA value.
-    ///
-    /// This is used by `cast_if_needed` to determine if a cast is required.
-    pub fn track_value_type(&mut self, value: ValueRef, ty: TypeRef) {
-        self.value_types.insert(value, ty);
-    }
-
-    /// Get the tracked IR type of a value.
-    ///
-    /// Returns `None` if the value's type was not tracked.
-    pub fn get_value_type(&self, value: ValueRef) -> Option<TypeRef> {
-        self.value_types.get(&value).copied()
     }
 
     /// Get the type of an AST node by NodeId.

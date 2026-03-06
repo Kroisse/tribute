@@ -205,8 +205,6 @@ fn lower_function<'db>(
             (p, r, None)
         };
 
-    let param_ir_types_for_tracking = param_ir_types.clone();
-
     // Create entry block with parameter args
     let block_args: Vec<BlockArgData> = param_ir_types
         .iter()
@@ -235,9 +233,6 @@ fn lower_function<'db>(
         if let Some(local_id) = param.local_id {
             let arg_val = ir.block_arg(entry_block, i as u32);
             ctx.bind(local_id, param.name, arg_val);
-            if i < param_ir_types_for_tracking.len() {
-                ctx.track_value_type(arg_val, param_ir_types_for_tracking[i]);
-            }
         }
     }
 

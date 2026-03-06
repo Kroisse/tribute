@@ -38,7 +38,7 @@ pub(super) fn lower_expr<'db>(
             );
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, i32_ty);
+
             Some(result)
         }
 
@@ -53,7 +53,7 @@ pub(super) fn lower_expr<'db>(
             );
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, i32_ty);
+
             Some(result)
         }
 
@@ -67,7 +67,7 @@ pub(super) fn lower_expr<'db>(
             );
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, i32_ty);
+
             Some(result)
         }
 
@@ -81,7 +81,7 @@ pub(super) fn lower_expr<'db>(
             );
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, f64_ty);
+
             Some(result)
         }
 
@@ -90,7 +90,7 @@ pub(super) fn lower_expr<'db>(
             let op = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(b));
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, bool_ty);
+
             Some(result)
         }
 
@@ -99,7 +99,7 @@ pub(super) fn lower_expr<'db>(
             let op = adt::string_const(builder.ir, location, string_ty, s.clone());
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, string_ty);
+
             Some(result)
         }
 
@@ -115,7 +115,7 @@ pub(super) fn lower_expr<'db>(
                 let op = func::constant(builder.ir, location, func_ty, func_name);
                 builder.ir.push_op(builder.block, op.op_ref());
                 let result = op.result(builder.ir);
-                builder.ctx.track_value_type(result, func_ty);
+
                 Some(result)
             }
             ResolvedRef::Constructor { variant, .. } => {
@@ -126,7 +126,7 @@ pub(super) fn lower_expr<'db>(
                         let op = func::constant(builder.ir, location, func_ty, *variant);
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
-                        builder.ctx.track_value_type(result, func_ty);
+
                         Some(result)
                     }
                     _ => {
@@ -144,7 +144,7 @@ pub(super) fn lower_expr<'db>(
                         );
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
-                        builder.ctx.track_value_type(result, result_ty);
+
                         Some(result)
                     }
                 }
@@ -215,7 +215,7 @@ pub(super) fn lower_expr<'db>(
                             func::call(builder.ir, location, arg_values, result_ty, callee_name);
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
-                        builder.ctx.track_value_type(result, result_ty);
+
                         Some(result)
                     }
                     ResolvedRef::Local { id, .. } => {
@@ -242,7 +242,7 @@ pub(super) fn lower_expr<'db>(
                             );
                             builder.ir.push_op(builder.block, op.op_ref());
                             let result = op.result(builder.ir);
-                            builder.ctx.track_value_type(result, result_ty);
+
                             Some(result)
                         } else {
                             // Regular call_indirect for closures
@@ -266,7 +266,7 @@ pub(super) fn lower_expr<'db>(
                             );
                             builder.ir.push_op(builder.block, op.op_ref());
                             let result = op.result(builder.ir);
-                            builder.ctx.track_value_type(result, result_ty);
+
                             Some(result)
                         }
                     }
@@ -279,7 +279,7 @@ pub(super) fn lower_expr<'db>(
                         );
                         builder.ir.push_op(builder.block, op.op_ref());
                         let result = op.result(builder.ir);
-                        builder.ctx.track_value_type(result, result_ty);
+
                         Some(result)
                     }
                     ResolvedRef::AbilityOp { ability, op } => {
@@ -310,7 +310,7 @@ pub(super) fn lower_expr<'db>(
                     );
                     builder.ir.push_op(builder.block, op.op_ref());
                     let result = op.result(builder.ir);
-                    builder.ctx.track_value_type(result, result_ty);
+
                     Some(result)
                 }
             }
@@ -328,7 +328,7 @@ pub(super) fn lower_expr<'db>(
                     );
                     builder.ir.push_op(builder.block, op.op_ref());
                     let result = op.result(builder.ir);
-                    builder.ctx.track_value_type(result, result_ty);
+
                     Some(result)
                 }
                 _ => builder.emit_unsupported(location, "non-constructor in Cons"),
@@ -352,7 +352,7 @@ pub(super) fn lower_expr<'db>(
             let op = adt::struct_new(builder.ir, location, values, result_ty, type_attr);
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
-            builder.ctx.track_value_type(result, result_ty);
+
             Some(result)
         }
 
@@ -443,7 +443,9 @@ pub(super) fn lower_expr<'db>(
 
             let op = adt::struct_new(builder.ir, location, ordered_values, struct_ty, type_attr);
             builder.ir.push_op(builder.block, op.op_ref());
-            Some(op.result(builder.ir))
+            let result = op.result(builder.ir);
+
+            Some(result)
         }
 
         ExprKind::MethodCall { .. } => {
