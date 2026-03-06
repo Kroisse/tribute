@@ -45,6 +45,7 @@ use std::collections::{BTreeMap, HashSet};
 use tribute_ir::arena::dialect::ability as arena_ability;
 use tribute_ir::dialect::ability;
 use trunk_ir::arena::context::{BlockArgData, IrContext};
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
@@ -352,10 +353,10 @@ impl ArenaRewritePattern for TransformEvidenceCallPattern {
         let mut new_args = vec![ev_value];
         new_args.extend(old_args.iter().copied());
 
-        let result_ty = result_types.first().copied().unwrap_or_else(|| {
-            ctx.types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
-        });
+        let result_ty = result_types
+            .first()
+            .copied()
+            .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
 
         let new_call = arena_func::call(ctx, loc, new_args, result_ty, callee);
         rewriter.replace_op(new_call.op_ref());

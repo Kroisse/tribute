@@ -3,7 +3,7 @@
 #[crate::arena_dialect(crate = crate)]
 mod cont {
     // Types
-    struct Continuation<Arg, Result>;
+    struct Continuation<Arg, Result, Effect>;
     struct PromptTag;
 
     #[attr(tag: any)]

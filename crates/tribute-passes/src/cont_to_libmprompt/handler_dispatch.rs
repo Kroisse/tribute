@@ -235,9 +235,7 @@ fn build_shift_branch(
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
 
     let block = ctx.create_block(BlockData {
         location: loc,

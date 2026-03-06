@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
@@ -353,9 +354,7 @@ impl ArenaRewritePattern for PrintLinePattern {
 
         // Emit all operations
         let result_types = ctx.op_result_types(op).to_vec();
-        let nil_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
         if result_types.is_empty() || (result_types.len() == 1 && result_types[0] == nil_ty) {
             // Void: emit operations and drop the fd_write result
             rewriter.insert_op(fd_const.op_ref());

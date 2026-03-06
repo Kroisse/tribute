@@ -338,25 +338,21 @@ impl<'a> ArenaIrBuilder<'a> {
                 .return_type
                 .as_ref()
                 .map(|t| self.build_type(t))
-                .unwrap_or_else(|| {
-                    self.ctx.types.intern(
-                        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build(),
-                    )
-                });
+                .unwrap_or_else(|| crate::arena::dialect::core::nil(self.ctx).as_type_ref());
 
-            let mut func_type_builder =
-                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(return_ty);
-            for (_, raw_ty) in &raw.func_params {
-                let param_ty = self.build_type(raw_ty);
-                func_type_builder = func_type_builder.param(param_ty);
-            }
-            if let Some(effect_raw) = &raw.effect_type {
-                let effect_ty = self.build_type(effect_raw);
-                func_type_builder =
-                    func_type_builder.attr(Symbol::new("effect"), Attribute::Type(effect_ty));
-            }
+            let param_types: Vec<TypeRef> = raw
+                .func_params
+                .iter()
+                .map(|(_, raw_ty)| self.build_type(raw_ty))
+                .collect();
+            let effect_ty = raw
+                .effect_type
+                .as_ref()
+                .map(|effect_raw| self.build_type(effect_raw));
 
-            let func_ty = self.ctx.types.intern(func_type_builder.build());
+            let func_ty =
+                crate::arena::dialect::core::func(self.ctx, return_ty, param_types, effect_ty)
+                    .as_type_ref();
             attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
         }
 
@@ -532,17 +528,11 @@ mod tests {
     }
 
     fn make_nil_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+        core::nil(ctx).as_type_ref()
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     fn make_func_type_with_effect(
@@ -551,13 +541,7 @@ mod tests {
         ret: TypeRef,
         effect: TypeRef,
     ) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .attr(Symbol::new("effect"), Attribute::Type(effect))
-                .build(),
-        )
+        core::func(ctx, ret, params.iter().copied(), Some(effect)).as_type_ref()
     }
 
     fn wrap_in_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> OpRef {

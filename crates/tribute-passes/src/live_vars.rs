@@ -634,7 +634,7 @@ mod tests {
         use super::*;
         use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
         use trunk_ir::arena::dialect::{
-            arith as arena_arith, cont as arena_cont, func as arena_func,
+            arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
         };
         use trunk_ir::arena::ops::ArenaDialectOp;
         use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
@@ -654,14 +654,11 @@ mod tests {
         }
 
         fn nil_type(ctx: &mut IrContext) -> TypeRef {
-            ctx.types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+            arena_core::nil(ctx).as_type_ref()
         }
 
         fn prompt_tag_type(ctx: &mut IrContext) -> TypeRef {
-            ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build(),
-            )
+            arena_cont::prompt_tag(ctx).as_type_ref()
         }
 
         fn ability_ref_type(ctx: &mut IrContext) -> TypeRef {

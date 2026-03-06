@@ -17,9 +17,9 @@
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::TypeDataBuilder;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::rewrite::ArenaModule;
 use trunk_ir::arena::rewrite::helpers::erase_op;
@@ -59,9 +59,7 @@ fn rewrite_region(ctx: &mut IrContext, region: RegionRef, cont_values: &mut Hash
 }
 
 fn rewrite_block(ctx: &mut IrContext, block: BlockRef, cont_values: &mut HashSet<ValueRef>) {
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let mut ops_to_erase: Vec<OpRef> = Vec::new();

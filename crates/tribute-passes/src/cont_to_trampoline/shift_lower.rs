@@ -95,8 +95,7 @@ pub(crate) fn anyref_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Helper to intern the step type.
 pub(crate) fn step_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("trampoline"), Symbol::new("step")).build())
+    arena_trampoline::step(ctx).as_type_ref()
 }
 
 /// Helper to intern the continuation type.

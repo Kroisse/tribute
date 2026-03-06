@@ -52,9 +52,7 @@ impl ArenaRewritePattern for LowerPushPromptPattern {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let ptr_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
         let tag = push_prompt.tag(ctx);
         let body = push_prompt.body(ctx);
@@ -255,9 +253,7 @@ fn generate_outlined_body(
     use super::handler_dispatch::clone_op_into_block_with_remap;
     use std::collections::HashMap;
 
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());

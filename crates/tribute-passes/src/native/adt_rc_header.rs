@@ -23,6 +23,7 @@ use trunk_ir::adt_layout::{
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt;
 use trunk_ir::arena::dialect::clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
@@ -43,9 +44,7 @@ pub fn lower(
     rtti_map: &HashMap<TypeRef, u32>,
 ) {
     // Pre-intern types
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());

@@ -18,7 +18,7 @@ use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
 use trunk_ir::ir::Symbol;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
@@ -484,9 +484,7 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
 /// 2. struct_new operations have type_idx attribute set
 /// 3. struct_get operations have correct type_idx and result types
 pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
-    let structref_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("structref")).build());
+    let structref_ty = arena_wasm::structref(ctx).as_type_ref();
 
     // Phase 1: Collect all struct types and assign type_idx
     let registry = collect_struct_types(ctx, module, structref_ty);

@@ -24,7 +24,8 @@
 
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::{
-    adt as arena_adt, func as arena_func, trampoline as arena_trampoline, wasm as arena_wasm,
+    adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
+    wasm as arena_wasm,
 };
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
@@ -1075,12 +1076,17 @@ impl ArenaRewritePattern for ConvertFuncTypePattern {
         }
 
         // Build new function type preserving effect attribute
-        let mut builder =
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).params(new_params);
-        if let Some(eff) = effect_attr {
-            builder = builder.attr("effect", eff);
-        }
-        let new_func_ty = ctx.types.intern(builder.build());
+        let effect_ty = effect_attr.and_then(|eff| match eff {
+            ArenaAttribute::Type(ty) => Some(ty),
+            _ => None,
+        });
+        let new_func_ty = arena_core::func(
+            ctx,
+            new_params[0],
+            new_params[1..].iter().copied(),
+            effect_ty,
+        )
+        .as_type_ref();
 
         // Update block arguments in the entry block to match new param types
         let body = func_op.body(ctx);

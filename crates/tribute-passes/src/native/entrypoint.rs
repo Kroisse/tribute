@@ -7,6 +7,7 @@
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
@@ -88,9 +89,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
 
     let tribute_main_return_ty = main_return_ty.unwrap_or(nil_ty);
 
@@ -281,8 +280,7 @@ mod tests {
     }
 
     fn arena_nil_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+        arena_core::nil(ctx).as_type_ref()
     }
 
     /// Build an arena module with a single main function returning i32.
