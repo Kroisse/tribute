@@ -73,7 +73,6 @@ use trunk_ir::arena::{ArenaModule, IrContext};
 use trunk_ir::conversion::resolve_unrealized_casts_arena;
 use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
-use trunk_ir::transforms::eliminate_dead_functions;
 
 // =============================================================================
 // Compilation configuration
@@ -382,103 +381,6 @@ pub fn stage_evidence_params<'db>(
     })
 }
 
-/// Continuation to Trampoline Lowering.
-///
-/// This pass transforms continuation operations to trampoline operations:
-/// - `cont.shift` → `trampoline.build_state` + `trampoline.build_continuation` + etc.
-/// - `cont.resume` → `trampoline.reset_yield_state` + `trampoline.continuation_get` + call
-/// - `cont.done` / `cont.suspend` → consumed by handler_dispatch lowering
-///
-/// This is a backend-agnostic pass that prepares continuation operations for
-/// the trampoline (yield-bubbling) implementation strategy.
-///
-/// Returns an error if any `cont.*` operations (except `cont.drop`) remain after conversion.
-fn stage_cont_to_trampoline<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Result<Module<'db>, ConversionError> {
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    lower_cont_to_trampoline(&mut ctx, arena_module).map_err(|illegal_ops| ConversionError {
-        illegal_ops: illegal_ops
-            .into_iter()
-            .map(|op| trunk_ir::rewrite::IllegalOp {
-                dialect: op.dialect.to_string(),
-                name: op.name.to_string(),
-            })
-            .collect(),
-    })?;
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    Ok(Module::from_operation(db, exported).unwrap())
-}
-
-/// Continuation to libmprompt Lowering (native backend).
-///
-/// This pass transforms continuation operations to libmprompt FFI calls:
-/// - `cont.push_prompt` → body outlining + `__tribute_prompt` call
-/// - `cont.handler_dispatch` → `scf.loop` with yield state polling
-/// - `cont.shift` → `__tribute_yield`
-/// - `cont.resume` → `__tribute_resume`
-/// - `cont.drop` → `__tribute_resume_drop`
-///
-/// Returns an error if any `cont.*` operations remain after conversion.
-fn stage_cont_to_libmprompt<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    with_arena_session(db, module, |ctx, m| {
-        tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
-    })
-}
-
-/// Evidence to Native Lowering.
-///
-/// Replaces evidence runtime function stubs with extern declarations for
-/// the native runtime, rewrites empty evidence creation and extend call sites.
-#[salsa::tracked]
-fn stage_evidence_to_native<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    with_arena_session(db, module, |ctx, m| {
-        tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
-    })
-}
-
-/// Dead Code Elimination (DCE).
-///
-/// This pass removes unreachable function definitions from the module.
-/// Entry points include:
-/// - Functions named "main" or "_start"
-/// - Functions referenced by `wasm.export_func` (for wasm target)
-#[salsa::tracked]
-fn stage_dce<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    let result = eliminate_dead_functions(db, module);
-    if result.removed_count > 0 {
-        tracing::debug!(
-            "DCE removed {} functions: {:?}",
-            result.removed_count,
-            result.removed_functions
-        );
-    }
-    result.module
-}
-
-/// Resolve unrealized conversion casts.
-///
-/// This pass eliminates `core.unrealized_conversion_cast` operations that may
-/// have been inserted during earlier passes (e.g., handler lowering, trampoline
-/// conversion). It uses the generic type converter for target-agnostic type
-/// materializations.
-///
-/// Casts that cannot be resolved with the generic converter will be left for
-/// backend-specific converters to handle.
-fn stage_resolve_casts<'db>(db: &'db dyn salsa::Database, module: Module<'db>) -> Module<'db> {
-    with_arena_session(db, module, |ctx, arena_module| {
-        let tc = generic_type_converter_arena(ctx);
-        let result = resolve_unrealized_casts_arena(ctx, arena_module, &tc);
-        // Unresolved casts are left for backend-specific converters to handle.
-        tracing::debug!(
-            "stage_resolve_casts: resolved={}, unresolved={}",
-            result.resolved_count,
-            result.unresolved.len()
-        );
-    })
-}
-
 /// Compile a TrunkIR module to WebAssembly binary.
 ///
 /// Runs all WASM backend passes in a single arena session:
@@ -612,30 +514,30 @@ pub fn run_through_closure_lower<'db>(
 // Full Pipeline (Orchestration)
 // =============================================================================
 
-/// Run the shared middle-end pipeline (backend-independent).
+/// Run the shared middle-end pipeline (backend-independent) in an arena session.
 ///
 /// Runs all four arena passes (evidence_params, closure_lower, evidence_calls,
 /// resolve_evidence) in a **single arena session**, avoiding 4 separate
 /// Salsa↔Arena round-trips.
 ///
-/// This produces a module with `cont.*` operations that backend-specific
-/// pipelines then lower.
-#[salsa::tracked]
-fn run_shared_pipeline<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
-        return empty_module(db, source);
-    };
+/// Returns the arena session so that backend-specific pipelines can continue
+/// without a Salsa↔Arena round-trip.
+fn run_shared_pipeline_arena(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Option<(IrContext, ArenaModule)> {
+    let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
 
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
     tribute_passes::resolve_evidence::resolve_evidence_dispatch(&mut ctx, m);
 
-    let exported = export_to_salsa(db, &ctx, m);
-    Module::from_operation(db, exported).unwrap()
+    Some((ctx, m))
 }
 
-/// Run the WASM pipeline: shared passes + cont_to_trampoline + DCE + resolve_casts.
+/// Run the WASM pipeline in a single arena session:
+/// shared passes + cont_to_trampoline + DCE + resolve_casts.
 ///
 /// This produces a module ready for WASM backend lowering (trampoline-based
 /// continuation implementation).
@@ -644,56 +546,47 @@ pub fn run_wasm_pipeline<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    let module = run_shared_pipeline(db, source);
-
-    // DEBUG: List all functions before cont_to_trampoline
-    {
-        use trunk_ir::DialectOp;
-        use trunk_ir::dialect::func;
-        let body = module.body(db);
-        let mut func_names = Vec::new();
-        for block in body.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                if let Ok(f) = func::Func::from_operation(db, *op) {
-                    func_names.push(format!("{}", f.sym_name(db)));
-                }
-            }
-        }
-        tracing::debug!(
-            "Before cont_to_trampoline: {} functions: {:?}",
-            func_names.len(),
-            func_names
-        );
-    }
+    let Some((mut ctx, m)) = run_shared_pipeline_arena(db, source) else {
+        return Ok(empty_module(db, source));
+    };
 
     // Continuation lowering (trampoline/yield-bubbling strategy for WASM)
-    let module = stage_cont_to_trampoline(db, module)?;
+    lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
+        illegal_ops: illegal_ops
+            .into_iter()
+            .map(|op| trunk_ir::rewrite::IllegalOp {
+                dialect: op.dialect.to_string(),
+                name: op.name.to_string(),
+            })
+            .collect(),
+    })?;
 
-    // DEBUG: List all functions before DCE
-    {
-        use trunk_ir::DialectOp;
-        use trunk_ir::dialect::func;
-        let body = module.body(db);
-        let mut func_names = Vec::new();
-        for block in body.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                if let Ok(f) = func::Func::from_operation(db, *op) {
-                    func_names.push(format!("{}", f.sym_name(db)));
-                }
-            }
-        }
+    // Dead code elimination
+    let dce_result = trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
+    if dce_result.removed_count > 0 {
         tracing::debug!(
-            "Before DCE: {} functions: {:?}",
-            func_names.len(),
-            func_names
+            "DCE removed {} functions: {:?}",
+            dce_result.removed_count,
+            dce_result.removed_functions
         );
     }
 
-    let module = stage_dce(db, module);
-    Ok(stage_resolve_casts(db, module))
+    // Resolve unrealized conversion casts
+    let tc = generic_type_converter_arena(&mut ctx);
+    let cast_result = resolve_unrealized_casts_arena(&mut ctx, m, &tc);
+    tracing::debug!(
+        "resolve_casts: resolved={}, unresolved={}",
+        cast_result.resolved_count,
+        cast_result.unresolved.len()
+    );
+
+    // Export to Salsa at the end
+    let exported = export_to_salsa(db, &ctx, m);
+    Ok(Module::from_operation(db, exported).unwrap())
 }
 
-/// Run the native pipeline: shared passes + cont lowering + DCE + resolve_casts.
+/// Run the native pipeline in a single arena session:
+/// shared passes + cont_to_libmprompt + evidence_to_native + DCE + resolve_casts.
 ///
 /// Uses `cont_to_libmprompt` for native delimited continuations via libmprompt FFI.
 #[salsa::tracked]
@@ -701,16 +594,58 @@ pub fn run_native_pipeline<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Result<Module<'db>, ConversionError> {
-    let module = run_shared_pipeline(db, source);
+    let Some((mut ctx, m)) = run_shared_pipeline_arena(db, source) else {
+        return Ok(empty_module(db, source));
+    };
 
-    let module = stage_cont_to_libmprompt(db, module);
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "cont_to_libmprompt");
+    // Continuation lowering (libmprompt FFI for native)
+    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(&mut ctx, m);
+    if cfg!(debug_assertions) {
+        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        if !result.is_ok() {
+            tracing::warn!(
+                "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
+                result.stale_errors,
+                result.use_chain_errors
+            );
+        }
+    }
 
-    let module = stage_evidence_to_native(db, module);
-    trunk_ir::validation::debug_assert_value_integrity(db, module, "evidence_to_native");
+    // Evidence to native lowering
+    tribute_passes::native::evidence::lower_evidence_to_native(&mut ctx, m);
+    if cfg!(debug_assertions) {
+        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        if !result.is_ok() {
+            tracing::warn!(
+                "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
+                result.stale_errors,
+                result.use_chain_errors
+            );
+        }
+    }
 
-    let module = stage_dce(db, module);
-    Ok(stage_resolve_casts(db, module))
+    // Dead code elimination
+    let dce_result = trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
+    if dce_result.removed_count > 0 {
+        tracing::debug!(
+            "DCE removed {} functions: {:?}",
+            dce_result.removed_count,
+            dce_result.removed_functions
+        );
+    }
+
+    // Resolve unrealized conversion casts
+    let tc = generic_type_converter_arena(&mut ctx);
+    let cast_result = resolve_unrealized_casts_arena(&mut ctx, m, &tc);
+    tracing::debug!(
+        "resolve_casts: resolved={}, unresolved={}",
+        cast_result.resolved_count,
+        cast_result.unresolved.len()
+    );
+
+    // Export to Salsa at the end
+    let exported = export_to_salsa(db, &ctx, m);
+    Ok(Module::from_operation(db, exported).unwrap())
 }
 
 /// Run the full middle-end pipeline.
