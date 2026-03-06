@@ -17,7 +17,7 @@ tree-sitter.workspace = true
 tree-sitter-tribute.workspace = true
 tribute-core.workspace = true
 tribute-ir.workspace = true
-trunk-ir.workspace = true
+trunk-ir = { workspace = true, features = ["salsa"] }
 
 [dev-dependencies]
 insta.workspace = true

@@ -7,7 +7,7 @@ license.workspace = true
 description = "TrunkIR: A multi-level dialect IR system"
 
 [features]
-default = ["salsa"]
+default = []
 salsa = ["dep:salsa"]
 
 [dependencies]
