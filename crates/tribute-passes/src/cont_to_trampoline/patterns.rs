@@ -11,8 +11,8 @@ use trunk_ir::arena::dialect::scf as arena_scf;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::arena::types::Attribute;
 
 use super::get_region_result_value_arena;
 use super::shift_lower::{anyref_type, i32_type, step_type};
@@ -28,7 +28,7 @@ impl RewritePattern for LowerResumePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_cont::Resume::from_op(ctx, op).is_err() {
             return false;
@@ -116,7 +116,7 @@ impl RewritePattern for UpdateEffectfulCallResultTypePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(call) = arena_func::Call::from_op(ctx, op) else {
             return false;
@@ -180,7 +180,7 @@ impl RewritePattern for UpdateScfIfResultTypePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_scf::If::from_op(ctx, op).is_err() {
             return false;
@@ -247,7 +247,7 @@ impl RewritePattern for UpdateScfYieldToStepPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_scf::Yield::from_op(ctx, op).is_err() {
             return false;
@@ -318,7 +318,7 @@ impl RewritePattern for LowerPushPromptPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
             return false;
@@ -329,7 +329,7 @@ impl RewritePattern for LowerPushPromptPattern {
         let step_ty = step_type(ctx);
         let tag_attr = push_prompt.tag(ctx);
         let tag = match tag_attr {
-            ArenaAttribute::IntBits(v) => v as u32,
+            Attribute::IntBits(v) => v as u32,
             _ => panic!("push_prompt tag must be IntBits"),
         };
 
@@ -386,8 +386,7 @@ fn build_yield_then_branch(
     let i32_ty = i32_type(ctx);
     let cont_ty = super::shift_lower::continuation_type(ctx);
 
-    let tag_const =
-        arena_arith::r#const(ctx, location, i32_ty, ArenaAttribute::IntBits(tag as u64));
+    let tag_const = arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(tag as u64));
     let tag_val = tag_const.result(ctx);
 
     let get_cont = arena_trampoline::get_yield_continuation(ctx, location, cont_ty);
@@ -450,7 +449,7 @@ fn build_yield_else_branch(
     } else {
         // No body result - create a step_done with zero value
         let i32_ty = i32_type(ctx);
-        let zero = arena_arith::r#const(ctx, location, i32_ty, ArenaAttribute::IntBits(0));
+        let zero = arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
         ctx.push_op(block, zero.op_ref());
         let step_done = arena_trampoline::step_done(ctx, location, zero.result(ctx), step_ty);
         ctx.push_op(block, step_done.op_ref());

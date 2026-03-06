@@ -8,7 +8,7 @@ use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use trunk_ir::arena::walk;
 use trunk_ir::location::Span;
 
@@ -266,7 +266,7 @@ fn has_effectful_type(ctx: &IrContext, func_ty: TypeRef) -> bool {
     if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
         return false;
     }
-    let Some(ArenaAttribute::Type(effect)) = data.attrs.get(&Symbol::new("effect")) else {
+    let Some(Attribute::Type(effect)) = data.attrs.get(&Symbol::new("effect")) else {
         return false;
     };
     let effect_data = ctx.types.get(*effect);

@@ -31,9 +31,7 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::{DialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{
-    Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
-};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 /// Sentinel value used for unresolved cont.shift tags.
 /// When a shift is generated without an enclosing handler, this value is used
@@ -62,7 +60,7 @@ impl OpTableRegistry {
         &mut self,
         _abilities: Vec<TypeRef>,
         _operations: Vec<(TypeRef, Symbol)>,
-        _location: ArenaLocation,
+        _location: Location,
     ) -> u32 {
         let index = self.next_index;
         self.next_index += 1;
@@ -333,7 +331,7 @@ fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
     let data = ctx.types.get(ability_ref);
     // ability_ref is core.ability_ref type
     let ability_name = match data.attrs.get(&Symbol::new("name")) {
-        Some(ArenaAttribute::Symbol(s)) => *s,
+        Some(Attribute::Symbol(s)) => *s,
         _ => panic!(
             "ICE: compute_ability_id: ability type has no name: {:?}",
             data
@@ -433,7 +431,7 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
                 && let trunk_ir::arena::refs::ValueDef::OpResult(def_op, 0) =
                     ctx.value_def(shift_op.tag(ctx))
                 && let Ok(const_op) = arena_arith::Const::from_op(ctx, def_op)
-                && let ArenaAttribute::IntBits(value) = const_op.value(ctx)
+                && let Attribute::IntBits(value) = const_op.value(ctx)
                 && value == UNRESOLVED_SHIFT_TAG as u64
             {
                 let ability_ref = shift_op.ability_ref(ctx);
@@ -484,7 +482,7 @@ fn transform_handler_roots(
         let i32_ty = i32_type_ref(ctx);
 
         // Create empty evidence: arith.const 0 + adt.array_new
-        let zero_const = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(0));
+        let zero_const = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
         let empty_evidence = arena_adt::array_new(
             ctx,
             loc,
@@ -615,7 +613,7 @@ fn transform_shifts_in_block(
             let loc = ctx.op(op).location;
             let tag_attr = push_prompt_op.tag(ctx);
             let tag = match &tag_attr {
-                ArenaAttribute::IntBits(v) => *v as u32,
+                Attribute::IntBits(v) => *v as u32,
                 _ => continue,
             };
 
@@ -656,17 +654,13 @@ fn transform_shifts_in_block(
 
             // Create tag constant
             let tag_const =
-                arena_arith::r#const(ctx, loc, prompt_tag_ty, ArenaAttribute::IntBits(tag as u64));
+                arena_arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(tag as u64));
             let tag_val = ctx.op_result(tag_const.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_const.op_ref());
 
             // Create op_table_index constant
-            let op_table_idx_const = arena_arith::r#const(
-                ctx,
-                loc,
-                i32_ty,
-                ArenaAttribute::IntBits(op_table_idx as u64),
-            );
+            let op_table_idx_const =
+                arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_table_idx as u64));
             let op_table_idx_val = ctx.op_result(op_table_idx_const.op_ref(), 0);
             ctx.insert_op_before(block, op, op_table_idx_const.op_ref());
 
@@ -675,12 +669,8 @@ fn transform_shifts_in_block(
             for &ability_ref in &abilities {
                 let ability_id = compute_ability_id(ctx, ability_ref);
 
-                let ability_id_const = arena_arith::r#const(
-                    ctx,
-                    loc,
-                    i32_ty,
-                    ArenaAttribute::IntBits(ability_id as u64),
-                );
+                let ability_id_const =
+                    arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
                 let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                 ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
@@ -743,7 +733,7 @@ fn transform_shifts_in_block(
 
             // %ability_id_const = arith.const ability_id
             let ability_id_const =
-                arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(ability_id as u64));
+                arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
             let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
@@ -984,12 +974,12 @@ mod tests {
 
         let state_ref = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         );
         let console_ref = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("Console")))
+                .attr("name", Attribute::Symbol(Symbol::new("Console")))
                 .build(),
         );
 
@@ -999,7 +989,7 @@ mod tests {
         // Same ability should have same ID (interning gives same TypeRef)
         let state_ref2 = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         );
         let state_id2 = compute_ability_id(&ctx, state_ref2);
@@ -1019,14 +1009,14 @@ mod tests {
 
         let state_i32 = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .param(i32_ty)
                 .build(),
         );
 
         let state_no_params = ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         );
 
@@ -1037,9 +1027,9 @@ mod tests {
         assert_ne!(id_with_params, id_no_params);
     }
 
-    fn test_location(ctx: &mut IrContext) -> ArenaLocation {
+    fn test_location(ctx: &mut IrContext) -> Location {
         let path = ctx.paths.intern("test".to_owned());
-        ArenaLocation::new(path, trunk_ir::Span::new(0, 0))
+        Location::new(path, trunk_ir::Span::new(0, 0))
     }
 
     #[test]

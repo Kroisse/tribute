@@ -13,8 +13,8 @@ use trunk_ir::arena::dialect::{
 };
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
-use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use crate::cont_util::compute_op_idx;
 
@@ -31,7 +31,7 @@ impl RewritePattern for LowerShiftPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) else {
             return false;
@@ -53,7 +53,7 @@ impl RewritePattern for LowerShiftPattern {
         let ability_ref_ty = shift_op.ability_ref(ctx);
         let ability_data = ctx.types.get(ability_ref_ty);
         let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-            Some(ArenaAttribute::Symbol(s)) => Some(*s),
+            Some(Attribute::Symbol(s)) => Some(*s),
             _ => None,
         };
         let op_name = Some(shift_op.op_name(ctx));
@@ -61,7 +61,7 @@ impl RewritePattern for LowerShiftPattern {
 
         // %op_idx = arith.const <op_idx>
         let op_idx_const =
-            arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(op_idx as u64));
+            arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_idx as u64));
         rewriter.insert_op(op_idx_const.op_ref());
 
         // %shift_val = shift_value or null ptr
@@ -74,7 +74,7 @@ impl RewritePattern for LowerShiftPattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };
@@ -117,7 +117,7 @@ impl RewritePattern for LowerResumePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if !arena_cont::Resume::matches(ctx, op) {
             return false;
@@ -149,7 +149,7 @@ impl RewritePattern for LowerResumePattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };
@@ -191,7 +191,7 @@ impl RewritePattern for LowerDropPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if !arena_cont::Drop::matches(ctx, op) {
             return false;

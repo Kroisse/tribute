@@ -20,8 +20,8 @@ use trunk_ir::arena::dialect::{
 };
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 /// Pattern: Lower `cont.push_prompt` -> body outlining + `__tribute_prompt` call.
@@ -42,7 +42,7 @@ impl RewritePattern for LowerPushPromptPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
             return false;
@@ -75,7 +75,7 @@ impl RewritePattern for LowerPushPromptPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
 
         let env_val = if live_ins.is_empty() {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         } else {
@@ -114,12 +114,12 @@ impl RewritePattern for LowerPushPromptPattern {
         rewriter.insert_op(body_fn.op_ref());
 
         // %tag_val
-        let tag_val = if let ArenaAttribute::IntBits(bits) = tag {
-            let c = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(bits));
+        let tag_val = if let Attribute::IntBits(bits) = tag {
+            let c = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(bits));
             rewriter.insert_op(c.op_ref());
             c.result(ctx)
         } else {
-            let c = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(0));
+            let c = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
             rewriter.insert_op(c.op_ref());
             c.result(ctx)
         };
@@ -362,7 +362,7 @@ fn generate_outlined_body(
             ctx.push_op(entry_block, ret.op_ref());
         }
     } else {
-        let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+        let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
         ctx.push_op(entry_block, null.op_ref());
         let ret = arena_func::r#return(ctx, loc, [null.result(ctx)]);
         ctx.push_op(entry_block, ret.op_ref());
@@ -388,20 +388,20 @@ fn generate_outlined_body(
 /// - params: field types
 fn build_env_struct_type(ctx: &mut IrContext, field_types: &[TypeRef]) -> TypeRef {
     // Build fields attribute: list of [Symbol(f0), Type(ty0)], [Symbol(f1), Type(ty1)], ...
-    let fields_attr: Vec<ArenaAttribute> = field_types
+    let fields_attr: Vec<Attribute> = field_types
         .iter()
         .enumerate()
         .map(|(i, &ty)| {
-            ArenaAttribute::List(vec![
-                ArenaAttribute::Symbol(Symbol::from_dynamic(&format!("f{i}"))),
-                ArenaAttribute::Type(ty),
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::from_dynamic(&format!("f{i}"))),
+                Attribute::Type(ty),
             ])
         })
         .collect();
 
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-        .attr("name", ArenaAttribute::Symbol(Symbol::new("__prompt_env")))
-        .attr("fields", ArenaAttribute::List(fields_attr));
+        .attr("name", Attribute::Symbol(Symbol::new("__prompt_env")))
+        .attr("fields", Attribute::List(fields_attr));
     for &ty in field_types {
         builder = builder.param(ty);
     }

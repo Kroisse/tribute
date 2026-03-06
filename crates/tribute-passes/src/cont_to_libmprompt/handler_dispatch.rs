@@ -38,8 +38,8 @@ use trunk_ir::arena::dialect::{
 };
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 use crate::cont_util::{SuspendArm, collect_suspend_arms_arena, get_done_region_arena};
@@ -52,7 +52,7 @@ impl RewritePattern for LowerHandlerDispatchPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(dispatch) = arena_cont::HandlerDispatch::from_op(ctx, op) else {
             return false;
@@ -316,7 +316,7 @@ fn build_nested_dispatch(
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
 
     if arm_index >= suspend_arms.len() {
-        let dummy = arena_arith::r#const(ctx, loc, result_ty, ArenaAttribute::IntBits(0));
+        let dummy = arena_arith::r#const(ctx, loc, result_ty, Attribute::IntBits(0));
         ctx.push_op(block, dummy.op_ref());
         let unreachable = arena_func::unreachable(ctx, loc);
         ctx.push_op(block, unreachable.op_ref());
@@ -329,7 +329,7 @@ fn build_nested_dispatch(
     let then_region = build_arm_region(ctx, loc, arm.body, k, v, result_ty);
 
     if is_last {
-        let true_const = arena_arith::r#const(ctx, loc, i1_ty, ArenaAttribute::IntBits(1));
+        let true_const = arena_arith::r#const(ctx, loc, i1_ty, Attribute::IntBits(1));
         ctx.push_op(block, true_const.op_ref());
         let else_region = build_arm_region(ctx, loc, arm.body, k, v, result_ty);
         let if_op = arena_scf::r#if(
@@ -352,7 +352,7 @@ fn build_nested_dispatch(
         ctx,
         loc,
         i32_ty,
-        ArenaAttribute::IntBits(arm.expected_op_idx as u64),
+        Attribute::IntBits(arm.expected_op_idx as u64),
     );
     ctx.push_op(block, expected.op_ref());
     let cmp = arena_arith::cmp_eq(ctx, loc, current_op_idx, expected.result(ctx), i1_ty);
@@ -476,7 +476,7 @@ fn build_arm_region(
                 let y = arena_scf::r#yield(ctx, loc, [result_val]);
                 ctx.push_op(new_block, y.op_ref());
             } else {
-                let dummy = arena_arith::r#const(ctx, loc, result_ty, ArenaAttribute::IntBits(0));
+                let dummy = arena_arith::r#const(ctx, loc, result_ty, Attribute::IntBits(0));
                 ctx.push_op(new_block, dummy.op_ref());
                 let y = arena_scf::r#yield(ctx, loc, [dummy.result(ctx)]);
                 ctx.push_op(new_block, y.op_ref());

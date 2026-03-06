@@ -20,7 +20,7 @@ use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
@@ -142,10 +142,10 @@ fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
     if data.name != Symbol::new("i32_const") {
         return None;
     }
-    let ArenaAttribute::IntBits(ptr) = data.attributes.get(&Symbol::new("value"))? else {
+    let Attribute::IntBits(ptr) = data.attributes.get(&Symbol::new("value"))? else {
         return None;
     };
-    let ArenaAttribute::IntBits(len) = data.attributes.get(&Symbol::new("literal_len"))? else {
+    let Attribute::IntBits(len) = data.attributes.get(&Symbol::new("literal_len"))? else {
         return None;
     };
     let ptr_u32 = u32::try_from(*ptr).ok()?;

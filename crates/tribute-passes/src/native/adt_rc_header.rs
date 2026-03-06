@@ -342,14 +342,14 @@ mod tests {
     use trunk_ir::arena::dialect::func as arena_func;
     use trunk_ir::arena::printer::print_module;
     use trunk_ir::arena::rewrite::Module;
-    use trunk_ir::arena::types::Attribute as ArenaAttribute;
-    use trunk_ir::arena::types::Location as ArenaLocation;
+    use trunk_ir::arena::types::Attribute;
+    use trunk_ir::arena::types::Location;
     use trunk_ir::smallvec::smallvec;
 
-    fn test_ctx() -> (IrContext, ArenaLocation) {
+    fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("file:///test.trb".to_owned());
-        let loc = ArenaLocation::new(path, Span::new(0, 0));
+        let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
@@ -360,7 +360,7 @@ mod tests {
 
     fn build_and_lower(
         ctx: &mut IrContext,
-        loc: ArenaLocation,
+        loc: Location,
         struct_ty: TypeRef,
         field_types: &[TypeRef],
     ) -> String {
@@ -395,7 +395,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
                 .operands(field_vals)
                 .result(struct_ty)
-                .attr("type", ArenaAttribute::Type(struct_ty))
+                .attr("type", Attribute::Type(struct_ty))
                 .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
@@ -428,7 +428,7 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);

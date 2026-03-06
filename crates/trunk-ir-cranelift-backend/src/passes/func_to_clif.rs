@@ -17,10 +17,9 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
-    RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 
 /// Lower func dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
@@ -34,7 +33,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("func");
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(target)
         .add_pattern(FuncFuncPattern)
         .add_pattern(FuncCallPattern)
@@ -48,7 +47,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
 fn adapt_closure_structs(ctx: &mut IrContext, module: Module) {
     let applicator =
-        ArenaPatternApplicator::new(TypeConverter::new()).add_pattern(ClosureStructAdaptPattern);
+        PatternApplicator::new(TypeConverter::new()).add_pattern(ClosureStructAdaptPattern);
     applicator.apply_partial(ctx, module);
 }
 
@@ -59,7 +58,7 @@ fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
     data.attrs
         .get(&Symbol::new("name"))
         .and_then(|a| match a {
-            ArenaAttribute::Symbol(s) => Some(*s),
+            Attribute::Symbol(s) => Some(*s),
             _ => None,
         })
         .is_some_and(|name| name == Symbol::new(CLOSURE_STRUCT_NAME_STR))
@@ -75,18 +74,18 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     builder = builder.param(i64_ty).param(ptr_ty);
     builder = builder.attr(
         "name",
-        ArenaAttribute::Symbol(Symbol::new(CLOSURE_STRUCT_NAME_STR)),
+        Attribute::Symbol(Symbol::new(CLOSURE_STRUCT_NAME_STR)),
     );
     builder = builder.attr(
         "fields",
-        ArenaAttribute::List(vec![
-            ArenaAttribute::List(vec![
-                ArenaAttribute::Symbol(Symbol::new("func_ptr")),
-                ArenaAttribute::Type(i64_ty),
+        Attribute::List(vec![
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("func_ptr")),
+                Attribute::Type(i64_ty),
             ]),
-            ArenaAttribute::List(vec![
-                ArenaAttribute::Symbol(Symbol::new("env")),
-                ArenaAttribute::Type(ptr_ty),
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::new("env")),
+                Attribute::Type(ptr_ty),
             ]),
         ]),
     );
@@ -111,7 +110,7 @@ impl RewritePattern for FuncFuncPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::Func::from_op(ctx, op).is_err() {
             return false;
@@ -122,7 +121,7 @@ impl RewritePattern for FuncFuncPattern {
         // Convert parameter and return types in the function signature
         let data = ctx.op(op);
         let func_type_attr = data.attributes.get(&Symbol::new("type")).and_then(|a| {
-            if let ArenaAttribute::Type(t) = a {
+            if let Attribute::Type(t) = a {
                 Some(*t)
             } else {
                 None
@@ -137,17 +136,16 @@ impl RewritePattern for FuncFuncPattern {
                 // - Layout A: params = [ret, arg1, arg2, ...] (translate_signature format)
                 // - Layout B: params = [arg1, arg2, ...], attrs.result = ret
                 // We read both and output in Layout A for translate_signature.
-                let (arg_params, ret_ty) = if let Some(ArenaAttribute::Type(r)) =
-                    type_data.attrs.get(&Symbol::new("result"))
-                {
-                    // Layout B: return type in attrs
-                    (&type_data.params[..], Some(*r))
-                } else if !type_data.params.is_empty() {
-                    // Layout A: params[0] = return type
-                    (&type_data.params[1..], Some(type_data.params[0]))
-                } else {
-                    (&type_data.params[..], None)
-                };
+                let (arg_params, ret_ty) =
+                    if let Some(Attribute::Type(r)) = type_data.attrs.get(&Symbol::new("result")) {
+                        // Layout B: return type in attrs
+                        (&type_data.params[..], Some(*r))
+                    } else if !type_data.params.is_empty() {
+                        // Layout A: params[0] = return type
+                        (&type_data.params[1..], Some(type_data.params[0]))
+                    } else {
+                        (&type_data.params[..], None)
+                    };
 
                 // Convert params and return type
                 let new_params: Vec<TypeRef> = arg_params
@@ -160,7 +158,7 @@ impl RewritePattern for FuncFuncPattern {
                 let ret_ty = new_ret.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
                 let new_func_ty =
                     arena_core::func(ctx, ret_ty, new_params.iter().copied(), None).as_type_ref();
-                new_attrs.insert(Symbol::new("type"), ArenaAttribute::Type(new_func_ty));
+                new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
             }
         }
 
@@ -186,7 +184,7 @@ impl RewritePattern for FuncCallPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
             return false;
@@ -201,7 +199,7 @@ impl RewritePattern for FuncCallPattern {
         );
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), ArenaAttribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -215,7 +213,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::CallIndirect::from_op(ctx, op).is_err() {
             return false;
@@ -246,7 +244,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         );
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("sig"), ArenaAttribute::Type(sig_ty));
+            .insert(Symbol::new("sig"), Attribute::Type(sig_ty));
         rewriter.replace_op(new_op);
         true
     }
@@ -260,7 +258,7 @@ impl RewritePattern for FuncReturnPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::Return::from_op(ctx, op).is_err() {
             return false;
@@ -284,7 +282,7 @@ impl RewritePattern for FuncTailCallPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(tail_call) = arena_func::TailCall::from_op(ctx, op) else {
             return false;
@@ -299,7 +297,7 @@ impl RewritePattern for FuncTailCallPattern {
         );
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), ArenaAttribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -313,7 +311,7 @@ impl RewritePattern for FuncUnreachablePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::Unreachable::from_op(ctx, op).is_err() {
             return false;
@@ -333,7 +331,7 @@ impl RewritePattern for FuncConstantPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(const_op) = arena_func::Constant::from_op(ctx, op) else {
             return false;
@@ -356,7 +354,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         use trunk_ir::arena::dialect::adt as arena_adt;
 
@@ -376,7 +374,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
             );
             ctx.op_mut(new_op)
                 .attributes
-                .insert(Symbol::new("type"), ArenaAttribute::Type(native_ty));
+                .insert(Symbol::new("type"), Attribute::Type(native_ty));
             // Update result type to native_ty
             let result_types = ctx.op_result_types(new_op).to_vec();
             if !result_types.is_empty() {
@@ -401,7 +399,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
             );
             ctx.op_mut(new_op)
                 .attributes
-                .insert(Symbol::new("type"), ArenaAttribute::Type(native_ty));
+                .insert(Symbol::new("type"), Attribute::Type(native_ty));
             if field_idx == 0 {
                 let i64_ty = intern_i64_type(ctx);
                 ctx.set_op_result_type(new_op, 0, i64_ty);

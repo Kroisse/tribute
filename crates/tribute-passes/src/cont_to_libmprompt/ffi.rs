@@ -10,7 +10,7 @@ use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 /// Ensure all libmprompt FFI function declarations are present in the module.
@@ -128,7 +128,7 @@ fn build_extern_func(
     // Add abi attribute
     let data = ctx.op_mut(func_op.op_ref());
     data.attributes
-        .insert(Symbol::new("abi"), ArenaAttribute::String("C".to_string()));
+        .insert(Symbol::new("abi"), Attribute::String("C".to_string()));
 
     func_op.op_ref()
 }

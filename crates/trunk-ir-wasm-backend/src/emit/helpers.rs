@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::refs::{TypeRef, ValueRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
@@ -70,7 +70,7 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
         return false;
     }
     match data.attrs.get(&Symbol::new("name")) {
-        Some(ArenaAttribute::Symbol(name)) => name.with_str(|s| s == expected_name),
+        Some(Attribute::Symbol(name)) => name.with_str(|s| s == expected_name),
         _ => false,
     }
 }
@@ -247,11 +247,11 @@ pub(crate) fn result_types(
 /// Extract a heap type from operation attributes.
 pub(crate) fn attr_heap_type(
     ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
     key: Symbol,
 ) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => {
+        Some(Attribute::IntBits(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
                     "heap type index {} out of u32 range",
@@ -260,8 +260,8 @@ pub(crate) fn attr_heap_type(
             })?;
             Ok(HeapType::Concrete(idx))
         }
-        Some(ArenaAttribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
-        Some(ArenaAttribute::Type(ty)) => {
+        Some(Attribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
+        Some(Attribute::Type(ty)) => {
             let data = ctx.types.get(*ty);
             if data.dialect == Symbol::new("wasm") {
                 let name = data.name;
@@ -331,13 +331,13 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// Priority: type_idx attr > type attr > inferred_type (from result/operand)
 pub(crate) fn get_type_idx_from_attrs(
     ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
     inferred_type: Option<TypeRef>,
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> Option<u32> {
     // First try type_idx attribute
     match attrs.get(&Symbol::new("type_idx")) {
-        Some(ArenaAttribute::IntBits(idx)) => {
+        Some(Attribute::IntBits(idx)) => {
             return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
         }
         Some(_) => {
@@ -347,7 +347,7 @@ pub(crate) fn get_type_idx_from_attrs(
         None => {} // not present, continue to fallback
     }
     // Fall back to type attribute
-    if let Some(ArenaAttribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
+    if let Some(Attribute::Type(ty)) = attrs.get(&Symbol::new("type")) {
         if is_closure_struct_type(ctx, *ty) {
             return Some(CLOSURE_STRUCT_IDX);
         }
@@ -373,12 +373,9 @@ pub(crate) fn get_type_idx_from_attrs(
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and IntBits → checked u32 conversion
-pub(crate) fn attr_u32(
-    attrs: &BTreeMap<Symbol, ArenaAttribute>,
-    key: Symbol,
-) -> CompilationResult<u32> {
+pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
     match attrs.get(&key) {
-        Some(ArenaAttribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
+        Some(Attribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",
                 key, bits
@@ -396,7 +393,7 @@ pub(crate) fn attr_u32(
 ///
 /// Only falls back to `field` when `field_idx` is missing. If `field_idx` is present
 /// but has a wrong variant or out-of-range value, that error is propagated immediately.
-pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, ArenaAttribute>) -> CompilationResult<u32> {
+pub(crate) fn attr_field_idx(attrs: &BTreeMap<Symbol, Attribute>) -> CompilationResult<u32> {
     match attr_u32(attrs, Symbol::new("field_idx")) {
         Ok(v) => Ok(v),
         Err(e) if e.is_missing_attribute() => attr_u32(attrs, Symbol::new("field")),

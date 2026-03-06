@@ -36,9 +36,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::rewrite::{
-    ConversionTarget, PatternApplicator as ArenaPatternApplicator, TypeConverter,
-};
+use trunk_ir::arena::rewrite::{ConversionTarget, PatternApplicator, TypeConverter};
 use trunk_ir::location::Span;
 
 // Re-export shared utilities from cont_util so existing internal callers still work.
@@ -196,7 +194,7 @@ pub fn lower_cont_to_trampoline(
 
     // Step 3: Lower cont.* operations to trampoline.*
     let type_converter = standard_type_converter(ctx);
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .add_pattern(LowerShiftPattern {
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
@@ -222,11 +220,10 @@ pub fn lower_cont_to_trampoline(
 
     // Step 4: Wrap returns in effectful functions with step_done
     let type_converter2 = standard_type_converter(ctx);
-    let applicator2 = ArenaPatternApplicator::new(type_converter2).add_pattern(
-        WrapReturnsInEffectfulFuncsPattern {
+    let applicator2 =
+        PatternApplicator::new(type_converter2).add_pattern(WrapReturnsInEffectfulFuncsPattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
-        },
-    );
+        });
     applicator2.apply_partial(ctx, module);
 
     // Verify all cont.* ops (except cont.drop) are converted.

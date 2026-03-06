@@ -29,9 +29,7 @@ use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::rewrite::helpers::erase_op;
-use trunk_ir::arena::types::{
-    Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
-};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 /// Lower evidence operations for the native backend.
 ///
@@ -109,14 +107,14 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
 }
 
 /// Build extern `fn __tribute_evidence_empty() -> i64`
-fn make_evidence_empty_extern(ctx: &mut IrContext, loc: ArenaLocation, i64_ty: TypeRef) -> OpRef {
+fn make_evidence_empty_extern(ctx: &mut IrContext, loc: Location, i64_ty: TypeRef) -> OpRef {
     super::build_extern_func(ctx, loc, "__tribute_evidence_empty", &[], i64_ty)
 }
 
 /// Build extern `fn __tribute_evidence_lookup(ev: i64, ability_id: i32) -> i32`
 fn make_evidence_lookup_extern(
     ctx: &mut IrContext,
-    loc: ArenaLocation,
+    loc: Location,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
@@ -132,7 +130,7 @@ fn make_evidence_lookup_extern(
 /// Build extern `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> i64`
 fn make_evidence_extend_extern(
     ctx: &mut IrContext,
-    loc: ArenaLocation,
+    loc: Location,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
@@ -323,7 +321,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     // Only eliminate struct_get for the prompt_tag field (index 1).
                     let field_attr = ctx.op(op).attributes.get(&Symbol::new("field"));
                     let field_idx = match field_attr {
-                        Some(ArenaAttribute::IntBits(bits)) => *bits,
+                        Some(Attribute::IntBits(bits)) => *bits,
                         other => panic!(
                             "expected IntBits field attribute on adt.struct_get, got {other:?}"
                         ),

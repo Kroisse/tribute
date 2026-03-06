@@ -11,8 +11,7 @@ use trunk_ir::arena::dialect::cf as arena_cf;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
 use trunk_ir::arena::rewrite::{
-    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
-    RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
 /// Lower cf dialect to clif dialect.
@@ -23,7 +22,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("cf");
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(target)
         .add_pattern(CfBrPattern)
         .add_pattern(CfCondBrPattern);
@@ -38,7 +37,7 @@ impl RewritePattern for CfBrPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_cf::Br::from_op(ctx, op).is_err() {
             return false;
@@ -58,7 +57,7 @@ impl RewritePattern for CfCondBrPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_cf::CondBr::from_op(ctx, op).is_err() {
             return false;

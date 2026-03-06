@@ -28,9 +28,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
-use trunk_ir::arena::rewrite::{
-    ConversionTarget, Module, PatternApplicator as ArenaPatternApplicator, TypeConverter,
-};
+use trunk_ir::arena::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
 use trunk_ir::arena::types::TypeDataBuilder;
 
 use ffi::ensure_libmprompt_ffi;
@@ -61,7 +59,7 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: Module) {
         }
     });
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(LowerShiftPattern)
         .add_pattern(LowerResumePattern)

@@ -35,7 +35,7 @@ use crate::Symbol;
 use crate::arena::context::IrContext;
 use crate::arena::refs::TypeRef;
 use crate::arena::rewrite::type_converter::TypeConverter;
-use crate::arena::types::Attribute as ArenaAttribute;
+use crate::arena::types::Attribute;
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -120,13 +120,13 @@ pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symb
     }
 
     let fields_attr = data.attrs.get(&Symbol::new("fields"))?;
-    let ArenaAttribute::List(fields) = fields_attr else {
+    let Attribute::List(fields) = fields_attr else {
         return None;
     };
 
     let mut result = Vec::new();
     for (i, field) in fields.iter().enumerate() {
-        let ArenaAttribute::List(pair) = field else {
+        let Attribute::List(pair) = field else {
             panic!("get_struct_fields_arena: field[{i}] expected List, got {field:?}");
         };
         assert!(
@@ -134,13 +134,13 @@ pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symb
             "get_struct_fields_arena: field[{i}] pair too short (len={})",
             pair.len()
         );
-        let ArenaAttribute::Symbol(name) = &pair[0] else {
+        let Attribute::Symbol(name) = &pair[0] else {
             panic!(
                 "get_struct_fields_arena: field[{i}] name expected Symbol, got {:?}",
                 pair[0]
             );
         };
-        let ArenaAttribute::Type(field_ty) = &pair[1] else {
+        let Attribute::Type(field_ty) = &pair[1] else {
             panic!(
                 "get_struct_fields_arena: field[{i}] type expected Type, got {:?}",
                 pair[1]
@@ -165,13 +165,13 @@ pub fn get_enum_variants_arena(
     }
 
     let variants_attr = data.attrs.get(&Symbol::new("variants"))?;
-    let ArenaAttribute::List(variants) = variants_attr else {
+    let Attribute::List(variants) = variants_attr else {
         return None;
     };
 
     let mut result = Vec::new();
     for (i, variant) in variants.iter().enumerate() {
-        let ArenaAttribute::List(pair) = variant else {
+        let Attribute::List(pair) = variant else {
             panic!("get_enum_variants_arena: variant[{i}] expected List, got {variant:?}");
         };
         assert!(
@@ -179,13 +179,13 @@ pub fn get_enum_variants_arena(
             "get_enum_variants_arena: variant[{i}] pair too short (len={})",
             pair.len()
         );
-        let ArenaAttribute::Symbol(name) = &pair[0] else {
+        let Attribute::Symbol(name) = &pair[0] else {
             panic!(
                 "get_enum_variants_arena: variant[{i}] name expected Symbol, got {:?}",
                 pair[0]
             );
         };
-        let ArenaAttribute::List(field_types_attr) = &pair[1] else {
+        let Attribute::List(field_types_attr) = &pair[1] else {
             panic!(
                 "get_enum_variants_arena: variant[{i}] fields expected List, got {:?}",
                 pair[1]
@@ -196,7 +196,7 @@ pub fn get_enum_variants_arena(
             .iter()
             .enumerate()
             .map(|(j, a)| {
-                let ArenaAttribute::Type(ty) = a else {
+                let Attribute::Type(ty) = a else {
                     panic!(
                         "get_enum_variants_arena: variant[{i}] field[{j}] expected Type, got {a:?}"
                     );

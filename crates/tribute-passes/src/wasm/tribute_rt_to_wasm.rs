@@ -29,7 +29,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 /// Helper to create arena type refs for common types.
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
@@ -48,7 +48,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(f64_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_BoxedF64")))
+            .attr("name", Attribute::Symbol(Symbol::new("_BoxedF64")))
             .build(),
     )
 }

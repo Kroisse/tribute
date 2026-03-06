@@ -15,10 +15,9 @@ use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
-    RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
@@ -28,7 +27,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("arith");
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(target)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -112,7 +111,7 @@ impl RewritePattern for ArithConstPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(const_op) = arena_arith::Const::from_op(ctx, op) else {
             return false;
@@ -140,21 +139,21 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match category {
             "f32" => {
-                if let ArenaAttribute::FloatBits(v) = value {
+                if let Attribute::FloatBits(v) = value {
                     arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
                 } else {
                     arena_clif::f32const(ctx, loc, result_ty, 0.0).op_ref()
                 }
             }
             "f64" => {
-                if let ArenaAttribute::FloatBits(v) = value {
+                if let Attribute::FloatBits(v) = value {
                     arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
                 } else {
                     arena_clif::f64const(ctx, loc, result_ty, 0.0).op_ref()
                 }
             }
             _ => {
-                if let ArenaAttribute::IntBits(v) = value {
+                if let Attribute::IntBits(v) = value {
                     arena_clif::iconst(ctx, loc, result_ty, v as i64).op_ref()
                 } else {
                     arena_clif::iconst(ctx, loc, result_ty, 0).op_ref()
@@ -174,7 +173,7 @@ impl RewritePattern for ArithBinOpPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -248,7 +247,7 @@ impl RewritePattern for ArithCmpPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -340,7 +339,7 @@ impl RewritePattern for ArithNegPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(neg_op) = arena_arith::Neg::from_op(ctx, op) else {
             return false;
@@ -371,7 +370,7 @@ impl RewritePattern for ArithBitwisePattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -426,7 +425,7 @@ impl RewritePattern for ArithConversionPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {

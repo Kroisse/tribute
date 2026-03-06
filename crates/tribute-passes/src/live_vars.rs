@@ -14,7 +14,7 @@ use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::walk;
 
-/// Information about a single shift point in a function.
+/// Information about a single shift point in a function (arena version).
 #[derive(Debug, Clone)]
 pub struct ArenaShiftPoint {
     /// Index of this shift point (0, 1, 2, ...)
@@ -29,7 +29,7 @@ pub struct ArenaShiftPoint {
     pub continuation_ops: Vec<OpRef>,
 }
 
-/// Result of analyzing a function for shift points.
+/// Result of analyzing a function for shift points (arena version).
 #[derive(Debug)]
 pub struct ArenaFunctionAnalysis {
     /// All shift points in order
@@ -181,11 +181,9 @@ mod tests {
     use super::*;
     use trunk_ir::Symbol;
     use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-    use trunk_ir::arena::dialect::{
-        arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
-    };
+    use trunk_ir::arena::dialect::{arith as arena_arith, cont as arena_cont, func as arena_func};
     use trunk_ir::arena::ops::DialectOp;
-    use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
     use trunk_ir::location::Span;
     use trunk_ir::smallvec::smallvec;
 
@@ -202,17 +200,19 @@ mod tests {
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {
-        arena_core::nil(ctx).as_type_ref()
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
     }
 
     fn prompt_tag_type(ctx: &mut IrContext) -> TypeRef {
-        arena_cont::prompt_tag(ctx).as_type_ref()
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build())
     }
 
     fn ability_ref_type(ctx: &mut IrContext) -> TypeRef {
         ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::Symbol(Symbol::new("State")))
                 .build(),
         )
     }
@@ -280,11 +280,10 @@ mod tests {
             parent_op: None,
         });
 
-        let const_op = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(42));
+        let const_op = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(42));
         let const_val = const_op.result(ctx);
 
-        let tag_const =
-            arena_arith::r#const(ctx, loc, prompt_tag_ty, ArenaAttribute::IntBits(0));
+        let tag_const = arena_arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(0));
         let tag_val = tag_const.result(ctx);
 
         let shift_op = arena_cont::shift(
@@ -374,8 +373,7 @@ mod tests {
             parent_op: None,
         });
 
-        let tag_const =
-            arena_arith::r#const(ctx, loc, prompt_tag_ty, ArenaAttribute::IntBits(0));
+        let tag_const = arena_arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(0));
         let tag_val = tag_const.result(ctx);
 
         let shift0 = arena_cont::shift(
@@ -392,7 +390,7 @@ mod tests {
         );
         let n = shift0.result(ctx);
 
-        let one = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(1));
+        let one = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
         let one_val = one.result(ctx);
 
         let add_op = arena_arith::add(ctx, loc, n, one_val, i32_ty);

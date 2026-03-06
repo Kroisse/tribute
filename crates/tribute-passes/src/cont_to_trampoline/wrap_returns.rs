@@ -7,7 +7,7 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter as ArenaPatternRewriter, RewritePattern};
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
 
 use super::patterns::is_step_type;
 use super::shift_lower::step_type;
@@ -25,7 +25,7 @@ impl RewritePattern for WrapReturnsInEffectfulFuncsPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        _rewriter: &mut ArenaPatternRewriter<'_>,
+        _rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(func) = arena_func::Func::from_op(ctx, op) else {
             return false;

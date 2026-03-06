@@ -38,7 +38,7 @@ use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::rewrite::{Module, TypeConverter};
-use trunk_ir::arena::types::Location as ArenaLocation;
+use trunk_ir::arena::types::Location;
 use trunk_ir::arena::walk::WalkAction;
 use trunk_ir::arena::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::location::Span;
@@ -137,7 +137,7 @@ pub fn generate_rtti(
         return rtti_map;
     };
 
-    let loc = ArenaLocation::new(ctx.paths.intern("<rtti>".to_string()), Span::new(0, 0));
+    let loc = Location::new(ctx.paths.intern("<rtti>".to_string()), Span::new(0, 0));
 
     // Sort by rtti_idx for deterministic output
     let mut entries: Vec<_> = rtti_map
@@ -197,7 +197,7 @@ fn generate_release_function_for_struct(
     struct_ty: TypeRef,
     rtti_idx: u32,
     type_converter: &TypeConverter,
-    loc: ArenaLocation,
+    loc: Location,
 ) -> OpRef {
     let fields = get_struct_fields_arena(ctx, struct_ty)
         .expect("struct type registered in RttiMap must have fields");
@@ -359,7 +359,7 @@ fn generate_release_function_for_struct(
 #[allow(clippy::too_many_arguments)]
 fn gen_dealloc_and_return(
     ctx: &mut IrContext,
-    loc: ArenaLocation,
+    loc: Location,
     block: BlockRef,
     payload_ptr: ValueRef,
     layout: &trunk_ir::adt_layout::StructLayout,
@@ -412,7 +412,7 @@ fn generate_release_function_for_enum(
     enum_ty: TypeRef,
     rtti_idx: u32,
     type_converter: &TypeConverter,
-    loc: ArenaLocation,
+    loc: Location,
 ) -> OpRef {
     let layout = compute_enum_layout_arena(ctx, enum_ty, type_converter)
         .expect("enum type registered in RttiMap must have a valid layout");
@@ -675,12 +675,12 @@ mod tests {
     use trunk_ir::arena::dialect::func as arena_func;
     use trunk_ir::arena::printer::print_module;
     use trunk_ir::arena::rewrite::Module;
-    use trunk_ir::arena::types::Attribute as ArenaAttribute;
+    use trunk_ir::arena::types::Attribute;
 
-    fn test_ctx() -> (IrContext, ArenaLocation) {
+    fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("file:///test.trb".to_owned());
-        let loc = ArenaLocation::new(path, Span::new(0, 0));
+        let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
@@ -692,7 +692,7 @@ mod tests {
     /// Build a module containing a function that creates a struct via adt.struct_new.
     fn build_struct_new_module(
         ctx: &mut IrContext,
-        loc: ArenaLocation,
+        loc: Location,
         struct_ty: TypeRef,
         field_types: &[TypeRef],
     ) -> Module {
@@ -725,7 +725,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
                 .operands(field_vals)
                 .result(struct_ty)
-                .attr("type", ArenaAttribute::Type(struct_ty))
+                .attr("type", Attribute::Type(struct_ty))
                 .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
@@ -758,7 +758,7 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -872,7 +872,7 @@ mod tests {
         let sn1 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
             .operands([x, y])
             .result(point_ty)
-            .attr("type", ArenaAttribute::Type(point_ty))
+            .attr("type", Attribute::Type(point_ty))
             .build(&mut ctx);
         let sn1_ref = ctx.create_op(sn1);
         ctx.push_op(entry, sn1_ref);
@@ -881,7 +881,7 @@ mod tests {
         let sn2 = OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
             .operands([x, next])
             .result(node_ty)
-            .attr("type", ArenaAttribute::Type(node_ty))
+            .attr("type", Attribute::Type(node_ty))
             .build(&mut ctx);
         let sn2_ref = ctx.create_op(sn2);
         let sn2_result = ctx.op_result(sn2_ref, 0);
@@ -912,7 +912,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
                 .region(module_region)
                 .build(&mut ctx);
         let module_op = ctx.create_op(module_data);

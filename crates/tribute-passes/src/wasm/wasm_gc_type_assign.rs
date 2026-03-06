@@ -19,7 +19,7 @@ use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 
@@ -257,7 +257,7 @@ impl RewritePattern for UpdateStructNewPattern {
         };
 
         // Check if already has correct type_idx
-        if let Some(ArenaAttribute::IntBits(existing_idx)) =
+        if let Some(Attribute::IntBits(existing_idx)) =
             ctx.op(op).attributes.get(&Symbol::new(ATTR_TYPE_IDX))
             && *existing_idx as u32 == type_idx
         {
@@ -283,7 +283,7 @@ impl RewritePattern for UpdateStructNewPattern {
         }
         builder = builder.attr(
             Symbol::new(ATTR_TYPE_IDX),
-            ArenaAttribute::IntBits(type_idx as u64),
+            Attribute::IntBits(type_idx as u64),
         );
 
         let new_data = builder.build(ctx);
@@ -332,7 +332,7 @@ impl RewritePattern for UpdateStructGetPattern {
 
         // Get field_idx from attributes
         let field_idx = match ctx.op(op).attributes.get(&Symbol::new(ATTR_FIELD_IDX)) {
-            Some(ArenaAttribute::IntBits(idx)) => *idx as u32,
+            Some(Attribute::IntBits(idx)) => *idx as u32,
             _ => return false,
         };
 
@@ -347,7 +347,7 @@ impl RewritePattern for UpdateStructGetPattern {
             .attributes
             .get(&Symbol::new(ATTR_TYPE_IDX))
             .and_then(|a| match a {
-                ArenaAttribute::IntBits(idx) => Some(*idx as u32),
+                Attribute::IntBits(idx) => Some(*idx as u32),
                 _ => None,
             });
         let current_result_type = ctx.op_result_types(op).first().copied();
@@ -372,7 +372,7 @@ impl RewritePattern for UpdateStructGetPattern {
         }
         builder = builder.attr(
             Symbol::new(ATTR_TYPE_IDX),
-            ArenaAttribute::IntBits(type_idx as u64),
+            Attribute::IntBits(type_idx as u64),
         );
 
         let new_data = builder.build(ctx);
@@ -427,7 +427,7 @@ impl RewritePattern for UpdateRefCastPattern {
                     .attributes
                     .get(&Symbol::new(ATTR_TYPE_IDX))
                     .and_then(|a| match a {
-                        ArenaAttribute::IntBits(idx) => Some(*idx as u32),
+                        Attribute::IntBits(idx) => Some(*idx as u32),
                         _ => None,
                     });
 
@@ -452,7 +452,7 @@ impl RewritePattern for UpdateRefCastPattern {
                     }
                     builder = builder.attr(
                         Symbol::new(ATTR_TYPE_IDX),
-                        ArenaAttribute::IntBits(type_idx as u64),
+                        Attribute::IntBits(type_idx as u64),
                     );
 
                     let new_data = builder.build(ctx);

@@ -13,13 +13,13 @@ use crate::arena::dialect::core as arena_core;
 use crate::arena::ops::DialectOp;
 use crate::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::{Module, TypeConverter};
-use crate::arena::types::Location as ArenaLocation;
+use crate::arena::types::Location;
 
 /// Information about an unresolved cast (arena version).
 #[derive(Debug, Clone)]
 pub struct UnresolvedCast {
     /// Location of the cast operation.
-    pub location: ArenaLocation,
+    pub location: Location,
     /// Source type.
     pub from_type: TypeRef,
     /// Target type.

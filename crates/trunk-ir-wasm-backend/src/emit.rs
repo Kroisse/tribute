@@ -42,7 +42,7 @@ use trunk_ir::arena::Module as IrModule;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -820,7 +820,7 @@ fn assign_locals_in_region(
 
                     let placeholder_ty = if is_ref_cast {
                         attrs.get(&ATTR_TARGET_TYPE()).and_then(|attr| {
-                            if let ArenaAttribute::Type(ty) = attr {
+                            if let Attribute::Type(ty) = attr {
                                 if is_type(ctx, *ty, "wasm", "structref") {
                                     Some(*ty)
                                 } else {
@@ -834,7 +834,7 @@ fn assign_locals_in_region(
                         attrs
                             .get(&Symbol::new("type"))
                             .and_then(|attr| {
-                                if let ArenaAttribute::Type(ty) = attr {
+                                if let Attribute::Type(ty) = attr {
                                     if is_type(ctx, *ty, "wasm", "structref") {
                                         Some(*ty)
                                     } else {
@@ -862,7 +862,7 @@ fn assign_locals_in_region(
                             Some(ctx.op_operands(op).len())
                         } else {
                             attrs.get(&Symbol::new("field_count")).and_then(|attr| {
-                                if let ArenaAttribute::IntBits(fc) = attr {
+                                if let Attribute::IntBits(fc) = attr {
                                     usize::try_from(*fc).ok()
                                 } else {
                                     None
@@ -1304,10 +1304,7 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
 /// Intern a named adt.struct type (e.g., _Step, _Continuation).
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = std::collections::BTreeMap::new();
-    attrs.insert(
-        Symbol::new("name"),
-        ArenaAttribute::Symbol(Symbol::new(name)),
-    );
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(trunk_ir::arena::types::TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),

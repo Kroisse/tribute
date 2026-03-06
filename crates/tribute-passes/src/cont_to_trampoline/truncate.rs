@@ -9,7 +9,7 @@ use trunk_ir::arena::dialect::trampoline as arena_trampoline;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use super::analysis::calls_effectful_function;
 use super::patterns::is_step_type;
@@ -99,7 +99,7 @@ fn truncate_func_after_shift(
                 .attrs
                 .get(&Symbol::new("result"))
                 .and_then(|a| match a {
-                    ArenaAttribute::Type(t) => Some(*t),
+                    Attribute::Type(t) => Some(*t),
                     _ => None,
                 });
 
@@ -107,21 +107,19 @@ fn truncate_func_after_shift(
             for &p in &func_ty_data.params {
                 builder = builder.param(p);
             }
-            builder = builder.attr("result", ArenaAttribute::Type(step_ty));
-            if let Some(ArenaAttribute::Type(effect)) =
-                func_ty_data.attrs.get(&Symbol::new("effect"))
-            {
-                builder = builder.attr("effect", ArenaAttribute::Type(*effect));
+            builder = builder.attr("result", Attribute::Type(step_ty));
+            if let Some(Attribute::Type(effect)) = func_ty_data.attrs.get(&Symbol::new("effect")) {
+                builder = builder.attr("effect", Attribute::Type(*effect));
             }
             let new_func_ty = ctx.types.intern(builder.build());
 
             // Update the function's type attribute
             let mut new_attrs = ctx.op(func_op).attributes.clone();
-            new_attrs.insert(Symbol::new("type"), ArenaAttribute::Type(new_func_ty));
+            new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
             if let Some(original) = original_result {
                 new_attrs.insert(
                     Symbol::new("original_result_type"),
-                    ArenaAttribute::Type(original),
+                    Attribute::Type(original),
                 );
             }
             ctx.op_mut(func_op).attributes = new_attrs;

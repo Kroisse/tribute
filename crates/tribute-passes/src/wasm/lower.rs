@@ -13,7 +13,7 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 use super::const_to_wasm::ConstAnalysis;
@@ -155,8 +155,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == arena_func::DIALECT_NAME() && data.name == Symbol::new("func") {
-                if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
-                {
+                if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
                     let fn_data = ctx.types.get(*fn_ty);
                     let params: Vec<_> = fn_data
                         .params
@@ -175,7 +174,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                 }
             } else if data.dialect == arena_wasm::DIALECT_NAME()
                 && data.name == Symbol::new("func")
-                && let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
+                && let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
             {
                 let fn_data = ctx.types.get(*fn_ty);
                 let params: Vec<_> = fn_data
@@ -347,7 +346,7 @@ impl<'a> WasmLowerer<'a> {
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
                     } else if data.name == Symbol::new("export_func")
-                        && let Some(ArenaAttribute::String(name)) =
+                        && let Some(Attribute::String(name)) =
                             data.attributes.get(&Symbol::new("name"))
                     {
                         if name == "main" {
@@ -376,7 +375,7 @@ impl<'a> WasmLowerer<'a> {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(ArenaAttribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
+        let Some(Attribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
         else {
             return;
         };
@@ -388,7 +387,7 @@ impl<'a> WasmLowerer<'a> {
 
         self.main_exports.saw_main = true;
 
-        if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
+        if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
             let fn_data = ctx.types.get(*fn_ty);
             // In arena core.func type, params[0] is the return type
             if let Some(&result_ty) = fn_data.params.first() {
@@ -397,7 +396,7 @@ impl<'a> WasmLowerer<'a> {
         }
 
         // Read original_result_type attribute if present
-        if let Some(ArenaAttribute::Type(original_ty)) =
+        if let Some(Attribute::Type(original_ty)) =
             data.attributes.get(&Symbol::new("original_result_type"))
         {
             self.main_exports.original_result_type = Some(*original_ty);
@@ -466,7 +465,7 @@ impl<'a> WasmLowerer<'a> {
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g0.op_ref());
             // Index 1 ($yield_tag): i32
@@ -475,7 +474,7 @@ impl<'a> WasmLowerer<'a> {
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g1.op_ref());
             // Index 2 ($yield_cont): anyref
@@ -484,7 +483,7 @@ impl<'a> WasmLowerer<'a> {
                 location,
                 Symbol::new("anyref"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g2.op_ref());
             // Index 3 ($yield_op_idx): i32
@@ -493,7 +492,7 @@ impl<'a> WasmLowerer<'a> {
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g3.op_ref());
         }
@@ -516,7 +515,7 @@ impl<'a> WasmLowerer<'a> {
                 ctx,
                 location,
                 *offset,
-                ArenaAttribute::Bytes(content.as_slice().into()),
+                Attribute::Bytes(content.as_slice().into()),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -528,7 +527,7 @@ impl<'a> WasmLowerer<'a> {
                 ctx,
                 location,
                 0,
-                ArenaAttribute::Bytes(content.as_slice().into()),
+                Attribute::Bytes(content.as_slice().into()),
                 true,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -543,7 +542,7 @@ impl<'a> WasmLowerer<'a> {
                 ctx,
                 location,
                 *offset,
-                ArenaAttribute::Bytes(iovec_bytes.as_slice().into()),
+                Attribute::Bytes(iovec_bytes.as_slice().into()),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -555,7 +554,7 @@ impl<'a> WasmLowerer<'a> {
                 ctx,
                 location,
                 nwritten_offset,
-                ArenaAttribute::Bytes(smallvec![0, 0, 0, 0]),
+                Attribute::Bytes(smallvec![0, 0, 0, 0]),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -1130,7 +1129,7 @@ impl<'a> WasmLowerer<'a> {
 /// Check if a type is the Step ADT type.
 fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    if let Some(ArenaAttribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
+    if let Some(Attribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
         *name == Symbol::new("_Step")
     } else {
         false

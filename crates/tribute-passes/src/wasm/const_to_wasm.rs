@@ -11,14 +11,14 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::Attribute;
+use trunk_ir::arena::types::TypeDataBuilder;
 
 /// Result of const analysis - maps content to allocated offset.
 pub struct ConstAnalysis {
@@ -96,8 +96,7 @@ impl ConstCollector {
 
         if data.dialect == arena_adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(ArenaAttribute::String(s)) = data.attributes.get(&Symbol::new("value"))
-                {
+                if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
                     let bytes = s.clone().into_bytes();
                     if !self.string_seen.contains_key(&bytes) {
                         let offset = Self::align_to(self.next_string_offset, 4);
@@ -109,7 +108,7 @@ impl ConstCollector {
                     }
                 }
             } else if data.name == Symbol::new("bytes_const")
-                && let Some(ArenaAttribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
+                && let Some(Attribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
             {
                 let bytes: Vec<u8> = b.to_vec();
                 if !self.bytes_seen.contains_key(&bytes) {
@@ -262,7 +261,7 @@ impl RewritePattern for BytesConstPattern {
         };
 
         let value_attr = bytes_const.value(ctx);
-        let ArenaAttribute::Bytes(b) = value_attr else {
+        let Attribute::Bytes(b) = value_attr else {
             return false;
         };
         let content: Vec<u8> = b.to_vec();
@@ -272,7 +271,9 @@ impl RewritePattern for BytesConstPattern {
         };
 
         let location = ctx.op(op).location;
-        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
+        let bytes_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Create wasm.bytes_from_data operation
         let new_op = arena_wasm::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);

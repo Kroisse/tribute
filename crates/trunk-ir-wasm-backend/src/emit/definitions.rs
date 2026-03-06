@@ -12,7 +12,7 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{ExportKind, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};
@@ -205,7 +205,7 @@ pub(crate) fn extract_data_def(
     // bytes is typed as `any` in the dialect, so we access the raw attribute
     let op_data = ctx.op(data_op.op_ref());
     let bytes = match op_data.attributes.get(&Symbol::new("bytes")) {
-        Some(ArenaAttribute::Bytes(value)) => value.to_vec(),
+        Some(Attribute::Bytes(value)) => value.to_vec(),
         _ => {
             return Err(CompilationError::invalid_attribute(
                 "missing or invalid 'bytes' attribute on wasm.data",
@@ -290,7 +290,7 @@ pub(crate) fn extract_global_def(
     let mutable = global_op.mutable(ctx);
     let op_data = ctx.op(global_op.op_ref());
     let init = match op_data.attributes.get(&Symbol::new("init")) {
-        Some(ArenaAttribute::IntBits(v)) => *v as i64,
+        Some(Attribute::IntBits(v)) => *v as i64,
         other => {
             debug!(
                 "extract_global_def: missing or non-IntBits 'init' attribute (got {:?}), defaulting to 0",

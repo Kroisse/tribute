@@ -147,7 +147,7 @@ mod tests {
     use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
     use trunk_ir::arena::dialect::{arith as arena_arith, cont as arena_cont, scf as arena_scf};
     use trunk_ir::arena::refs::RegionRef;
-    use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
     use trunk_ir::location::Span;
     use trunk_ir::smallvec::smallvec;
 
@@ -207,7 +207,7 @@ mod tests {
     fn ability_ref_type(ctx: &mut IrContext, name: Symbol) -> trunk_ir::arena::refs::TypeRef {
         ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", ArenaAttribute::Symbol(name))
+                .attr("name", Attribute::Symbol(name))
                 .build(),
         )
     }
@@ -215,7 +215,7 @@ mod tests {
     /// Helper: create a simple body region with a const + yield.
     fn make_simple_body_arena(ctx: &mut IrContext, loc: Location) -> RegionRef {
         let i32_ty = i32_type(ctx);
-        let c = arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(0));
+        let c = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
         let c_result = c.result(ctx);
         let y = arena_scf::r#yield(ctx, loc, [c_result]);
         let block = ctx.create_block(BlockData {
@@ -239,7 +239,7 @@ mod tests {
     fn arena_get_region_result_value_returns_yield_operand() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        let c = arena_arith::r#const(&mut ctx, loc, i32_ty, ArenaAttribute::IntBits(42));
+        let c = arena_arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
         let c_result = c.result(&ctx);
         let y = arena_scf::r#yield(&mut ctx, loc, [c_result]);
         let block = ctx.create_block(BlockData {
@@ -264,7 +264,7 @@ mod tests {
     fn arena_get_region_result_value_returns_last_op_result() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        let c = arena_arith::r#const(&mut ctx, loc, i32_ty, ArenaAttribute::IntBits(42));
+        let c = arena_arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],

@@ -33,7 +33,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 use trunk_ir::arena::rewrite::type_converter::MaterializeResult;
 
@@ -112,7 +112,7 @@ pub fn step_adt_type(ctx: &mut IrContext) -> TypeRef {
             .param(anyref_ty)
             .param(i32_ty)
             .param(i32_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Step")))
+            .attr("name", Attribute::Symbol(Symbol::new("_Step")))
             .build(),
     )
 }
@@ -132,7 +132,7 @@ pub fn continuation_adt_type(ctx: &mut IrContext) -> TypeRef {
             .param(anyref_ty)
             .param(i32_ty)
             .param(anyref_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Continuation")))
+            .attr("name", Attribute::Symbol(Symbol::new("_Continuation")))
             .build(),
     )
 }
@@ -148,10 +148,7 @@ pub fn resume_wrapper_adt_type(ctx: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(anyref_ty)
             .param(anyref_ty)
-            .attr(
-                "name",
-                ArenaAttribute::Symbol(Symbol::new("_ResumeWrapper")),
-            )
+            .attr("name", Attribute::Symbol(Symbol::new("_ResumeWrapper")))
             .build(),
     )
 }
@@ -165,7 +162,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(f64_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_BoxedF64")))
+            .attr("name", Attribute::Symbol(Symbol::new("_BoxedF64")))
             .build(),
     )
 }
@@ -692,7 +689,7 @@ impl RewritePattern for LowerTrampolineStructGetPattern {
             let field_idx = state_get.field(ctx);
             // state_type must be set by the producer pass
             let state_type = match ctx.op(op).attributes.get(&Symbol::new("state_type")) {
-                Some(ArenaAttribute::Type(ty)) => *ty,
+                Some(Attribute::Type(ty)) => *ty,
                 other => unreachable!(
                     "trampoline.state_get op {op:?} missing or invalid 'state_type' attribute: {other:?}"
                 ),

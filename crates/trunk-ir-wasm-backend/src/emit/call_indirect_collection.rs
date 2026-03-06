@@ -13,7 +13,7 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
+use trunk_ir::arena::types::{Attribute, TypeData};
 use trunk_ir::smallvec::SmallVec;
 
 use crate::errors::CompilationResult;
@@ -45,10 +45,7 @@ fn intern_simple_wasm_type(ctx: &mut IrContext, name: &str) -> TypeRef {
 /// Intern an adt.struct type with the given name attribute.
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = BTreeMap::new();
-    attrs.insert(
-        Symbol::new("name"),
-        ArenaAttribute::Symbol(Symbol::new(name)),
-    );
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),

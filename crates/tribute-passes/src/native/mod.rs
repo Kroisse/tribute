@@ -28,7 +28,7 @@ use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location as ArenaLocation};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 /// Build an extern `func.func` with an unreachable body and `abi = "C"`.
@@ -37,7 +37,7 @@ use trunk_ir::smallvec::smallvec;
 /// that are linked at native code generation time.
 pub(crate) fn build_extern_func(
     ctx: &mut IrContext,
-    loc: ArenaLocation,
+    loc: Location,
     name: &str,
     params: &[TypeRef],
     result: TypeRef,
@@ -70,7 +70,7 @@ pub(crate) fn build_extern_func(
     let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
     ctx.op_mut(func_op.op_ref())
         .attributes
-        .insert(Symbol::new("abi"), ArenaAttribute::String("C".to_string()));
+        .insert(Symbol::new("abi"), Attribute::String("C".to_string()));
 
     func_op.op_ref()
 }

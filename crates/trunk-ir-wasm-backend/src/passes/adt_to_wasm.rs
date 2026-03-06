@@ -49,7 +49,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
@@ -213,7 +213,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
             .attrs
             .get(&Symbol::new("name"))
             .and_then(|a| match a {
-                ArenaAttribute::Symbol(s) => Some(*s),
+                Attribute::Symbol(s) => Some(*s),
                 _ => None,
             })
             .unwrap_or(base_data.name)
@@ -229,9 +229,9 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
     // Add variant type attributes for proper detection (instead of name-based heuristics)
     let builder = TypeDataBuilder::new(dialect, variant_name)
         .params(params)
-        .attr(Symbol::new("is_variant"), ArenaAttribute::Bool(true))
-        .attr(Symbol::new("base_enum"), ArenaAttribute::Type(base_type))
-        .attr(Symbol::new("variant_tag"), ArenaAttribute::Symbol(tag));
+        .attr(Symbol::new("is_variant"), Attribute::Bool(true))
+        .attr(Symbol::new("base_enum"), Attribute::Type(base_type))
+        .attr(Symbol::new("variant_tag"), Attribute::Symbol(tag));
 
     ctx.types.intern(builder.build())
 }

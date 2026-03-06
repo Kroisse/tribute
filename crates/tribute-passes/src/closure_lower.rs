@@ -31,10 +31,9 @@ use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::{DialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    Module, PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
-    RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use crate::evidence::collect_effectful_functions_arena;
 
@@ -48,7 +47,7 @@ fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(i32_ty)
             .param(anyref_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_closure")))
+            .attr("name", Attribute::Symbol(Symbol::new("_closure")))
             .build(),
     )
 }
@@ -61,18 +60,18 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     matches!(
         data.attrs.get(&Symbol::new("name")),
-        Some(ArenaAttribute::Symbol(s)) if *s == Symbol::new("_closure")
+        Some(Attribute::Symbol(s)) if *s == Symbol::new("_closure")
     )
 }
 
 /// Check if an arena value is a closure value (for pre-lowering collection).
 fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
-    use trunk_ir::arena::refs::ValueDef as ArenaValueDef;
+    use trunk_ir::arena::refs::ValueDef;
 
     let ty = ctx.value_ty(value);
 
     // Direct check for closure.new result
-    if let ArenaValueDef::OpResult(op, _) = ctx.value_def(value)
+    if let ValueDef::OpResult(op, _) = ctx.value_def(value)
         && arena_closure::New::from_op(ctx, op).is_ok()
     {
         return true;
@@ -154,7 +153,7 @@ impl RewritePattern for UpdateFuncSignatureArena {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
             return false;
@@ -230,7 +229,7 @@ impl RewritePattern for LowerClosureNewArena {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(closure_new) = arena_closure::New::from_op(ctx, op) else {
             return false;
@@ -273,7 +272,7 @@ impl RewritePattern for LowerClosureCallArena {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::CallIndirect::from_op(ctx, op).is_err() {
             return false;
@@ -352,7 +351,7 @@ impl RewritePattern for LowerClosureFuncArena {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_closure::Func::from_op(ctx, op).is_err() {
             return false;
@@ -383,7 +382,7 @@ impl RewritePattern for LowerClosureEnvArena {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_closure::Env::from_op(ctx, op).is_err() {
             return false;
@@ -588,7 +587,7 @@ pub fn lower_closures(ctx: &mut IrContext, module: Module) {
     let all_closure_calls = collect_all_closure_calls_arena(ctx, module);
 
     // Phase 1: Pattern application
-    let applicator = ArenaPatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(UpdateFuncSignatureArena)
         .add_pattern(LowerClosureCallArena)
         .add_pattern(LowerClosureNewArena)

@@ -19,7 +19,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 
 /// Lower arith dialect to wasm dialect using arena IR.
 ///
@@ -69,28 +69,28 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => {
-                let ArenaAttribute::IntBits(v) = value else {
+                let Attribute::IntBits(v) = value else {
                     warn!("arith.const: expected IntBits for i32, got {:?}", value);
                     return false;
                 };
                 arena_wasm::i32_const(ctx, loc, result_ty, v as i32).op_ref()
             }
             "i64" => {
-                let ArenaAttribute::IntBits(v) = value else {
+                let Attribute::IntBits(v) = value else {
                     warn!("arith.const: expected IntBits for i64, got {:?}", value);
                     return false;
                 };
                 arena_wasm::i64_const(ctx, loc, result_ty, v as i64).op_ref()
             }
             "f32" => {
-                let ArenaAttribute::FloatBits(v) = value else {
+                let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f32, got {:?}", value);
                     return false;
                 };
                 arena_wasm::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                let ArenaAttribute::FloatBits(v) = value else {
+                let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f64, got {:?}", value);
                     return false;
                 };
