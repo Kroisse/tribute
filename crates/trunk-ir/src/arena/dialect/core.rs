@@ -12,6 +12,8 @@ mod core {
 
     struct Nil;
     struct Never;
+    struct String;
+    struct Bytes;
     struct Ptr;
     struct Array<Element>;
     #[attr(nullable: bool)]
