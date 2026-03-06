@@ -16,8 +16,7 @@ pub struct DialectModule {
 
 pub enum DialectItem {
     Operation(OperationDef),
-    /// Type definitions are parsed but ignored for codegen (matching current behavior).
-    TypeDef,
+    TypeDef(TypeDefData),
 }
 
 pub struct OperationDef {
@@ -29,6 +28,22 @@ pub struct OperationDef {
     pub operands: Vec<Operand>,
     pub results: ResultDef,
     pub regions: Vec<RegionOrSuccessor>,
+}
+
+pub struct TypeDefData {
+    /// Clean name without `r#` prefix (e.g., "nil")
+    pub name: String,
+    /// Original ident for use in generated code
+    #[allow(dead_code)]
+    pub raw_ident: Ident,
+    pub params: Vec<TypeParam>,
+    pub attrs: Vec<AttrDef>,
+}
+
+pub struct TypeParam {
+    #[allow(dead_code)]
+    pub name: String,
+    pub raw_ident: Ident,
 }
 
 pub struct AttrDef {
@@ -156,10 +171,14 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
     let mut seen_names = std::collections::HashSet::new();
     while has_remaining(&body_iter) {
         let item = parse_item(&mut body_iter)?;
-        if let DialectItem::Operation(ref op) = item
-            && !seen_names.insert(op.name.clone())
+        let item_name = match &item {
+            DialectItem::Operation(op) => Some(op.name.clone()),
+            DialectItem::TypeDef(td) => Some(td.name.clone()),
+        };
+        if let Some(name) = item_name
+            && !seen_names.insert(name.clone())
         {
-            return Err(format!("duplicate operation name: `{}`", op.name));
+            return Err(format!("duplicate item name: `{name}`"));
         }
         items.push(item);
     }
@@ -197,25 +216,22 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
         }
     }
 
-    // Parse keyword: fn or type
-    let kw: Ident = Ident::parser(iter).map_err(|e| format!("expected `fn` or `type`: {e}"))?;
+    // Parse keyword: fn or struct
+    let kw: Ident = Ident::parser(iter).map_err(|e| format!("expected `fn` or `struct`: {e}"))?;
 
     match kw.to_string().as_str() {
         "fn" => {
             let op = parse_operation(iter, op_attrs, rest_results)?;
             Ok(DialectItem::Operation(op))
         }
-        "type" => {
-            if !op_attrs.is_empty() {
-                return Err("#[attr(...)] is not allowed on type items".into());
-            }
+        "struct" => {
             if rest_results {
-                return Err("#[rest_results] is not allowed on type items".into());
+                return Err("#[rest_results] is not allowed on struct items".into());
             }
-            parse_type_def(iter)?;
-            Ok(DialectItem::TypeDef)
+            let td = parse_struct_def(iter, op_attrs)?;
+            Ok(DialectItem::TypeDef(td))
         }
-        other => Err(format!("expected `fn` or `type`, got `{other}`")),
+        other => Err(format!("expected `fn` or `struct`, got `{other}`")),
     }
 }
 
@@ -525,30 +541,65 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
 }
 
 // ============================================================================
-// Type definition parsing (parsed but no codegen)
+// Struct (type) definition parsing
 // ============================================================================
 
-fn parse_type_def(iter: &mut TokenIter) -> Result<(), String> {
+/// Parse `struct Name;` or `struct Name<Param, ...>;`
+fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDefData, String> {
     // Parse type name
-    let _name: Ident = Ident::parser(iter).map_err(|e| format!("expected type name: {e}"))?;
+    let name_ident: Ident =
+        Ident::parser(iter).map_err(|e| format!("expected struct name: {e}"))?;
+    let name = ident_str(&name_ident);
 
-    // Optional params: (param1, param2)
-    if peek_group(iter, Delimiter::Parenthesis) {
-        let _paren = expect_group(iter, Delimiter::Parenthesis)?;
-    }
-
-    // Optional `with #[attr(...)]` - consume until semicolon
-    // For simplicity, skip any remaining tokens until `;`
-    while !peek_punct(iter, ';') {
-        if !has_remaining(iter) {
-            return Err("expected `;` after type definition".into());
-        }
-        let _: TokenTree =
-            TokenTree::parser(iter).map_err(|e| format!("error in type definition: {e}"))?;
-    }
+    // Optional generic params: <Param1, Param2>
+    let params = if peek_punct(iter, '<') {
+        parse_angle_params(iter)?
+    } else {
+        Vec::new()
+    };
 
     expect_punct(iter, ';')?;
-    Ok(())
+
+    Ok(TypeDefData {
+        name,
+        raw_ident: name_ident,
+        params,
+        attrs,
+    })
+}
+
+/// Parse `<Ident, Ident, ...>` angle-bracket generic parameters.
+fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
+    expect_punct(iter, '<')?;
+    let mut params = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    while !peek_punct(iter, '>') {
+        if !has_remaining(iter) {
+            return Err("expected `>` to close generic parameters".into());
+        }
+        let param_ident: Ident =
+            Ident::parser(iter).map_err(|e| format!("expected type parameter name: {e}"))?;
+        let param_name = ident_str(&param_ident);
+        if !seen_names.insert(param_name.clone()) {
+            return Err(format!("duplicate type parameter: `{param_name}`"));
+        }
+        params.push(TypeParam {
+            name: param_name,
+            raw_ident: param_ident,
+        });
+
+        // Require comma between params (trailing comma allowed)
+        if !peek_punct(iter, '>') {
+            if !peek_punct(iter, ',') {
+                return Err("expected `,` between type parameters".into());
+            }
+            consume_punct(iter)?;
+        }
+    }
+
+    expect_punct(iter, '>')?;
+    Ok(params)
 }
 
 // ============================================================================
@@ -901,17 +952,99 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_type_def_skipped() {
+    fn test_parse_unit_struct() {
         let module = parse_test_module(quote! {
             mod core {
-                type i32 = ();
+                struct Nil;
+            }
+        })
+        .unwrap();
+
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.name, "Nil");
+                assert!(td.params.is_empty());
+                assert!(td.attrs.is_empty());
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_with_param() {
+        let module = parse_test_module(quote! {
+            mod core {
+                struct Array<Element>;
+            }
+        })
+        .unwrap();
+
+        assert_eq!(module.items.len(), 1);
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.name, "Array");
+                assert_eq!(td.params.len(), 1);
+                assert_eq!(td.params[0].raw_ident.to_string(), "Element");
+                assert!(td.attrs.is_empty());
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_with_multiple_params() {
+        let module = parse_test_module(quote! {
+            mod core {
+                struct Pair<First, Second>;
+            }
+        })
+        .unwrap();
+
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.params.len(), 2);
+                assert_eq!(td.params[0].raw_ident.to_string(), "First");
+                assert_eq!(td.params[1].raw_ident.to_string(), "Second");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_with_attrs() {
+        let module = parse_test_module(quote! {
+            mod core {
+                #[attr(nullable: bool)]
+                struct Ref<Pointee>;
+            }
+        })
+        .unwrap();
+
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.name, "Ref");
+                assert_eq!(td.params.len(), 1);
+                assert_eq!(td.attrs.len(), 1);
+                assert_eq!(td.attrs[0].name, "nullable");
+                assert!(matches!(td.attrs[0].ty, AttrType::Bool));
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_and_fn_together() {
+        let module = parse_test_module(quote! {
+            mod core {
+                struct Nil;
                 fn add(lhs: (), rhs: ()) -> result {}
             }
         })
         .unwrap();
 
         assert_eq!(module.items.len(), 2);
-        assert!(matches!(module.items[0], DialectItem::TypeDef));
+        assert!(matches!(module.items[0], DialectItem::TypeDef(_)));
         assert!(matches!(module.items[1], DialectItem::Operation(_)));
     }
 
@@ -1217,31 +1350,46 @@ mod tests {
     }
 
     #[test]
-    fn test_attr_on_type_rejected() {
+    fn test_rest_results_on_struct_rejected() {
         let result = parse_test_module(quote! {
             mod test {
-                #[attr(foo: Symbol)]
-                type i32 = ();
+                #[rest_results]
+                struct Nil;
             }
         });
         let err = result.err().expect("should fail");
         assert!(
-            err.contains("#[attr(...)] is not allowed on type items"),
+            err.contains("#[rest_results] is not allowed on struct items"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn test_rest_results_on_type_rejected() {
+    fn test_duplicate_type_name_rejected() {
         let result = parse_test_module(quote! {
             mod test {
-                #[rest_results]
-                type i32 = ();
+                struct Nil;
+                struct Nil;
             }
         });
         let err = result.err().expect("should fail");
         assert!(
-            err.contains("#[rest_results] is not allowed on type items"),
+            err.contains("duplicate item name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_op_and_type_name_collision_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                fn foo() {}
+                struct foo;
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("duplicate item name"),
             "unexpected error: {err}"
         );
     }
@@ -1256,7 +1404,7 @@ mod tests {
         });
         let err = result.err().expect("should fail");
         assert!(
-            err.contains("duplicate operation name"),
+            err.contains("duplicate item name"),
             "unexpected error: {err}"
         );
     }

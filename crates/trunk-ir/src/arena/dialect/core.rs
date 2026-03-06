@@ -9,4 +9,11 @@ mod core {
     }
 
     fn unrealized_conversion_cast(value: ()) -> result {}
+
+    struct Nil;
+    struct Never;
+    struct Ptr;
+    struct Array<Element>;
+    #[attr(nullable: bool)]
+    struct Ref<Pointee>;
 }

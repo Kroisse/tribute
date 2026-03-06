@@ -18,7 +18,7 @@ pub mod wasm;
 mod tests {
     use crate::Span;
     use crate::Symbol;
-    use crate::arena::ops::ArenaDialectOp;
+    use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
     use crate::arena::refs::PathRef;
     use crate::arena::types::Location;
     use crate::arena::{
@@ -398,5 +398,86 @@ mod tests {
         assert_eq!(super::arith::DIALECT_NAME(), Symbol::new("arith"));
         assert_eq!(super::wasm::DIALECT_NAME(), Symbol::new("wasm"));
         assert_eq!(super::clif::DIALECT_NAME(), Symbol::new("clif"));
+    }
+
+    // ================================================================
+    // Arena dialect types
+    // ================================================================
+
+    #[test]
+    fn test_nil_type_round_trip() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+
+        // from_type_ref round-trip
+        let nil2 =
+            super::core::Nil::from_type_ref(&ctx, nil.as_type_ref()).expect("should match Nil");
+        assert_eq!(nil.as_type_ref(), nil2.as_type_ref());
+
+        // matches
+        assert!(super::core::Nil::matches(&ctx, nil.as_type_ref()));
+    }
+
+    #[test]
+    fn test_array_type_with_param() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let arr = super::core::array(&mut ctx, i32_ty);
+
+        // element accessor
+        assert_eq!(arr.element(&ctx), i32_ty);
+
+        // from_type_ref
+        let arr2 =
+            super::core::Array::from_type_ref(&ctx, arr.as_type_ref()).expect("should match Array");
+        assert_eq!(arr.as_type_ref(), arr2.as_type_ref());
+        assert_eq!(arr2.element(&ctx), i32_ty);
+    }
+
+    #[test]
+    fn test_ref_type_with_attr() {
+        let mut ctx = IrContext::new();
+        let ptr_ty = super::core::ptr(&mut ctx);
+        let r = super::core::r#ref(&mut ctx, ptr_ty.as_type_ref(), true);
+
+        assert_eq!(r.pointee(&ctx), ptr_ty.as_type_ref());
+        assert_eq!(r.nullable(&ctx), true);
+
+        let r2 = super::core::Ref::from_type_ref(&ctx, r.as_type_ref()).expect("should match Ref");
+        assert_eq!(r2.nullable(&ctx), true);
+    }
+
+    #[test]
+    fn test_type_matches_wrong_type() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+        // Nil should not match as Array
+        assert!(!super::core::Array::matches(&ctx, nil.as_type_ref()));
+        assert!(super::core::Array::from_type_ref(&ctx, nil.as_type_ref()).is_none());
+    }
+
+    #[test]
+    fn test_type_into_type_ref() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+        let ty_ref: crate::arena::TypeRef = nil.into();
+        assert_eq!(ty_ref, nil.as_type_ref());
+    }
+
+    #[test]
+    fn test_type_name_constant() {
+        assert_eq!(super::core::NIL(), Symbol::new("nil"));
+        assert_eq!(super::core::NEVER(), Symbol::new("never"));
+        assert_eq!(super::core::PTR(), Symbol::new("ptr"));
+        assert_eq!(super::core::ARRAY(), Symbol::new("array"));
+        assert_eq!(super::core::REF(), Symbol::new("ref"));
+    }
+
+    #[test]
+    fn test_type_trait_constants() {
+        assert_eq!(super::core::Nil::DIALECT_NAME, "core");
+        assert_eq!(super::core::Nil::TYPE_NAME, "nil");
+        assert_eq!(super::core::Array::DIALECT_NAME, "core");
+        assert_eq!(super::core::Array::TYPE_NAME, "array");
     }
 }
