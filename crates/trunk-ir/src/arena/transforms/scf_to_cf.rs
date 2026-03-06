@@ -40,7 +40,7 @@ use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 use crate::arena::rewrite::ArenaModule;
 use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::arena::types::{Attribute, Location};
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 /// Lower all `scf` operations in a module to `cf` operations.
 pub fn lower_scf_to_cf(ctx: &mut IrContext, module: ArenaModule) {
@@ -493,8 +493,8 @@ mod tests {
     use super::*;
     use crate::arena::dialect::{arith, func, scf};
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
     use std::ops::ControlFlow;
 

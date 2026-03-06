@@ -27,6 +27,7 @@ use crate::adt_layout::{
     compute_enum_layout_arena, compute_struct_layout_arena, find_variant_layout,
     get_enum_variants_arena,
 };
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
@@ -38,7 +39,6 @@ use trunk_ir::arena::rewrite::{
     PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
-use trunk_ir::ir::Symbol;
 
 /// Lower ADT operations to clif dialect.
 ///

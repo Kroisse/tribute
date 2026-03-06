@@ -8,6 +8,7 @@
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `clif.{band,bor,bxor,ishl,sshr,ushr}`
 //! - `arith.{cast,trunc,extend,convert}` -> `clif.{ireduce,sextend,fpromote,fdemote,fcvt_*}`
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::clif as arena_clif;
@@ -18,7 +19,6 @@ use trunk_ir::arena::rewrite::{
     PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
 };
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {

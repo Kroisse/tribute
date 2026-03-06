@@ -6,6 +6,7 @@
 
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
@@ -15,7 +16,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, PatternApplicator, WasmFuncSignatureConversionPattern,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 use trunk_ir::smallvec::smallvec;
 
 use super::const_to_wasm::ConstAnalysis;

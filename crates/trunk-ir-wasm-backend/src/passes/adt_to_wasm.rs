@@ -40,6 +40,7 @@
 //! emit can infer type_idx from result/operand types without the attribute.
 
 use tracing::warn;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -49,7 +50,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 
 /// Lower adt dialect to wasm dialect using arena IR.
 ///

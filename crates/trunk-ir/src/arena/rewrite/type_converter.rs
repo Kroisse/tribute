@@ -100,8 +100,8 @@ impl Default for ArenaTypeConverter {
 mod tests {
     use super::*;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

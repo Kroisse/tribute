@@ -10,6 +10,7 @@
 
 use tracing::warn;
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -19,7 +20,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
 
 /// Lower arith dialect to wasm dialect using arena IR.
 ///

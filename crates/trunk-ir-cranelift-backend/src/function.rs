@@ -9,11 +9,11 @@ use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::ir::Symbol;
 
 use crate::{CompilationError, CompilationResult};
 

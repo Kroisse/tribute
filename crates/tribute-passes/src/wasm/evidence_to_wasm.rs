@@ -23,6 +23,7 @@
 use std::collections::BTreeMap;
 
 use tribute_ir::arena::dialect::ability as arena_ability;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::ArenaDialectOp;
@@ -31,7 +32,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 

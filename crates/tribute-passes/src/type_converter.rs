@@ -18,11 +18,11 @@
 //! type converters.
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::refs::TypeRef;
 use trunk_ir::arena::rewrite::type_converter::{ArenaTypeConverter, MaterializeResult};
 use trunk_ir::arena::types::TypeDataBuilder;
-use trunk_ir::ir::Symbol;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
     ctx.types

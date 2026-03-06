@@ -215,7 +215,7 @@ fn write_escaped_string(f: &mut impl Write, s: &str) -> fmt::Result {
     Ok(())
 }
 
-fn write_symbol(f: &mut impl Write, sym: crate::ir::Symbol) -> fmt::Result {
+fn write_symbol(f: &mut impl Write, sym: crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| {
         let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_');
         if needs_quoting {

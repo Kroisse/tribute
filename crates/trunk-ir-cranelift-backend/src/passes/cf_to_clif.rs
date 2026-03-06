@@ -4,6 +4,7 @@
 //! - `cf.br` -> `clif.jump`
 //! - `cf.cond_br` -> `clif.brif`
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::OperationDataBuilder;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cf as arena_cf;
@@ -13,7 +14,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
     PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
 };
-use trunk_ir::ir::Symbol;
 
 /// Lower cf dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {

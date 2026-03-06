@@ -18,7 +18,7 @@ use crate::arena::refs::OpRef;
 use crate::arena::rewrite::ArenaModule;
 use crate::arena::types::Attribute;
 use crate::arena::walk::{WalkAction, walk_region};
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -396,8 +396,8 @@ mod tests {
     use super::*;
     use crate::arena::dialect::func;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {

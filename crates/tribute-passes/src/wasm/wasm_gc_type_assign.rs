@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 
 use tracing::debug;
+use trunk_ir::Symbol;
 use trunk_ir::arena::ValueDef;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -18,8 +19,8 @@ use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::Symbol;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use crate::arena::context::IrContext;
 use crate::arena::refs::OpRef;
 use crate::arena::walk;
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 /// Result of a legality check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

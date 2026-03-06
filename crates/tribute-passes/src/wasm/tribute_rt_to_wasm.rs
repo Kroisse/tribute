@@ -20,6 +20,7 @@
 //! - `tribute_rt.any` -> `wasm.anyref`
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -29,7 +30,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 
 /// Helper to create arena type refs for common types.
 fn i32_type(ctx: &mut IrContext) -> TypeRef {

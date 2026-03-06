@@ -26,6 +26,7 @@
 //! and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
@@ -34,7 +35,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, FuncSignatureConversionPattern, PatternApplicator,
     PatternRewriter, WasmFuncSignatureConversionPattern,
 };
-use trunk_ir::ir::Symbol;
 
 /// Normalize tribute_rt primitive types to core types.
 ///

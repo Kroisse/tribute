@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::core as arena_core;
@@ -18,7 +19,7 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
+use trunk_ir::Symbol;
 
 /// Result of const analysis - maps content to allocated offset.
 pub struct ConstAnalysis {

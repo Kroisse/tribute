@@ -7,15 +7,9 @@ pub mod arena;
 pub mod dialect;
 
 // Re-export common trunk-ir types for convenience
-pub use trunk_ir::{
-    Attribute, Attrs, Block, BlockBuilder, BlockId, ConversionError, DialectOp, DialectType, IdVec,
-    Location, Operation, PathId, Region, Span, Symbol, Type, Value, ValueDef, idvec,
-};
+pub use trunk_ir::{BlockId, ConversionError, IdVec, Span, Symbol, idvec};
 
 // Re-export trunk_ir::register_pure_op for convenience
-// Users can use:
-//   use tribute_ir::register_pure_op;
-//   register_pure_op!(crate::dialect::src::Var<'_>);
 pub use trunk_ir::register_pure_op;
 
 /// Tribute 모듈 경로 조작을 위한 Symbol extension trait

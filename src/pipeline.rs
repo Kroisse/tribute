@@ -68,7 +68,27 @@ use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::Span;
 use trunk_ir::arena::{ArenaModule, IrContext};
 use trunk_ir::conversion::resolve_unrealized_casts_arena;
-use trunk_ir::rewrite::ConversionError;
+/// Error when illegal operations remain after lowering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversionError {
+    illegal_ops: Vec<IllegalOp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IllegalOp {
+    dialect: String,
+    name: String,
+}
+
+impl std::fmt::Display for ConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Illegal operations remain after lowering:")?;
+        for op in &self.illegal_ops {
+            writeln!(f, "  - {}.{}", op.dialect, op.name)?;
+        }
+        Ok(())
+    }
+}
 
 // =============================================================================
 // Compilation configuration
@@ -432,7 +452,7 @@ fn run_wasm_target_pipeline_arena(
     lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
-            .map(|op| trunk_ir::rewrite::IllegalOp {
+            .map(|op| IllegalOp {
                 dialect: op.dialect.to_string(),
                 name: op.name.to_string(),
             })
@@ -516,7 +536,7 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
     if let Err(e) = lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
-            .map(|op| trunk_ir::rewrite::IllegalOp {
+            .map(|op| IllegalOp {
                 dialect: op.dialect.to_string(),
                 name: op.name.to_string(),
             })

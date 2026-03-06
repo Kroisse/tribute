@@ -34,8 +34,8 @@ impl ArenaModule {
     /// Create an `ArenaModule` wrapper, verifying it points to a `core.module` op.
     pub fn new(ctx: &IrContext, op: OpRef) -> Option<Self> {
         let data = ctx.op(op);
-        if data.dialect == crate::ir::Symbol::new("core")
-            && data.name == crate::ir::Symbol::new("module")
+        if data.dialect == crate::symbol::Symbol::new("core")
+            && data.name == crate::symbol::Symbol::new("module")
         {
             Some(ArenaModule(op))
         } else {
@@ -67,10 +67,10 @@ impl ArenaModule {
     }
 
     /// Get the module name (from `sym_name` attribute).
-    pub fn name(self, ctx: &IrContext) -> Option<crate::ir::Symbol> {
+    pub fn name(self, ctx: &IrContext) -> Option<crate::symbol::Symbol> {
         ctx.op(self.0)
             .attributes
-            .get(&crate::ir::Symbol::new("sym_name"))
+            .get(&crate::symbol::Symbol::new("sym_name"))
             .and_then(|a| match a {
                 super::types::Attribute::Symbol(s) => Some(*s),
                 _ => None,
@@ -88,8 +88,8 @@ impl ArenaModule {
 mod tests {
     use super::*;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {

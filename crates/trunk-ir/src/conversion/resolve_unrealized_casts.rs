@@ -191,8 +191,8 @@ mod tests {
         use crate::arena::rewrite::{ArenaModule, ArenaTypeConverter};
         use crate::arena::types::{Attribute, Location, TypeDataBuilder};
         use crate::conversion::resolve_unrealized_casts_arena;
-        use crate::ir::Symbol;
         use crate::location::Span;
+        use crate::symbol::Symbol;
         use smallvec::smallvec;
 
         fn test_ctx() -> (IrContext, Location) {

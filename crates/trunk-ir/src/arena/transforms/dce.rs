@@ -157,8 +157,8 @@ mod tests {
     use super::*;
     use crate::arena::dialect::{arith, func};
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

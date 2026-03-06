@@ -4,8 +4,8 @@ use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
+use trunk_ir::Symbol;
 use trunk_ir::arena::{ArenaModule, IrContext};
-use trunk_ir::ir::Symbol;
 
 /// Helper to check whether a `func.func` with the given `sym_name` exists
 /// among the top-level operations of an arena module.

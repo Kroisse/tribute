@@ -22,6 +22,7 @@
 //!
 //! This pass uses ArenaTypeConverter to consistently convert trampoline types to ADT types.
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::{
     adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
@@ -33,7 +34,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 
 use trunk_ir::arena::rewrite::type_converter::MaterializeResult;
 

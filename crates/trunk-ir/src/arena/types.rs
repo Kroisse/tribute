@@ -7,8 +7,8 @@ use smallvec::SmallVec;
 use std::collections::HashMap;
 
 use super::refs::{PathRef, TypeRef};
-use crate::ir::Symbol;
 use crate::location::Span;
+use crate::symbol::Symbol;
 
 // ============================================================================
 // Location
@@ -259,7 +259,7 @@ impl Default for PathInterner {
 mod tests {
     use super::*;
     use crate::arena::IrContext;
-    use crate::ir::Symbol;
+    use crate::Symbol;
 
     #[test]
     fn type_interner_dedup() {

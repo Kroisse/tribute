@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -20,7 +21,6 @@ use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
 use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 

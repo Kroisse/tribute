@@ -13,6 +13,8 @@ use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::ArenaRewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::ArenaTypeConverter;
+use crate::arena::types::{Attribute, TypeDataBuilder};
+use crate::Symbol;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {

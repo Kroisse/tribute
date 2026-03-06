@@ -436,8 +436,8 @@ fn main() { }
             .expect("run_through_evidence_params should succeed");
 
         // Verify the module has a lifted function (name starts with __lambda_)
-        let func_dialect = trunk_ir::dialect::func::DIALECT_NAME();
-        let func_name = trunk_ir::dialect::func::FUNC();
+        let func_dialect = Symbol::new("func");
+        let func_name = Symbol::new("func");
 
         let has_lifted = m.ops(&ctx).iter().any(|&op_ref| {
             let op_data = ctx.op(op_ref);
@@ -522,10 +522,8 @@ fn check_for_closure_new_in_module(ctx: &IrContext, m: ArenaModule) -> bool {
 
 /// Helper to recursively check for closure.new in a region (arena version)
 fn check_for_closure_new_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
-    use tribute_ir::dialect::closure;
-
-    let closure_dialect = closure::DIALECT_NAME();
-    let closure_new_name = closure::NEW();
+    let closure_dialect = Symbol::new("closure");
+    let closure_new_name = Symbol::new("new");
 
     let region = ctx.region(region_ref);
     for &block_ref in &region.blocks {
@@ -658,10 +656,8 @@ fn check_for_call_indirect_in_module(ctx: &IrContext, m: ArenaModule) -> bool {
 
 /// Helper to recursively check for func.call_indirect in a region (arena version)
 fn check_for_call_indirect_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
-    use trunk_ir::dialect::func;
-
-    let func_dialect = func::DIALECT_NAME();
-    let call_indirect_name = func::CALL_INDIRECT();
+    let func_dialect = Symbol::new("func");
+    let call_indirect_name = Symbol::new("call_indirect");
 
     let region = ctx.region(region_ref);
     for &block_ref in &region.blocks {
@@ -771,13 +767,11 @@ fn check_for_lowered_closure_ops_in_region(
     ctx: &IrContext,
     region_ref: RegionRef,
 ) -> LoweredClosureOps {
-    use trunk_ir::dialect::{adt, func};
-
-    let func_dialect = func::DIALECT_NAME();
-    let func_constant_name = func::CONSTANT();
-    let adt_dialect = adt::DIALECT_NAME();
-    let adt_struct_new_name = adt::STRUCT_NEW();
-    let adt_struct_get_name = adt::STRUCT_GET();
+    let func_dialect = Symbol::new("func");
+    let func_constant_name = Symbol::new("constant");
+    let adt_dialect = Symbol::new("adt");
+    let adt_struct_new_name = Symbol::new("struct_new");
+    let adt_struct_get_name = Symbol::new("struct_get");
 
     let mut result = LoweredClosureOps {
         has_func_constant: false,

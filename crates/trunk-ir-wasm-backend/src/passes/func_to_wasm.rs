@@ -16,6 +16,7 @@
 
 use std::collections::HashMap;
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
@@ -26,7 +27,6 @@ use trunk_ir::arena::rewrite::{
 };
 use trunk_ir::arena::types::TypeDataBuilder;
 use trunk_ir::arena::{BlockData, RegionData};
-use trunk_ir::ir::Symbol;
 
 use trunk_ir::smallvec::smallvec;
 
