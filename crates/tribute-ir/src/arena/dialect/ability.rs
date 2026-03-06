@@ -174,11 +174,7 @@ mod tests {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let other_array = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i32_ty)
-                .build(),
-        );
+        let other_array = arena_core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false
