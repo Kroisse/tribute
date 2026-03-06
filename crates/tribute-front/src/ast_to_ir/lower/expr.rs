@@ -363,9 +363,10 @@ pub(super) fn lower_expr<'db>(
         } => {
             let db = builder.db();
 
-            if spread.is_some() {
-                return builder.emit_unsupported(location, "record spread syntax");
-            }
+            let spread_val = match &spread {
+                Some(spread_expr) => Some(lower_expr(builder, spread_expr.clone())?),
+                None => None,
+            };
 
             let struct_name = extract_type_name(db, &type_name.resolved);
             let ctor_id = extract_ctor_id(&type_name.resolved);
@@ -412,10 +413,22 @@ pub(super) fn lower_expr<'db>(
                 field_map.insert(name, val);
             }
 
+            let qualified = qualified_type_name(db, &ctor_id);
+            let type_attr = match builder.ctx.get_type(qualified) {
+                Some(ty) => ty,
+                None => builder.ctx.any_type(builder.ir),
+            };
+            let any_ty = builder.ctx.any_type(builder.ir);
+
             let mut ordered_values: Vec<ValueRef> = Vec::with_capacity(field_order.len());
-            for field_name in &field_order {
+            for (i, field_name) in field_order.iter().enumerate() {
                 if let Some(val) = field_map.get(field_name) {
                     ordered_values.push(*val);
+                } else if let Some(base) = spread_val {
+                    let get_op =
+                        adt::struct_get(builder.ir, location, base, any_ty, type_attr, i as u32);
+                    builder.ir.push_op(builder.block, get_op.op_ref());
+                    ordered_values.push(get_op.result(builder.ir));
                 } else {
                     Diagnostic {
                         message: format!("missing field: {}", field_name),
@@ -427,12 +440,6 @@ pub(super) fn lower_expr<'db>(
                     return Some(builder.emit_nil(location));
                 }
             }
-
-            let qualified = qualified_type_name(db, &ctor_id);
-            let type_attr = match builder.ctx.get_type(qualified) {
-                Some(ty) => ty,
-                None => builder.ctx.any_type(builder.ir),
-            };
 
             let op = adt::struct_new(builder.ir, location, ordered_values, struct_ty, type_attr);
             builder.ir.push_op(builder.block, op.op_ref());

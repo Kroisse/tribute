@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 153
 expression: ir_text
 ---
 core.module @test {
@@ -19,7 +18,8 @@ core.module @test {
   func.func @update_x(%0: tribute_rt.any) -> tribute_rt.any {
     ^bb0:
       %1 = arith.const {value = 100} : core.i32
-      %2 = arith.const {value = unit} : core.nil
-      func.return %2
+      %2 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : tribute_rt.any
+      %3 = adt.struct_new %1, %2 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : adt.typeref() {name = @Point}
+      func.return %3
   }
 }
