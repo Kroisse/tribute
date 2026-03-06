@@ -267,10 +267,11 @@ pub fn lower_cont_to_trampoline(
         .collect();
 
     // Add resume functions to module body
-    if let Some(module_block) = module.first_block(ctx) {
-        for func_op in resume_funcs {
-            ctx.push_op(module_block, func_op);
-        }
+    let module_block = module
+        .first_block(ctx)
+        .expect("expected module first_block for inserting resume funcs");
+    for func_op in resume_funcs {
+        ctx.push_op(module_block, func_op);
     }
 
     let illegal = conversion_target.verify(ctx, module_body);

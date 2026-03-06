@@ -90,7 +90,7 @@ fn create_state_fields(count: usize, anyref_ty: TypeRef) -> Vec<(Symbol, TypeRef
 /// Helper to intern the anyref type.
 pub(crate) fn anyref_type(ctx: &mut IrContext) -> TypeRef {
     ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("Any")).build())
+        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
 }
 
 /// Helper to intern the step type.

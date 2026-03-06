@@ -594,11 +594,20 @@ pub(crate) fn build_arm_region(
         let is_resume = arena_cont::Resume::from_op(ctx, op).is_ok();
         let produces_step = is_effectful_call || is_resume;
 
-        // Remap operands
+        // Remap operands (follow chains transitively)
         let operands = ctx.op_operands(op).to_vec();
         let remapped_operands: Vec<ValueRef> = operands
             .iter()
-            .map(|&v| *value_remap.get(&v).unwrap_or(&v))
+            .map(|&v| {
+                let mut current = v;
+                while let Some(&next) = value_remap.get(&current) {
+                    if next == current {
+                        break;
+                    }
+                    current = next;
+                }
+                current
+            })
             .collect();
 
         let result_types = if produces_step {

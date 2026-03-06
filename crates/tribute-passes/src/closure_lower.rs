@@ -65,12 +65,6 @@ fn anyref_type_ref(ctx: &mut IrContext) -> TypeRef {
         .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
 }
 
-/// Create a `core.nil` type ref in arena.
-fn nil_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
-}
-
 /// Check if a TypeRef is a closure.closure type.
 fn is_closure_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
@@ -294,8 +288,8 @@ impl ArenaRewritePattern for LowerClosureNewArena {
 
         // Extract function type from closure.closure result type
         let result_ty = ctx.op_result_types(op)[0];
-        let func_ty =
-            extract_closure_func_type(ctx, result_ty).unwrap_or_else(|| nil_type_ref(ctx));
+        let func_ty = extract_closure_func_type(ctx, result_ty)
+            .expect("closure.new result type must contain a valid func type (from func.constant)");
 
         // Generate: %funcref = func.constant @func_ref : func_type
         let constant_op = arena_func::constant(ctx, loc, func_ty, func_ref);
