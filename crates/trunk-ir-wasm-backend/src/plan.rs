@@ -6,7 +6,7 @@
 //!
 //! Note: WASI imports and data segments are now handled by intrinsic_to_wasm and const_to_wasm passes.
 
-use trunk_ir::Type;
+use trunk_ir::arena::refs::TypeRef;
 
 /// Linear memory planning.
 ///
@@ -37,20 +37,20 @@ impl MemoryPlan {
 ///
 /// Tracks whether the main function was encountered and what type it returns.
 #[derive(Default)]
-pub struct MainExports<'db> {
+pub struct MainExports {
     /// Whether the main function was encountered during lowering.
     pub saw_main: bool,
     /// The return type of the main function, if any.
     /// When main is effectful, this will be the Step type.
-    pub main_result_type: Option<Type<'db>>,
+    pub main_result_type: Option<TypeRef>,
     /// The original return type of main before Step conversion.
     /// This is used by the trampoline to properly unbox the result.
-    pub original_result_type: Option<Type<'db>>,
+    pub original_result_type: Option<TypeRef>,
     /// Whether main has been exported.
     pub main_exported: bool,
 }
 
-impl<'db> MainExports<'db> {
+impl MainExports {
     /// Create a new main exports tracker.
     pub fn new() -> Self {
         Self::default()
