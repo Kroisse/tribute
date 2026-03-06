@@ -274,7 +274,7 @@ fn has_effectful_type(ctx: &IrContext, func_ty: TypeRef) -> bool {
         return false;
     }
     // Non-empty if it has ability params or a tail variable
-    !effect_data.params.is_empty() || effect_data.attrs.get(&Symbol::new("tail_var")).is_some()
+    !effect_data.params.is_empty() || effect_data.attrs.contains_key(&Symbol::new("tail_var"))
 }
 
 /// Check if a region calls any effectful function.

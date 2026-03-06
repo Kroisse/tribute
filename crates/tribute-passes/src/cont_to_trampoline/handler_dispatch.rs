@@ -564,10 +564,10 @@ pub(crate) fn build_arm_region(
     for &op in &original_ops {
         // Skip all unrealized_conversion_cast
         if arena_core::UnrealizedConversionCast::from_op(ctx, op).is_ok() {
-            if let Some(&input) = ctx.op_operands(op).first() {
-                if is_step_type(ctx, ctx.value_ty(input)) {
-                    last_step_value = Some(input);
-                }
+            if let Some(&input) = ctx.op_operands(op).first()
+                && is_step_type(ctx, ctx.value_ty(input))
+            {
+                last_step_value = Some(input);
             }
             continue;
         }

@@ -128,7 +128,11 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
         return true;
     }
     if is_core_func_type_ref(ctx, ty) {
-        return true;
+        // Only treat core.func as closure if it's a block arg (matching LowerClosureCallArena)
+        return matches!(
+            ctx.value_def(value),
+            trunk_ir::arena::refs::ValueDef::BlockArg(_, _)
+        );
     }
     if is_continuation_type_ref(ctx, ty) {
         return true;
