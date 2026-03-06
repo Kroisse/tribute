@@ -16,38 +16,32 @@ use std::collections::HashSet;
 use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
-use tribute_passes::evidence::{collect_effectful_functions, is_effectful_type};
-use trunk_ir::dialect::{core, core::Module, func};
-use trunk_ir::{DialectOp, DialectType};
+use tribute_passes::evidence::{collect_effectful_functions_arena, is_effectful_type_arena};
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::rewrite::ArenaModule;
 
-/// Helper to compile code through AST pipeline and return the IR module.
-fn compile_to_ir(code: &str, name: &str) -> impl FnOnce(&dyn salsa::Database) -> Module<'_> {
+/// Helper to compile code through AST pipeline and return arena IR.
+fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, ArenaModule) {
     let source_code = Rope::from_str(code);
-    let name = name.to_string();
-
-    move |db: &dyn salsa::Database| {
-        let tree = parse_with_thread_local(&source_code, None);
-        let source_file = SourceCst::from_path(db, &name, source_code.clone(), tree);
-        tribute::pipeline::compile_frontend(db, source_file)
-    }
+    let tree = parse_with_thread_local(&source_code, None);
+    let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
+    tribute::pipeline::compile_frontend_to_arena(db, source_file)
+        .expect("compilation should succeed")
 }
 
 /// Helper to get all function names and their effectful status.
-fn get_function_effectfulness<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
-) -> Vec<(String, bool)> {
+fn get_function_effectfulness(ctx: &IrContext, module: &ArenaModule) -> Vec<(String, bool)> {
     let mut results = Vec::new();
-    let body = module.body(db);
 
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let name = func_op.sym_name(db).to_string();
-                let func_ty = func_op.r#type(db);
-                let is_effectful = is_effectful_type(db, func_ty);
-                results.push((name, is_effectful));
-            }
+    for op in module.ops(ctx) {
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let name = func_op.sym_name(ctx).to_string();
+            let func_ty = func_op.r#type(ctx);
+            let is_effectful = is_effectful_type_arena(ctx, func_ty);
+            results.push((name, is_effectful));
         }
     }
 
@@ -56,31 +50,34 @@ fn get_function_effectfulness<'db>(
 
 /// Debug helper to print detailed function effect information.
 #[allow(dead_code)]
-fn debug_function_effects<'db>(db: &'db dyn salsa::Database, module: &Module<'db>) {
-    let body = module.body(db);
+fn debug_function_effects(ctx: &IrContext, module: &ArenaModule) {
+    for op in module.ops(ctx) {
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let name = func_op.sym_name(ctx).to_string();
+            let func_ty = func_op.r#type(ctx);
 
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let name = func_op.sym_name(db).to_string();
-                let func_ty = func_op.r#type(db);
+            let data = ctx.types.get(func_ty);
+            if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
+                let effect = data
+                    .attrs
+                    .get(&Symbol::new("effect"))
+                    .and_then(|a| match a {
+                        trunk_ir::arena::types::Attribute::Type(ty) => Some(*ty),
+                        _ => None,
+                    });
+                eprintln!(
+                    "Function: {} | Type dialect: {}.{} | Effect attr: {:?}",
+                    name, data.dialect, data.name, effect
+                );
 
-                // Get the core::Func wrapper
-                if let Some(core_func) = core::Func::from_type(db, func_ty) {
-                    let effect = core_func.effect(db);
+                if let Some(eff_ref) = effect {
+                    let eff_data = ctx.types.get(eff_ref);
                     eprintln!(
-                        "Function: {} | Type: {:?} | Effect: {:?}",
-                        name, func_ty, effect
+                        "  -> Effect type: {}.{} with {} params",
+                        eff_data.dialect,
+                        eff_data.name,
+                        eff_data.params.len()
                     );
-
-                    if let Some(eff) = effect {
-                        if let Some(row) = core::EffectRowType::from_type(db, eff) {
-                            let abilities = row.abilities(db);
-                            eprintln!("  -> Effect row abilities: {:?}", abilities);
-                        } else {
-                            eprintln!("  -> Effect is not an EffectRowType");
-                        }
-                    }
                 }
             }
         }
@@ -88,11 +85,8 @@ fn debug_function_effects<'db>(db: &'db dyn salsa::Database, module: &Module<'db
 }
 
 /// Helper to get effectful function names as a set.
-fn get_effectful_function_names<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
-) -> HashSet<String> {
-    collect_effectful_functions(db, module)
+fn get_effectful_function_names(ctx: &IrContext, module: &ArenaModule) -> HashSet<String> {
+    collect_effectful_functions_arena(ctx, *module)
         .into_iter()
         .map(|s| s.to_string())
         .collect()
@@ -116,8 +110,8 @@ fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
-        let module = compile_to_ir(code, "pure_lambda.trb")(db);
-        let effectful = get_effectful_function_names(db, &module);
+        let (ctx, module) = compile_to_ir(db, code, "pure_lambda.trb");
+        let effectful = get_effectful_function_names(&ctx, &module);
 
         // main and apply are pure, lifted lambda should also be pure
         assert!(
@@ -157,9 +151,9 @@ fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
-        let module = compile_to_ir(code, "direct_ability.trb")(db);
+        let (ctx, module) = compile_to_ir(db, code, "direct_ability.trb");
 
-        let functions = get_function_effectfulness(db, &module);
+        let functions = get_function_effectfulness(&ctx, &module);
 
         // Find the lifted lambda function
         let lambda_functions: Vec<_> = functions
@@ -218,8 +212,8 @@ fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
-        let module = compile_to_ir(code, "indirect_effect.trb")(db);
-        let functions = get_function_effectfulness(db, &module);
+        let (ctx, module) = compile_to_ir(db, code, "indirect_effect.trb");
+        let functions = get_function_effectfulness(&ctx, &module);
 
         // counter should be effectful
         let counter_effectful = functions
@@ -279,8 +273,8 @@ fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
-        let module = compile_to_ir(code, "handler_arm.trb")(db);
-        let functions = get_function_effectfulness(db, &module);
+        let (ctx, module) = compile_to_ir(db, code, "handler_arm.trb");
+        let functions = get_function_effectfulness(&ctx, &module);
 
         eprintln!("All functions:");
         for (name, is_effectful) in &functions {
@@ -334,8 +328,8 @@ fn main() { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
-        let module = compile_to_ir(code, "ability_core.trb")(db);
-        let functions = get_function_effectfulness(db, &module);
+        let (ctx, module) = compile_to_ir(db, code, "ability_core.trb");
+        let functions = get_function_effectfulness(&ctx, &module);
 
         eprintln!("=== ability_core pattern functions ===");
         for (name, is_effectful) in &functions {
@@ -415,21 +409,22 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "evidence_param.trb", source_code.clone(), tree);
 
-        let module = compile_to_ir(code, "evidence_param.trb")(db);
+        let (ctx_before, module_before) = compile_to_ir(db, code, "evidence_param.trb");
 
         // Get function param counts before evidence pass
-        let before_counts = get_function_param_counts(db, &module);
+        let before_counts = get_function_param_counts(&ctx_before, &module_before);
         eprintln!("Before evidence pass: {:?}", before_counts);
 
         // Apply evidence params pass via arena-based run_through_evidence_params
-        let after_evidence = run_through_evidence_params(db, source_file);
+        let (ctx_after, module_after) = run_through_evidence_params(db, source_file)
+            .expect("evidence pass should succeed");
 
         // Get lambda param count after evidence pass
-        let after_counts = get_function_param_counts(db, &after_evidence);
+        let after_counts = get_function_param_counts(&ctx_after, &module_after);
         eprintln!("After evidence pass: {:?}", after_counts);
 
         // Find effectful lambdas and verify they got an extra parameter
-        let effectful_before = collect_effectful_functions(db, &module);
+        let effectful_before = collect_effectful_functions_arena(&ctx_before, module_before);
         eprintln!("Effectful functions: {:?}", effectful_before);
 
         // Effectful lambdas already get evidence as their first parameter during
@@ -466,22 +461,17 @@ fn main() { }
 }
 
 /// Helper to get function parameter counts.
-fn get_function_param_counts<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
-) -> Vec<(String, usize)> {
+fn get_function_param_counts(ctx: &IrContext, module: &ArenaModule) -> Vec<(String, usize)> {
     let mut results = Vec::new();
-    let body = module.body(db);
 
-    for block in body.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func_op) = func::Func::from_operation(db, *op) {
-                let name = func_op.sym_name(db).to_string();
-                let func_body = func_op.body(db);
-                if let Some(entry_block) = func_body.blocks(db).first() {
-                    let param_count = entry_block.args(db).len();
-                    results.push((name, param_count));
-                }
+    for op in module.ops(ctx) {
+        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+            let name = func_op.sym_name(ctx).to_string();
+            let func_body = func_op.body(ctx);
+            let blocks = &ctx.region(func_body).blocks;
+            if let Some(&entry_block) = blocks.first() {
+                let param_count = ctx.block_args(entry_block).len();
+                results.push((name, param_count));
             }
         }
     }

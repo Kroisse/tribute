@@ -1,12 +1,13 @@
-//! Example showing how to use the Salsa database for the Tribute language.
+//! Example showing how to use the arena IR pipeline for the Tribute language.
 //!
-//! This example demonstrates the AST-based compilation pipeline.
+//! This example demonstrates the AST-based compilation pipeline that produces
+//! arena IR (`IrContext` + `ArenaModule`) instead of Salsa-tracked IR.
 
 use salsa::Setter;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use trunk_ir::DialectOp;
-use trunk_ir::dialect::func;
+use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
+use trunk_ir::Symbol;
+use trunk_ir::arena::Attribute;
 
 fn main() {
     // Example 1: Basic database usage
@@ -34,26 +35,39 @@ fn basic_database_usage() {
         }
     "#;
 
-    // Lower to TrunkIR using the convenience function
+    // Lower to arena IR using the convenience function
     let tree = parser.parse(source_code, None).expect("tree");
     let source = SourceCst::from_path(&db, "example.tr", source_code.into(), Some(tree));
-    let module = compile_frontend(&db, source);
 
-    // Get the operations from the module
-    let body = module.body(&db);
-    let blocks = body.blocks(&db);
+    let Some((ctx, arena_module)) = compile_frontend_to_arena(&db, source) else {
+        println!("Compilation failed");
+        return;
+    };
 
-    if !blocks.is_empty() {
-        let ops = blocks[0].operations(&db);
-        println!("Lowered {} top-level operations", ops.len());
+    // Print module name if available
+    if let Some(name) = arena_module.name(&ctx) {
+        println!("Module name: {}", name);
+    }
 
-        // Display the lowered functions
-        for (i, op) in ops.iter().enumerate() {
-            if let Ok(func_op) = func::Func::from_operation(&db, *op) {
-                println!("  Operation {}: func.func \"{}\"", i + 1, func_op.name(&db));
-            } else {
-                println!("  Operation {}: {:?}", i + 1, op);
+    // Get the top-level operations from the module
+    let ops = arena_module.ops(&ctx);
+    println!("Lowered {} top-level operations", ops.len());
+
+    // Display the lowered functions
+    for (i, op_ref) in ops.iter().enumerate() {
+        let op_data = ctx.op(*op_ref);
+        if op_data.dialect == Symbol::new("func") && op_data.name == Symbol::new("func") {
+            if let Some(Attribute::Symbol(name)) = op_data.attributes.get(&Symbol::new("sym_name"))
+            {
+                println!("  Operation {}: func.func \"{}\"", i + 1, name);
             }
+        } else {
+            println!(
+                "  Operation {}: {}.{}",
+                i + 1,
+                op_data.dialect,
+                op_data.name
+            );
         }
     }
 
@@ -77,12 +91,12 @@ fn incremental_compilation_demo() {
 
     // Lower it
     println!("Initial lowering...");
-    let module1 = compile_frontend(&db, source_file);
-    let body1 = module1.body(&db);
-    let blocks1 = body1.blocks(&db);
-    if !blocks1.is_empty() {
-        println!("Lowered {} operations", blocks1[0].operations(&db).len());
-    }
+    let Some((ctx1, m1)) = compile_frontend_to_arena(&db, source_file) else {
+        println!("Initial compilation failed");
+        return;
+    };
+    let ops1 = m1.ops(&ctx1);
+    println!("Lowered {} operations", ops1.len());
 
     // Modify the source file
     println!("Modifying source...");
@@ -92,22 +106,25 @@ fn incremental_compilation_demo() {
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - Salsa will automatically detect the change and recompute
-    let module2 = compile_frontend(&db, source_file);
-    let body2 = module2.body(&db);
-    let blocks2 = body2.blocks(&db);
-    if !blocks2.is_empty() {
-        println!(
-            "Lowered {} operations after modification",
-            blocks2[0].operations(&db).len()
-        );
-    }
+    // the internal tracked queries, then produce fresh arena IR.
+    let Some((ctx2, m2)) = compile_frontend_to_arena(&db, source_file) else {
+        println!("Recompilation failed");
+        return;
+    };
+    let ops2 = m2.ops(&ctx2);
+    println!("Lowered {} operations after modification", ops2.len());
 
-    // Lower again without changes - this should use the cached result
-    let module3 = compile_frontend(&db, source_file);
-    println!(
-        "Cached result identical: {}",
-        module2.body(&db).blocks(&db).len() == module3.body(&db).blocks(&db).len()
-    );
+    // Lower again without changes - internally Salsa caches the tracked
+    // queries, so this recomputation is fast.
+    let Some((ctx3, m3)) = compile_frontend_to_arena(&db, source_file) else {
+        println!("Cached compilation failed");
+        return;
+    };
+    let ops3 = m3.ops(&ctx3);
+    println!("Cached result identical: {}", ops2.len() == ops3.len());
+
+    // We can also inspect module names
+    println!("Module name: {:?}", m3.name(&ctx3));
 
     println!();
 }

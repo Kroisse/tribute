@@ -1,28 +1,29 @@
-//! Salsa integration tests for AST-based compilation pipeline.
+//! Salsa integration tests for AST-based compilation pipeline (arena IR).
 
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
-use trunk_ir::DialectOp;
-use trunk_ir::dialect::func;
+use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
+use trunk_ir::arena::{ArenaModule, IrContext};
+use trunk_ir::ir::Symbol;
 
-/// Helper to count user functions (excluding prelude) by checking for specific names.
-fn find_func_by_name<'db>(
-    db: &'db dyn salsa::Database,
-    module: &trunk_ir::dialect::core::Module<'db>,
-    name: &str,
-) -> bool {
-    let body = module.body(db);
-    let blocks = body.blocks(db);
-    if blocks.is_empty() {
-        return false;
-    }
-
-    blocks[0].operations(db).iter().any(|op| {
-        func::Func::from_operation(db, *op)
-            .map(|f| f.name(db) == name)
-            .unwrap_or(false)
+/// Helper to check whether a `func.func` with the given `sym_name` exists
+/// among the top-level operations of an arena module.
+fn find_func_by_name(ctx: &IrContext, module: &ArenaModule, name: &str) -> bool {
+    let func_dialect = Symbol::new("func");
+    let func_name = Symbol::new("func");
+    let sym_name_key = Symbol::new("sym_name");
+    module.ops(ctx).iter().any(|&op_ref| {
+        let op_data = ctx.op(op_ref);
+        if op_data.dialect == func_dialect && op_data.name == func_name {
+            op_data
+                .attributes
+                .get(&sym_name_key)
+                .map(|attr| matches!(attr, trunk_ir::arena::types::Attribute::Symbol(s) if *s == name))
+                .unwrap_or(false)
+        } else {
+            false
+        }
     })
 }
 
@@ -61,12 +62,13 @@ fn main() {
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let module = compile_frontend(db, source_file);
+        let (ctx, module) =
+            compile_frontend_to_arena(db, source_file).expect("compilation should succeed");
 
         // Verify that expected user functions exist
         for func_name in expected_funcs {
             assert!(
-                find_func_by_name(db, &module, func_name),
+                find_func_by_name(&ctx, &module, func_name),
                 "Expected function '{}' not found in {}",
                 func_name,
                 filename
@@ -77,7 +79,7 @@ fn main() {
 
 #[test]
 fn test_salsa_incremental_computation_detailed() {
-    // Demonstrate incremental computation
+    // Demonstrate incremental computation via compile_frontend_to_arena
     let mut db = TributeDatabaseImpl::default();
     let mut parser = Parser::new();
     parser
@@ -88,9 +90,10 @@ fn test_salsa_incremental_computation_detailed() {
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let module1 = compile_frontend(&db, source_file);
+    let (ctx1, module1) =
+        compile_frontend_to_arena(&db, source_file).expect("compilation should succeed");
     assert!(
-        find_func_by_name(&db, &module1, "main"),
+        find_func_by_name(&ctx1, &module1, "main"),
         "Should have main function"
     );
 
@@ -100,21 +103,27 @@ fn test_salsa_incremental_computation_detailed() {
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
-    // Lower again - should recompute
-    let module2 = compile_frontend(&db, source_file);
+    // Lower again - should recompute with updated source
+    let (ctx2, module2) = compile_frontend_to_arena(&db, source_file)
+        .expect("compilation should succeed after update");
     assert!(
-        find_func_by_name(&db, &module2, "main"),
+        find_func_by_name(&ctx2, &module2, "main"),
         "Should have main function after update"
     );
 
-    // Lower again without changes - should use cached result
-    let module3 = compile_frontend(&db, source_file);
+    // Lower again without changes - pipeline still works
+    let (ctx3, module3) =
+        compile_frontend_to_arena(&db, source_file).expect("compilation should succeed on re-run");
+    assert!(
+        find_func_by_name(&ctx3, &module3, "main"),
+        "Should have main function on cached run"
+    );
 
-    // Verify that cached results are the same
+    // Verify modules have the same structure (same number of top-level ops)
     assert_eq!(
-        module2.body(&db).blocks(&db).len(),
-        module3.body(&db).blocks(&db).len(),
-        "Modules should be identical (cached result)"
+        module2.ops(&ctx2).len(),
+        module3.ops(&ctx3).len(),
+        "Modules should have the same number of top-level ops"
     );
 }
 
@@ -131,19 +140,19 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let module = compile_frontend(db, source);
+    let (ctx, module) = compile_frontend_to_arena(db, source).expect("compilation should succeed");
 
     // Verify all user functions exist
     assert!(
-        find_func_by_name(db, &module, "add"),
+        find_func_by_name(&ctx, &module, "add"),
         "Should have add function"
     );
     assert!(
-        find_func_by_name(db, &module, "multiply"),
+        find_func_by_name(&ctx, &module, "multiply"),
         "Should have multiply function"
     );
     assert!(
-        find_func_by_name(db, &module, "main"),
+        find_func_by_name(&ctx, &module, "main"),
         "Should have main function"
     );
 }
@@ -159,8 +168,9 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let module1 = compile_frontend(db, source1);
-        module1.name(db).to_string()
+        let (ctx, module) =
+            compile_frontend_to_arena(db, source1).expect("compilation should succeed");
+        module.name(&ctx).map(|s| s.to_string())
     });
 
     let module2_name = TributeDatabaseImpl::default().attach(|db| {
@@ -171,13 +181,14 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let module2 = compile_frontend(db, source2);
-        module2.name(db).to_string()
+        let (ctx, module) =
+            compile_frontend_to_arena(db, source2).expect("compilation should succeed");
+        module.name(&ctx).map(|s| s.to_string())
     });
 
     // Module names are derived from file paths
-    assert_eq!(module1_name, "test1");
-    assert_eq!(module2_name, "test2");
+    assert_eq!(module1_name, Some("test1".to_string()));
+    assert_eq!(module2_name, Some("test2".to_string()));
 }
 
 #[salsa_test]
@@ -189,11 +200,12 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let module = compile_frontend(db, source_file);
+    let (ctx, module) =
+        compile_frontend_to_arena(db, source_file).expect("compilation should succeed");
 
     // Verify the main function exists
     assert!(
-        find_func_by_name(db, &module, "main"),
+        find_func_by_name(&ctx, &module, "main"),
         "Should have main function"
     );
 }

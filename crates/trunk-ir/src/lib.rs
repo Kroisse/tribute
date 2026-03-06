@@ -5,6 +5,9 @@
 
 #![recursion_limit = "512"]
 
+// === Salsa-independent primitives ===
+pub mod symbol;
+
 // === ADT layout computation ===
 pub mod adt_layout;
 
@@ -39,15 +42,11 @@ pub use paste;
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 
-pub use ir::{Block, BlockArg, BlockBuilder, BlockId, Operation, Region, Symbol, Value, ValueDef};
+pub use ir::{Block, BlockArg, BlockBuilder, Operation, Region, Value, ValueDef};
 pub use location::{Location, PathId, Span, Spanned};
 pub use ops::{ConversionError, DialectOp};
+pub use symbol::{BlockId, IdVec, Symbol, SymbolVec};
 pub use types::{Attribute, Attrs, DialectType, Type};
 pub use walk::{OperationWalk, WalkAction};
 
-/// Small vector for values tracked by Salsa framework.
-pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
 pub use smallvec::smallvec as idvec;
-
-/// Small vector for symbols.
-pub type SymbolVec = smallvec::SmallVec<[Symbol; 4]>;

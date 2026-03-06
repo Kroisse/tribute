@@ -60,18 +60,14 @@ use ropey::Rope;
 use salsa::Accumulator;
 use std::path::Path;
 use tree_sitter::Parser;
-use tribute_front::derive_module_name_from_path;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
 use tribute_passes::generic_type_converter_arena;
 use tribute_passes::lower_cont_to_trampoline;
-use trunk_ir::DialectOp;
 use trunk_ir::Span;
-use trunk_ir::arena::bridge::export_to_salsa;
 use trunk_ir::arena::{ArenaModule, IrContext};
 use trunk_ir::conversion::resolve_unrealized_casts_arena;
-use trunk_ir::dialect::core::Module;
 use trunk_ir::rewrite::ConversionError;
 
 // =============================================================================
@@ -296,7 +292,7 @@ fn merge_and_lower_to_ir<'db>(
 ///
 /// Returns `None` if parsing fails. Otherwise returns arena IR ready
 /// for in-place passes, avoiding unnecessary Salsa↔Arena round-trips.
-fn compile_frontend_to_arena(
+pub fn compile_frontend_to_arena(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<(IrContext, ArenaModule)> {
@@ -304,33 +300,10 @@ fn compile_frontend_to_arena(
     Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
-/// Build an empty Salsa `Module` for error/fallback cases.
-fn empty_module<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-    let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-    let module_name = derive_module_name_from_path(db, path);
-    Module::build(db, location, module_name, |_| {})
-}
-
-/// Compile frontend: parse → resolve → typecheck → TDNR → merge prelude → ast_to_ir.
-///
-/// Returns a Salsa `Module<'db>` for callers that need Salsa-interned IR
-/// (LSP, tests). Pipeline functions should prefer `compile_frontend_to_arena`
-/// to avoid an extra Salsa↔Arena round-trip.
-#[salsa::tracked]
-pub fn compile_frontend<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let Some((ir, arena_module)) = compile_frontend_to_arena(db, source) else {
-        return empty_module(db, source);
-    };
-
-    let exported = export_to_salsa(db, &ir, arena_module);
-    Module::from_operation(db, exported).unwrap()
-}
-
 /// Result of the full compilation pipeline.
-pub struct CompilationResult<'db> {
-    /// The compiled module with resolved types.
-    pub module: Module<'db>,
+pub struct CompilationResult {
+    /// The compiled module as arena IR (None if compilation failed).
+    pub module: Option<(IrContext, ArenaModule)>,
     /// Diagnostics collected during compilation.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -399,43 +372,30 @@ fn compile_to_wasm_arena(
 // These functions take SourceCst and run the pipeline up to a specific stage.
 // Useful for testing individual stages or for tools that need intermediate results.
 
-/// Compile for LSP: minimal pipeline preserving source structure.
-pub fn compile_for_lsp<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    compile_frontend(db, source)
-}
-
 /// Run pipeline through evidence params (for testing).
 ///
 /// Runs frontend + `add_evidence_params` in a single arena session.
-#[salsa::tracked]
-pub fn run_through_evidence_params<'db>(
-    db: &'db dyn salsa::Database,
+pub fn run_through_evidence_params(
+    db: &dyn salsa::Database,
     source: SourceCst,
-) -> Module<'db> {
-    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
-        return empty_module(db, source);
-    };
+) -> Option<(IrContext, ArenaModule)> {
+    let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
     evidence::add_evidence_params(&mut ctx, m);
-    let exported = export_to_salsa(db, &ctx, m);
-    Module::from_operation(db, exported).unwrap()
+    Some((ctx, m))
 }
 
 /// Run pipeline through closure lower (for testing).
 ///
 /// Runs frontend + `add_evidence_params` + `lower_closures`
 /// in a single arena session.
-#[salsa::tracked]
-pub fn run_through_closure_lower<'db>(
-    db: &'db dyn salsa::Database,
+pub fn run_through_closure_lower(
+    db: &dyn salsa::Database,
     source: SourceCst,
-) -> Module<'db> {
-    let Some((mut ctx, m)) = compile_frontend_to_arena(db, source) else {
-        return empty_module(db, source);
-    };
+) -> Option<(IrContext, ArenaModule)> {
+    let (mut ctx, m) = compile_frontend_to_arena(db, source)?;
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
-    let exported = export_to_salsa(db, &ctx, m);
-    Module::from_operation(db, exported).unwrap()
+    Some((ctx, m))
 }
 
 // =============================================================================
@@ -842,36 +802,44 @@ pub fn parse_and_lower_ast<'db>(
     ))
 }
 
+/// Run the shared pipeline for diagnostic collection only.
+///
+/// This is a `#[salsa::tracked]` function so that diagnostics accumulated
+/// during compilation can be collected via `compile_ast_tracked::accumulated`.
+#[salsa::tracked]
+fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
+    // Run the shared pipeline; diagnostics are accumulated as side effects
+    let _ = run_shared_pipeline_arena(db, source);
+}
+
 /// Compile using the AST-based pipeline.
 ///
 /// Runs the shared pipeline (frontend + evidence/closure/evidence-calls/
-/// resolve-evidence passes) and exports to Salsa Module. Does NOT run
+/// resolve-evidence passes) and returns arena IR. Does NOT run
 /// target-specific passes (WASM/native), making it suitable for
-/// diagnostic-only compilation ("none" target) and LSP.
-#[salsa::tracked]
-pub fn compile_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
-    let Some((ctx, m)) = run_shared_pipeline_arena(db, source) else {
-        return empty_module(db, source);
-    };
-
-    let exported = export_to_salsa(db, &ctx, m);
-    Module::from_operation(db, exported).unwrap()
+/// diagnostic-only compilation ("none" target).
+pub fn compile_ast(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> Option<(IrContext, ArenaModule)> {
+    run_shared_pipeline_arena(db, source)
 }
 
 /// Run compilation and return detailed results including diagnostics.
 ///
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
-pub fn compile_with_diagnostics<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> CompilationResult<'db> {
-    let module = compile_ast(db, source);
+pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> CompilationResult {
+    // Run the tracked function to collect diagnostics
+    compile_ast_tracked(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let diagnostics: Vec<Diagnostic> = compile_ast::accumulated::<Diagnostic>(db, source)
+    let diagnostics: Vec<Diagnostic> = compile_ast_tracked::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .cloned()
         .collect();
+
+    // Run the pipeline again for the actual result (Salsa memoizes, so this is cheap)
+    let module = run_shared_pipeline_arena(db, source);
 
     CompilationResult {
         module,
@@ -943,11 +911,6 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use tree_sitter::Parser;
 
-    #[salsa::tracked]
-    fn test_compile(db: &dyn salsa::Database, source: SourceCst) -> Module<'_> {
-        compile_ast(db, source)
-    }
-
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| {
             let mut parser = Parser::new();
@@ -964,8 +927,10 @@ mod tests {
     fn test_full_pipeline(db: &salsa::DatabaseImpl) {
         let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
-        let module = test_compile(db, source);
-        assert_eq!(module.name(db), "test");
+        let result = compile_ast(db, source);
+        assert!(result.is_some(), "Should compile successfully");
+        let (ctx, m) = result.unwrap();
+        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
     #[salsa_test]
@@ -1196,25 +1161,26 @@ mod tests {
 
     #[salsa_test]
     fn test_ast_pipeline_simple_function(db: &salsa::DatabaseImpl) {
-        // Test that AST pipeline can parse and lower a simple function
         let source = source_from_str("test.trb", "fn compute() -> Int { 42 }\nfn main() { }");
 
-        let module = compile_frontend(db, source);
-        assert_eq!(module.name(db), "test");
+        let result = compile_frontend_to_arena(db, source);
+        assert!(result.is_some());
+        let (ctx, m) = result.unwrap();
+        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
     #[salsa_test]
     fn test_ast_pipeline_with_params(db: &salsa::DatabaseImpl) {
-        // Test that AST pipeline handles function parameters
         let source = source_from_str("test.trb", "fn add(x: Int, y: Int) -> Int { x + y }");
 
-        let module = compile_frontend(db, source);
-        assert_eq!(module.name(db), "test");
+        let result = compile_frontend_to_arena(db, source);
+        assert!(result.is_some());
+        let (ctx, m) = result.unwrap();
+        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
     #[salsa_test]
     fn test_ast_pipeline_let_binding(db: &salsa::DatabaseImpl) {
-        // Test that AST pipeline handles let bindings
         let source = source_from_str(
             "test.trb",
             r#"
@@ -1226,13 +1192,14 @@ mod tests {
             "#,
         );
 
-        let module = compile_frontend(db, source);
-        assert_eq!(module.name(db), "test");
+        let result = compile_frontend_to_arena(db, source);
+        assert!(result.is_some());
+        let (ctx, m) = result.unwrap();
+        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
     #[salsa_test]
     fn test_ast_pipeline_struct(db: &salsa::DatabaseImpl) {
-        // Test that AST pipeline handles struct definitions
         let source = source_from_str(
             "test.trb",
             r#"
@@ -1245,8 +1212,10 @@ mod tests {
             "#,
         );
 
-        let module = compile_frontend(db, source);
-        assert_eq!(module.name(db), "test");
+        let result = compile_frontend_to_arena(db, source);
+        assert!(result.is_some());
+        let (ctx, m) = result.unwrap();
+        assert_eq!(m.name(&ctx), Some(trunk_ir::Symbol::new("test")));
     }
 
     // =========================================================================
