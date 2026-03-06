@@ -3,7 +3,7 @@
 //! This module handles WebAssembly GC array operations.
 
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use wasm_encoder::{Function, Instruction};
 
@@ -34,7 +34,7 @@ fn get_type_idx(
 /// Handle array.new operation
 pub(crate) fn handle_array_new(
     ctx: &IrContext,
-    array_new_op: arena_wasm::ArrayNew,
+    array_new_op: wasm_dialect::ArrayNew,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -75,7 +75,7 @@ pub(crate) fn handle_array_new_default(
 /// Handle array.get operation
 pub(crate) fn handle_array_get(
     ctx: &IrContext,
-    array_get_op: arena_wasm::ArrayGet,
+    array_get_op: wasm_dialect::ArrayGet,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -96,7 +96,7 @@ pub(crate) fn handle_array_get(
 /// Handle array.get_s operation (sign-extending load)
 pub(crate) fn handle_array_get_s(
     ctx: &IrContext,
-    array_get_s_op: arena_wasm::ArrayGetS,
+    array_get_s_op: wasm_dialect::ArrayGetS,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -117,7 +117,7 @@ pub(crate) fn handle_array_get_s(
 /// Handle array.get_u operation (zero-extending load)
 pub(crate) fn handle_array_get_u(
     ctx: &IrContext,
-    array_get_u_op: arena_wasm::ArrayGetU,
+    array_get_u_op: wasm_dialect::ArrayGetU,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -138,7 +138,7 @@ pub(crate) fn handle_array_get_u(
 /// Handle array.set operation
 pub(crate) fn handle_array_set(
     ctx: &IrContext,
-    array_set_op: arena_wasm::ArraySet,
+    array_set_op: wasm_dialect::ArraySet,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -158,7 +158,7 @@ pub(crate) fn handle_array_set(
 /// Handle array.copy operation
 pub(crate) fn handle_array_copy(
     ctx: &IrContext,
-    array_copy_op: arena_wasm::ArrayCopy,
+    array_copy_op: wasm_dialect::ArrayCopy,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,

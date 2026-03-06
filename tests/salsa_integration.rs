@@ -3,7 +3,7 @@
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
+use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use trunk_ir::Symbol;
 use trunk_ir::arena::{IrContext, Module};
 
@@ -62,8 +62,7 @@ fn main() {
             .expect("Failed to set language");
         let tree = parser.parse(source_code, None).expect("tree");
         let source_file = SourceCst::from_path(db, filename, source_code.into(), Some(tree));
-        let (ctx, module) =
-            compile_frontend_to_arena(db, source_file).expect("compilation should succeed");
+        let (ctx, module) = compile_frontend(db, source_file).expect("compilation should succeed");
 
         // Verify that expected user functions exist
         for func_name in expected_funcs {
@@ -79,7 +78,7 @@ fn main() {
 
 #[test]
 fn test_salsa_incremental_computation_detailed() {
-    // Demonstrate incremental computation via compile_frontend_to_arena
+    // Demonstrate incremental computation via compile_frontend
     let mut db = TributeDatabaseImpl::default();
     let mut parser = Parser::new();
     parser
@@ -90,8 +89,7 @@ fn test_salsa_incremental_computation_detailed() {
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
 
     // Initial lowering
-    let (ctx1, module1) =
-        compile_frontend_to_arena(&db, source_file).expect("compilation should succeed");
+    let (ctx1, module1) = compile_frontend(&db, source_file).expect("compilation should succeed");
     assert!(
         find_func_by_name(&ctx1, &module1, "main"),
         "Should have main function"
@@ -104,8 +102,8 @@ fn test_salsa_incremental_computation_detailed() {
     source_file.set_tree(&mut db).to(Some(updated_tree));
 
     // Lower again - should recompute with updated source
-    let (ctx2, module2) = compile_frontend_to_arena(&db, source_file)
-        .expect("compilation should succeed after update");
+    let (ctx2, module2) =
+        compile_frontend(&db, source_file).expect("compilation should succeed after update");
     assert!(
         find_func_by_name(&ctx2, &module2, "main"),
         "Should have main function after update"
@@ -113,7 +111,7 @@ fn test_salsa_incremental_computation_detailed() {
 
     // Lower again without changes - pipeline still works
     let (ctx3, module3) =
-        compile_frontend_to_arena(&db, source_file).expect("compilation should succeed on re-run");
+        compile_frontend(&db, source_file).expect("compilation should succeed on re-run");
     assert!(
         find_func_by_name(&ctx3, &module3, "main"),
         "Should have main function on cached run"
@@ -140,7 +138,7 @@ fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
-    let (ctx, module) = compile_frontend_to_arena(db, source).expect("compilation should succeed");
+    let (ctx, module) = compile_frontend(db, source).expect("compilation should succeed");
 
     // Verify all user functions exist
     assert!(
@@ -168,8 +166,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
-        let (ctx, module) =
-            compile_frontend_to_arena(db, source1).expect("compilation should succeed");
+        let (ctx, module) = compile_frontend(db, source1).expect("compilation should succeed");
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -181,8 +178,7 @@ fn test_salsa_database_isolation() {
         let text = "fn main() { 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
-        let (ctx, module) =
-            compile_frontend_to_arena(db, source2).expect("compilation should succeed");
+        let (ctx, module) = compile_frontend(db, source2).expect("compilation should succeed");
         module.name(&ctx).map(|s| s.to_string())
     });
 
@@ -200,8 +196,7 @@ fn test_function_lowering(db: &salsa::DatabaseImpl) {
         .expect("Failed to set language");
     let tree = parser.parse(source, None).expect("tree");
     let source_file = SourceCst::from_path(db, "func_test.trb", source.into(), Some(tree));
-    let (ctx, module) =
-        compile_frontend_to_arena(db, source_file).expect("compilation should succeed");
+    let (ctx, module) = compile_frontend(db, source_file).expect("compilation should succeed");
 
     // Verify the main function exists
     assert!(

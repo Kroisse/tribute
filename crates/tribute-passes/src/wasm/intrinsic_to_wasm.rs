@@ -14,7 +14,7 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::arena::rewrite::{
@@ -53,7 +53,7 @@ fn extract_bytes_fields(
     let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
     let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
 
-    let get_data = arena_wasm::struct_get(
+    let get_data = wasm_dialect::struct_get(
         ctx,
         location,
         bytes_value,
@@ -62,7 +62,7 @@ fn extract_bytes_fields(
         BYTES_DATA_FIELD,
     );
 
-    let get_offset = arena_wasm::struct_get(
+    let get_offset = wasm_dialect::struct_get(
         ctx,
         location,
         bytes_value,
@@ -71,7 +71,7 @@ fn extract_bytes_fields(
         BYTES_OFFSET_FIELD,
     );
 
-    let get_len = arena_wasm::struct_get(
+    let get_len = wasm_dialect::struct_get(
         ctx,
         location,
         bytes_value,
@@ -136,7 +136,7 @@ fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != arena_wasm::DIALECT_NAME() {
+    if data.dialect != wasm_dialect::DIALECT_NAME() {
         return None;
     }
     if data.name != Symbol::new("i32_const") {
@@ -178,7 +178,7 @@ pub fn analyze_intrinsics(ctx: &IrContext, module: Module, base_offset: u32) -> 
         next_offset: &mut u32,
     ) {
         // Check for wasm.call to __print_line
-        if let Ok(call) = arena_wasm::Call::from_op(ctx, op) {
+        if let Ok(call) = wasm_dialect::Call::from_op(ctx, op) {
             let callee = call.callee(ctx);
             if callee.last_segment() == Symbol::new("__print_line") {
                 let operands = ctx.op_operands(op);
@@ -282,7 +282,7 @@ impl RewritePattern for PrintLinePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Check if this is wasm.call to __print_line
-        let Ok(call_op) = arena_wasm::Call::from_op(ctx, op) else {
+        let Ok(call_op) = wasm_dialect::Call::from_op(ctx, op) else {
             return false;
         };
 
@@ -320,12 +320,12 @@ impl RewritePattern for PrintLinePattern {
         // result = wasm.call(fd_write, fd_const, iovec_const, iovec_len_const, nwritten_const)
         // wasm.drop(result)
 
-        let fd_const = arena_wasm::i32_const(ctx, location, i32_ty, 1); // stdout
-        let iovec_const = arena_wasm::i32_const(ctx, location, i32_ty, iovec_offset as i32);
-        let iovec_len_const = arena_wasm::i32_const(ctx, location, i32_ty, 1); // one iovec entry
-        let nwritten_const = arena_wasm::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
+        let fd_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // stdout
+        let iovec_const = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_offset as i32);
+        let iovec_len_const = wasm_dialect::i32_const(ctx, location, i32_ty, 1); // one iovec entry
+        let nwritten_const = wasm_dialect::i32_const(ctx, location, i32_ty, nwritten_offset as i32);
 
-        let call = arena_wasm::call(
+        let call = wasm_dialect::call(
             ctx,
             location,
             vec![
@@ -338,7 +338,7 @@ impl RewritePattern for PrintLinePattern {
             Symbol::new("fd_write"),
         );
 
-        let drop_op = arena_wasm::drop(ctx, location, call.results(ctx)[0]);
+        let drop_op = wasm_dialect::drop(ctx, location, call.results(ctx)[0]);
 
         // Emit all operations
         let result_types = ctx.op_result_types(op).to_vec();
@@ -373,7 +373,7 @@ impl RewritePattern for PrintLinePattern {
 
 /// Check if operation is a wasm.call to a `__bytes_*` intrinsic.
 fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_name: &'static str) -> bool {
-    let Ok(call) = arena_wasm::Call::from_op(ctx, op) else {
+    let Ok(call) = wasm_dialect::Call::from_op(ctx, op) else {
         return false;
     };
     let callee = call.callee(ctx);
@@ -408,7 +408,7 @@ impl RewritePattern for BytesLenPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
         // struct.get to get len field (field 2)
-        let get_len = arena_wasm::struct_get(
+        let get_len = wasm_dialect::struct_get(
             ctx,
             location,
             bytes_ref,
@@ -460,7 +460,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         // Get data array ref (field 0)
         let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
         let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
-        let get_data = arena_wasm::struct_get(
+        let get_data = wasm_dialect::struct_get(
             ctx,
             location,
             bytes_ref,
@@ -470,7 +470,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
         );
 
         // Get offset (field 1)
-        let get_offset = arena_wasm::struct_get(
+        let get_offset = wasm_dialect::struct_get(
             ctx,
             location,
             bytes_ref,
@@ -480,10 +480,11 @@ impl RewritePattern for BytesGetOrPanicPattern {
         );
 
         // Add offset to index: actual_index = offset + index
-        let add_offset = arena_wasm::i32_add(ctx, location, get_offset.result(ctx), index, i32_ty);
+        let add_offset =
+            wasm_dialect::i32_add(ctx, location, get_offset.result(ctx), index, i32_ty);
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
-        let array_get = arena_wasm::array_get_u(
+        let array_get = wasm_dialect::array_get_u(
             ctx,
             location,
             get_data.result(ctx),
@@ -540,7 +541,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         // Get data array ref (field 0) - shared, zero-copy
         let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
         let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
-        let get_data = arena_wasm::struct_get(
+        let get_data = wasm_dialect::struct_get(
             ctx,
             location,
             bytes_ref,
@@ -550,7 +551,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         );
 
         // Get current offset (field 1)
-        let get_offset = arena_wasm::struct_get(
+        let get_offset = wasm_dialect::struct_get(
             ctx,
             location,
             bytes_ref,
@@ -560,13 +561,14 @@ impl RewritePattern for BytesSliceOrPanicPattern {
         );
 
         // new_offset = offset + start
-        let new_offset = arena_wasm::i32_add(ctx, location, get_offset.result(ctx), start, i32_ty);
+        let new_offset =
+            wasm_dialect::i32_add(ctx, location, get_offset.result(ctx), start, i32_ty);
 
         // new_len = end - start
-        let new_len = arena_wasm::i32_sub(ctx, location, end, start, i32_ty);
+        let new_len = wasm_dialect::i32_sub(ctx, location, end, start, i32_ty);
 
         // struct.new to create new Bytes (shares the underlying array)
-        let struct_new = arena_wasm::struct_new(
+        let struct_new = wasm_dialect::struct_new(
             ctx,
             location,
             vec![
@@ -629,10 +631,10 @@ impl RewritePattern for BytesConcatPattern {
 
         // Calculate total_len = left.len + right.len
         let total_len =
-            arena_wasm::i32_add(ctx, location, left_fields.len, right_fields.len, i32_ty);
+            wasm_dialect::i32_add(ctx, location, left_fields.len, right_fields.len, i32_ty);
 
         // Allocate new array: array_new_default(total_len)
-        let new_array = arena_wasm::array_new_default(
+        let new_array = wasm_dialect::array_new_default(
             ctx,
             location,
             total_len.result(ctx),
@@ -641,9 +643,9 @@ impl RewritePattern for BytesConcatPattern {
         );
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
 
-        let copy_left = arena_wasm::array_copy(
+        let copy_left = wasm_dialect::array_copy(
             ctx,
             location,
             new_array.result(ctx),
@@ -656,7 +658,7 @@ impl RewritePattern for BytesConcatPattern {
         );
 
         // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
-        let copy_right = arena_wasm::array_copy(
+        let copy_right = wasm_dialect::array_copy(
             ctx,
             location,
             new_array.result(ctx),
@@ -669,7 +671,7 @@ impl RewritePattern for BytesConcatPattern {
         );
 
         // Create new Bytes struct: struct_new(new_arr, 0, total_len)
-        let struct_new = arena_wasm::struct_new(
+        let struct_new = wasm_dialect::struct_new(
             ctx,
             location,
             vec![

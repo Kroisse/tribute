@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use tribute::TributeDatabaseImpl;
 use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
-use tribute_passes::evidence::{collect_effectful_functions_arena, is_effectful_type_arena};
+use tribute_passes::evidence::{collect_effectful_functions, is_effectful_type};
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
@@ -28,8 +28,7 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
-    tribute::pipeline::compile_frontend_to_arena(db, source_file)
-        .expect("compilation should succeed")
+    tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed")
 }
 
 /// Helper to get all function names and their effectful status.
@@ -40,7 +39,7 @@ fn get_function_effectfulness(ctx: &IrContext, module: &Module) -> Vec<(String, 
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx).to_string();
             let func_ty = func_op.r#type(ctx);
-            let is_effectful = is_effectful_type_arena(ctx, func_ty);
+            let is_effectful = is_effectful_type(ctx, func_ty);
             results.push((name, is_effectful));
         }
     }
@@ -86,7 +85,7 @@ fn debug_function_effects(ctx: &IrContext, module: &Module) {
 
 /// Helper to get effectful function names as a set.
 fn get_effectful_function_names(ctx: &IrContext, module: &Module) -> HashSet<String> {
-    collect_effectful_functions_arena(ctx, *module)
+    collect_effectful_functions(ctx, *module)
         .into_iter()
         .map(|s| s.to_string())
         .collect()
@@ -424,7 +423,7 @@ fn main() { }
         eprintln!("After evidence pass: {:?}", after_counts);
 
         // Find effectful lambdas and verify they got an extra parameter
-        let effectful_before = collect_effectful_functions_arena(&ctx_before, module_before);
+        let effectful_before = collect_effectful_functions(&ctx_before, module_before);
         eprintln!("Effectful functions: {:?}", effectful_before);
 
         // Effectful lambdas already get evidence as their first parameter during

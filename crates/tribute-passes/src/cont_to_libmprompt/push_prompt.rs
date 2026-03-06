@@ -15,8 +15,8 @@ use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::{
-    adt as arena_adt, arith as arena_arith, cont as arena_cont, core as arena_core,
-    func as arena_func, scf as arena_scf,
+    adt as arena_adt, arith, cont as arena_cont, core as arena_core, func as arena_func,
+    scf as arena_scf,
 };
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -75,7 +75,7 @@ impl RewritePattern for LowerPushPromptPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
 
         let env_val = if live_ins.is_empty() {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         } else {
@@ -115,11 +115,11 @@ impl RewritePattern for LowerPushPromptPattern {
 
         // %tag_val
         let tag_val = if let Attribute::IntBits(bits) = tag {
-            let c = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(bits));
+            let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(bits));
             rewriter.insert_op(c.op_ref());
             c.result(ctx)
         } else {
-            let c = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
+            let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
             rewriter.insert_op(c.op_ref());
             c.result(ctx)
         };
@@ -362,7 +362,7 @@ fn generate_outlined_body(
             ctx.push_op(entry_block, ret.op_ref());
         }
     } else {
-        let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
         ctx.push_op(entry_block, null.op_ref());
         let ret = arena_func::r#return(ctx, loc, [null.result(ctx)]);
         ctx.push_op(entry_block, ret.op_ref());

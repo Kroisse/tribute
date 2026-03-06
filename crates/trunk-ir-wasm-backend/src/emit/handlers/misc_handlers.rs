@@ -4,7 +4,7 @@
 //! - wasm.bytes_from_data (create Bytes struct from passive data segment)
 
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -24,7 +24,7 @@ use super::super::{FunctionEmitContext, set_result_local};
 ///   struct.new $bytes_struct
 pub(crate) fn handle_bytes_from_data(
     ctx: &IrContext,
-    bytes_op: arena_wasm::BytesFromData,
+    bytes_op: wasm_dialect::BytesFromData,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::arena::types::Attribute;
@@ -226,7 +226,7 @@ fn resolve_struct_get_type_idx(
             "struct_get: operand defined by {}.{}",
             op_data.dialect, op_data.name
         );
-        if arena_wasm::RefCast::matches(ctx, def_op) {
+        if wasm_dialect::RefCast::matches(ctx, def_op) {
             return resolve_from_ref_cast(ctx, op, def_op, attrs, module_info);
         }
         // Not a ref_cast, use normal lookup
@@ -467,7 +467,7 @@ fn check_struct_get_needs_boxing(
 /// Handle struct.set operation
 pub(crate) fn handle_struct_set(
     ctx: &IrContext,
-    struct_set_op: arena_wasm::StructSet,
+    struct_set_op: wasm_dialect::StructSet,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,

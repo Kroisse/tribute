@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
@@ -14,7 +14,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::arena::types::Attribute;
 
-use super::get_region_result_value_arena;
+use super::get_region_result_value;
 use super::shift_lower::{anyref_type, i32_type, step_type};
 
 // ============================================================================
@@ -335,7 +335,7 @@ impl RewritePattern for LowerPushPromptPattern {
 
         // Get the body region
         let body = push_prompt.body(ctx);
-        let body_result = get_region_result_value_arena(ctx, body);
+        let body_result = get_region_result_value(ctx, body);
 
         let mut all_ops = Vec::new();
 
@@ -386,7 +386,7 @@ fn build_yield_then_branch(
     let i32_ty = i32_type(ctx);
     let cont_ty = super::shift_lower::continuation_type(ctx);
 
-    let tag_const = arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(tag as u64));
+    let tag_const = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(tag as u64));
     let tag_val = tag_const.result(ctx);
 
     let get_cont = arena_trampoline::get_yield_continuation(ctx, location, cont_ty);
@@ -449,7 +449,7 @@ fn build_yield_else_branch(
     } else {
         // No body result - create a step_done with zero value
         let i32_ty = i32_type(ctx);
-        let zero = arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
+        let zero = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
         ctx.push_op(block, zero.op_ref());
         let step_done = arena_trampoline::step_done(ctx, location, zero.result(ctx), step_ty);
         ctx.push_op(block, step_done.op_ref());

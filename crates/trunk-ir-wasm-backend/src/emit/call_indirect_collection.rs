@@ -10,7 +10,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::Module;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
 use trunk_ir::arena::types::{Attribute, TypeData};
@@ -98,7 +98,7 @@ pub(crate) fn collect_call_indirect_types(
                 }
                 // Check if this is a function definition to track return type
                 // NOTE: In lowered wasm IR, functions are wasm.func, not func.func
-                let func_return_ty = if let Ok(wasm_fn) = arena_wasm::Func::from_op(ctx, op) {
+                let func_return_ty = if let Ok(wasm_fn) = wasm_dialect::Func::from_op(ctx, op) {
                     // Get the function's return type from wasm.func
                     let func_type = wasm_fn.r#type(ctx);
                     debug!(
@@ -141,7 +141,7 @@ pub(crate) fn collect_call_indirect_types(
                 }
 
                 // Check if this is a call_indirect
-                if arena_wasm::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op) {
                     // Build function type from operands and results
                     let operands: Vec<_> = ctx.op_operands(op).to_vec();
 
@@ -314,7 +314,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
                 }
 
                 // Check if this is a ref_func
-                if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, op) {
+                if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
                     ref_funcs.insert(ref_func_op.func_name(ctx));
                 }
             }
@@ -340,7 +340,7 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
                 }
 
                 // Check if this is a call_indirect
-                if arena_wasm::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op) {
                     return true;
                 }
             }

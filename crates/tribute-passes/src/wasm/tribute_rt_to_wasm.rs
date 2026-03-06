@@ -23,7 +23,7 @@ use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
@@ -63,18 +63,18 @@ fn create_i31_unbox(
     value: ValueRef,
     is_signed: bool,
 ) -> (Vec<OpRef>, OpRef) {
-    let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
+    let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
     let i32_ty = i32_type(ctx);
 
     // Cast anyref to i31ref first (abstract type, no type_idx needed)
-    let cast_op = arena_wasm::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
+    let cast_op = wasm_dialect::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
     let cast_result = cast_op.result(ctx);
 
     // Extract value: signed or unsigned
     let get_op_ref = if is_signed {
-        arena_wasm::i31_get_s(ctx, location, cast_result, i32_ty).op_ref()
+        wasm_dialect::i31_get_s(ctx, location, cast_result, i32_ty).op_ref()
     } else {
-        arena_wasm::i31_get_u(ctx, location, cast_result, i32_ty).op_ref()
+        wasm_dialect::i31_get_u(ctx, location, cast_result, i32_ty).op_ref()
     };
 
     (vec![cast_op.op_ref()], get_op_ref)
@@ -113,10 +113,10 @@ impl RewritePattern for BoxIntPattern {
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
 
-        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
         // wasm.ref_i31: i32 -> i31ref
-        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
 
         rewriter.replace_op(new_op.op_ref());
         true
@@ -175,9 +175,9 @@ impl RewritePattern for BoxNatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
-        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -236,7 +236,7 @@ impl RewritePattern for BoxFloatPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let anyref_ty = arena_wasm::anyref(ctx).as_type_ref();
+        let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
         let boxed_f64_ty = boxed_f64_type(ctx);
 
         // adt.struct_new creates BoxedF64 struct with the f64 value
@@ -308,9 +308,9 @@ impl RewritePattern for BoxBoolPattern {
 
         let location = ctx.op(op).location;
         let value = box_op.value(ctx);
-        let i31ref_ty = arena_wasm::i31ref(ctx).as_type_ref();
+        let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
-        let new_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }

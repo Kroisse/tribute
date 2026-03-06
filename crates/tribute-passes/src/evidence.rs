@@ -58,7 +58,7 @@ use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 // ============================================================================
 
 /// Check if an arena `core.func` type has concrete abilities in its effect row.
-pub fn is_effectful_type_arena(ctx: &IrContext, ty: TypeRef) -> bool {
+pub fn is_effectful_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
         return false;
@@ -92,12 +92,12 @@ fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
 }
 
 /// Collect names of all effectful functions in the module.
-pub fn collect_effectful_functions_arena(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+pub fn collect_effectful_functions(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut effectful = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             let func_ty = func_op.r#type(ctx);
-            if is_effectful_type_arena(ctx, func_ty) {
+            if is_effectful_type(ctx, func_ty) {
                 effectful.insert(func_op.sym_name(ctx));
             }
         }
@@ -106,7 +106,7 @@ pub fn collect_effectful_functions_arena(ctx: &IrContext, module: Module) -> Has
 }
 
 /// Collect names of functions whose first parameter is evidence type.
-fn collect_functions_with_evidence_param_arena(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+fn collect_functions_with_evidence_param(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut fns_with_evidence = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -201,7 +201,7 @@ impl RewritePattern for AddEvidenceParamPattern {
 
 /// Phase 1 (arena): Add evidence parameters to effectful function signatures.
 pub fn add_evidence_params(ctx: &mut IrContext, module: Module) {
-    let effectful_fns = collect_effectful_functions_arena(ctx, module);
+    let effectful_fns = collect_effectful_functions(ctx, module);
     if effectful_fns.is_empty() {
         return;
     }
@@ -294,8 +294,8 @@ impl RewritePattern for TransformEvidenceCallPattern {
 
 /// Phase 2 (arena): Transform calls to pass evidence through call sites.
 pub fn transform_evidence_calls(ctx: &mut IrContext, module: Module) {
-    let effectful_fns = collect_effectful_functions_arena(ctx, module);
-    let fns_with_evidence = collect_functions_with_evidence_param_arena(ctx, module);
+    let effectful_fns = collect_effectful_functions(ctx, module);
+    let fns_with_evidence = collect_functions_with_evidence_param(ctx, module);
 
     if effectful_fns.is_empty() && fns_with_evidence.is_empty() {
         return;
@@ -428,14 +428,14 @@ mod tests {
         Module::new(ctx, module_op).expect("test module should be valid")
     }
 
-    // === is_effectful_type_arena tests ===
+    // === is_effectful_type tests ===
 
     #[test]
     fn test_is_effectful_type_arena_pure() {
         let (mut ctx, _) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let pure_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
-        assert!(!is_effectful_type_arena(&ctx, pure_ty));
+        assert!(!is_effectful_type(&ctx, pure_ty));
     }
 
     #[test]
@@ -443,7 +443,7 @@ mod tests {
         let (mut ctx, _) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
         let effectful_ty = make_effectful_func_type(&mut ctx, &[i32_ty], i32_ty);
-        assert!(is_effectful_type_arena(&ctx, effectful_ty));
+        assert!(is_effectful_type(&ctx, effectful_ty));
     }
 
     #[test]
@@ -460,14 +460,14 @@ mod tests {
                 .attr("effect", Attribute::Type(empty_row))
                 .build(),
         );
-        assert!(!is_effectful_type_arena(&ctx, ty));
+        assert!(!is_effectful_type(&ctx, ty));
     }
 
     #[test]
     fn test_is_effectful_type_arena_non_func() {
         let (mut ctx, _) = test_ctx();
         let i32_ty = i32_type(&mut ctx);
-        assert!(!is_effectful_type_arena(&ctx, i32_ty));
+        assert!(!is_effectful_type(&ctx, i32_ty));
     }
 
     // === add_evidence_params tests ===

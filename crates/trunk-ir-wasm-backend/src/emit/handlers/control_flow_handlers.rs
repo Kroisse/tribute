@@ -9,7 +9,7 @@
 
 use tracing::debug;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
@@ -343,7 +343,7 @@ pub(crate) fn handle_loop(
 /// Handle wasm.br operation
 pub(crate) fn handle_br(
     ctx: &IrContext,
-    br_op: arena_wasm::Br,
+    br_op: wasm_dialect::Br,
     function: &mut Function,
 ) -> CompilationResult<()> {
     let depth = br_op.target(ctx);
@@ -354,7 +354,7 @@ pub(crate) fn handle_br(
 /// Handle wasm.br_if operation
 pub(crate) fn handle_br_if(
     ctx: &IrContext,
-    br_if_op: arena_wasm::BrIf,
+    br_if_op: wasm_dialect::BrIf,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,

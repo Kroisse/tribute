@@ -5,7 +5,7 @@
 
 use salsa::Setter;
 use tree_sitter::Parser;
-use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend_to_arena};
+use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use trunk_ir::Symbol;
 use trunk_ir::arena::Attribute;
 
@@ -39,18 +39,18 @@ fn basic_database_usage() {
     let tree = parser.parse(source_code, None).expect("tree");
     let source = SourceCst::from_path(&db, "example.tr", source_code.into(), Some(tree));
 
-    let Some((ctx, arena_module)) = compile_frontend_to_arena(&db, source) else {
+    let Some((ctx, module)) = compile_frontend(&db, source) else {
         println!("Compilation failed");
         return;
     };
 
     // Print module name if available
-    if let Some(name) = arena_module.name(&ctx) {
+    if let Some(name) = module.name(&ctx) {
         println!("Module name: {}", name);
     }
 
     // Get the top-level operations from the module
-    let ops = arena_module.ops(&ctx);
+    let ops = module.ops(&ctx);
     println!("Lowered {} top-level operations", ops.len());
 
     // Display the lowered functions
@@ -91,7 +91,7 @@ fn incremental_compilation_demo() {
 
     // Lower it
     println!("Initial lowering...");
-    let Some((ctx1, m1)) = compile_frontend_to_arena(&db, source_file) else {
+    let Some((ctx1, m1)) = compile_frontend(&db, source_file) else {
         println!("Initial compilation failed");
         return;
     };
@@ -107,7 +107,7 @@ fn incremental_compilation_demo() {
 
     // Lower again - Salsa will automatically detect the change and recompute
     // the internal tracked queries, then produce fresh arena IR.
-    let Some((ctx2, m2)) = compile_frontend_to_arena(&db, source_file) else {
+    let Some((ctx2, m2)) = compile_frontend(&db, source_file) else {
         println!("Recompilation failed");
         return;
     };
@@ -116,7 +116,7 @@ fn incremental_compilation_demo() {
 
     // Lower again without changes - internally Salsa caches the tracked
     // queries, so this recomputation is fast.
-    let Some((ctx3, m3)) = compile_frontend_to_arena(&db, source_file) else {
+    let Some((ctx3, m3)) = compile_frontend(&db, source_file) else {
         println!("Cached compilation failed");
         return;
     };

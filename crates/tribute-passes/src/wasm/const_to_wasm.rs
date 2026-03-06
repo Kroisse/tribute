@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 use trunk_ir::arena::rewrite::{
@@ -216,7 +216,7 @@ impl RewritePattern for StringConstPattern {
 
         // Use typed helper to create wasm.i32_const with just the offset.
         // Length information is available in ConstAnalysis and will be used by emit.rs.
-        let new_op = arena_wasm::i32_const(ctx, location, i32_ty, offset as i32);
+        let new_op = wasm_dialect::i32_const(ctx, location, i32_ty, offset as i32);
 
         rewriter.replace_op(new_op.op_ref());
         true
@@ -276,7 +276,7 @@ impl RewritePattern for BytesConstPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Create wasm.bytes_from_data operation
-        let new_op = arena_wasm::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
+        let new_op = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
 
         rewriter.replace_op(new_op.op_ref());
         true

@@ -9,7 +9,7 @@ use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::types::Attribute;
@@ -93,7 +93,7 @@ pub(crate) struct GlobalDef {
 
 pub(crate) fn extract_function_def(
     ctx: &IrContext,
-    func_op: arena_wasm::Func,
+    func_op: wasm_dialect::Func,
 ) -> CompilationResult<FunctionDef> {
     let name = func_op.sym_name(ctx);
     let ty = func_op.r#type(ctx);
@@ -132,7 +132,7 @@ pub(crate) fn extract_function_def(
 
 pub(crate) fn extract_import_def(
     ctx: &IrContext,
-    import_op: arena_wasm::ImportFunc,
+    import_op: wasm_dialect::ImportFunc,
 ) -> CompilationResult<ImportFuncDef> {
     let module = import_op.module(ctx);
     let name = import_op.name(ctx);
@@ -156,7 +156,7 @@ pub(crate) fn extract_import_def(
 
 pub(crate) fn extract_export_func(
     ctx: &IrContext,
-    export_op: arena_wasm::ExportFunc,
+    export_op: wasm_dialect::ExportFunc,
 ) -> CompilationResult<ExportDef> {
     let name = export_op.name(ctx);
     let func = export_op.func(ctx);
@@ -169,7 +169,7 @@ pub(crate) fn extract_export_func(
 
 pub(crate) fn extract_export_memory(
     ctx: &IrContext,
-    export_op: arena_wasm::ExportMemory,
+    export_op: wasm_dialect::ExportMemory,
 ) -> CompilationResult<ExportDef> {
     let name = export_op.name(ctx);
     let index = export_op.index(ctx);
@@ -182,7 +182,7 @@ pub(crate) fn extract_export_memory(
 
 pub(crate) fn extract_memory_def(
     ctx: &IrContext,
-    memory_op: arena_wasm::Memory,
+    memory_op: wasm_dialect::Memory,
 ) -> CompilationResult<MemoryDef> {
     let min = memory_op.min(ctx);
     let max = memory_op.max(ctx);
@@ -198,7 +198,7 @@ pub(crate) fn extract_memory_def(
 
 pub(crate) fn extract_data_def(
     ctx: &IrContext,
-    data_op: arena_wasm::Data,
+    data_op: wasm_dialect::Data,
 ) -> CompilationResult<DataDef> {
     let passive = data_op.passive(ctx);
     let offset = if passive { 0 } else { data_op.offset(ctx) };
@@ -223,7 +223,7 @@ pub(crate) fn extract_data_def(
 
 pub(crate) fn extract_table_def(
     ctx: &IrContext,
-    table_op: arena_wasm::Table,
+    table_op: wasm_dialect::Table,
 ) -> CompilationResult<TableDef> {
     let reftype_sym = table_op.reftype(ctx);
     let reftype = reftype_sym.with_str(|s| match s {
@@ -241,7 +241,7 @@ pub(crate) fn extract_table_def(
 
 pub(crate) fn extract_element_def(
     ctx: &IrContext,
-    elem_op: arena_wasm::Elem,
+    elem_op: wasm_dialect::Elem,
 ) -> CompilationResult<ElementDef> {
     let table = elem_op.table(ctx).unwrap_or(0);
     let raw_offset = elem_op.offset(ctx).unwrap_or(0);
@@ -256,7 +256,7 @@ pub(crate) fn extract_element_def(
             // Look for func.constant or wasm.ref_func operations
             if let Ok(const_op) = arena_func::Constant::from_op(ctx, inner_op) {
                 funcs.push(const_op.func_ref(ctx));
-            } else if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, inner_op) {
+            } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, inner_op) {
                 funcs.push(ref_func_op.func_name(ctx));
             }
         }
@@ -271,7 +271,7 @@ pub(crate) fn extract_element_def(
 
 pub(crate) fn extract_global_def(
     ctx: &IrContext,
-    global_op: arena_wasm::Global,
+    global_op: wasm_dialect::Global,
 ) -> CompilationResult<GlobalDef> {
     let valtype_sym = global_op.valtype(ctx);
     let valtype = valtype_sym.with_str(|s| match s {

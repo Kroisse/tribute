@@ -13,7 +13,7 @@ use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::ValueDef;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
@@ -134,7 +134,7 @@ fn collect_struct_types(
 
         for &op in ctx.block(block).ops.iter() {
             // Check if this is a struct_new operation with placeholder result type
-            if arena_wasm::StructNew::matches(ctx, op) {
+            if wasm_dialect::StructNew::matches(ctx, op) {
                 // Only process struct_new with placeholder result type (wasm.structref)
                 let result_types = ctx.op_result_types(op);
                 let is_placeholder = result_types
@@ -207,7 +207,7 @@ fn trace_value_to_type_idx(
 
     // Trace through ref_cast operations
     if let ValueDef::OpResult(op, _) = ctx.value_def(value)
-        && arena_wasm::RefCast::matches(ctx, op)
+        && wasm_dialect::RefCast::matches(ctx, op)
     {
         let operands = ctx.op_operands(op);
         if let Some(&operand) = operands.first() {
@@ -230,7 +230,7 @@ impl RewritePattern for UpdateStructNewPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::StructNew::matches(ctx, op) {
+        if !wasm_dialect::StructNew::matches(ctx, op) {
             return false;
         }
 
@@ -315,7 +315,7 @@ impl RewritePattern for UpdateStructGetPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::StructGet::matches(ctx, op) {
+        if !wasm_dialect::StructGet::matches(ctx, op) {
             return false;
         }
 
@@ -404,7 +404,7 @@ impl RewritePattern for UpdateRefCastPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::RefCast::matches(ctx, op) {
+        if !wasm_dialect::RefCast::matches(ctx, op) {
             return false;
         }
 
@@ -484,7 +484,7 @@ impl RewritePattern for UpdateRefCastPattern {
 /// 2. struct_new operations have type_idx attribute set
 /// 3. struct_get operations have correct type_idx and result types
 pub fn assign_gc_type_indices(ctx: &mut IrContext, module: Module) {
-    let structref_ty = arena_wasm::structref(ctx).as_type_ref();
+    let structref_ty = wasm_dialect::structref(ctx).as_type_ref();
 
     // Phase 1: Collect all struct types and assign type_idx
     let registry = collect_struct_types(ctx, module, structref_ty);

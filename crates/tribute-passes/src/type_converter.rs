@@ -46,7 +46,7 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// This converter handles the IR-level type transformations that are common
 /// across all backends. Backend-specific converters can extend this with
 /// additional conversions.
-pub fn generic_type_converter_arena(ctx: &mut IrContext) -> TypeConverter {
+pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-intern commonly used types (TypeRef is Copy)
     let tribute_rt_int = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("int"));
     let tribute_rt_nat = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("nat"));

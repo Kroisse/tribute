@@ -6,5 +6,5 @@
 //!
 //! See:
 //! - `crates/tribute-front/src/ast_to_ir/lower.rs`: `cast_if_needed()`
-//! - `crates/tribute-passes/src/type_converter.rs`: boxing materializers in `generic_type_converter_arena()`
-//! - `crates/trunk-ir/src/conversion/resolve_unrealized_casts.rs`: `resolve_unrealized_casts_arena()`
+//! - `crates/tribute-passes/src/type_converter.rs`: boxing materializers in `generic_type_converter()`
+//! - `crates/trunk-ir/src/conversion/resolve_unrealized_casts.rs`: `resolve_unrealized_casts()`

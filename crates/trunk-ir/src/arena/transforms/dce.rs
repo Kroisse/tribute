@@ -132,7 +132,7 @@ fn sweep_block(ctx: &mut IrContext, block: BlockRef, config: &DceConfig) -> usiz
 /// Check if an operation is dead (pure + all results unused).
 fn is_dead(ctx: &IrContext, op: OpRef) -> bool {
     // Non-pure operations have side effects — must keep
-    if !PureOps::is_pure_arena(ctx, op) {
+    if !PureOps::is_pure(ctx, op) {
         return false;
     }
 

@@ -3,7 +3,7 @@
 //! This module handles memory management and linear memory access operations.
 
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction, MemArg};
 
 use crate::CompilationResult;
@@ -37,7 +37,7 @@ fn make_memarg(offset: u32, align: u32, memory_index: u32, natural_align: u32) -
 /// Handle memory.size operation
 pub(crate) fn handle_memory_size(
     ctx: &IrContext,
-    mem_size_op: arena_wasm::MemorySize,
+    mem_size_op: wasm_dialect::MemorySize,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -50,7 +50,7 @@ pub(crate) fn handle_memory_size(
 /// Handle memory.grow operation
 pub(crate) fn handle_memory_grow(
     ctx: &IrContext,
-    mem_grow_op: arena_wasm::MemoryGrow,
+    mem_grow_op: wasm_dialect::MemoryGrow,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -68,7 +68,7 @@ pub(crate) fn handle_memory_grow(
 /// Handle i32.load operation
 pub(crate) fn handle_i32_load(
     ctx: &IrContext,
-    load_op: arena_wasm::I32Load,
+    load_op: wasm_dialect::I32Load,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -89,7 +89,7 @@ pub(crate) fn handle_i32_load(
 /// Handle i64.load operation
 pub(crate) fn handle_i64_load(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load,
+    load_op: wasm_dialect::I64Load,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -110,7 +110,7 @@ pub(crate) fn handle_i64_load(
 /// Handle f32.load operation
 pub(crate) fn handle_f32_load(
     ctx: &IrContext,
-    load_op: arena_wasm::F32Load,
+    load_op: wasm_dialect::F32Load,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -131,7 +131,7 @@ pub(crate) fn handle_f32_load(
 /// Handle f64.load operation
 pub(crate) fn handle_f64_load(
     ctx: &IrContext,
-    load_op: arena_wasm::F64Load,
+    load_op: wasm_dialect::F64Load,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -154,7 +154,7 @@ pub(crate) fn handle_f64_load(
 /// Handle i32.load8_s operation
 pub(crate) fn handle_i32_load8_s(
     ctx: &IrContext,
-    load_op: arena_wasm::I32Load8S,
+    load_op: wasm_dialect::I32Load8S,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -175,7 +175,7 @@ pub(crate) fn handle_i32_load8_s(
 /// Handle i32.load8_u operation
 pub(crate) fn handle_i32_load8_u(
     ctx: &IrContext,
-    load_op: arena_wasm::I32Load8U,
+    load_op: wasm_dialect::I32Load8U,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -196,7 +196,7 @@ pub(crate) fn handle_i32_load8_u(
 /// Handle i32.load16_s operation
 pub(crate) fn handle_i32_load16_s(
     ctx: &IrContext,
-    load_op: arena_wasm::I32Load16S,
+    load_op: wasm_dialect::I32Load16S,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -217,7 +217,7 @@ pub(crate) fn handle_i32_load16_s(
 /// Handle i32.load16_u operation
 pub(crate) fn handle_i32_load16_u(
     ctx: &IrContext,
-    load_op: arena_wasm::I32Load16U,
+    load_op: wasm_dialect::I32Load16U,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -240,7 +240,7 @@ pub(crate) fn handle_i32_load16_u(
 /// Handle i64.load8_s operation
 pub(crate) fn handle_i64_load8_s(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load8S,
+    load_op: wasm_dialect::I64Load8S,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -261,7 +261,7 @@ pub(crate) fn handle_i64_load8_s(
 /// Handle i64.load8_u operation
 pub(crate) fn handle_i64_load8_u(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load8U,
+    load_op: wasm_dialect::I64Load8U,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -282,7 +282,7 @@ pub(crate) fn handle_i64_load8_u(
 /// Handle i64.load16_s operation
 pub(crate) fn handle_i64_load16_s(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load16S,
+    load_op: wasm_dialect::I64Load16S,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -303,7 +303,7 @@ pub(crate) fn handle_i64_load16_s(
 /// Handle i64.load16_u operation
 pub(crate) fn handle_i64_load16_u(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load16U,
+    load_op: wasm_dialect::I64Load16U,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -324,7 +324,7 @@ pub(crate) fn handle_i64_load16_u(
 /// Handle i64.load32_s operation
 pub(crate) fn handle_i64_load32_s(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load32S,
+    load_op: wasm_dialect::I64Load32S,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -345,7 +345,7 @@ pub(crate) fn handle_i64_load32_s(
 /// Handle i64.load32_u operation
 pub(crate) fn handle_i64_load32_u(
     ctx: &IrContext,
-    load_op: arena_wasm::I64Load32U,
+    load_op: wasm_dialect::I64Load32U,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -368,7 +368,7 @@ pub(crate) fn handle_i64_load32_u(
 /// Handle i32.store operation
 pub(crate) fn handle_i32_store(
     ctx: &IrContext,
-    store_op: arena_wasm::I32Store,
+    store_op: wasm_dialect::I32Store,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -388,7 +388,7 @@ pub(crate) fn handle_i32_store(
 /// Handle i64.store operation
 pub(crate) fn handle_i64_store(
     ctx: &IrContext,
-    store_op: arena_wasm::I64Store,
+    store_op: wasm_dialect::I64Store,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -408,7 +408,7 @@ pub(crate) fn handle_i64_store(
 /// Handle f32.store operation
 pub(crate) fn handle_f32_store(
     ctx: &IrContext,
-    store_op: arena_wasm::F32Store,
+    store_op: wasm_dialect::F32Store,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -428,7 +428,7 @@ pub(crate) fn handle_f32_store(
 /// Handle f64.store operation
 pub(crate) fn handle_f64_store(
     ctx: &IrContext,
-    store_op: arena_wasm::F64Store,
+    store_op: wasm_dialect::F64Store,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -450,7 +450,7 @@ pub(crate) fn handle_f64_store(
 /// Handle i32.store8 operation
 pub(crate) fn handle_i32_store8(
     ctx: &IrContext,
-    store_op: arena_wasm::I32Store8,
+    store_op: wasm_dialect::I32Store8,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -470,7 +470,7 @@ pub(crate) fn handle_i32_store8(
 /// Handle i32.store16 operation
 pub(crate) fn handle_i32_store16(
     ctx: &IrContext,
-    store_op: arena_wasm::I32Store16,
+    store_op: wasm_dialect::I32Store16,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -490,7 +490,7 @@ pub(crate) fn handle_i32_store16(
 /// Handle i64.store8 operation
 pub(crate) fn handle_i64_store8(
     ctx: &IrContext,
-    store_op: arena_wasm::I64Store8,
+    store_op: wasm_dialect::I64Store8,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -510,7 +510,7 @@ pub(crate) fn handle_i64_store8(
 /// Handle i64.store16 operation
 pub(crate) fn handle_i64_store16(
     ctx: &IrContext,
-    store_op: arena_wasm::I64Store16,
+    store_op: wasm_dialect::I64Store16,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,
@@ -530,7 +530,7 @@ pub(crate) fn handle_i64_store16(
 /// Handle i64.store32 operation
 pub(crate) fn handle_i64_store32(
     ctx: &IrContext,
-    store_op: arena_wasm::I64Store32,
+    store_op: wasm_dialect::I64Store32,
     emit_ctx: &FunctionEmitContext,
     _module_info: &ModuleInfo,
     function: &mut Function,

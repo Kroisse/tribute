@@ -26,7 +26,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::{
     adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
-    wasm as arena_wasm,
+    wasm as wasm_dialect,
 };
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
@@ -248,12 +248,12 @@ fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
         if is_from_i32 && is_to_anyref {
             // wasm.ref_i31: i32 -> i31ref
-            let box_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+            let box_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
             let i31ref_value = ctx.op_result(box_op.op_ref(), 0);
 
             // Upcast i31ref -> anyref (no-op in runtime, but needed for IR type correctness)
             let upcast_op =
-                arena_wasm::ref_cast(ctx, location, i31ref_value, anyref_ty, anyref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, i31ref_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -273,7 +273,7 @@ fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // Upcast BoxedF64 to anyref
             let upcast_op =
-                arena_wasm::ref_cast(ctx, location, boxed_value, anyref_ty, anyref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, boxed_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -289,11 +289,11 @@ fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
         if is_from_anyref && is_to_i32 {
             // Cast anyref to i31ref
             let ref_cast_op =
-                arena_wasm::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
             let i31ref_value = ctx.op_result(ref_cast_op.op_ref(), 0);
 
             // Unbox i31ref to i32
-            let unbox_op = arena_wasm::i31_get_s(ctx, location, i31ref_value, i32_ty);
+            let unbox_op = wasm_dialect::i31_get_s(ctx, location, i31ref_value, i32_ty);
             let final_value = ctx.op_result(unbox_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -340,7 +340,7 @@ fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
 fn create_i32_const(ctx: &mut IrContext, location: Location, value: i32) -> OpRef {
     let i32_ty = intern_type(ctx, "core", "i32");
-    arena_wasm::i32_const(ctx, location, i32_ty, value).op_ref()
+    wasm_dialect::i32_const(ctx, location, i32_ty, value).op_ref()
 }
 
 /// Push an i32 constant and a global_set operation to set a global variable.
@@ -354,7 +354,7 @@ fn push_set_i32_global(
     let const_op = create_i32_const(ctx, location, value);
     let const_val = ctx.op_result(const_op, 0);
     ops.push(const_op);
-    ops.push(arena_wasm::global_set(ctx, location, const_val, global_idx).op_ref());
+    ops.push(wasm_dialect::global_set(ctx, location, const_val, global_idx).op_ref());
 }
 
 /// Cast a value to anyref type using TypeConverter materializations.
@@ -393,7 +393,7 @@ fn materialize_to_any(
     }
 
     // Fallback: upcast to anyref using ref_cast
-    let cast_op = arena_wasm::ref_cast(ctx, location, value, anyref_ty, anyref_ty, None);
+    let cast_op = wasm_dialect::ref_cast(ctx, location, value, anyref_ty, anyref_ty, None);
     let cast_val = ctx.op_result(cast_op.op_ref(), 0);
     ops.push(cast_op.op_ref());
     cast_val
@@ -882,12 +882,14 @@ impl RewritePattern for LowerSetYieldStatePattern {
 
         // Set $yield_tag = tag (cont.prompt_tag has same representation as i32)
         ops.push(
-            arena_wasm::global_set(ctx, location, tag_operand, yield_globals::TAG_IDX).op_ref(),
+            wasm_dialect::global_set(ctx, location, tag_operand, yield_globals::TAG_IDX).op_ref(),
         );
 
         // Set $yield_cont = continuation (as anyref)
         let cont_any = materialize_to_any(ctx, location, cont_val, rewriter, &mut ops);
-        ops.push(arena_wasm::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref());
+        ops.push(
+            wasm_dialect::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref(),
+        );
 
         // Set $yield_op_idx = op_idx
         let op_idx_i32: i32 = op_idx.try_into().expect("op_idx out of i32 range");
@@ -958,13 +960,13 @@ impl RewritePattern for LowerYieldContinuationAccessPattern {
 
         // Load continuation from $yield_cont global
         let get_cont =
-            arena_wasm::global_get(ctx, location, anyref_ty, yield_globals::CONT_IDX).op_ref();
+            wasm_dialect::global_get(ctx, location, anyref_ty, yield_globals::CONT_IDX).op_ref();
         let cont_anyref = ctx.op_result(get_cont, 0);
         ops.push(get_cont);
 
         // Cast anyref to continuation type
         let cont_cast =
-            arena_wasm::ref_cast(ctx, location, cont_anyref, cont_type, cont_type, None).op_ref();
+            wasm_dialect::ref_cast(ctx, location, cont_anyref, cont_type, cont_type, None).op_ref();
         let cont_ref = ctx.op_result(cont_cast, 0);
         ops.push(cont_cast);
 
@@ -1009,7 +1011,7 @@ impl RewritePattern for LowerYieldGlobalGetPattern {
 
         let location = ctx.op(op).location;
         let i32_ty = intern_type(ctx, "core", "i32");
-        let get_global = arena_wasm::global_get(ctx, location, i32_ty, global_idx).op_ref();
+        let get_global = wasm_dialect::global_get(ctx, location, i32_ty, global_idx).op_ref();
 
         rewriter.replace_op(get_global);
         true
@@ -1074,7 +1076,7 @@ impl RewritePattern for ConvertFuncTypePattern {
 
         // Build new function type preserving effect attribute
         let effect_ty = effect_attr.and_then(|eff| match eff {
-            ArenaAttribute::Type(ty) => Some(ty),
+            Attribute::Type(ty) => Some(ty),
             _ => None,
         });
         let new_func_ty = arena_core::func(
@@ -1129,7 +1131,7 @@ impl RewritePattern for ConvertTrampolineResultTypePattern {
         // Check if this is a supported operation type
         let is_supported = arena_func::Call::from_op(ctx, op).is_ok()
             || arena_func::CallIndirect::from_op(ctx, op).is_ok()
-            || arena_wasm::If::from_op(ctx, op).is_ok();
+            || wasm_dialect::If::from_op(ctx, op).is_ok();
 
         if !is_supported {
             return false;

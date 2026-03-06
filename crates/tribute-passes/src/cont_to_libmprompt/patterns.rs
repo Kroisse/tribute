@@ -8,9 +8,7 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::{
-    arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
-};
+use trunk_ir::arena::dialect::{arith, cont as arena_cont, core as arena_core, func as arena_func};
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
 use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
@@ -60,8 +58,7 @@ impl RewritePattern for LowerShiftPattern {
         let op_idx = compute_op_idx(ability_name, op_name);
 
         // %op_idx = arith.const <op_idx>
-        let op_idx_const =
-            arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_idx as u64));
+        let op_idx_const = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_idx as u64));
         rewriter.insert_op(op_idx_const.op_ref());
 
         // %shift_val = shift_value or null ptr
@@ -74,7 +71,7 @@ impl RewritePattern for LowerShiftPattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };
@@ -149,7 +146,7 @@ impl RewritePattern for LowerResumePattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };

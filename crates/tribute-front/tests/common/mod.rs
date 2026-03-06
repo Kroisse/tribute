@@ -47,7 +47,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         result.function_types.into_iter().collect();
     let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let mut ir = IrContext::new();
-    let arena_module = tribute_front::ast_to_ir::lower_ast_to_ir(
+    let module = tribute_front::ast_to_ir::lower_ast_to_ir(
         db,
         &mut ir,
         tdnr_ast,
@@ -56,7 +56,7 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
         function_types_map,
         node_types_map,
     );
-    print_module(&ir, arena_module.op())
+    print_module(&ir, module.op())
 }
 
 /// Run the full AST pipeline without returning IR text.

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::arena::rewrite::{
@@ -123,7 +123,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     let location = ctx.op(module.op()).location;
 
     // Create wasm.table for closure functions
-    let table_op = arena_wasm::table(
+    let table_op = wasm_dialect::table(
         ctx,
         location,
         Symbol::new("funcref"),
@@ -135,7 +135,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     let funcref_ty = intern_funcref_type(ctx);
     let func_ref_ops: Vec<OpRef> = funcs
         .iter()
-        .map(|func_sym| arena_wasm::ref_func(ctx, location, funcref_ty, *func_sym).op_ref())
+        .map(|func_sym| wasm_dialect::ref_func(ctx, location, funcref_ty, *func_sym).op_ref())
         .collect();
 
     // Create the funcs region for wasm.elem
@@ -155,7 +155,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     });
 
     // Create wasm.elem with table 0 and offset 0
-    let elem_op = arena_wasm::elem(ctx, location, Some(0), Some(0), funcs_region);
+    let elem_op = wasm_dialect::elem(ctx, location, Some(0), Some(0), funcs_region);
 
     // Prepend table and elem operations to the module body.
     // We insert before the first op in the block (if any), or push at the end.
@@ -191,7 +191,7 @@ impl RewritePattern for FuncFuncPattern {
         // Detach body region so it can be reused in the new wasm.func
         ctx.detach_region(body);
 
-        let new_op = arena_wasm::func(ctx, loc, sym_name, func_type, body);
+        let new_op = wasm_dialect::func(ctx, loc, sym_name, func_type, body);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -216,7 +216,7 @@ impl RewritePattern for FuncCallPattern {
         let args: Vec<_> = ctx.op_operands(op).to_vec();
         let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
 
-        let new_op = arena_wasm::call(ctx, loc, args, result_types, callee);
+        let new_op = wasm_dialect::call(ctx, loc, args, result_types, callee);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -245,7 +245,7 @@ impl RewritePattern for FuncCallIndirectPattern {
 
         // Build wasm.call_indirect with same operands
         // The emit phase will resolve the type_idx and table attributes
-        let new_op = arena_wasm::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
+        let new_op = wasm_dialect::call_indirect(ctx, loc, all_operands, result_types, 0, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -268,7 +268,7 @@ impl RewritePattern for FuncReturnPattern {
         let loc = ctx.op(op).location;
         let values: Vec<_> = ctx.op_operands(op).to_vec();
 
-        let new_op = arena_wasm::r#return(ctx, loc, values);
+        let new_op = wasm_dialect::r#return(ctx, loc, values);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -292,7 +292,7 @@ impl RewritePattern for FuncTailCallPattern {
         let callee = tail_call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
 
-        let new_op = arena_wasm::return_call(ctx, loc, args, callee);
+        let new_op = wasm_dialect::return_call(ctx, loc, args, callee);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -314,7 +314,7 @@ impl RewritePattern for FuncUnreachablePattern {
 
         let loc = ctx.op(op).location;
 
-        let new_op = arena_wasm::unreachable(ctx, loc);
+        let new_op = wasm_dialect::unreachable(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -351,7 +351,7 @@ impl RewritePattern for FuncConstantPattern {
 
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
-        let new_op = arena_wasm::i32_const(ctx, loc, i32_ty, table_idx as i32);
+        let new_op = wasm_dialect::i32_const(ctx, loc, i32_ty, table_idx as i32);
 
         rewriter.replace_op(new_op.op_ref());
         true
@@ -370,5 +370,5 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a wasm.funcref type.
 fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
-    arena_wasm::funcref(ctx).as_type_ref()
+    wasm_dialect::funcref(ctx).as_type_ref()
 }

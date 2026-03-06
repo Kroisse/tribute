@@ -17,9 +17,7 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::{
-    compute_enum_layout_arena, compute_struct_layout_arena, find_variant_layout,
-};
+use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt;
 use trunk_ir::arena::dialect::clif;
@@ -107,7 +105,7 @@ impl RewritePattern for StructNewPattern {
         let struct_ty = struct_new.r#type(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             panic!(
                 "adt_rc_header: cannot compute layout for struct_new type {:?}; \
                  the struct type matched adt.struct_new but has no valid layout",
@@ -232,7 +230,7 @@ impl RewritePattern for VariantNewPattern {
         let tag = variant_new.tag(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             panic!(
                 "adt_rc_header: cannot compute enum layout for variant_new type {:?}; \
                  the enum type matched adt.variant_new but has no valid layout",
@@ -435,7 +433,7 @@ mod tests {
         let module = Module::new(ctx, module_op).expect("valid arena module");
 
         // Run RTTI pass first (needed for rtti_map)
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(ctx);
         let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc);
 
         // Run adt_rc_header pass

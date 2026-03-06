@@ -40,7 +40,7 @@ use trunk_ir::arena::rewrite::{ConversionTarget, PatternApplicator, TypeConverte
 use trunk_ir::location::Span;
 
 // Re-export shared utilities from cont_util so existing internal callers still work.
-pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value_arena};
+pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value};
 
 // ============================================================================
 // Public API

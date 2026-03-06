@@ -10,7 +10,7 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
@@ -113,7 +113,7 @@ impl RewritePattern for ArithConstPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arena_arith::Const::from_op(ctx, op) else {
+        let Ok(const_op) = arith::Const::from_op(ctx, op) else {
             return false;
         };
 
@@ -341,7 +341,7 @@ impl RewritePattern for ArithNegPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arena_arith::Neg::from_op(ctx, op) else {
+        let Ok(neg_op) = arith::Neg::from_op(ctx, op) else {
             return false;
         };
 

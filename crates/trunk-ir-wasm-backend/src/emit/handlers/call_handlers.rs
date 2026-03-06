@@ -8,7 +8,7 @@
 use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef};
 use wasm_encoder::{Function, Instruction};
 
@@ -21,7 +21,7 @@ use super::super::{FunctionEmitContext, ModuleInfo, resolve_callee, set_result_l
 /// Handle wasm.call operation
 pub(crate) fn handle_call(
     ctx: &IrContext,
-    call_op: arena_wasm::Call,
+    call_op: wasm_dialect::Call,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -247,7 +247,7 @@ pub(crate) fn handle_call_indirect(
 /// Handle wasm.return_call operation (tail call)
 pub(crate) fn handle_return_call(
     ctx: &IrContext,
-    return_call_op: arena_wasm::ReturnCall,
+    return_call_op: wasm_dialect::ReturnCall,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,

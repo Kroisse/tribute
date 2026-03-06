@@ -33,4 +33,4 @@ pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::arena::rewrite::{
     ApplyResult, PatternApplicator, PatternRewriter, RewritePattern,
 };
-pub use type_converter::generic_type_converter_arena;
+pub use type_converter::generic_type_converter;

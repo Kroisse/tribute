@@ -20,7 +20,7 @@ pub mod database;
 pub mod pipeline;
 
 pub use pipeline::{
-    CompilationConfig, CompilationResult, LinkError, compile_ast, compile_frontend_to_arena,
+    CompilationConfig, CompilationResult, LinkError, compile_ast, compile_frontend,
     compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics, dump_ir,
     link_native_binary, parse_and_lower_ast,
 };

@@ -10,7 +10,7 @@
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
 use trunk_ir::arena::rewrite::{
@@ -67,7 +67,7 @@ impl RewritePattern for ScfIfPattern {
         ctx.detach_region(then_region);
         ctx.detach_region(else_region);
 
-        let new_op = arena_wasm::r#if(ctx, loc, cond, result_ty, then_region, else_region);
+        let new_op = wasm_dialect::r#if(ctx, loc, cond, result_ty, then_region, else_region);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -112,7 +112,7 @@ impl RewritePattern for ScfLoopPattern {
         ctx.detach_region(body);
 
         // Create wasm.loop with init operands and the body region
-        let wasm_loop = arena_wasm::r#loop(ctx, loc, init, result_ty, body);
+        let wasm_loop = wasm_dialect::r#loop(ctx, loc, init, result_ty, body);
 
         // Create a block containing just the wasm.loop, to serve as the break target
         let block_body_block = ctx.create_block(BlockData {
@@ -129,7 +129,7 @@ impl RewritePattern for ScfLoopPattern {
             parent_op: None,
         });
 
-        let wasm_block = arena_wasm::block(ctx, loc, result_ty, block_body);
+        let wasm_block = wasm_dialect::block(ctx, loc, result_ty, block_body);
         rewriter.replace_op(wasm_block.op_ref());
         true
     }
@@ -173,7 +173,7 @@ impl RewritePattern for ScfYieldPattern {
 
         let value = operands[0];
         let loc = ctx.op(op).location;
-        let new_op = arena_wasm::r#yield(ctx, loc, value);
+        let new_op = wasm_dialect::r#yield(ctx, loc, value);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -208,7 +208,7 @@ impl RewritePattern for ScfContinuePattern {
 
         if values.is_empty() {
             // No loop-carried values -- simple branch
-            let br_op = arena_wasm::br(ctx, loc, 1);
+            let br_op = wasm_dialect::br(ctx, loc, 1);
             rewriter.replace_op(br_op.op_ref());
             return true;
         }
@@ -217,8 +217,8 @@ impl RewritePattern for ScfContinuePattern {
         // The emit layer will translate yield+br targeting a loop into
         // local.set for the loop arg followed by br.
         let value = values[0];
-        let yield_op = arena_wasm::r#yield(ctx, loc, value);
-        let br_op = arena_wasm::br(ctx, loc, 1);
+        let yield_op = wasm_dialect::r#yield(ctx, loc, value);
+        let br_op = wasm_dialect::br(ctx, loc, 1);
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());
@@ -253,10 +253,10 @@ impl RewritePattern for ScfBreakPattern {
         let value = break_op.value(ctx);
 
         // Emit the break value via wasm.yield (marks it as region result)
-        let yield_op = arena_wasm::r#yield(ctx, loc, value);
+        let yield_op = wasm_dialect::r#yield(ctx, loc, value);
 
         // Branch to outer block (depth 2: if=0, loop=1, block=2)
-        let br_op = arena_wasm::br(ctx, loc, 2);
+        let br_op = wasm_dialect::br(ctx, loc, 2);
 
         rewriter.insert_op(yield_op.op_ref());
         rewriter.replace_op(br_op.op_ref());

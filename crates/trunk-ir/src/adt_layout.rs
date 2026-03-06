@@ -88,7 +88,7 @@ pub struct VariantFieldLayout {
 ///
 /// After type conversion, all types should be one of the core types.
 /// Unknown types default to pointer size (8 bytes) for safety.
-pub fn type_size_align_arena(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
+pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("core") {
         return (8, 8);
@@ -113,7 +113,7 @@ pub fn type_size_align_arena(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 /// Extract struct fields from an arena TypeRef.
 ///
 /// Returns `None` if the type is not `adt.struct`.
-pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
+pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
         return None;
@@ -127,22 +127,22 @@ pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symb
     let mut result = Vec::new();
     for (i, field) in fields.iter().enumerate() {
         let Attribute::List(pair) = field else {
-            panic!("get_struct_fields_arena: field[{i}] expected List, got {field:?}");
+            panic!("get_struct_fields: field[{i}] expected List, got {field:?}");
         };
         assert!(
             pair.len() >= 2,
-            "get_struct_fields_arena: field[{i}] pair too short (len={})",
+            "get_struct_fields: field[{i}] pair too short (len={})",
             pair.len()
         );
         let Attribute::Symbol(name) = &pair[0] else {
             panic!(
-                "get_struct_fields_arena: field[{i}] name expected Symbol, got {:?}",
+                "get_struct_fields: field[{i}] name expected Symbol, got {:?}",
                 pair[0]
             );
         };
         let Attribute::Type(field_ty) = &pair[1] else {
             panic!(
-                "get_struct_fields_arena: field[{i}] type expected Type, got {:?}",
+                "get_struct_fields: field[{i}] type expected Type, got {:?}",
                 pair[1]
             );
         };
@@ -155,10 +155,7 @@ pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symb
 /// Extract enum variants from an arena TypeRef.
 ///
 /// Returns `None` if the type is not `adt.enum`.
-pub fn get_enum_variants_arena(
-    ctx: &IrContext,
-    ty: TypeRef,
-) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
+pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
         return None;
@@ -172,22 +169,22 @@ pub fn get_enum_variants_arena(
     let mut result = Vec::new();
     for (i, variant) in variants.iter().enumerate() {
         let Attribute::List(pair) = variant else {
-            panic!("get_enum_variants_arena: variant[{i}] expected List, got {variant:?}");
+            panic!("get_enum_variants: variant[{i}] expected List, got {variant:?}");
         };
         assert!(
             pair.len() >= 2,
-            "get_enum_variants_arena: variant[{i}] pair too short (len={})",
+            "get_enum_variants: variant[{i}] pair too short (len={})",
             pair.len()
         );
         let Attribute::Symbol(name) = &pair[0] else {
             panic!(
-                "get_enum_variants_arena: variant[{i}] name expected Symbol, got {:?}",
+                "get_enum_variants: variant[{i}] name expected Symbol, got {:?}",
                 pair[0]
             );
         };
         let Attribute::List(field_types_attr) = &pair[1] else {
             panic!(
-                "get_enum_variants_arena: variant[{i}] fields expected List, got {:?}",
+                "get_enum_variants: variant[{i}] fields expected List, got {:?}",
                 pair[1]
             );
         };
@@ -197,9 +194,7 @@ pub fn get_enum_variants_arena(
             .enumerate()
             .map(|(j, a)| {
                 let Attribute::Type(ty) = a else {
-                    panic!(
-                        "get_enum_variants_arena: variant[{i}] field[{j}] expected Type, got {a:?}"
-                    );
+                    panic!("get_enum_variants: variant[{i}] field[{j}] expected Type, got {a:?}");
                 };
                 *ty
             })
@@ -215,12 +210,12 @@ pub fn get_enum_variants_arena(
 ///
 /// Uses the `TypeConverter` to determine the native size of each field type.
 /// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
-pub fn compute_struct_layout_arena(
+pub fn compute_struct_layout(
     ctx: &IrContext,
     struct_ty: TypeRef,
     type_converter: &TypeConverter,
 ) -> Option<StructLayout> {
-    let fields = get_struct_fields_arena(ctx, struct_ty)?;
+    let fields = get_struct_fields(ctx, struct_ty)?;
 
     let mut offset: u32 = 0;
     let mut max_align: u32 = 1;
@@ -228,7 +223,7 @@ pub fn compute_struct_layout_arena(
 
     for (_name, field_ty) in &fields {
         let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
-        let (size, align) = type_size_align_arena(ctx, native_ty);
+        let (size, align) = type_size_align(ctx, native_ty);
 
         offset = (offset + align - 1) & !(align - 1);
         field_offsets.push(offset);
@@ -249,12 +244,12 @@ pub fn compute_struct_layout_arena(
 ///
 /// Uses the `TypeConverter` to determine the native size of each field type.
 /// Returns `None` if the type is not an `adt.enum` or variants cannot be extracted.
-pub fn compute_enum_layout_arena(
+pub fn compute_enum_layout(
     ctx: &IrContext,
     enum_ty: TypeRef,
     type_converter: &TypeConverter,
 ) -> Option<EnumLayout> {
-    let variants = get_enum_variants_arena(ctx, enum_ty)?;
+    let variants = get_enum_variants(ctx, enum_ty)?;
 
     let mut variant_layouts = Vec::with_capacity(variants.len());
     let mut max_fields_size: u32 = 0;
@@ -266,7 +261,7 @@ pub fn compute_enum_layout_arena(
 
         for field_ty in field_types {
             let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
-            let (size, align) = type_size_align_arena(ctx, native_ty);
+            let (size, align) = type_size_align(ctx, native_ty);
 
             offset = (offset + align - 1) & !(align - 1);
             field_offsets.push(offset);

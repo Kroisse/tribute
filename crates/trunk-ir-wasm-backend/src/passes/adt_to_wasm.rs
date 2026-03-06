@@ -43,7 +43,7 @@ use tracing::warn;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
@@ -95,7 +95,7 @@ impl RewritePattern for StructNewPattern {
         // Keep type attribute, emit will convert to type_idx
         // Note: Result type is preserved as-is; emit phase uses type_to_field_type
         // for wasm type conversion.
-        let new_op = arena_wasm::struct_new(ctx, loc, fields, result_ty, 0);
+        let new_op = wasm_dialect::struct_new(ctx, loc, fields, result_ty, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -125,7 +125,7 @@ impl RewritePattern for StructGetPattern {
 
         // Build wasm.struct_get: just change dialect/name
         // field attribute is already u32, emit will read it directly
-        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        let new_op = wasm_dialect::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -152,7 +152,7 @@ impl RewritePattern for StructSetPattern {
 
         // Build wasm.struct_set: just change dialect/name
         // field attribute is already u32, emit will read it directly
-        let new_op = arena_wasm::struct_set(ctx, loc, ref_val, value, 0, field_idx);
+        let new_op = wasm_dialect::struct_set(ctx, loc, ref_val, value, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -185,7 +185,7 @@ impl RewritePattern for VariantNewPattern {
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
-        let new_op = arena_wasm::struct_new(ctx, loc, fields, variant_type, 0);
+        let new_op = wasm_dialect::struct_new(ctx, loc, fields, variant_type, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -271,7 +271,7 @@ impl RewritePattern for VariantIsPattern {
         let variant_type = make_variant_type(ctx, enum_type, tag);
 
         // Create wasm.ref_test with variant-specific type
-        let new_op = arena_wasm::ref_test(ctx, loc, ref_val, result_ty, variant_type, None);
+        let new_op = wasm_dialect::ref_test(ctx, loc, ref_val, result_ty, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -312,7 +312,7 @@ impl RewritePattern for VariantCastPattern {
 
         // Create wasm.ref_cast with variant-specific type
         // Result type is the variant-specific type - emit infers type_idx from it
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, variant_type, variant_type, None);
+        let new_op = wasm_dialect::ref_cast(ctx, loc, ref_val, variant_type, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -343,7 +343,7 @@ impl RewritePattern for VariantGetPattern {
 
         // Infer type from the operand (the cast result has the variant-specific type)
         // field attribute is already u32 and will be used directly
-        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        let new_op = wasm_dialect::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -374,13 +374,13 @@ impl RewritePattern for ArrayNewPattern {
             }
             1 => {
                 // Only size operand -> array_new_default
-                let new_op = arena_wasm::array_new_default(ctx, loc, operands[0], result_ty, 0);
+                let new_op = wasm_dialect::array_new_default(ctx, loc, operands[0], result_ty, 0);
                 rewriter.replace_op(new_op.op_ref());
             }
             2 => {
                 // size + init value -> array_new
                 let new_op =
-                    arena_wasm::array_new(ctx, loc, operands[0], operands[1], result_ty, 0);
+                    wasm_dialect::array_new(ctx, loc, operands[0], operands[1], result_ty, 0);
                 rewriter.replace_op(new_op.op_ref());
             }
             n => {
@@ -412,7 +412,7 @@ impl RewritePattern for ArrayGetPattern {
         let index = array_get.index(ctx);
         let result_ty = array_get.result_ty(ctx);
 
-        let new_op = arena_wasm::array_get(ctx, loc, ref_val, index, result_ty, 0);
+        let new_op = wasm_dialect::array_get(ctx, loc, ref_val, index, result_ty, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -437,7 +437,7 @@ impl RewritePattern for ArraySetPattern {
         let index = array_set.index(ctx);
         let value = array_set.value(ctx);
 
-        let new_op = arena_wasm::array_set(ctx, loc, ref_val, index, value, 0);
+        let new_op = wasm_dialect::array_set(ctx, loc, ref_val, index, value, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -461,7 +461,7 @@ impl RewritePattern for ArrayLenPattern {
         let ref_val = array_len.r#ref(ctx);
         let result_ty = array_len.result_ty(ctx);
 
-        let new_op = arena_wasm::array_len(ctx, loc, ref_val, result_ty);
+        let new_op = wasm_dialect::array_len(ctx, loc, ref_val, result_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -488,7 +488,7 @@ impl RewritePattern for RefNullPattern {
         let adt_type = ref_null.r#type(ctx);
         let heap_type = ctx.types.get(adt_type).name;
 
-        let new_op = arena_wasm::ref_null(ctx, loc, result_ty, heap_type, None);
+        let new_op = wasm_dialect::ref_null(ctx, loc, result_ty, heap_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -512,7 +512,7 @@ impl RewritePattern for RefIsNullPattern {
         let ref_val = ref_is_null.r#ref(ctx);
         let result_ty = ref_is_null.result_ty(ctx);
 
-        let new_op = arena_wasm::ref_is_null(ctx, loc, ref_val, result_ty);
+        let new_op = wasm_dialect::ref_is_null(ctx, loc, ref_val, result_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -539,7 +539,7 @@ impl RewritePattern for RefCastPattern {
         // Get the target type from the adt type attribute
         let adt_type = ref_cast.r#type(ctx);
 
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, result_ty, adt_type, None);
+        let new_op = wasm_dialect::ref_cast(ctx, loc, ref_val, result_ty, adt_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }

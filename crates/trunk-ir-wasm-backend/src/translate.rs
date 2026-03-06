@@ -6,7 +6,7 @@
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
 use trunk_ir::arena::Module;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::ops::DialectOp;
 
 use crate::{CompilationResult, emit_wasm, validate_wasm_ir};
@@ -28,10 +28,7 @@ pub struct WasmBinary {
 /// 1. Validates the IR (checks for unresolved types and non-wasm ops)
 /// 2. Emits the wasm binary
 /// 3. Extracts metadata (exports, imports)
-pub fn emit_module_to_wasm_arena(
-    ctx: &mut IrContext,
-    module: Module,
-) -> CompilationResult<WasmBinary> {
+pub fn emit_module_to_wasm(ctx: &mut IrContext, module: Module) -> CompilationResult<WasmBinary> {
     // Validate IR (check for unresolved types and non-wasm ops)
     validate_wasm_ir(ctx, module)?;
 
@@ -59,10 +56,10 @@ fn extract_metadata(ctx: &IrContext, module: Module) -> (Vec<Symbol>, Vec<(Symbo
 
     for &block_ref in &ctx.region(body).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if let Ok(export_op) = arena_wasm::ExportFunc::from_op(ctx, op) {
+            if let Ok(export_op) = wasm_dialect::ExportFunc::from_op(ctx, op) {
                 let name = export_op.name(ctx);
                 exports.push(Symbol::from_dynamic(&name));
-            } else if let Ok(import_op) = arena_wasm::ImportFunc::from_op(ctx, op) {
+            } else if let Ok(import_op) = wasm_dialect::ImportFunc::from_op(ctx, op) {
                 let module_name = import_op.module(ctx);
                 let func_name = import_op.name(ctx);
                 imports.push((module_name, func_name));

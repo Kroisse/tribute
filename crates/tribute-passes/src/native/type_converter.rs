@@ -115,7 +115,7 @@ impl NativeTypeRefs {
 ///
 /// Arena version of `native_type_converter()`. All type checks use pre-interned
 /// `TypeRef` comparisons for efficiency.
-pub fn native_type_converter_arena(ctx: &mut IrContext) -> (TypeConverter, NativeTypeRefs) {
+pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeRefs) {
     let refs = NativeTypeRefs::new(ctx);
 
     let mut tc = TypeConverter::new();
@@ -197,8 +197,8 @@ pub fn native_type_converter_arena(ctx: &mut IrContext) -> (TypeConverter, Nativ
         }
 
         // Pointer equivalences: ptr-like ↔ ptr
-        let from_ptr_like = is_ptr_like_arena(ctx, from_ty, r.evidence_ty, r.core_ptr);
-        let to_ptr_like = is_ptr_like_arena(ctx, to_ty, r.evidence_ty, r.core_ptr);
+        let from_ptr_like = is_ptr_like(ctx, from_ty, r.evidence_ty, r.core_ptr);
+        let to_ptr_like = is_ptr_like(ctx, to_ty, r.evidence_ty, r.core_ptr);
         let from_is_ptr = from_ty == r.core_ptr;
         let to_is_ptr = to_ty == r.core_ptr;
 
@@ -212,17 +212,17 @@ pub fn native_type_converter_arena(ctx: &mut IrContext) -> (TypeConverter, Nativ
         // Boxing: primitive → ptr
         if to_is_ptr {
             if from_ty == r.core_i32 {
-                return Some(box_primitive_arena(
+                return Some(box_primitive(
                     ctx, location, value, 4, r.core_i64, r.core_i32, r.core_ptr,
                 ));
             }
             if from_ty == r.core_i64 {
-                return Some(box_primitive_arena(
+                return Some(box_primitive(
                     ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
                 ));
             }
             if from_ty == r.core_f64 {
-                return Some(box_primitive_arena(
+                return Some(box_primitive(
                     ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
                 ));
             }
@@ -286,7 +286,7 @@ fn arena_materialize_result_noop(
 }
 
 /// Generate boxing operations in arena IR: allocate + store RC header + store value.
-fn box_primitive_arena(
+fn box_primitive(
     ctx: &mut IrContext,
     location: Location,
     value: ValueRef,
@@ -354,12 +354,7 @@ fn box_primitive_arena(
 }
 
 /// Check if a type is a pointer-like reference type in arena native representation.
-pub fn is_ptr_like_arena(
-    ctx: &IrContext,
-    ty: TypeRef,
-    evidence_ty: TypeRef,
-    ptr_ty: TypeRef,
-) -> bool {
+pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: TypeRef) -> bool {
     if ty == ptr_ty {
         return true;
     }

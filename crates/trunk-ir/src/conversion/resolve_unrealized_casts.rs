@@ -39,12 +39,12 @@ pub struct ResolveResult {
 ///
 /// Uses the provided TypeConverter's materialization functions to generate
 /// actual conversion operations. Mutates the module in place.
-pub fn resolve_unrealized_casts_arena(
+pub fn resolve_unrealized_casts(
     ctx: &mut IrContext,
     module: Module,
     tc: &TypeConverter,
 ) -> ResolveResult {
-    tracing::debug!("resolve_unrealized_casts_arena: starting resolution");
+    tracing::debug!("resolve_unrealized_casts: starting resolution");
     let mut resolver = ArenaCastResolver::new();
 
     let body = match module.body(ctx) {
@@ -60,7 +60,7 @@ pub fn resolve_unrealized_casts_arena(
     resolver.resolve_region(ctx, tc, body);
 
     tracing::debug!(
-        "resolve_unrealized_casts_arena: resolved {} casts, {} unresolved",
+        "resolve_unrealized_casts: resolved {} casts, {} unresolved",
         resolver.resolved_count,
         resolver.unresolved.len()
     );
@@ -169,7 +169,7 @@ impl ArenaCastResolver {
             }
             None => {
                 // Could not materialize - keep the cast and mark as unresolved
-                tracing::debug!("resolve_unrealized_casts_arena: FAILED to materialize cast");
+                tracing::debug!("resolve_unrealized_casts: FAILED to materialize cast");
                 self.unresolved.push(UnresolvedCast {
                     location,
                     from_type,
@@ -185,12 +185,12 @@ mod tests {
     mod arena_tests {
         use crate::arena::OperationDataBuilder;
         use crate::arena::context::{BlockData, IrContext, RegionData};
-        use crate::arena::dialect::arith as arena_arith;
+        use crate::arena::dialect::arith;
         use crate::arena::dialect::core as arena_core;
         use crate::arena::refs::{OpRef, TypeRef};
         use crate::arena::rewrite::{Module, TypeConverter};
         use crate::arena::types::{Attribute, Location, TypeDataBuilder};
-        use crate::conversion::resolve_unrealized_casts_arena;
+        use crate::conversion::resolve_unrealized_casts;
         use crate::location::Span;
         use crate::symbol::Symbol;
         use smallvec::smallvec;
@@ -243,7 +243,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arena_arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
@@ -253,7 +253,7 @@ mod tests {
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
             let tc = TypeConverter::new();
-            let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
+            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
 
             // Should fail — no materializer registered
             assert_eq!(result.unresolved.len(), 1);
@@ -266,7 +266,7 @@ mod tests {
             let i32_ty = i32_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arena_arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i32 (same type)
@@ -276,7 +276,7 @@ mod tests {
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
             let tc = TypeConverter::new();
-            let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
+            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
 
             // Same-type casts should be resolved even without a materializer
             assert!(result.unresolved.is_empty());
@@ -295,7 +295,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arena_arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
@@ -333,7 +333,7 @@ mod tests {
                 })
             });
 
-            let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
+            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
 
             assert!(result.unresolved.is_empty());
             assert_eq!(result.resolved_count, 1);

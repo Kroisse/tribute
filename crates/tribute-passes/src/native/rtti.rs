@@ -28,8 +28,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{
-    compute_enum_layout_arena, compute_struct_layout_arena, get_enum_variants_arena,
-    get_struct_fields_arena,
+    compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
 use trunk_ir::arena::TypeDataBuilder;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -148,7 +147,7 @@ pub fn generate_rtti(
     entries.sort_by_key(|(_, idx)| *idx);
 
     for (ty, rtti_idx) in entries {
-        let is_enum = get_enum_variants_arena(ctx, ty).is_some();
+        let is_enum = get_enum_variants(ctx, ty).is_some();
         let func_op = if is_enum {
             generate_release_function_for_enum(ctx, ty, rtti_idx, type_converter, loc)
         } else {
@@ -173,7 +172,7 @@ fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
         if dialect == Symbol::new("adt") && name == Symbol::new("struct_new") {
             if let Ok(struct_new) = arena_adt::StructNew::from_op(ctx, op) {
                 let struct_ty = struct_new.r#type(ctx);
-                if get_struct_fields_arena(ctx, struct_ty).is_some() {
+                if get_struct_fields(ctx, struct_ty).is_some() {
                     rtti_map.get_or_insert(struct_ty);
                 }
             }
@@ -182,7 +181,7 @@ fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
             && let Ok(variant_new) = arena_adt::VariantNew::from_op(ctx, op)
         {
             let enum_ty = variant_new.r#type(ctx);
-            if get_enum_variants_arena(ctx, enum_ty).is_some() {
+            if get_enum_variants(ctx, enum_ty).is_some() {
                 rtti_map.get_or_insert(enum_ty);
             }
         }
@@ -199,9 +198,9 @@ fn generate_release_function_for_struct(
     type_converter: &TypeConverter,
     loc: Location,
 ) -> OpRef {
-    let fields = get_struct_fields_arena(ctx, struct_ty)
+    let fields = get_struct_fields(ctx, struct_ty)
         .expect("struct type registered in RttiMap must have fields");
-    let layout = compute_struct_layout_arena(ctx, struct_ty, type_converter)
+    let layout = compute_struct_layout(ctx, struct_ty, type_converter)
         .expect("struct type registered in RttiMap must have a valid layout");
 
     let tys = ClifTypes::intern(ctx);
@@ -414,9 +413,9 @@ fn generate_release_function_for_enum(
     type_converter: &TypeConverter,
     loc: Location,
 ) -> OpRef {
-    let layout = compute_enum_layout_arena(ctx, enum_ty, type_converter)
+    let layout = compute_enum_layout(ctx, enum_ty, type_converter)
         .expect("enum type registered in RttiMap must have a valid layout");
-    let variants = get_enum_variants_arena(ctx, enum_ty).unwrap_or_default();
+    let variants = get_enum_variants(ctx, enum_ty).unwrap_or_default();
 
     let tys = ClifTypes::intern(ctx);
     let ptr_ty = tys.ptr;
@@ -793,7 +792,7 @@ mod tests {
   }
 }"#;
         let module = trunk_ir::arena::parser::parse_test_module(&mut ctx, ir);
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let rtti = generate_rtti(&mut ctx, module, &tc);
         assert!(rtti.type_to_idx.is_empty());
     }
@@ -807,7 +806,7 @@ mod tests {
         let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty), ("y", i32_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
 
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let _rtti = generate_rtti(&mut ctx, module, &tc);
 
         let output = print_module(&ctx, module.op());
@@ -824,7 +823,7 @@ mod tests {
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, ptr_ty]);
 
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let _rtti = generate_rtti(&mut ctx, module, &tc);
 
         let output = print_module(&ctx, module.op());
@@ -918,7 +917,7 @@ mod tests {
         let module_op = ctx.create_op(module_data);
         let module = Module::new(&ctx, module_op).expect("valid");
 
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let rtti = generate_rtti(&mut ctx, module, &tc);
 
         // Both struct types should be registered
@@ -943,7 +942,7 @@ mod tests {
         let closure_ty = make_struct_type(&mut ctx, &[("func_ptr", ptr_ty), ("env", ptr_ty)]);
         let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, ptr_ty]);
 
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let _rtti = generate_rtti(&mut ctx, module, &tc);
 
         let output = print_module(&ctx, module.op());

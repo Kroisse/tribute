@@ -73,14 +73,14 @@ impl PureOps {
     }
 
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
-    pub fn is_pure_arena(ctx: &IrContext, op: OpRef) -> bool {
+    pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
         REGISTRY.lookup(data.dialect, data.name)
     }
 
     /// Check if an arena operation is pure and eligible for DCE removal.
-    pub fn is_removable_arena(ctx: &IrContext, op: OpRef) -> bool {
-        Self::is_pure_arena(ctx, op)
+    pub fn is_removable(ctx: &IrContext, op: OpRef) -> bool {
+        Self::is_pure(ctx, op)
     }
 }
 
@@ -198,7 +198,7 @@ impl IsolatedFromAboveOps {
     }
 
     /// Check if an arena operation's regions are isolated from above.
-    pub fn is_isolated_arena(ctx: &IrContext, op: OpRef) -> bool {
+    pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
         ISOLATED_REGISTRY.lookup(data.dialect, data.name)
     }

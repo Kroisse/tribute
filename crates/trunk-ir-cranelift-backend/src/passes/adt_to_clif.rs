@@ -24,8 +24,7 @@
 use tracing::warn;
 
 use crate::adt_layout::{
-    compute_enum_layout_arena, compute_struct_layout_arena, find_variant_layout,
-    get_enum_variants_arena,
+    compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
@@ -93,7 +92,7 @@ impl RewritePattern for StructGetPattern {
         let field_idx = struct_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute layout for struct_get");
             return false;
         };
@@ -139,7 +138,7 @@ impl RewritePattern for StructSetPattern {
         let field_idx = struct_set.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute layout for struct_set");
             return false;
         };
@@ -177,7 +176,7 @@ impl RewritePattern for VariantIsPattern {
         let tag = variant_is.tag(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute enum layout for variant_is");
             return false;
         };
@@ -250,7 +249,7 @@ impl RewritePattern for VariantGetPattern {
         let field_idx = variant_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute enum layout for variant_get");
             return false;
         };
@@ -274,7 +273,7 @@ impl RewritePattern for VariantGetPattern {
         // The field was stored with its native type, so we must load with the
         // same type rather than the type-erased result type (which may be
         // tribute_rt.any instead of core.ptr).
-        let load_ty = get_enum_variants_arena(ctx, enum_ty)
+        let load_ty = get_enum_variants(ctx, enum_ty)
             .and_then(|variants| {
                 variants
                     .iter()

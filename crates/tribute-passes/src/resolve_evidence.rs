@@ -24,7 +24,7 @@ use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
@@ -430,7 +430,7 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
             if let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op)
                 && let trunk_ir::arena::refs::ValueDef::OpResult(def_op, 0) =
                     ctx.value_def(shift_op.tag(ctx))
-                && let Ok(const_op) = arena_arith::Const::from_op(ctx, def_op)
+                && let Ok(const_op) = arith::Const::from_op(ctx, def_op)
                 && let Attribute::IntBits(value) = const_op.value(ctx)
                 && value == UNRESOLVED_SHIFT_TAG as u64
             {
@@ -482,7 +482,7 @@ fn transform_handler_roots(
         let i32_ty = i32_type_ref(ctx);
 
         // Create empty evidence: arith.const 0 + adt.array_new
-        let zero_const = arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
+        let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
         let empty_evidence = arena_adt::array_new(
             ctx,
             loc,
@@ -653,14 +653,13 @@ fn transform_shifts_in_block(
             let op_table_idx = registry.register(abilities.clone(), operations, loc);
 
             // Create tag constant
-            let tag_const =
-                arena_arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(tag as u64));
+            let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(tag as u64));
             let tag_val = ctx.op_result(tag_const.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_const.op_ref());
 
             // Create op_table_index constant
             let op_table_idx_const =
-                arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_table_idx as u64));
+                arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_table_idx as u64));
             let op_table_idx_val = ctx.op_result(op_table_idx_const.op_ref(), 0);
             ctx.insert_op_before(block, op, op_table_idx_const.op_ref());
 
@@ -670,7 +669,7 @@ fn transform_shifts_in_block(
                 let ability_id = compute_ability_id(ctx, ability_ref);
 
                 let ability_id_const =
-                    arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
+                    arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
                 let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                 ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
@@ -733,7 +732,7 @@ fn transform_shifts_in_block(
 
             // %ability_id_const = arith.const ability_id
             let ability_id_const =
-                arena_arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
+                arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
             let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 

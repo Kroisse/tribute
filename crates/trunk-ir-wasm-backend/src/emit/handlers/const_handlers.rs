@@ -3,7 +3,7 @@
 //! This module handles the emission of constant values (i32, i64, f32, f64).
 
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;
@@ -13,7 +13,7 @@ use super::super::{FunctionEmitContext, set_result_local};
 /// Handle i32.const operation
 pub(crate) fn handle_i32_const(
     ctx: &IrContext,
-    const_op: arena_wasm::I32Const,
+    const_op: wasm_dialect::I32Const,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -26,7 +26,7 @@ pub(crate) fn handle_i32_const(
 /// Handle i64.const operation
 pub(crate) fn handle_i64_const(
     ctx: &IrContext,
-    const_op: arena_wasm::I64Const,
+    const_op: wasm_dialect::I64Const,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -39,7 +39,7 @@ pub(crate) fn handle_i64_const(
 /// Handle f32.const operation
 pub(crate) fn handle_f32_const(
     ctx: &IrContext,
-    const_op: arena_wasm::F32Const,
+    const_op: wasm_dialect::F32Const,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -52,7 +52,7 @@ pub(crate) fn handle_f32_const(
 /// Handle f64.const operation
 pub(crate) fn handle_f64_const(
     ctx: &IrContext,
-    const_op: arena_wasm::F64Const,
+    const_op: wasm_dialect::F64Const,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {

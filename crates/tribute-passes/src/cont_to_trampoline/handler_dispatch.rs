@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
@@ -17,7 +17,7 @@ use trunk_ir::location::Span;
 
 use super::patterns::is_step_type;
 use super::shift_lower::{anyref_type, continuation_type, i32_type, step_type};
-use crate::cont_util::{SuspendArm, collect_suspend_arms_arena};
+use crate::cont_util::{SuspendArm, collect_suspend_arms};
 
 // ============================================================================
 // Pattern: Lower cont.handler_dispatch
@@ -62,7 +62,7 @@ impl RewritePattern for LowerHandlerDispatchPattern {
         let body_region = dispatch.body(ctx);
 
         // Collect suspend arms
-        let suspend_arms = collect_suspend_arms_arena(ctx, body_region);
+        let suspend_arms = collect_suspend_arms(ctx, body_region);
 
         // Check if this handler is inside an effectful function
         let is_in_effectful_func = self.handlers_in_effectful_funcs.contains(&location.span);
@@ -130,9 +130,9 @@ impl LowerHandlerDispatchPattern {
         let step_tag = get_tag.result(ctx);
 
         // Compare with DONE (0)
-        let done_const = arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
+        let done_const = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
         ctx.push_op(block, done_const.op_ref());
-        let is_done = arena_arith::cmp_eq(ctx, location, step_tag, done_const.result(ctx), i1_ty);
+        let is_done = arith::cmp_eq(ctx, location, step_tag, done_const.result(ctx), i1_ty);
         ctx.push_op(block, is_done.op_ref());
 
         // Build Done branch
@@ -253,10 +253,10 @@ impl LowerHandlerDispatchPattern {
 
         // Compare with our handler's tag
         let our_tag_const =
-            arena_arith::r#const(ctx, location, i32_ty, Attribute::IntBits(our_tag as u64));
+            arith::r#const(ctx, location, i32_ty, Attribute::IntBits(our_tag as u64));
         ctx.push_op(block, our_tag_const.op_ref());
         let tag_matches =
-            arena_arith::cmp_eq(ctx, location, step_prompt, our_tag_const.result(ctx), i1_ty);
+            arith::cmp_eq(ctx, location, step_prompt, our_tag_const.result(ctx), i1_ty);
         ctx.push_op(block, tag_matches.op_ref());
 
         // Build dispatch region (when tag matches)
@@ -410,7 +410,7 @@ pub(crate) fn build_nested_dispatch(
 
     if is_last_arm {
         // Last arm: always-true condition
-        let true_const = arena_arith::r#const(ctx, location, i1_ty, Attribute::IntBits(1));
+        let true_const = arith::r#const(ctx, location, i1_ty, Attribute::IntBits(1));
         ctx.push_op(block, true_const.op_ref());
         let else_region = build_arm_region(ctx, location, arm.body, effectful_funcs);
 
@@ -428,14 +428,14 @@ pub(crate) fn build_nested_dispatch(
 
     // Compare current op_idx with expected
     let i32_ty = i32_type(ctx);
-    let expected_const = arena_arith::r#const(
+    let expected_const = arith::r#const(
         ctx,
         location,
         i32_ty,
         Attribute::IntBits(arm.expected_op_idx as u64),
     );
     ctx.push_op(block, expected_const.op_ref());
-    let cmp_op = arena_arith::cmp_eq(
+    let cmp_op = arith::cmp_eq(
         ctx,
         location,
         current_op_idx,

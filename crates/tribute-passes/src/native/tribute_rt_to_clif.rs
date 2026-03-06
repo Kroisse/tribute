@@ -440,7 +440,7 @@ mod tests {
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc);
         print_module(&ctx, module.op())
     }
@@ -560,7 +560,7 @@ mod tests {
   }
 }"#;
         let module = parse_test_module(&mut ctx, ir);
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc);
 
         let output = print_module(&ctx, module.op());

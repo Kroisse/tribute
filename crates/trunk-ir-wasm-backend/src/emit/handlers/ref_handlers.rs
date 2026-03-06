@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{AbstractHeapType, Function, HeapType, Instruction};
@@ -56,7 +56,7 @@ pub(crate) fn handle_ref_null(
 /// Handle ref.func operation
 pub(crate) fn handle_ref_func(
     ctx: &IrContext,
-    ref_func_op: arena_wasm::RefFunc,
+    ref_func_op: wasm_dialect::RefFunc,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
