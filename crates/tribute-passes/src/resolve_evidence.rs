@@ -26,8 +26,9 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::arith as arena_arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::ArenaModule;
 use trunk_ir::arena::types::{
@@ -79,13 +80,11 @@ fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn nil_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+    arena_core::nil(ctx).as_type_ref()
 }
 
 fn prompt_tag_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build())
+    arena_cont::prompt_tag(ctx).as_type_ref()
 }
 
 // ============================================================================
@@ -127,13 +126,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: ArenaModule) {
         let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(marker_ty) // return
-                .param(evidence_ty)
-                .param(i32_ty)
-                .build(),
-        );
+        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty], None).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::arena::context::BlockData {
@@ -177,13 +170,8 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: ArenaModule) {
         let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(evidence_ty) // return
-                .param(evidence_ty)
-                .param(marker_ty)
-                .build(),
-        );
+        let func_ty =
+            arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty], None).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::arena::context::BlockData {
             location: loc,
@@ -240,15 +228,14 @@ fn collect_functions_with_evidence(ctx: &IrContext, module: ArenaModule) -> Hash
 
 /// Check if a `core.func` type has evidence as its first parameter.
 fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let data = ctx.types.get(func_ty);
-    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+    let Some(func) = arena_core::Func::from_type_ref(ctx, func_ty) else {
+        return false;
+    };
+    let params = func.params(ctx);
+    if params.is_empty() {
         return false;
     }
-    // params[0] = return, params[1..] = param types
-    if data.params.len() < 2 {
-        return false;
-    }
-    arena_ability::is_evidence_type_ref(ctx, data.params[1])
+    arena_ability::is_evidence_type_ref(ctx, params[0])
 }
 
 /// Collect handler-root functions (contain push_prompt but no evidence param).

@@ -22,11 +22,14 @@
 use std::collections::HashSet;
 
 use tribute_ir::arena::dialect::closure as arena_closure;
+use tribute_ir::arena::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
@@ -61,26 +64,22 @@ fn i32_type_ref(ctx: &mut IrContext) -> TypeRef {
 
 /// Create a `tribute_rt.any` (anyref) type ref in arena.
 fn anyref_type_ref(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
+    tribute_rt::any(ctx).as_type_ref()
 }
 
 /// Check if a TypeRef is a closure.closure type.
 fn is_closure_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure")
+    arena_closure::Closure::matches(ctx, ty)
 }
 
 /// Check if a TypeRef is a core.func type.
 fn is_core_func_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("func")
+    arena_core::Func::matches(ctx, ty)
 }
 
 /// Check if a TypeRef is a cont.continuation type.
 fn is_continuation_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("cont") && data.name == Symbol::new("continuation")
+    arena_cont::Continuation::matches(ctx, ty)
 }
 
 /// Check if a TypeRef is an adt.struct with name "_closure".
@@ -97,12 +96,8 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Extract the inner func type from a closure.closure TypeRef.
 fn extract_closure_func_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
-    let data = ctx.types.get(ty);
-    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
-        return None;
-    }
-    // closure.closure type has the inner func type as first param
-    data.params.first().copied()
+    let closure = arena_closure::Closure::from_type_ref(ctx, ty)?;
+    Some(closure.func_type(ctx))
 }
 
 /// Get the type of an arena value.
@@ -233,11 +228,7 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
         for &param_ty in &params[1..] {
             if is_core_func_type_ref(ctx, param_ty) {
                 // Convert core.func to closure.closure wrapping the func type
-                let closure_ty = ctx.types.intern(
-                    TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-                        .param(param_ty)
-                        .build(),
-                );
+                let closure_ty = arena_closure::closure(ctx, param_ty).as_type_ref();
                 new_params.push(closure_ty);
                 needs_update = true;
             } else {
