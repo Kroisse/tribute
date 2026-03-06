@@ -1,0 +1,25 @@
+---
+source: crates/tribute-front/tests/record_field_type.rs
+expression: ir_text
+---
+core.module @test {
+  core.module @Point {
+    func.func @"test::Point::x"(%0: adt.typeref() {name = @Point}) -> core.i32 {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+        func.return %1
+    }
+    func.func @"test::Point::y"(%0: adt.typeref() {name = @Point}) -> core.i32 {
+      ^bb0:
+        %1 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+        func.return %1
+    }
+  }
+  func.func @replace_all(%0: tribute_rt.any) -> tribute_rt.any {
+    ^bb0:
+      %1 = arith.const {value = 1} : core.i32
+      %2 = arith.const {value = 2} : core.i32
+      %3 = adt.struct_new %1, %2 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : adt.typeref() {name = @Point}
+      func.return %3
+  }
+}
