@@ -14,13 +14,12 @@ use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
-    link_native_binary, run_native_pipeline, run_wasm_pipeline,
+    link_native_binary,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_front::query::parsed_ast;
 use tribute_front::resolve::build_env;
 use tribute_passes::{Diagnostic, DiagnosticSeverity};
-use trunk_ir::DialectOp;
 
 fn main() {
     let cli = Cli::parse();
@@ -87,19 +86,15 @@ fn compile_file(
             if sanitize_address {
                 eprintln!("warning: --sanitize has no effect with --dump-ir (sanitizer ops are added during backend lowering)");
             }
-            let result = match target {
-                "native" => run_native_pipeline(db, source),
-                _ => run_wasm_pipeline(db, source),
-            };
+            let is_native = target == "native";
+            let result = tribute::pipeline::dump_ir(db, source, is_native);
 
-            // Collect diagnostics from the target-specific pipeline
-            let diagnostics: Vec<Diagnostic> = match target {
-                "native" => run_native_pipeline::accumulated::<Diagnostic>(db, source),
-                _ => run_wasm_pipeline::accumulated::<Diagnostic>(db, source),
-            }
-            .into_iter()
-            .cloned()
-            .collect();
+            // Collect diagnostics
+            let diagnostics: Vec<Diagnostic> =
+                tribute::pipeline::dump_ir::accumulated::<Diagnostic>(db, source, is_native)
+                    .into_iter()
+                    .cloned()
+                    .collect();
 
             if !diagnostics.is_empty() {
                 let file_path = input_path.display().to_string();
@@ -116,8 +111,7 @@ fn compile_file(
             }
 
             match result {
-                Ok(module) => {
-                    let ir_text = trunk_ir::printer::print_op(db, module.as_operation());
+                Ok(ir_text) => {
                     println!("{}", ir_text);
                 }
                 Err(e) => {
@@ -154,11 +148,10 @@ fn compile_file(
             "wasm" => {
                 println!("Compiling {} to WebAssembly...", input_path.display());
 
-                if let Some(wasm_binary) = compile_to_wasm_binary(db, source) {
-                    let bytes = wasm_binary.bytes(db);
+                if let Some(wasm_bytes) = compile_to_wasm_binary(db, source) {
                     let output = output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
-                    match std::fs::write(&output, bytes) {
+                    match std::fs::write(&output, &wasm_bytes) {
                         Ok(_) => {
                             println!(
                                 "Successfully wrote WebAssembly binary to {}",

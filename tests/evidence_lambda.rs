@@ -388,7 +388,7 @@ fn main() { }
 /// The evidence pass should detect this and not add a duplicate parameter.
 #[test]
 fn test_evidence_param_not_duplicated_for_effectful_lambda() {
-    use tribute::pipeline::stage_evidence_params;
+    use tribute::pipeline::run_through_evidence_params;
 
     let code = r#"
 ability State(s) {
@@ -409,16 +409,20 @@ fn run() -> Int {
 fn main() { }
 "#;
 
+    let source_code = Rope::from_str(code);
+
     TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, "evidence_param.trb", source_code.clone(), tree);
+
         let module = compile_to_ir(code, "evidence_param.trb")(db);
 
         // Get function param counts before evidence pass
         let before_counts = get_function_param_counts(db, &module);
         eprintln!("Before evidence pass: {:?}", before_counts);
 
-        // Apply evidence params pass
-        // (boxing is now handled via unrealized_conversion_cast in ast_to_ir)
-        let after_evidence = stage_evidence_params(db, module);
+        // Apply evidence params pass via arena-based run_through_evidence_params
+        let after_evidence = run_through_evidence_params(db, source_file);
 
         // Get lambda param count after evidence pass
         let after_counts = get_function_param_counts(db, &after_evidence);
