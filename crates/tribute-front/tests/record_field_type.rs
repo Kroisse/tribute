@@ -172,6 +172,65 @@ fn make_pair() -> Pair(Int, Bool) {
     assert_snapshot!(ir_text);
 }
 
+/// Snapshot test for record with spread only (no explicit fields).
+/// All fields should be extracted via `adt.struct_get` from the base.
+#[salsa_test]
+fn test_snapshot_record_spread_only(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+struct Config { debug: Bool, verbose: Bool }
+
+fn copy_config(c: Config) -> Config {
+    Config { ..c }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// Snapshot test for record with all fields explicit plus spread.
+/// Explicit fields should take priority over spread values.
+#[salsa_test]
+fn test_snapshot_record_spread_all_fields_explicit(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+struct Point { x: Int, y: Int }
+
+fn replace_all(p: Point) -> Point {
+    Point { x: 1, y: 2, ..p }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert_snapshot!(ir_text);
+}
+
+/// Test record spread with a function call as the spread expression.
+#[salsa_test]
+fn test_record_spread_complex_expr(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+struct Point { x: Int, y: Int }
+
+fn origin() -> Point {
+    Point { x: 0, y: 0 }
+}
+
+fn shift_x() -> Point {
+    Point { x: 10, ..origin() }
+}
+"#,
+    );
+
+    run_ast_pipeline(db, source);
+}
+
 // ========================================================================
 // Forward Reference Tests
 // ========================================================================

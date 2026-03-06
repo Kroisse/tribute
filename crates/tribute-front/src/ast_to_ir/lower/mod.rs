@@ -58,9 +58,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         let ty = self.ctx.nil_type(self.ir);
         let op = arith::r#const(self.ir, location, ty, Attribute::Unit);
         self.ir.push_op(self.block, op.op_ref());
-        let result = op.result(self.ir);
-        self.ctx.track_value_type(result, ty);
-        result
+        op.result(self.ir)
     }
 
     /// Emit diagnostic for unimplemented expression and return nil placeholder.
@@ -96,28 +94,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         value: ValueRef,
         target_ty: TypeRef,
     ) -> ValueRef {
-        // Get the current type of the value from its definition
-        let value_ty = {
-            let value_data = self.ir.value(value);
-            match value_data.def {
-                trunk_ir::arena::refs::ValueDef::OpResult(op, _idx) => {
-                    let results = self.ir.op_result_types(op);
-                    let index = match value_data.def {
-                        trunk_ir::arena::refs::ValueDef::OpResult(_, i) => i as usize,
-                        _ => 0,
-                    };
-                    results.get(index).copied()
-                }
-                trunk_ir::arena::refs::ValueDef::BlockArg(_, _) => self
-                    .ctx
-                    .get_value_type(value)
-                    .or_else(|| Some(self.ir.value_ty(value))),
-            }
-        };
-
-        let Some(value_ty) = value_ty else {
-            return value;
-        };
+        let value_ty = self.ir.value_ty(value);
 
         if value_ty == target_ty {
             return value;
@@ -141,9 +118,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
         // Insert unrealized_conversion_cast
         let cast_op = core::unrealized_conversion_cast(self.ir, location, value, target_ty);
         self.ir.push_op(self.block, cast_op.op_ref());
-        let casted = cast_op.result(self.ir);
-        self.ctx.track_value_type(casted, target_ty);
-        casted
+        cast_op.result(self.ir)
     }
 
     /// Lower arguments and propagate errors properly.

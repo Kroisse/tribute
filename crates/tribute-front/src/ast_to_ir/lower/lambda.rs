@@ -241,7 +241,6 @@ pub(super) fn lower_lambda<'db>(
         if let Some(local_id) = param.local_id {
             let arg_val = arg_values[i + 2];
             builder.ctx.bind(local_id, param.name, arg_val);
-            builder.ctx.track_value_type(arg_val, any_ty);
         }
     }
 
@@ -259,7 +258,6 @@ pub(super) fn lower_lambda<'db>(
             builder.ir.push_op(entry_block, extracted.op_ref());
             let extracted_val = extracted.result(builder.ir);
             builder.ctx.bind(cap.local_id, cap.name, extracted_val);
-            builder.ctx.track_value_type(extracted_val, cap.ty);
         }
     }
 

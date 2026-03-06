@@ -315,13 +315,16 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
         for child in fields_node.named_children(&mut cursor) {
             match child.kind() {
                 "record_field" | "field_initializer" => {
-                    if let Some((name, value)) = lower_field_initializer(ctx, child) {
+                    // Check if this record_field is a spread (..expr) variant
+                    let has_spread = child
+                        .named_children(&mut child.walk())
+                        .any(|c| c.kind() == "spread");
+                    if has_spread {
+                        if let Some(value_node) = child.child_by_field_name("value") {
+                            spread = Some(lower_expr(ctx, value_node));
+                        }
+                    } else if let Some((name, value)) = lower_field_initializer(ctx, child) {
                         fields.push((name, value));
-                    }
-                }
-                "spread_expression" => {
-                    if let Some(inner) = child.named_child(0) {
-                        spread = Some(lower_expr(ctx, inner));
                     }
                 }
                 _ => {}
