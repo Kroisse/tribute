@@ -2,6 +2,15 @@
 
 #[crate::arena_dialect(crate = crate)]
 mod wasm {
+    // Types (abstract heap types)
+    struct Anyref;
+    struct Eqref;
+    struct I31ref;
+    struct Structref;
+    struct Arrayref;
+    struct Funcref;
+    struct Externref;
+
     // Control flow
     fn block() -> result {
         #[region(body)]

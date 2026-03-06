@@ -2,6 +2,10 @@
 
 #[crate::arena_dialect(crate = crate)]
 mod cont {
+    // Types
+    struct Continuation<Arg, Result>;
+    struct PromptTag;
+
     #[attr(tag: any)]
     fn push_prompt(#[rest] args: ()) -> result {
         #[region(body)]
