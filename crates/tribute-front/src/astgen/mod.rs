@@ -82,10 +82,13 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
 
 /// Lower a parsed CST to an AST Module.
 ///
-/// This is the entry point for CST → AST conversion.
-/// Note: This function does not preserve span information.
-/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
-/// The module name will be `None` and can be set by a later phase.
+/// This is a convenience entry point for CST → AST conversion that uses
+/// `source_hash = 0`. It does not preserve span information and does not
+/// distinguish nodes by source origin.
+///
+/// **Intended for tests and debugging only.** Production code should use
+/// [`lower_source_to_parsed_ast`], which computes a proper source hash from
+/// the [`SourceCst`] URI and preserves span information.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
     lower_cst_to_ast_internal(source, cst, None, 0).module
 }

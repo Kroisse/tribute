@@ -237,4 +237,51 @@ mod tests {
         let result = find_ast_node_at(&tree, &span_map, 5, 0);
         assert!(result.is_none());
     }
+
+    #[test]
+    fn test_find_ast_node_at_nonzero_source_hash() {
+        let source = "fn main() { 42 }";
+        let tree = parse_source(source);
+        let source_hash: u64 = 0xDEAD;
+
+        let mut builder = SpanMapBuilder::new();
+        let root = tree.root_node();
+        let func_node = root.child(0).expect("Should have function node");
+        let func_id = NodeId::from_cst(&func_node, source_hash);
+        builder.insert(func_id, Span::new(0, 16));
+        let span_map = builder.finish();
+
+        // Lookup with matching source hash should succeed
+        let result = find_ast_node_at(&tree, &span_map, 0, source_hash);
+        assert!(result.is_some());
+        let lookup = result.unwrap();
+        assert_eq!(lookup.node_id, func_id);
+        assert_eq!(lookup.span, Span::new(0, 16));
+
+        // find_ast_nodes_at should also work
+        let results = find_ast_nodes_at(&tree, &span_map, 0, source_hash);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].node_id, func_id);
+    }
+
+    #[test]
+    fn test_find_ast_node_at_source_hash_mismatch() {
+        let source = "fn main() { 42 }";
+        let tree = parse_source(source);
+
+        // Register node with source_hash = 1
+        let mut builder = SpanMapBuilder::new();
+        let root = tree.root_node();
+        let func_node = root.child(0).expect("Should have function node");
+        let func_id = NodeId::from_cst(&func_node, 1);
+        builder.insert(func_id, Span::new(0, 16));
+        let span_map = builder.finish();
+
+        // Lookup with different source_hash (0) should not find the node
+        let result = find_ast_node_at(&tree, &span_map, 0, 0);
+        assert!(result.is_none());
+
+        let results = find_ast_nodes_at(&tree, &span_map, 0, 0);
+        assert!(results.is_empty());
+    }
 }
