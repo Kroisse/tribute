@@ -202,12 +202,13 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
         }
 
         // Build new func type preserving effect attribute
-        let mut builder =
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).params(new_params);
-        if let Some(eff) = effect_attr {
-            builder = builder.attr("effect", eff);
-        }
-        let new_func_ty = ctx.types.intern(builder.build());
+        let return_ty = new_params[0];
+        let effect = effect_attr.and_then(|a| match a {
+            ArenaAttribute::Type(t) => Some(t),
+            _ => None,
+        });
+        let new_func_ty =
+            arena_core::func(ctx, return_ty, new_params[1..].iter().copied(), effect).as_type_ref();
 
         // Rebuild the function with new type
         let func_name = func_op.sym_name(ctx);

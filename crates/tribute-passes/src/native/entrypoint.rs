@@ -197,11 +197,7 @@ fn build_entrypoint(
     sanitize: bool,
 ) -> OpRef {
     // Build func type: () -> i32
-    let func_ty = ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .param(i32_ty)
-            .build(),
-    );
+    let func_ty = arena_core::func(ctx, i32_ty, [], None).as_type_ref();
 
     // Create entry block
     let entry_block = ctx.create_block(BlockData {
@@ -286,11 +282,7 @@ mod tests {
     /// Build an arena module with a single main function returning i32.
     fn make_arena_main_module(ctx: &mut IrContext, loc: ArenaLocation) -> ArenaModule {
         let i32_ty = arena_i32_type(ctx);
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(i32_ty)
-                .build(),
-        );
+        let func_ty = arena_core::func(ctx, i32_ty, [], None).as_type_ref();
 
         // Build main function: const 42, return
         let entry = ctx.create_block(ArenaBlockData {
@@ -381,11 +373,7 @@ mod tests {
     fn arena_entrypoint_no_main() {
         let (mut ctx, loc) = arena_test_ctx();
         let i32_ty = arena_i32_type(&mut ctx);
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(i32_ty)
-                .build(),
-        );
+        let func_ty = arena_core::func(&mut ctx, i32_ty, [], None).as_type_ref();
 
         // Build helper function (not main)
         let entry = ctx.create_block(ArenaBlockData {
@@ -448,11 +436,7 @@ mod tests {
 
         // Build module with main returning nil
         let nil_ty = arena_nil_type(&mut ctx);
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(nil_ty)
-                .build(),
-        );
+        let func_ty = arena_core::func(&mut ctx, nil_ty, [], None).as_type_ref();
 
         let entry = ctx.create_block(ArenaBlockData {
             location: loc,

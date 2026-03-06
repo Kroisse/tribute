@@ -52,7 +52,7 @@ use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::arena::types::Attribute;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::{DialectOp, DialectType, Symbol, Type};
 
@@ -201,22 +201,23 @@ fn build_func_type_with_evidence(
     old_func_ty: TypeRef,
     ev_ty: TypeRef,
 ) -> TypeRef {
-    let data = ctx.types.get(old_func_ty);
-    // params[0] = return, params[1..] = param types
-    let result_ty = data.params[0];
-    let old_params = &data.params[1..];
+    let (result_ty, old_params, effect) = {
+        let data = ctx.types.get(old_func_ty);
+        // params[0] = return, params[1..] = param types
+        let result_ty = data.params[0];
+        let old_params: Vec<TypeRef> = data.params[1..].to_vec();
+        let effect = data
+            .attrs
+            .get(&Symbol::new("effect"))
+            .and_then(|a| match a {
+                Attribute::Type(t) => Some(*t),
+                _ => None,
+            });
+        (result_ty, old_params, effect)
+    };
 
-    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-        .param(result_ty)
-        .param(ev_ty)
-        .params(old_params.iter().copied());
-
-    // Preserve effect attribute
-    if let Some(eff) = data.attrs.get(&Symbol::new("effect")) {
-        builder = builder.attr("effect", eff.clone());
-    }
-
-    ctx.types.intern(builder.build())
+    let params = std::iter::once(ev_ty).chain(old_params);
+    arena_core::func(ctx, result_ty, params, effect).as_type_ref()
 }
 
 /// Pattern that adds evidence parameters to effectful `func.func` signatures.
@@ -391,7 +392,7 @@ pub fn transform_evidence_calls(ctx: &mut IrContext, module: ArenaModule) {
 mod tests {
     use super::*;
     use trunk_ir::arena::context::{BlockData, OperationDataBuilder, RegionData};
-    use trunk_ir::arena::types::Location;
+    use trunk_ir::arena::types::{Location, TypeDataBuilder};
     use trunk_ir::location::Span;
     use trunk_ir::smallvec::smallvec;
 
@@ -412,12 +413,7 @@ mod tests {
         params: &[trunk_ir::arena::refs::TypeRef],
         ret: trunk_ir::arena::refs::TypeRef,
     ) -> trunk_ir::arena::refs::TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        arena_core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     fn make_effectful_func_type(
@@ -440,13 +436,7 @@ mod tests {
                 .param(state_ability)
                 .build(),
         );
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .attr("effect", Attribute::Type(effect_row))
-                .build(),
-        )
+        arena_core::func(ctx, ret, params.iter().copied(), Some(effect_row)).as_type_ref()
     }
 
     fn make_func_op(
@@ -531,12 +521,7 @@ mod tests {
         let empty_row = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
-        let ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(i32_ty)
-                .attr("effect", Attribute::Type(empty_row))
-                .build(),
-        );
+        let ty = arena_core::func(&mut ctx, i32_ty, [], Some(empty_row)).as_type_ref();
         assert!(!is_effectful_type_arena(&ctx, ty));
     }
 

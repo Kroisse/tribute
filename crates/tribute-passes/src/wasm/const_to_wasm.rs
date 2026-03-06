@@ -10,14 +10,14 @@ use std::collections::HashMap;
 
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 use trunk_ir::arena::rewrite::{
     ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 use trunk_ir::ir::Symbol;
 
 /// Result of const analysis - maps content to allocated offset.
@@ -272,9 +272,7 @@ impl ArenaRewritePattern for BytesConstPattern {
         };
 
         let location = ctx.op(op).location;
-        let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
 
         // Create wasm.bytes_from_data operation
         let new_op = arena_wasm::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);

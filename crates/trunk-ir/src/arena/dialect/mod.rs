@@ -33,8 +33,9 @@ mod tests {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_func_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
+    fn make_func_type(ctx: &mut IrContext) -> crate::arena::TypeRef {
+        let nil_ty = super::core::nil(ctx).as_type_ref();
+        super::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     // ================================================================
@@ -127,7 +128,7 @@ mod tests {
     fn test_func_with_region() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let func_ty = make_func_type(&mut ctx.types);
+        let func_ty = make_func_type(&mut ctx);
 
         // Create a region for the function body
         let block = ctx.create_block(BlockData {
@@ -489,7 +490,7 @@ mod tests {
     fn test_tuple_type_variadic() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
-        let func_ty = make_func_type(&mut ctx.types);
+        let func_ty = make_func_type(&mut ctx);
 
         let tup = super::core::tuple(&mut ctx, [i32_ty, func_ty]);
 

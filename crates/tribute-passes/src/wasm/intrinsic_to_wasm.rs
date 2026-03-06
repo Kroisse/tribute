@@ -50,16 +50,8 @@ fn extract_bytes_fields(
     let i8_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
-    let array_ty = ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-            .param(i8_ty)
-            .build(),
-    );
-    let array_ref_ty = ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
-            .param(array_ty)
-            .build(),
-    );
+    let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
+    let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
 
     let get_data = arena_wasm::struct_get(
         ctx,
@@ -470,16 +462,8 @@ impl ArenaRewritePattern for BytesGetOrPanicPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
 
         // Get data array ref (field 0)
-        let array_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i8_ty)
-                .build(),
-        );
-        let array_ref_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
-                .param(array_ty)
-                .build(),
-        );
+        let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
+        let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
         let get_data = arena_wasm::struct_get(
             ctx,
             location,
@@ -555,21 +539,11 @@ impl ArenaRewritePattern for BytesSliceOrPanicPattern {
         let i8_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
-        let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
+        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
 
         // Get data array ref (field 0) - shared, zero-copy
-        let array_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i8_ty)
-                .build(),
-        );
-        let array_ref_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
-                .param(array_ty)
-                .build(),
-        );
+        let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
+        let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
         let get_data = arena_wasm::struct_get(
             ctx,
             location,
@@ -649,19 +623,9 @@ impl ArenaRewritePattern for BytesConcatPattern {
         let i8_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
-        let bytes_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
-        let array_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i8_ty)
-                .build(),
-        );
-        let array_ref_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ref"))
-                .param(array_ty)
-                .build(),
-        );
+        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
+        let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
+        let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
 
         // Extract fields from left and right Bytes structs
         let (left_fields, left_ops) = extract_bytes_fields(ctx, location, left);

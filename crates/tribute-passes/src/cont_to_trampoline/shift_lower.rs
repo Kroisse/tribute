@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
@@ -89,8 +90,7 @@ fn create_state_fields(count: usize, anyref_ty: TypeRef) -> Vec<(Symbol, TypeRef
 
 /// Helper to intern the anyref type.
 pub(crate) fn anyref_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
+    arena_tribute_rt::any(ctx).as_type_ref()
 }
 
 /// Helper to intern the step type.
@@ -100,16 +100,12 @@ pub(crate) fn step_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Helper to intern the continuation type.
 pub(crate) fn continuation_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("trampoline"), Symbol::new("continuation")).build(),
-    )
+    arena_trampoline::continuation(ctx).as_type_ref()
 }
 
 /// Helper to intern the resume_wrapper type.
 pub(crate) fn resume_wrapper_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("trampoline"), Symbol::new("resume_wrapper")).build(),
-    )
+    arena_trampoline::resume_wrapper(ctx).as_type_ref()
 }
 
 /// Helper to intern i32 type.

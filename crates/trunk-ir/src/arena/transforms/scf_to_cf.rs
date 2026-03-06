@@ -520,8 +520,8 @@ mod tests {
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
+        let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
+        crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> ArenaModule {

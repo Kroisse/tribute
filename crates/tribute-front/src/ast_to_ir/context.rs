@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::arena::dialect::closure as arena_closure;
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::arena::context::IrContext;
@@ -407,8 +409,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `tribute_rt.any` type.
     pub fn any_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
+        arena_tribute_rt::any(ir).as_type_ref()
     }
 
     /// Get the `cont.prompt_tag` type.
@@ -540,11 +541,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create the `closure.closure` type wrapping a function type.
     pub fn closure_type(&self, ir: &mut IrContext, func_type: TypeRef) -> TypeRef {
-        ir.types.intern(
-            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-                .param(func_type)
-                .build(),
-        )
+        arena_closure::closure(ir, func_type).as_type_ref()
     }
 
     /// Check if a type is a `closure.closure` type.

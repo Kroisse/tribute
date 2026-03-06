@@ -13,8 +13,6 @@ use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::ArenaRewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::ArenaTypeConverter;
-use crate::arena::types::{Attribute, TypeDataBuilder};
-use crate::ir::Symbol;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
@@ -73,15 +71,13 @@ fn convert_func_signature(
 
 /// Build a new `core.func` TypeRef from converted params/result/effect.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-        .param(sig.new_result)
-        .params(sig.new_params.iter().copied());
-
-    if let Some(eff) = sig.effect {
-        builder = builder.attr("effect", Attribute::Type(eff));
-    }
-
-    ctx.types.intern(builder.build())
+    crate::arena::dialect::core::func(
+        ctx,
+        sig.new_result,
+        sig.new_params.iter().copied(),
+        sig.effect,
+    )
+    .as_type_ref()
 }
 
 /// Update entry block argument types in-place to match converted params.
@@ -223,6 +219,8 @@ mod tests {
     use crate::arena::rewrite::{
         ArenaConversionTarget, ArenaModule, ArenaTypeConverter, PatternApplicator,
     };
+    use crate::arena::types::{Attribute, TypeDataBuilder};
+    use crate::ir::Symbol;
     use crate::location::Span;
     use smallvec::smallvec;
     use std::collections::BTreeMap;
@@ -245,12 +243,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     fn make_func_type_with_effect(
@@ -259,13 +252,8 @@ mod tests {
         ret: TypeRef,
         effect: TypeRef,
     ) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .attr("effect", Attribute::Type(effect))
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), Some(effect))
+            .as_type_ref()
     }
 
     fn make_module(

@@ -35,6 +35,7 @@ use trunk_ir::arena::TypeDataBuilder;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::rewrite::{ArenaModule, ArenaTypeConverter};
 use trunk_ir::arena::types::Location as ArenaLocation;
@@ -212,12 +213,7 @@ fn generate_release_function_for_struct(
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
     // Function type: (core.ptr) -> core.nil
-    let func_ty = ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .param(nil_ty)
-            .param(ptr_ty)
-            .build(),
-    );
+    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty], None).as_type_ref();
 
     // Collect pointer field offsets (skip func_ptr fields)
     let func_ptr_sym = Symbol::new("func_ptr");
@@ -430,12 +426,7 @@ fn generate_release_function_for_enum(
     let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
-    let func_ty = ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .param(nil_ty)
-            .param(ptr_ty)
-            .build(),
-    );
+    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty], None).as_type_ref();
 
     let entry_block = ctx.create_block(BlockData {
         location: loc,
@@ -706,12 +697,8 @@ mod tests {
         field_types: &[TypeRef],
     ) -> ArenaModule {
         // Build function type: (field_types...) -> struct_ty
-        let mut ft_builder =
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(struct_ty);
-        for &ft in field_types {
-            ft_builder = ft_builder.param(ft);
-        }
-        let func_ty = ctx.types.intern(ft_builder.build());
+        let func_ty =
+            arena_core::func(ctx, struct_ty, field_types.iter().copied(), None).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -854,14 +841,8 @@ mod tests {
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
 
         // Build module with two struct_new ops
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ptr_ty)
-                .param(i32_ty)
-                .param(i32_ty)
-                .param(ptr_ty)
-                .build(),
-        );
+        let func_ty =
+            arena_core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty], None).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,

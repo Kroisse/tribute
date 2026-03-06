@@ -374,12 +374,7 @@ fn generate_outlined_body(
         parent_op: None,
     });
 
-    let func_ty = ctx.types.intern({
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .param(ptr_ty)
-            .param(ptr_ty)
-            .build()
-    });
+    let func_ty = arena_core::func(ctx, ptr_ty, [ptr_ty], None).as_type_ref();
 
     let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
     func_op.op_ref()

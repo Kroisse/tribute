@@ -28,6 +28,7 @@
 //! types, the native backend uses opaque pointers (`core.ptr`) for all
 //! reference types. Most conversions between pointer types are no-ops.
 
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use tribute_ir::dialect::{ability, closure, tribute_rt};
 use trunk_ir::arena::context::IrContext;
@@ -476,24 +477,12 @@ impl NativeTypeRefs {
     pub fn new(ctx: &mut IrContext) -> Self {
         use tribute_ir::arena::dialect::ability as arena_ability;
         Self {
-            tribute_rt_int: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("int")).build(),
-            ),
-            tribute_rt_nat: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("nat")).build(),
-            ),
-            tribute_rt_bool: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("bool")).build(),
-            ),
-            tribute_rt_float: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("float")).build(),
-            ),
-            tribute_rt_intref: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("intref")).build(),
-            ),
-            tribute_rt_any: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build(),
-            ),
+            tribute_rt_int: arena_tribute_rt::int(ctx).as_type_ref(),
+            tribute_rt_nat: arena_tribute_rt::nat(ctx).as_type_ref(),
+            tribute_rt_bool: arena_tribute_rt::bool(ctx).as_type_ref(),
+            tribute_rt_float: arena_tribute_rt::float(ctx).as_type_ref(),
+            tribute_rt_intref: arena_tribute_rt::intref(ctx).as_type_ref(),
+            tribute_rt_any: arena_tribute_rt::any(ctx).as_type_ref(),
             core_i1: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
