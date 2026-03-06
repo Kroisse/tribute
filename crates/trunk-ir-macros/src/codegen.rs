@@ -500,19 +500,7 @@ fn gen_type_impl_block(crate_path: &TokenStream, td: &TypeDefData) -> TokenStrea
     };
 
     // Param accessors: each param is accessed by index in ctx.types.get(self.0).params
-    let param_accessors: Vec<TokenStream> = td
-        .params
-        .iter()
-        .enumerate()
-        .map(|(idx, param)| {
-            let name = format_ident!("{}", param.raw_ident.to_string().to_snake_case());
-            quote! {
-                pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::TypeRef {
-                    ctx.types.get(self.0).params[#idx]
-                }
-            }
-        })
-        .collect();
+    let param_accessors = gen_type_param_accessors(crate_path, &td.params);
 
     // Attr accessors: same pattern as op attrs, but via ctx.types.get(self.0).attrs
     let attr_accessors: Vec<TokenStream> = td
@@ -524,10 +512,62 @@ fn gen_type_impl_block(crate_path: &TokenStream, td: &TypeDefData) -> TokenStrea
     quote! {
         impl #sname {
             #as_type_ref_method
-            #(#param_accessors)*
+            #param_accessors
             #(#attr_accessors)*
         }
     }
+}
+
+fn gen_type_param_accessors(
+    crate_path: &TokenStream,
+    params: &[crate::parse::TypeParam],
+) -> TokenStream {
+    if params.is_empty() {
+        return quote!();
+    }
+
+    // Check if there's only a variadic param with no fixed params
+    if params.len() == 1 && params[0].variadic {
+        let name = format_ident!("r#{}", params[0].raw_ident.to_string().to_snake_case());
+        return quote! {
+            pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+                &ctx.types.get(self.0).params
+            }
+        };
+    }
+
+    let mut methods = Vec::new();
+    let mut fixed_count = 0usize;
+
+    for param in params {
+        let name = format_ident!("r#{}", param.raw_ident.to_string().to_snake_case());
+        if param.variadic {
+            let idx = fixed_count;
+            if idx > 0 {
+                methods.push(quote! {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+                        &ctx.types.get(self.0).params[#idx..]
+                    }
+                });
+            } else {
+                methods.push(quote! {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+                        &ctx.types.get(self.0).params
+                    }
+                });
+            }
+        } else {
+            let idx = fixed_count;
+            methods.push(quote! {
+                pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::TypeRef {
+                    ctx.types.get(self.0).params[#idx]
+                }
+            });
+            fixed_count += 1;
+        }
+    }
+
+    quote!(#(#methods)*)
 }
 
 fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
@@ -570,9 +610,14 @@ fn gen_type_constructor(
 
     // Type params become TypeRef parameters
     for param in &td.params {
-        let name = format_ident!("{}", param.raw_ident.to_string().to_snake_case());
-        params.push(quote!(#name: #crate_path::arena::TypeRef));
-        body_stmts.push(quote!(__builder = __builder.param(#name);));
+        let name = format_ident!("r#{}", param.raw_ident.to_string().to_snake_case());
+        if param.variadic {
+            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::arena::TypeRef>));
+            body_stmts.push(quote!(__builder = __builder.params(#name);));
+        } else {
+            params.push(quote!(#name: #crate_path::arena::TypeRef));
+            body_stmts.push(quote!(__builder = __builder.param(#name);));
+        }
     }
 
     // Attrs

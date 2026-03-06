@@ -480,4 +480,78 @@ mod tests {
         assert_eq!(super::core::Array::DIALECT_NAME, "core");
         assert_eq!(super::core::Array::TYPE_NAME, "array");
     }
+
+    // ================================================================
+    // Variadic type params (Tuple, Func)
+    // ================================================================
+
+    #[test]
+    fn test_tuple_type_variadic() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let func_ty = make_func_type(&mut ctx.types);
+
+        let tup = super::core::tuple(&mut ctx, [i32_ty, func_ty]);
+
+        assert!(super::core::Tuple::matches(&ctx, tup.as_type_ref()));
+        let elements = tup.elements(&ctx);
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0], i32_ty);
+        assert_eq!(elements[1], func_ty);
+    }
+
+    #[test]
+    fn test_tuple_type_empty() {
+        let mut ctx = IrContext::new();
+        let tup = super::core::tuple(&mut ctx, []);
+        assert_eq!(tup.elements(&ctx).len(), 0);
+    }
+
+    #[test]
+    fn test_func_type_variadic() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+
+        // func(i32, i32) -> i32  (no effect)
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty, i32_ty], None);
+
+        assert!(super::core::Func::matches(&ctx, f.as_type_ref()));
+        assert_eq!(f.r#return(&ctx), i32_ty);
+        assert_eq!(f.params(&ctx), &[i32_ty, i32_ty]);
+        assert_eq!(f.effect(&ctx), None);
+    }
+
+    #[test]
+    fn test_func_type_with_effect() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let effect_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
+
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty], Some(effect_ty));
+
+        assert_eq!(f.r#return(&ctx), i32_ty);
+        assert_eq!(f.params(&ctx), &[i32_ty]);
+        assert_eq!(f.effect(&ctx), Some(effect_ty));
+    }
+
+    #[test]
+    fn test_func_type_no_params() {
+        let mut ctx = IrContext::new();
+        let nil_ty = super::core::nil(&mut ctx);
+
+        let f = super::core::func(&mut ctx, nil_ty.as_type_ref(), [], None);
+
+        assert_eq!(f.r#return(&ctx), nil_ty.as_type_ref());
+        assert!(f.params(&ctx).is_empty());
+    }
+
+    #[test]
+    fn test_type_name_constants_extended() {
+        assert_eq!(super::core::TUPLE(), Symbol::new("tuple"));
+        assert_eq!(super::core::FUNC(), Symbol::new("func"));
+        assert_eq!(super::core::STRING(), Symbol::new("string"));
+        assert_eq!(super::core::BYTES(), Symbol::new("bytes"));
+    }
 }

@@ -44,6 +44,7 @@ pub struct TypeParam {
     #[allow(dead_code)]
     pub name: String,
     pub raw_ident: Ident,
+    pub variadic: bool,
 }
 
 pub struct AttrDef {
@@ -568,16 +569,43 @@ fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDef
     })
 }
 
-/// Parse `<Ident, Ident, ...>` angle-bracket generic parameters.
+/// Parse `<Ident, #[rest] Ident, ...>` angle-bracket generic parameters.
+///
+/// Supports `#[rest]` on the last type parameter for variadic params.
 fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
     expect_punct(iter, '<')?;
     let mut params = Vec::new();
     let mut seen_names = std::collections::HashSet::new();
+    let mut seen_variadic = false;
 
     while !peek_punct(iter, '>') {
         if !has_remaining(iter) {
             return Err("expected `>` to close generic parameters".into());
         }
+
+        // Check for #[rest] marker
+        let variadic = if peek_punct(iter, '#') {
+            consume_punct(iter)?;
+            let bracket = expect_group(iter, Delimiter::Bracket)?;
+            let mut inner = bracket.stream().to_token_iter();
+            let kw: Ident =
+                Ident::parser(&mut inner).map_err(|e| format!("expected `rest`: {e}"))?;
+            if kw != "rest" {
+                return Err(format!("expected `rest`, got `{kw}`"));
+            }
+            expect_consumed(&inner, "#[rest]")?;
+            if seen_variadic {
+                return Err("at most one #[rest] type parameter is allowed".into());
+            }
+            seen_variadic = true;
+            true
+        } else {
+            if seen_variadic {
+                return Err("#[rest] type parameter must be the last parameter".into());
+            }
+            false
+        };
+
         let param_ident: Ident =
             Ident::parser(iter).map_err(|e| format!("expected type parameter name: {e}"))?;
         let param_name = ident_str(&param_ident);
@@ -587,6 +615,7 @@ fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
         params.push(TypeParam {
             name: param_name,
             raw_ident: param_ident,
+            variadic,
         });
 
         // Require comma between params (trailing comma allowed)
@@ -1405,6 +1434,78 @@ mod tests {
         let err = result.err().expect("should fail");
         assert!(
             err.contains("duplicate item name"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ================================================================
+    // Variadic type params (#[rest])
+    // ================================================================
+
+    #[test]
+    fn test_parse_struct_variadic_only() {
+        let module = parse_test_module(quote! {
+            mod core {
+                struct Tuple<#[rest] Elements>;
+            }
+        })
+        .unwrap();
+
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.name, "Tuple");
+                assert_eq!(td.params.len(), 1);
+                assert!(td.params[0].variadic);
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_mixed_fixed_and_variadic() {
+        let module = parse_test_module(quote! {
+            mod core {
+                struct Func<Return, #[rest] Params>;
+            }
+        })
+        .unwrap();
+
+        match &module.items[0] {
+            DialectItem::TypeDef(td) => {
+                assert_eq!(td.params.len(), 2);
+                assert!(!td.params[0].variadic);
+                assert_eq!(td.params[0].raw_ident.to_string(), "Return");
+                assert!(td.params[1].variadic);
+                assert_eq!(td.params[1].raw_ident.to_string(), "Params");
+            }
+            _ => panic!("expected TypeDef"),
+        }
+    }
+
+    #[test]
+    fn test_parse_struct_rest_must_be_last_param() {
+        let result = parse_test_module(quote! {
+            mod test {
+                struct Bad<#[rest] A, B>;
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("must be the last parameter"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_struct_multiple_rest_rejected() {
+        let result = parse_test_module(quote! {
+            mod test {
+                struct Bad<#[rest] A, #[rest] B>;
+            }
+        });
+        let err = result.err().expect("should fail");
+        assert!(
+            err.contains("rest") && err.contains("one"),
             "unexpected error: {err}"
         );
     }
