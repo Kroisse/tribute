@@ -46,8 +46,9 @@ fn lower_cst_to_ast_internal(
     source: &Rope,
     cst: &ParsedCst,
     module_name: Option<trunk_ir::Symbol>,
+    source_hash: u64,
 ) -> LoweringResult {
-    let mut ctx = AstLoweringCtx::new(source.clone());
+    let mut ctx = AstLoweringCtx::new(source.clone(), source_hash);
     let root = cst.root_node();
 
     // Check for ERROR nodes anywhere in the CST
@@ -81,12 +82,15 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
 
 /// Lower a parsed CST to an AST Module.
 ///
-/// This is the entry point for CST → AST conversion.
-/// Note: This function does not preserve span information.
-/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
-/// The module name will be `None` and can be set by a later phase.
+/// This is a convenience entry point for CST → AST conversion that uses
+/// `source_hash = 0`. It does not preserve span information and does not
+/// distinguish nodes by source origin.
+///
+/// **Intended for tests and debugging only.** Production code should use
+/// [`lower_source_to_parsed_ast`], which computes a proper source hash from
+/// the [`SourceCst`] URI and preserves span information.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
-    lower_cst_to_ast_internal(source, cst, None).module
+    lower_cst_to_ast_internal(source, cst, None, 0).module
 }
 
 /// Salsa-tracked parsing result containing both Module and SpanMap.
@@ -124,13 +128,15 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     source: SourceCst,
     module_path: Option<trunk_ir::Symbol>,
 ) -> Option<ParsedAst<'db>> {
+    use crate::ast::node_id::source_hash;
     use crate::query::parse_cst;
 
     use salsa::Accumulator;
 
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
-    let result = lower_cst_to_ast_internal(text, &cst, module_path);
+    let sh = source_hash(source.uri(db).as_str());
+    let result = lower_cst_to_ast_internal(text, &cst, module_path, sh);
     for diag in result.diagnostics {
         diag.accumulate(db);
     }

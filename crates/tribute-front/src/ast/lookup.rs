@@ -37,17 +37,23 @@ pub struct AstNodeLookup {
 /// ```ignore
 /// let tree = source.tree(&db)?;
 /// let span_map = query::span_map(db, source)?;
-/// if let Some(lookup) = find_ast_node_at(&tree, &span_map, cursor_offset) {
+/// let source_hash = node_id::source_hash(source.uri(&db).as_str());
+/// if let Some(lookup) = find_ast_node_at(&tree, &span_map, offset, source_hash) {
 ///     println!("Found AST node {:?} at {:?}", lookup.node_id, lookup.span);
 /// }
 /// ```
-pub fn find_ast_node_at(tree: &Tree, span_map: &SpanMap, offset: usize) -> Option<AstNodeLookup> {
+pub fn find_ast_node_at(
+    tree: &Tree,
+    span_map: &SpanMap,
+    offset: usize,
+    source_hash: u64,
+) -> Option<AstNodeLookup> {
     // Find the smallest CST node containing the offset
     let mut node = tree.root_node().descendant_for_byte_range(offset, offset)?;
 
     // Walk up the tree until we find an AST node (one that's in the SpanMap)
     loop {
-        let node_id = NodeId::from_cst(&node);
+        let node_id = NodeId::from_cst(&node, source_hash);
         if span_map.contains(node_id) {
             return Some(AstNodeLookup {
                 node_id,
@@ -62,7 +68,12 @@ pub fn find_ast_node_at(tree: &Tree, span_map: &SpanMap, offset: usize) -> Optio
 ///
 /// This is useful when you need to consider multiple enclosing nodes,
 /// such as finding both the expression and the containing statement.
-pub fn find_ast_nodes_at(tree: &Tree, span_map: &SpanMap, offset: usize) -> Vec<AstNodeLookup> {
+pub fn find_ast_nodes_at(
+    tree: &Tree,
+    span_map: &SpanMap,
+    offset: usize,
+    source_hash: u64,
+) -> Vec<AstNodeLookup> {
     let mut results = Vec::new();
 
     // Find the smallest CST node containing the offset
@@ -72,7 +83,7 @@ pub fn find_ast_nodes_at(tree: &Tree, span_map: &SpanMap, offset: usize) -> Vec<
 
     // Walk up the tree, collecting all AST nodes
     loop {
-        let node_id = NodeId::from_cst(&node);
+        let node_id = NodeId::from_cst(&node, source_hash);
         if span_map.contains(node_id) {
             results.push(AstNodeLookup {
                 node_id,
@@ -115,13 +126,13 @@ mod tests {
         let func_node = root.child(0).expect("Should have function node");
         assert_eq!(func_node.kind(), "function_definition");
 
-        let func_id = NodeId::from_cst(&func_node);
+        let func_id = NodeId::from_cst(&func_node, 0);
         builder.insert(func_id, Span::new(0, 16));
 
         let span_map = builder.finish();
 
         // Looking up any position in the source should find the function
-        let result = find_ast_node_at(&tree, &span_map, 0);
+        let result = find_ast_node_at(&tree, &span_map, 0, 0);
         assert!(result.is_some());
         assert_eq!(result.unwrap().node_id, func_id);
     }
@@ -136,7 +147,7 @@ mod tests {
         // Register both function and the literal
         let root = tree.root_node();
         let func_node = root.child(0).expect("Should have function node");
-        let func_id = NodeId::from_cst(&func_node);
+        let func_id = NodeId::from_cst(&func_node, 0);
         builder.insert(func_id, Span::new(0, 16));
 
         // Find the int_literal node by walking down the tree
@@ -146,7 +157,7 @@ mod tests {
             let mut current = node;
             loop {
                 if current.kind() == "int_literal" || current.kind() == "nat_literal" {
-                    let literal_id = NodeId::from_cst(&current);
+                    let literal_id = NodeId::from_cst(&current, 0);
                     builder.insert(literal_id, Span::new(12, 14));
                     break true;
                 }
@@ -167,7 +178,7 @@ mod tests {
         let span_map = builder.finish();
 
         // Looking up at position 12-14 should find the literal (innermost)
-        let result = find_ast_node_at(&tree, &span_map, 12);
+        let result = find_ast_node_at(&tree, &span_map, 12, 0);
         assert!(result.is_some());
         // The span should be for the literal
         let lookup = result.unwrap();
@@ -184,7 +195,7 @@ mod tests {
 
         let root = tree.root_node();
         let func_node = root.child(0).expect("Should have function node");
-        let func_id = NodeId::from_cst(&func_node);
+        let func_id = NodeId::from_cst(&func_node, 0);
         builder.insert(func_id, Span::new(0, 16));
 
         // Find the int_literal node by walking up from position 12
@@ -193,7 +204,7 @@ mod tests {
             let mut current = node;
             loop {
                 if current.kind() == "int_literal" || current.kind() == "nat_literal" {
-                    let literal_id = NodeId::from_cst(&current);
+                    let literal_id = NodeId::from_cst(&current, 0);
                     builder.insert(literal_id, Span::new(12, 14));
                     break;
                 }
@@ -207,7 +218,7 @@ mod tests {
         let span_map = builder.finish();
 
         // Should find both literal (inner) and function (outer)
-        let results = find_ast_nodes_at(&tree, &span_map, 12);
+        let results = find_ast_nodes_at(&tree, &span_map, 12, 0);
         assert_eq!(results.len(), 2);
         // First should be the innermost (literal)
         assert_eq!(results[0].span.start, 12);
@@ -223,7 +234,54 @@ mod tests {
         // Empty span map
         let span_map = SpanMapBuilder::new().finish();
 
-        let result = find_ast_node_at(&tree, &span_map, 5);
+        let result = find_ast_node_at(&tree, &span_map, 5, 0);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_ast_node_at_nonzero_source_hash() {
+        let source = "fn main() { 42 }";
+        let tree = parse_source(source);
+        let source_hash: u64 = 0xDEAD;
+
+        let mut builder = SpanMapBuilder::new();
+        let root = tree.root_node();
+        let func_node = root.child(0).expect("Should have function node");
+        let func_id = NodeId::from_cst(&func_node, source_hash);
+        builder.insert(func_id, Span::new(0, 16));
+        let span_map = builder.finish();
+
+        // Lookup with matching source hash should succeed
+        let result = find_ast_node_at(&tree, &span_map, 0, source_hash);
+        assert!(result.is_some());
+        let lookup = result.unwrap();
+        assert_eq!(lookup.node_id, func_id);
+        assert_eq!(lookup.span, Span::new(0, 16));
+
+        // find_ast_nodes_at should also work
+        let results = find_ast_nodes_at(&tree, &span_map, 0, source_hash);
+        assert!(!results.is_empty());
+        assert_eq!(results[0].node_id, func_id);
+    }
+
+    #[test]
+    fn test_find_ast_node_at_source_hash_mismatch() {
+        let source = "fn main() { 42 }";
+        let tree = parse_source(source);
+
+        // Register node with source_hash = 1
+        let mut builder = SpanMapBuilder::new();
+        let root = tree.root_node();
+        let func_node = root.child(0).expect("Should have function node");
+        let func_id = NodeId::from_cst(&func_node, 1);
+        builder.insert(func_id, Span::new(0, 16));
+        let span_map = builder.finish();
+
+        // Lookup with different source_hash (0) should not find the node
+        let result = find_ast_node_at(&tree, &span_map, 0, 0);
+        assert!(result.is_none());
+
+        let results = find_ast_nodes_at(&tree, &span_map, 0, 0);
+        assert!(results.is_empty());
     }
 }

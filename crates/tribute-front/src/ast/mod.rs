@@ -51,7 +51,7 @@
 mod decl;
 mod expr;
 pub mod lookup;
-mod node_id;
+pub(crate) mod node_id;
 mod pattern;
 mod phases;
 #[cfg(test)]
