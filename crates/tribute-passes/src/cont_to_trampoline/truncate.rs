@@ -1,36 +1,35 @@
 use std::collections::HashSet;
 
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::dialect::{cont, scf, trampoline};
-use trunk_ir::{
-    Attribute, Block, DialectOp, DialectType, IdVec, Operation, Region, Symbol, Type, Value,
-};
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::scf as arena_scf;
+use trunk_ir::arena::dialect::trampoline as arena_trampoline;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
-use super::calls_effectful_function;
+use super::analysis::calls_effectful_function;
+use super::patterns::is_step_type;
+use super::shift_lower::step_type;
 
 // ============================================================================
 // Truncate After Shift
 // ============================================================================
 
 /// Truncate effectful function bodies after the first effect point.
-///
-/// An effect point is either:
-/// 1. A `step_shift` operation (from transformed cont.shift)
-/// 2. A call to an effectful function (which may return Step)
-///
-/// After these points, continuation operations are stored in ResumeFuncSpec
-/// for resume function generation, but they still remain in the original
-/// function body. This causes type mismatches because the effect point
-/// returns `Step` but continuation ops expect the original type.
-///
-/// This function removes all operations after an effect point and adds a proper
-/// `func.return` for the Step result.
-pub(crate) fn truncate_after_shift<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
+pub(crate) fn truncate_after_shift(
+    ctx: &mut IrContext,
+    module: ArenaModule,
     effectful_funcs: &HashSet<Symbol>,
-) -> Module<'db> {
+) {
+    let module_body = match module.body(ctx) {
+        Some(r) => r,
+        None => return,
+    };
+
     tracing::debug!(
         "truncate_after_shift: processing {} effectful functions: {:?}",
         effectful_funcs.len(),
@@ -39,546 +38,355 @@ pub(crate) fn truncate_after_shift<'db>(
             .map(|s| s.to_string())
             .collect::<Vec<_>>()
     );
-    let body = module.body(db);
-    let (new_body, modified) =
-        find_and_truncate_effectful_funcs_in_region(db, &body, effectful_funcs);
 
-    if !modified {
-        return module;
-    }
-
-    Module::create(db, module.location(db), module.name(db), new_body)
+    find_and_truncate_effectful_funcs_in_region(ctx, module_body, effectful_funcs);
 }
 
 /// Recursively find and truncate effectful functions in a region.
-/// This includes functions nested inside other operations (e.g., inside enum definitions).
-/// Returns (modified_region, was_modified).
-fn find_and_truncate_effectful_funcs_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+fn find_and_truncate_effectful_funcs_in_region(
+    ctx: &mut IrContext,
+    region: RegionRef,
     effectful_funcs: &HashSet<Symbol>,
-) -> (Region<'db>, bool) {
-    let mut new_blocks = Vec::new();
-    let mut region_modified = false;
+) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
 
-    for block in region.blocks(db).iter() {
-        let mut new_ops = Vec::new();
-        let mut block_modified = false;
+    for block in blocks {
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
-        for op in block.operations(db).iter() {
-            if let Ok(func) = Func::from_operation(db, *op) {
-                let func_name = func.sym_name(db);
+        for op in ops {
+            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                let func_name = func.sym_name(ctx);
                 if effectful_funcs.contains(&func_name) {
-                    // Process effectful function
-                    let (new_func, func_modified) =
-                        truncate_func_after_shift(db, *op, effectful_funcs);
-                    new_ops.push(new_func);
-                    block_modified |= func_modified;
+                    truncate_func_after_shift(ctx, op, effectful_funcs);
                     continue;
                 }
             }
 
-            // Recursively process nested regions to find more effectful functions
-            let regions = op.regions(db);
-            if regions.is_empty() {
-                new_ops.push(*op);
-            } else {
-                let mut new_regions = Vec::new();
-                let mut op_modified = false;
-
-                for nested_region in regions.iter() {
-                    let (new_nested, nested_modified) = find_and_truncate_effectful_funcs_in_region(
-                        db,
-                        nested_region,
-                        effectful_funcs,
-                    );
-                    new_regions.push(new_nested);
-                    op_modified |= nested_modified;
-                }
-
-                if op_modified {
-                    let new_op = op.modify(db).regions(IdVec::from(new_regions)).build();
-                    new_ops.push(new_op);
-                    block_modified = true;
-                } else {
-                    new_ops.push(*op);
-                }
+            // Recursively process nested regions
+            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            for nested_region in regions {
+                find_and_truncate_effectful_funcs_in_region(ctx, nested_region, effectful_funcs);
             }
         }
-
-        if block_modified {
-            new_blocks.push(Block::new(
-                db,
-                block.id(db),
-                block.location(db),
-                block.args(db).clone(),
-                IdVec::from(new_ops),
-            ));
-            region_modified = true;
-        } else {
-            new_blocks.push(*block);
-        }
-    }
-
-    if region_modified {
-        (
-            Region::new(db, region.location(db), IdVec::from(new_blocks)),
-            true,
-        )
-    } else {
-        (*region, false)
     }
 }
 
 /// Truncate a single function's body after the first effect point.
-/// Returns (modified_operation, was_modified).
-fn truncate_func_after_shift<'db>(
-    db: &'db dyn salsa::Database,
-    func_op: Operation<'db>,
+fn truncate_func_after_shift(
+    ctx: &mut IrContext,
+    func_op: OpRef,
     effectful_funcs: &HashSet<Symbol>,
-) -> (Operation<'db>, bool) {
-    let func = match Func::from_operation(db, func_op) {
-        Ok(f) => f,
-        Err(_) => return (func_op, false),
+) {
+    let Ok(func) = arena_func::Func::from_op(ctx, func_op) else {
+        return;
     };
 
-    let func_name = func.sym_name(db);
-    let body = func.body(db);
-    let (new_body, body_modified) = truncate_region_after_shift(db, body, effectful_funcs);
+    let func_name = func.sym_name(ctx);
+    let body = func.body(ctx);
 
-    // Effectful functions need Step return type even if body wasn't truncated
-    // (e.g., push_prompt may be in a nested region like handler_dispatch)
+    truncate_region_after_shift(ctx, body, effectful_funcs);
+
+    // Effectful functions need Step return type
     let is_effectful = effectful_funcs.contains(&func_name);
-    let modified = body_modified || is_effectful;
-
-    tracing::debug!(
-        "truncate_func_after_shift: {} body_modified={} is_effectful={} modified={}",
-        func_name,
-        body_modified,
-        is_effectful,
-        modified
-    );
-
-    if !modified {
-        return (func_op, false);
-    }
-
-    // Change return type to Step for effectful functions
-    // The function type is stored in the "type" attribute, not in results
-    let step_ty = trampoline::Step::new(db).as_type();
-
-    let mut builder = func_op.modify(db).regions(IdVec::from(vec![new_body]));
-
     if is_effectful {
-        // Get the existing function type and modify its return type
-        let old_func_ty = func.r#type(db);
-        let func_ty = core::Func::from_type(db, old_func_ty).unwrap_or_else(|| {
-            panic!(
-                "truncate_func_after_shift: effectful function {} has non-function type {:?}",
-                func_name, old_func_ty
-            )
-        });
-        let original_result = func_ty.result(db);
-        let params = func_ty.params(db);
-        let effect = func_ty.effect(db);
-        let new_func_ty = core::Func::with_effect(db, params, step_ty, effect);
-        builder = builder
-            .attr(Symbol::new("type"), Attribute::Type(new_func_ty.as_type()))
-            .attr(
-                Symbol::new("original_result_type"),
-                Attribute::Type(original_result),
-            );
-        tracing::debug!(
-            "truncate_func_after_shift: {} changed return type to Step (original: {:?})",
-            func_name,
-            original_result
-        );
-    }
+        let step_ty = step_type(ctx);
+        let func_ty = func.r#type(ctx);
+        let func_ty_data = ctx.types.get(func_ty);
 
-    let new_op = builder.build();
-    (new_op, true)
+        // Build new func type with Step return
+        if func_ty_data.dialect == Symbol::new("core") && func_ty_data.name == Symbol::new("func") {
+            let original_result = func_ty_data
+                .attrs
+                .get(&Symbol::new("result"))
+                .and_then(|a| match a {
+                    ArenaAttribute::Type(t) => Some(*t),
+                    _ => None,
+                });
+
+            let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
+            for &p in &func_ty_data.params {
+                builder = builder.param(p);
+            }
+            builder = builder.attr("result", ArenaAttribute::Type(step_ty));
+            if let Some(ArenaAttribute::Type(effect)) =
+                func_ty_data.attrs.get(&Symbol::new("effect"))
+            {
+                builder = builder.attr("effect", ArenaAttribute::Type(*effect));
+            }
+            let new_func_ty = ctx.types.intern(builder.build());
+
+            // Update the function's type attribute
+            let mut new_attrs = ctx.op(func_op).attributes.clone();
+            new_attrs.insert(Symbol::new("type"), ArenaAttribute::Type(new_func_ty));
+            if let Some(original) = original_result {
+                new_attrs.insert(
+                    Symbol::new("original_result_type"),
+                    ArenaAttribute::Type(original),
+                );
+            }
+            ctx.op_mut(func_op).attributes = new_attrs;
+
+            tracing::debug!(
+                "truncate_func_after_shift: {} changed return type to Step",
+                func_name,
+            );
+        }
+    }
 }
 
 /// Truncate a region after the first effect point.
-/// Returns (modified_region, was_modified).
-fn truncate_region_after_shift<'db>(
-    db: &'db dyn salsa::Database,
-    region: Region<'db>,
+fn truncate_region_after_shift(
+    ctx: &mut IrContext,
+    region: RegionRef,
     effectful_funcs: &HashSet<Symbol>,
-) -> (Region<'db>, bool) {
-    let mut new_blocks = Vec::new();
-    let mut any_modified = false;
+) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
 
-    for block in region.blocks(db).iter() {
-        let (new_block, modified) = truncate_block_after_shift(db, *block, effectful_funcs);
-        new_blocks.push(new_block);
-        any_modified |= modified;
+    for block in blocks {
+        truncate_block_after_shift(ctx, block, effectful_funcs);
     }
-
-    if !any_modified {
-        return (region, false);
-    }
-
-    (
-        Region::new(db, region.location(db), IdVec::from(new_blocks)),
-        true,
-    )
 }
 
-/// Truncate an scf.if branch region, keeping only operations up to the first
-/// effectful call and ending with scf.yield(Step value).
-pub(crate) fn truncate_scf_if_branch<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+/// Truncate a block after the first effect point.
+fn truncate_block_after_shift(
+    ctx: &mut IrContext,
+    block: BlockRef,
     effectful_funcs: &HashSet<Symbol>,
-    step_ty: Type<'db>,
-) -> Region<'db> {
-    let new_blocks: IdVec<Block<'db>> = region
-        .blocks(db)
-        .iter()
-        .map(|block| truncate_scf_if_block(db, block, effectful_funcs, step_ty))
-        .collect();
-    Region::new(db, region.location(db), new_blocks)
-}
-
-/// Truncate an scf.if block, keeping operations up to the first effectful call
-/// and replacing the terminator with scf.yield(Step value).
-pub(crate) fn truncate_scf_if_block<'db>(
-    db: &'db dyn salsa::Database,
-    block: &Block<'db>,
-    effectful_funcs: &HashSet<Symbol>,
-    step_ty: Type<'db>,
-) -> Block<'db> {
-    let ops = block.operations(db);
-    let mut new_ops: Vec<Operation<'db>> = Vec::new();
-    let mut step_value: Option<Value<'db>> = None;
-    let mut original_yield_operand: Option<Value<'db>> = None;
-
-    for op in ops.iter() {
-        // Capture scf.yield operand before skipping — needed to wrap pure
-        // branches in step_done when the branch has no effectful call.
-        if scf::Yield::from_operation(db, *op).is_ok() {
-            original_yield_operand = op.operands(db).first().copied();
-            continue;
-        }
-
-        // Check if this is a call to an effectful function
-        if let Ok(call) = func::Call::from_operation(db, *op)
-            && effectful_funcs.contains(&call.callee(db))
-        {
-            // Create new call with Step result type
-            let new_call = Operation::new(
-                db,
-                op.location(db),
-                op.dialect(db),
-                op.name(db),
-                op.operands(db).clone(),
-                IdVec::from(vec![step_ty]),
-                op.attributes(db).clone(),
-                op.regions(db).clone(),
-                op.successors(db).clone(),
-            );
-            step_value = Some(new_call.result(db, 0));
-            new_ops.push(new_call);
-            break; // Stop processing after effectful call
-        }
-
-        // Check if this operation already produces Step
-        if op
-            .results(db)
-            .first()
-            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
-        {
-            step_value = Some(op.result(db, 0));
-            new_ops.push(*op);
-            break; // Stop processing after Step-producing op
-        }
-
-        // Keep other operations
-        new_ops.push(*op);
-    }
-
-    // Add scf.yield with Step value
-    if let Some(val) = step_value {
-        let yield_op = scf::r#yield(db, block.location(db), vec![val]);
-        new_ops.push(yield_op.as_operation());
-    } else if let Some(original_val) = original_yield_operand {
-        // Non-effectful branch: wrap the original yield value in step_done
-        // so both branches of the scf.if produce a Step-typed result.
-        let step_done_op = trampoline::step_done(db, block.location(db), original_val, step_ty);
-        new_ops.push(step_done_op.as_operation());
-        let yield_op = scf::r#yield(db, block.location(db), vec![step_done_op.result(db)]);
-        new_ops.push(yield_op.as_operation());
-    } else {
-        // Defensive fallback: no Step value and no yield operand found.
-        // This should be unreachable for well-formed scf.if branches (which
-        // always end with scf.yield), but emit a terminator to keep the
-        // block valid rather than producing malformed IR.
-        tracing::warn!(
-            "truncate_scf_if_block: block has neither step_value nor yield operand; \
-             emitting func.unreachable as defensive terminator"
-        );
-        new_ops.push(func::unreachable(db, block.location(db)).as_operation());
-    }
-
-    Block::new(
-        db,
-        block.id(db),
-        block.location(db),
-        block.args(db).clone(),
-        new_ops.into(),
-    )
-}
-
-/// Rebuild an operation with its result type changed to `Step`.
-/// If the operation has no results, returns it unchanged.
-fn rebuild_with_step_result<'db>(
-    db: &'db dyn salsa::Database,
-    op: &Operation<'db>,
-) -> Operation<'db> {
-    if op.results(db).is_empty() {
-        return *op;
-    }
-    debug_assert!(
-        op.results(db).len() <= 1,
-        "rebuild_with_step_result: expected at most 1 result, got {} for {}.{}",
-        op.results(db).len(),
-        op.dialect(db),
-        op.name(db),
-    );
-    let step_ty = trampoline::Step::new(db).as_type();
-    op.modify(db).results(IdVec::from(vec![step_ty])).build()
-}
-
-/// Truncate a block after the first effect point (step_shift or effectful call).
-/// Returns (modified_block, was_modified).
-fn truncate_block_after_shift<'db>(
-    db: &'db dyn salsa::Database,
-    block: Block<'db>,
-    effectful_funcs: &HashSet<Symbol>,
-) -> (Block<'db>, bool) {
-    let ops = block.operations(db);
-    let mut new_ops = Vec::new();
+) {
+    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let mut found_effect_point = false;
-    let mut effect_result: Option<Value<'db>> = None;
-    let mut effect_location: Option<trunk_ir::Location<'db>> = None;
+    let mut effect_result: Option<ValueRef> = None;
+    let mut effect_location = None;
+    let mut ops_to_remove: Vec<OpRef> = Vec::new();
 
-    tracing::debug!(
-        "truncate_block_after_shift: checking block with {} ops: [{}]",
-        ops.len(),
-        ops.iter()
-            .map(|op| format!("{}.{}", op.dialect(db), op.name(db)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-
-    for op in ops.iter() {
-        tracing::trace!(
-            "truncate_block_after_shift: op = {}.{}",
-            op.dialect(db),
-            op.name(db)
-        );
+    for &op in &ops {
         if found_effect_point {
-            // Special case: scf.loop after an effect point is the handler trampoline
-            // (generated by LowerHandlerDispatchPattern). It consumes the Step result
-            // from push_prompt and drives the trampoline loop. Must be preserved.
-            if scf::Loop::from_operation(db, *op).is_ok() {
-                // The scf.loop's init operand may reference the old scf.if result.
-                // Replace it with the new effect_result from the recreated scf.if.
-                let new_loop = if let Some(new_step) = effect_result {
-                    let old_operands = op.operands(db);
-                    debug_assert!(
-                        old_operands.len() == 1,
-                        "handler trampoline scf.loop should have exactly one init operand (the Step value), got {}",
-                        old_operands.len()
-                    );
-                    if !old_operands.is_empty() {
-                        let mut new_operands: Vec<Value<'db>> =
-                            old_operands.iter().copied().collect();
-                        new_operands[0] = new_step;
-                        op.modify(db).operands(IdVec::from(new_operands)).build()
-                    } else {
-                        *op
+            // Special case: scf.loop after an effect point (handler trampoline)
+            if arena_scf::Loop::from_op(ctx, op).is_ok() {
+                // Update the loop's init operand to point to the new effect_result
+                if let Some(new_step) = effect_result {
+                    let operands = ctx.op_operands(op).to_vec();
+                    if !operands.is_empty() {
+                        ctx.set_op_operand(op, 0, new_step);
                     }
-                } else {
-                    *op
-                };
-                new_ops.push(new_loop);
-                // Update effect result to the loop's result (may be Step or user_result_ty)
-                if !new_loop.results(db).is_empty() {
-                    effect_result = Some(new_loop.result(db, 0));
                 }
-                effect_location = Some(op.location(db));
-                tracing::debug!(
-                    "truncate_block_after_shift: preserved handler trampoline scf.loop after effect point"
-                );
+                // Update effect result to the loop's result
+                let results = ctx.op_results(op);
+                if !results.is_empty() {
+                    effect_result = Some(results[0]);
+                }
+                effect_location = Some(ctx.op(op).location);
                 continue;
             }
-            // Skip all other operations after effect point (they're now in resume functions)
+            // Skip all other operations after effect point
+            ops_to_remove.push(op);
             continue;
         }
 
         // Check if this is a step_shift operation
-        if trampoline::StepShift::from_operation(db, *op).is_ok() {
-            new_ops.push(*op);
+        if arena_trampoline::StepShift::from_op(ctx, op).is_ok() {
             found_effect_point = true;
-            effect_result = Some(op.result(db, 0));
-            effect_location = Some(op.location(db));
+            let results = ctx.op_results(op);
+            if !results.is_empty() {
+                effect_result = Some(results[0]);
+            }
+            effect_location = Some(ctx.op(op).location);
             continue;
         }
 
-        // Check if this is a push_prompt operation (establishes an effect handler)
-        // The push_prompt result is the Step value from the handler
-        if cont::PushPrompt::from_operation(db, *op).is_ok() {
-            // Create new operation with Step result type
-            let new_op = rebuild_with_step_result(db, op);
-            new_ops.push(new_op);
-            found_effect_point = true;
-            if !new_op.results(db).is_empty() {
-                effect_result = Some(new_op.result(db, 0));
+        // Check if this is a push_prompt operation
+        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+            // Change result type to Step
+            let step_ty = step_type(ctx);
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() && !is_step_type(ctx, result_types[0]) {
+                ctx.set_op_result_type(op, 0, step_ty);
             }
-            effect_location = Some(op.location(db));
-            tracing::debug!(
-                "truncate_block_after_shift: found push_prompt, changed result type to Step"
-            );
+            found_effect_point = true;
+            let results = ctx.op_results(op);
+            if !results.is_empty() {
+                effect_result = Some(results[0]);
+            }
+            effect_location = Some(ctx.op(op).location);
             continue;
         }
 
         // Check if this is a call to an effectful function
-        if let Ok(call) = func::Call::from_operation(db, *op)
-            && effectful_funcs.contains(&call.callee(db))
+        if let Ok(call) = arena_func::Call::from_op(ctx, op)
+            && effectful_funcs.contains(&call.callee(ctx))
         {
-            // Create new operation with Step result type
-            let new_op = rebuild_with_step_result(db, op);
-            new_ops.push(new_op);
-            found_effect_point = true;
-            if !new_op.results(db).is_empty() {
-                effect_result = Some(new_op.result(db, 0));
+            let step_ty = step_type(ctx);
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() && !is_step_type(ctx, result_types[0]) {
+                ctx.set_op_result_type(op, 0, step_ty);
             }
-            effect_location = Some(op.location(db));
-            tracing::debug!(
-                "truncate_block_after_shift: found effectful call to {}, changed result type to Step",
-                call.callee(db)
-            );
+            found_effect_point = true;
+            let results = ctx.op_results(op);
+            if !results.is_empty() {
+                effect_result = Some(results[0]);
+            }
+            effect_location = Some(ctx.op(op).location);
             continue;
         }
 
-        // Check if this is a call_indirect (indirect function call through closure).
-        // In effectful functions, call_indirect may invoke effectful closures, so we
-        // must treat the result as Step to avoid double-wrapping in step_done.
-        if func::CallIndirect::from_operation(db, *op).is_ok() {
-            let new_op = rebuild_with_step_result(db, op);
-            new_ops.push(new_op);
-            found_effect_point = true;
-            if !new_op.results(db).is_empty() {
-                effect_result = Some(new_op.result(db, 0));
+        // Check if this is call_indirect
+        if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+            let step_ty = step_type(ctx);
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() {
+                ctx.set_op_result_type(op, 0, step_ty);
             }
-            effect_location = Some(op.location(db));
-            tracing::debug!(
-                "truncate_block_after_shift: found call_indirect, changed result type to Step"
-            );
+            found_effect_point = true;
+            let results = ctx.op_results(op);
+            if !results.is_empty() {
+                effect_result = Some(results[0]);
+            }
+            effect_location = Some(ctx.op(op).location);
             continue;
         }
 
-        // Check if this is a scf.if that contains effectful code or returns Step
-        if scf::If::from_operation(db, *op).is_ok() {
-            // Check if result type is Step (from push_prompt/check_yield)
-            let returns_step = op
-                .results(db)
-                .first()
-                .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some());
+        // Check if this is scf.if with effectful code or Step result
+        if arena_scf::If::from_op(ctx, op).is_ok() {
+            let result_types = ctx.op_result_types(op);
+            let returns_step = !result_types.is_empty() && is_step_type(ctx, result_types[0]);
 
-            // Check if any branch contains effectful code (calls to effectful funcs)
-            let has_effectful_code = op
-                .regions(db)
+            let has_effectful_code = ctx
+                .op(op)
+                .regions
                 .iter()
-                .any(|r| calls_effectful_function(db, r, effectful_funcs));
+                .any(|&r| calls_effectful_function(ctx, r, effectful_funcs));
 
             if has_effectful_code || returns_step {
-                // Recursively process scf.if regions to truncate branches
-                let step_ty = trampoline::Step::new(db).as_type();
-                let new_regions: IdVec<Region<'db>> = op
-                    .regions(db)
-                    .iter()
-                    .map(|region| truncate_scf_if_branch(db, region, effectful_funcs, step_ty))
-                    .collect();
-
-                // Create new scf.if with Step result type and truncated regions
-                let new_op = Operation::new(
-                    db,
-                    op.location(db),
-                    op.dialect(db),
-                    op.name(db),
-                    op.operands(db).clone(),
-                    IdVec::from(vec![step_ty]),
-                    op.attributes(db).clone(),
-                    new_regions,
-                    op.successors(db).clone(),
-                );
-                new_ops.push(new_op);
+                let step_ty = step_type(ctx);
+                // Truncate branches
+                let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+                for region in regions {
+                    truncate_scf_if_branch(ctx, region, effectful_funcs, step_ty);
+                }
+                // Update result type to Step
+                let result_types = ctx.op_result_types(op);
+                if !result_types.is_empty() && !is_step_type(ctx, result_types[0]) {
+                    ctx.set_op_result_type(op, 0, step_ty);
+                }
                 found_effect_point = true;
-                effect_result = Some(new_op.result(db, 0));
-                effect_location = Some(op.location(db));
-                let result_ty = op.results(db).first();
-                tracing::debug!(
-                    "truncate_block_after_shift: found scf.if with effectful code or Step result (returns_step={}, has_effectful_code={}, result_ty={:?}, location={:?})",
-                    returns_step,
-                    has_effectful_code,
-                    result_ty,
-                    op.location(db)
-                );
+                let results = ctx.op_results(op);
+                if !results.is_empty() {
+                    effect_result = Some(results[0]);
+                }
+                effect_location = Some(ctx.op(op).location);
                 continue;
             }
         }
 
-        // Check if this is a scf.loop with Step result type (trampoline loop)
-        // These loops are generated by LowerHandlerDispatchPattern in effectful functions
-        if scf::Loop::from_operation(db, *op).is_ok()
-            && op
-                .results(db)
-                .first()
-                .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
-        {
-            new_ops.push(*op);
-            found_effect_point = true;
-            effect_result = Some(op.result(db, 0));
-            effect_location = Some(op.location(db));
-            tracing::debug!("truncate_block_after_shift: found scf.loop with Step result");
-            continue;
+        // Check if this is scf.loop with Step result type (trampoline loop)
+        if arena_scf::Loop::from_op(ctx, op).is_ok() {
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() && is_step_type(ctx, result_types[0]) {
+                found_effect_point = true;
+                effect_result = Some(ctx.op_results(op)[0]);
+                effect_location = Some(ctx.op(op).location);
+                continue;
+            }
         }
-
-        new_ops.push(*op);
     }
 
     if !found_effect_point {
-        return (block, false);
+        return;
+    }
+
+    // Remove ops after effect point
+    for op in ops_to_remove {
+        ctx.remove_op_from_block(block, op);
     }
 
     // Add func.return for the effect result
     if let (Some(result), Some(location)) = (effect_result, effect_location) {
-        let return_op = func::r#return(db, location, Some(result));
-        new_ops.push(return_op.as_operation());
+        let return_op = arena_func::r#return(ctx, location, [result]);
+        ctx.push_op(block, return_op.op_ref());
+    }
+}
+
+/// Truncate scf.if branch region.
+pub(crate) fn truncate_scf_if_branch(
+    ctx: &mut IrContext,
+    region: RegionRef,
+    effectful_funcs: &HashSet<Symbol>,
+    step_ty: TypeRef,
+) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    for block in blocks {
+        truncate_scf_if_block(ctx, block, effectful_funcs, step_ty);
+    }
+}
+
+/// Truncate scf.if block.
+fn truncate_scf_if_block(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    effectful_funcs: &HashSet<Symbol>,
+    step_ty: TypeRef,
+) {
+    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+    let mut step_value: Option<ValueRef> = None;
+    let mut original_yield_operand: Option<ValueRef> = None;
+    let mut ops_to_remove: Vec<OpRef> = Vec::new();
+    let mut found_effect = false;
+
+    for &op in &ops {
+        if found_effect {
+            ops_to_remove.push(op);
+            continue;
+        }
+
+        // Capture scf.yield operand before skipping
+        if arena_scf::Yield::from_op(ctx, op).is_ok() {
+            original_yield_operand = ctx.op_operands(op).first().copied();
+            ops_to_remove.push(op);
+            continue;
+        }
+
+        // Check if this is a call to an effectful function
+        if let Ok(call) = arena_func::Call::from_op(ctx, op)
+            && effectful_funcs.contains(&call.callee(ctx))
+        {
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() {
+                ctx.set_op_result_type(op, 0, step_ty);
+                step_value = Some(ctx.op_results(op)[0]);
+            }
+            found_effect = true;
+            continue;
+        }
+
+        // Check if this operation already produces Step
+        let result_types = ctx.op_result_types(op);
+        if !result_types.is_empty() && is_step_type(ctx, result_types[0]) {
+            step_value = Some(ctx.op_results(op)[0]);
+            found_effect = true;
+            continue;
+        }
     }
 
-    tracing::debug!(
-        "truncate_block_after_shift: truncated {} ops to {} ops: [{}]",
-        ops.len(),
-        new_ops.len(),
-        new_ops
-            .iter()
-            .map(|op| format!("{}.{}", op.dialect(db), op.name(db)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    // Remove ops
+    for op in ops_to_remove {
+        ctx.remove_op_from_block(block, op);
+    }
 
-    (
-        Block::new(
-            db,
-            block.id(db),
-            block.location(db),
-            block.args(db).clone(),
-            IdVec::from(new_ops),
-        ),
-        true,
-    )
+    let location = ctx.block(block).location;
+
+    // Add scf.yield with Step value
+    if let Some(val) = step_value {
+        let yield_op = arena_scf::r#yield(ctx, location, [val]);
+        ctx.push_op(block, yield_op.op_ref());
+    } else if let Some(original_val) = original_yield_operand {
+        // Non-effectful branch: wrap in step_done
+        let step_done = arena_trampoline::step_done(ctx, location, original_val, step_ty);
+        ctx.push_op(block, step_done.op_ref());
+        let yield_op = arena_scf::r#yield(ctx, location, [step_done.result(ctx)]);
+        ctx.push_op(block, yield_op.op_ref());
+    } else {
+        tracing::warn!("truncate_scf_if_block: block has neither step_value nor yield operand");
+        let unreachable = arena_func::unreachable(ctx, location);
+        ctx.push_op(block, unreachable.op_ref());
+    }
 }

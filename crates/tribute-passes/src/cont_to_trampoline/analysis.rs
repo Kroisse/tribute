@@ -1,11 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::live_vars::FunctionAnalysis;
-use trunk_ir::dialect::cont;
-use trunk_ir::dialect::core::{self, Module};
-use trunk_ir::dialect::func::{self, Func};
-use trunk_ir::{Block, DialectOp, DialectType, Region, Span, Symbol, Type};
+use crate::live_vars::ArenaFunctionAnalysis;
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{RegionRef, TypeRef};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::walk;
+use trunk_ir::location::Span;
 
 use super::{ShiftAnalysis, ShiftPointInfo};
 
@@ -15,15 +20,15 @@ use super::{ShiftAnalysis, ShiftPointInfo};
 
 /// Analyze all effectful functions for shift points.
 /// Returns a map from shift operation span to shift point info.
-pub(crate) fn analyze_shift_points<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
+pub(crate) fn analyze_shift_points(
+    ctx: &IrContext,
+    module_body: RegionRef,
     effectful_funcs: &HashSet<Symbol>,
-) -> ShiftAnalysis<'db> {
+) -> ShiftAnalysis {
     let mut analysis = HashMap::new();
 
     // Recursively walk through all functions (including those in nested regions)
-    analyze_shift_points_in_region(db, &module.body(db), effectful_funcs, &mut analysis);
+    analyze_shift_points_in_region(ctx, module_body, effectful_funcs, &mut analysis);
 
     tracing::debug!(
         "analyze_shift_points: found {} shift points",
@@ -33,28 +38,27 @@ pub(crate) fn analyze_shift_points<'db>(
 }
 
 /// Helper to recursively analyze shift points in a region.
-fn analyze_shift_points_in_region<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+fn analyze_shift_points_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
     effectful_funcs: &HashSet<Symbol>,
-    analysis: &mut HashMap<Span, ShiftPointInfo<'db>>,
+    analysis: &mut HashMap<Span, ShiftPointInfo>,
 ) {
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if let Ok(func) = Func::from_operation(db, *op) {
-                let func_name = func.sym_name(db);
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                let func_name = func.sym_name(ctx);
                 if effectful_funcs.contains(&func_name) {
                     // Analyze this effectful function
-                    let body = func.body(db);
-                    if let Some(func_analysis) = FunctionAnalysis::analyze(db, &body) {
+                    let body = func.body(ctx);
+                    if let Some(func_analysis) = ArenaFunctionAnalysis::analyze(ctx, body) {
                         let total_shifts = func_analysis.shift_points.len();
                         for shift_point in func_analysis.shift_points {
-                            let span = shift_point.shift_op.location(db).span;
+                            let span = ctx.op(shift_point.shift_op).location.span;
                             // Get the shift result value and type if the operation has results
-                            let (shift_result_value, shift_result_type) = if let Some(result_type) =
-                                shift_point.shift_op.results(db).first()
-                            {
-                                (Some(shift_point.shift_op.result(db, 0)), Some(*result_type))
+                            let results = ctx.op_results(shift_point.shift_op);
+                            let (shift_result_value, shift_result_type) = if !results.is_empty() {
+                                (Some(results[0]), Some(ctx.value_ty(results[0])))
                             } else {
                                 (None, None)
                             };
@@ -75,8 +79,8 @@ fn analyze_shift_points_in_region<'db>(
             }
 
             // Recursively check nested regions
-            for nested_region in op.regions(db).iter() {
-                analyze_shift_points_in_region(db, nested_region, effectful_funcs, analysis);
+            for &nested_region in &ctx.op(op).regions {
+                analyze_shift_points_in_region(ctx, nested_region, effectful_funcs, analysis);
             }
         }
     }
@@ -84,52 +88,52 @@ fn analyze_shift_points_in_region<'db>(
 
 /// Collect spans of handler_dispatch operations inside effectful functions.
 /// These handlers should return Step type (to be propagated by the effectful function).
-pub(crate) fn collect_handlers_in_effectful_funcs<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
+pub(crate) fn collect_handlers_in_effectful_funcs(
+    ctx: &IrContext,
+    module_body: RegionRef,
     effectful_funcs: &HashSet<Symbol>,
 ) -> HashSet<Span> {
     let mut handler_spans = HashSet::new();
 
-    fn collect_handlers_in_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: &Region<'db>,
+    fn collect_handlers_in_region(
+        ctx: &IrContext,
+        region: RegionRef,
         handler_spans: &mut HashSet<Span>,
     ) {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
                 // Check if this is a handler_dispatch
-                if cont::HandlerDispatch::from_operation(db, *op).is_ok() {
-                    handler_spans.insert(op.location(db).span);
+                if arena_cont::HandlerDispatch::from_op(ctx, op).is_ok() {
+                    handler_spans.insert(ctx.op(op).location.span);
                 }
                 // Recursively check nested regions
-                for region in op.regions(db).iter() {
-                    collect_handlers_in_region(db, region, handler_spans);
+                for &region in &ctx.op(op).regions {
+                    collect_handlers_in_region(ctx, region, handler_spans);
                 }
             }
         }
     }
 
     // Helper to recursively find and process effectful functions
-    fn find_effectful_funcs_and_collect<'db>(
-        db: &'db dyn salsa::Database,
-        region: &Region<'db>,
+    fn find_effectful_funcs_and_collect(
+        ctx: &IrContext,
+        region: RegionRef,
         effectful_funcs: &HashSet<Symbol>,
         handler_spans: &mut HashSet<Span>,
     ) {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                if let Ok(func) = Func::from_operation(db, *op) {
-                    let func_name = func.sym_name(db);
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                    let func_name = func.sym_name(ctx);
                     if effectful_funcs.contains(&func_name) {
                         // Collect handler_dispatch spans in this effectful function
-                        collect_handlers_in_region(db, &func.body(db), handler_spans);
+                        collect_handlers_in_region(ctx, func.body(ctx), handler_spans);
                     }
                 }
                 // Recursively check nested regions for more functions
-                for nested_region in op.regions(db).iter() {
+                for &nested_region in &ctx.op(op).regions {
                     find_effectful_funcs_and_collect(
-                        db,
+                        ctx,
                         nested_region,
                         effectful_funcs,
                         handler_spans,
@@ -140,7 +144,7 @@ pub(crate) fn collect_handlers_in_effectful_funcs<'db>(
     }
 
     // Walk through all functions (including those in nested regions)
-    find_effectful_funcs_and_collect(db, &module.body(db), effectful_funcs, &mut handler_spans);
+    find_effectful_funcs_and_collect(ctx, module_body, effectful_funcs, &mut handler_spans);
 
     tracing::debug!(
         "collect_handlers_in_effectful_funcs: found {} handlers in effectful functions",
@@ -156,15 +160,15 @@ pub(crate) fn collect_handlers_in_effectful_funcs<'db>(
 /// Identify all effectful functions in the module.
 /// A function is effectful if it contains `cont.shift` or `cont.push_prompt` operations,
 /// or if it calls another effectful function (transitive closure).
-pub(crate) fn identify_effectful_functions<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<'db>,
+pub(crate) fn identify_effectful_functions(
+    ctx: &IrContext,
+    module_body: RegionRef,
 ) -> Rc<HashSet<Symbol>> {
     let mut effectful = HashSet::new();
-    let mut all_funcs: Vec<(Symbol, Region<'db>)> = Vec::new();
+    let mut all_funcs: Vec<(Symbol, RegionRef)> = Vec::new();
 
     // First pass: identify direct effectful functions and collect all functions
-    collect_direct_effectful_funcs(db, &module.body(db), &mut effectful, &mut all_funcs);
+    collect_direct_effectful_funcs(ctx, module_body, &mut effectful, &mut all_funcs);
 
     // Second pass: propagate effectfulness through the call graph
     // Keep iterating until no new effectful functions are found
@@ -175,7 +179,7 @@ pub(crate) fn identify_effectful_functions<'db>(
             if effectful.contains(func_name) {
                 continue;
             }
-            if calls_effectful_function(db, body, &effectful) {
+            if calls_effectful_function(ctx, *body, &effectful) {
                 effectful.insert(*func_name);
                 changed = true;
             }
@@ -204,26 +208,26 @@ pub(crate) fn identify_effectful_functions<'db>(
 /// which means either:
 /// - It has concrete abilities (e.g., `->{State(Int)}`)
 /// - It has a polymorphic effect row (e.g., `->{e}` with a tail variable)
-fn collect_direct_effectful_funcs<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+fn collect_direct_effectful_funcs(
+    ctx: &IrContext,
+    region: RegionRef,
     effectful: &mut HashSet<Symbol>,
-    all_funcs: &mut Vec<(Symbol, Region<'db>)>,
+    all_funcs: &mut Vec<(Symbol, RegionRef)>,
 ) {
-    for block in region.blocks(db).iter() {
+    for &block in &ctx.region(region).blocks {
         tracing::trace!(
             "collect_direct_effectful_funcs: block has {} operations",
-            block.operations(db).len()
+            ctx.block(block).ops.len()
         );
-        for op in block.operations(db).iter() {
+        for &op in &ctx.block(block).ops {
             tracing::trace!(
                 "collect_direct_effectful_funcs: op {}.{}",
-                op.dialect(db),
-                op.name(db)
+                ctx.op(op).dialect,
+                ctx.op(op).name
             );
-            if let Ok(func) = Func::from_operation(db, *op) {
-                let func_name = func.sym_name(db);
-                let body = func.body(db);
+            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                let func_name = func.sym_name(ctx);
+                let body = func.body(ctx);
                 tracing::trace!(
                     "collect_direct_effectful_funcs: found func.func '{}'",
                     func_name
@@ -232,12 +236,11 @@ fn collect_direct_effectful_funcs<'db>(
                 all_funcs.push((func_name, body));
 
                 // Check the function's type signature for effectfulness
-                let func_ty = func.ty(db);
-                let is_effectful = has_effectful_type(db, func_ty);
+                let func_ty = func.r#type(ctx);
+                let is_effectful = has_effectful_type(ctx, func_ty);
                 tracing::trace!(
-                    "collect_direct_effectful_funcs: '{}' type={:?}, is_effectful={}",
+                    "collect_direct_effectful_funcs: '{}' is_effectful={}",
                     func_name,
-                    func_ty,
                     is_effectful
                 );
                 if is_effectful {
@@ -246,8 +249,8 @@ fn collect_direct_effectful_funcs<'db>(
             }
 
             // Recursively check nested regions
-            for nested_region in op.regions(db).iter() {
-                collect_direct_effectful_funcs(db, nested_region, effectful, all_funcs);
+            for &nested_region in &ctx.op(op).regions {
+                collect_direct_effectful_funcs(ctx, nested_region, effectful, all_funcs);
             }
         }
     }
@@ -258,103 +261,104 @@ fn collect_direct_effectful_funcs<'db>(
 /// Returns true if the effect row:
 /// - Has any concrete abilities, OR
 /// - Has a tail variable (is polymorphic)
-fn has_effectful_type<'db>(db: &'db dyn salsa::Database, func_ty: Type<'db>) -> bool {
-    let Some(func) = core::Func::from_type(db, func_ty) else {
+fn has_effectful_type(ctx: &IrContext, func_ty: TypeRef) -> bool {
+    let data = ctx.types.get(func_ty);
+    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        return false;
+    }
+    let Some(ArenaAttribute::Type(effect)) = data.attrs.get(&Symbol::new("effect")) else {
         return false;
     };
-    let Some(effect) = func.effect(db) else {
+    let effect_data = ctx.types.get(*effect);
+    if effect_data.dialect != Symbol::new("core") || effect_data.name != Symbol::new("effect_row") {
         return false;
-    };
-    let Some(row) = core::EffectRowType::from_type(db, effect) else {
-        return false;
-    };
-    let abilities = row.abilities(db);
-    let tail_var = row.tail_var(db);
-    !abilities.is_empty() || tail_var.is_some()
+    }
+    // Non-empty if it has ability params or a tail variable
+    !effect_data.params.is_empty() || effect_data.attrs.contains_key(&Symbol::new("tail_var"))
 }
 
 /// Check if a region calls any effectful function.
 /// NOTE: Calls inside push_prompt body are skipped (handled by the handler),
 /// but calls in handler_dispatch ARMS are checked (they may return Step).
-pub(crate) fn calls_effectful_function<'db>(
-    db: &'db dyn salsa::Database,
-    region: &Region<'db>,
+pub(crate) fn calls_effectful_function(
+    ctx: &IrContext,
+    region: RegionRef,
     effectful: &HashSet<Symbol>,
 ) -> bool {
     use std::ops::ControlFlow;
-    use trunk_ir::{OperationWalk, WalkAction};
 
-    region
-        .walk_all::<()>(db, |op| {
-            // Skip nested function definitions - they're analyzed separately
-            if Func::from_operation(db, op).is_ok() {
-                return ControlFlow::Continue(WalkAction::Skip);
-            }
-            // Skip push_prompt body - effects there are handled by the enclosing handler
-            if cont::PushPrompt::from_operation(db, op).is_ok() {
-                return ControlFlow::Continue(WalkAction::Skip);
-            }
-            // For handler_dispatch: check if handler ARMS call effectful functions
-            // Handler arms can call effectful functions that return Step
-            if let Ok(dispatch) = cont::HandlerDispatch::from_operation(db, op) {
-                let body_region = dispatch.body(db);
-                // Check cont.done and cont.suspend child ops' body regions
-                if let Some(first_block) = body_region.blocks(db).first() {
-                    for child_op in first_block.operations(db).iter() {
-                        if let Ok(done_op) = cont::Done::from_operation(db, *child_op) {
-                            for block in done_op.body(db).blocks(db).iter() {
-                                if block_calls_effectful_inner(db, block, effectful) {
-                                    return ControlFlow::Break(());
-                                }
+    walk::walk_region::<()>(ctx, region, &mut |op| {
+        // Skip nested function definitions - they're analyzed separately
+        if arena_func::Func::from_op(ctx, op).is_ok() {
+            return ControlFlow::Continue(walk::WalkAction::Skip);
+        }
+        // Skip push_prompt body - effects there are handled by the enclosing handler
+        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+            return ControlFlow::Continue(walk::WalkAction::Skip);
+        }
+        // For handler_dispatch: check if handler ARMS call effectful functions
+        if let Ok(dispatch) = arena_cont::HandlerDispatch::from_op(ctx, op) {
+            let body_region = dispatch.body(ctx);
+            // Check cont.done and cont.suspend child ops' body regions
+            let blocks = &ctx.region(body_region).blocks;
+            if let Some(&first_block) = blocks.first() {
+                for &child_op in &ctx.block(first_block).ops {
+                    if let Ok(done_op) = arena_cont::Done::from_op(ctx, child_op) {
+                        let done_body = done_op.body(ctx);
+                        for &block in &ctx.region(done_body).blocks {
+                            if block_calls_effectful_inner(ctx, block, effectful) {
+                                return ControlFlow::Break(());
                             }
                         }
-                        if let Ok(suspend_op) = cont::Suspend::from_operation(db, *child_op) {
-                            for block in suspend_op.body(db).blocks(db).iter() {
-                                if block_calls_effectful_inner(db, block, effectful) {
-                                    return ControlFlow::Break(());
-                                }
+                    }
+                    if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
+                        let suspend_body = suspend_op.body(ctx);
+                        for &block in &ctx.region(suspend_body).blocks {
+                            if block_calls_effectful_inner(ctx, block, effectful) {
+                                return ControlFlow::Break(());
                             }
                         }
                     }
                 }
-                return ControlFlow::Continue(WalkAction::Skip);
             }
-            if let Ok(call) = func::Call::from_operation(db, op)
-                && effectful.contains(&call.callee(db))
-            {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(WalkAction::Advance)
-            }
-        })
-        .is_break()
+            return ControlFlow::Continue(walk::WalkAction::Skip);
+        }
+        if let Ok(call) = arena_func::Call::from_op(ctx, op)
+            && effectful.contains(&call.callee(ctx))
+        {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(walk::WalkAction::Advance)
+        }
+    })
+    .is_break()
 }
 
 /// Helper to check if a block calls effectful functions (for handler arm checking).
-/// Only returns true if the block calls a function that is already known to be effectful.
-/// This is used for propagating effectfulness through the call graph.
-fn block_calls_effectful_inner<'db>(
-    db: &'db dyn salsa::Database,
-    block: &Block<'db>,
+fn block_calls_effectful_inner(
+    ctx: &IrContext,
+    block: trunk_ir::arena::refs::BlockRef,
     effectful: &HashSet<Symbol>,
 ) -> bool {
-    for op in block.operations(db).iter() {
+    for &op in &ctx.block(block).ops {
         // Check direct calls to effectful functions
-        if let Ok(call) = func::Call::from_operation(db, *op)
-            && effectful.contains(&call.callee(db))
+        if let Ok(call) = arena_func::Call::from_op(ctx, op)
+            && effectful.contains(&call.callee(ctx))
         {
             return true;
         }
-        // Recursively check nested regions (but skip nested functions and push_prompt bodies)
-        if Func::from_operation(db, *op).is_ok() {
-            continue; // Skip nested function definitions
+        // Skip nested function definitions
+        if arena_func::Func::from_op(ctx, op).is_ok() {
+            continue;
         }
-        if cont::PushPrompt::from_operation(db, *op).is_ok() {
-            continue; // Skip push_prompt body — effects there are handled by the enclosing handler
+        // Skip push_prompt body
+        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+            continue;
         }
-        for region in op.regions(db).iter() {
-            for nested_block in region.blocks(db).iter() {
-                if block_calls_effectful_inner(db, nested_block, effectful) {
+        // Recursively check nested regions
+        for &region in &ctx.op(op).regions {
+            for &nested_block in &ctx.region(region).blocks {
+                if block_calls_effectful_inner(ctx, nested_block, effectful) {
                     return true;
                 }
             }
@@ -362,11 +366,3 @@ fn block_calls_effectful_inner<'db>(
     }
     false
 }
-
-// NOTE: handler_dispatch is NOT considered effectful here because:
-// - For closed handlers, the trampoline loop returns user_result_ty (not Step)
-// - The function's return type should remain user_result_ty
-// - Open handlers (which propagate effects) are not yet supported
-//
-// If we need to support open handlers in the future, we'll need a different
-// approach (e.g., an attribute on the handler to indicate open vs closed).

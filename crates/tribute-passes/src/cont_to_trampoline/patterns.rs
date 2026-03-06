@@ -1,15 +1,21 @@
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use tribute_ir::dialect::tribute_rt;
-use trunk_ir::dialect::core::{self};
-use trunk_ir::dialect::func::{self};
-use trunk_ir::dialect::{arith, cont, scf, trampoline};
-use trunk_ir::ir::BlockBuilder;
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::{DialectOp, DialectType, IdVec, Location, Operation, Region, Symbol, Type, Value};
+use trunk_ir::Symbol;
+use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::core as arena_core;
+use trunk_ir::arena::dialect::func as arena_func;
+use trunk_ir::arena::dialect::scf as arena_scf;
+use trunk_ir::arena::dialect::trampoline as arena_trampoline;
+use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
+use trunk_ir::arena::types::Attribute as ArenaAttribute;
 
-use super::get_region_result_value;
+use super::get_region_result_value_arena;
+use super::shift_lower::{anyref_type, i32_type, step_type};
 
 // ============================================================================
 // Pattern: Lower cont.resume
@@ -17,81 +23,74 @@ use super::get_region_result_value;
 
 pub(crate) struct LowerResumePattern;
 
-impl<'db> RewritePattern<'db> for LowerResumePattern {
+impl ArenaRewritePattern for LowerResumePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        let Ok(_) = cont::Resume::from_operation(db, *op) else {
+        if arena_cont::Resume::from_op(ctx, op).is_err() {
             return false;
-        };
+        }
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let anyref_ty = tribute_rt::Any::new(db).as_type();
+        let location = ctx.op(op).location;
+        let i32_ty = i32_type(ctx);
+        let anyref_ty = anyref_type(ctx);
 
-        let operands = rewriter.operands();
-        let continuation = operands
-            .first()
-            .copied()
-            .expect("resume requires continuation");
+        let operands = ctx.op_operands(op).to_vec();
+        let continuation = *operands.first().expect("resume requires continuation");
         let value = operands.get(1).copied();
 
         let mut ops = Vec::new();
 
         // === 1. Reset yield state ===
-        ops.push(trampoline::reset_yield_state(db, location).as_operation());
+        let reset = arena_trampoline::reset_yield_state(ctx, location);
+        ops.push(reset.op_ref());
 
-        // === 2. Get resume_fn from continuation (i32 table index) ===
-        let get_resume_fn = trampoline::continuation_get(
-            db,
-            location,
-            continuation,
-            i32_ty,
-            Symbol::new("resume_fn"),
-        );
-        let resume_fn_val = get_resume_fn.as_operation().result(db, 0);
-        ops.push(get_resume_fn.as_operation());
+        // === 2. Get resume_fn from continuation (field 0 = resume_fn) ===
+        let get_resume_fn =
+            arena_trampoline::continuation_get(ctx, location, continuation, i32_ty, 0);
+        let resume_fn_val = get_resume_fn.result(ctx);
+        ops.push(get_resume_fn.op_ref());
 
-        // === 3. Get state from continuation ===
-        let get_state = trampoline::continuation_get(
-            db,
-            location,
-            continuation,
-            anyref_ty,
-            Symbol::new("state"),
-        );
-        let state_val = get_state.as_operation().result(db, 0);
-        ops.push(get_state.as_operation());
+        // === 3. Get state from continuation (field 1 = state) ===
+        let get_state =
+            arena_trampoline::continuation_get(ctx, location, continuation, anyref_ty, 1);
+        let state_val = get_state.result(ctx);
+        ops.push(get_state.op_ref());
 
         // === 4. Build resume wrapper ===
-        let wrapper_ty = trampoline::ResumeWrapper::new(db).as_type();
+        let wrapper_ty = super::shift_lower::resume_wrapper_type(ctx);
         let resume_value = value.unwrap_or(state_val);
 
-        let wrapper_op =
-            trampoline::build_resume_wrapper(db, location, state_val, resume_value, wrapper_ty);
-        let wrapper_val = wrapper_op.as_operation().result(db, 0);
-        ops.push(wrapper_op.as_operation());
+        let wrapper_op = arena_trampoline::build_resume_wrapper(
+            ctx,
+            location,
+            state_val,
+            resume_value,
+            wrapper_ty,
+        );
+        let wrapper_val = wrapper_op.result(ctx);
+        ops.push(wrapper_op.op_ref());
 
         // === 5. Call resume function ===
-        // Resume functions take (evidence, wrapper) where wrapper is the resume_wrapper type.
-        let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type(db);
-        let null_evidence =
-            trunk_ir::dialect::adt::ref_null(db, location, evidence_ty, evidence_ty);
-        ops.push(null_evidence.as_operation());
-        let evidence_val = null_evidence.as_operation().result(db, 0);
+        let evidence_ty = tribute_ir::arena::dialect::ability::evidence_adt_type_ref(ctx);
 
-        let step_ty = trampoline::Step::new(db).as_type();
-        let call_op = func::call_indirect(
-            db,
+        // Create null evidence
+        let null_evidence = arena_adt::ref_null(ctx, location, evidence_ty, evidence_ty);
+        let evidence_val = null_evidence.result(ctx);
+        ops.push(null_evidence.op_ref());
+
+        let step_ty = step_type(ctx);
+        let call_op = arena_func::call_indirect(
+            ctx,
             location,
             resume_fn_val,
-            IdVec::from(vec![evidence_val, wrapper_val]),
+            [evidence_val, wrapper_val],
             step_ty,
         );
-        ops.push(call_op.as_operation());
+        ops.push(call_op.op_ref());
 
         let last = ops.pop().unwrap();
         for o in ops {
@@ -102,78 +101,70 @@ impl<'db> RewritePattern<'db> for LowerResumePattern {
     }
 }
 
+use trunk_ir::arena::dialect::adt as arena_adt;
+
 // ============================================================================
 // Pattern: Update func.call result type for effectful functions
 // ============================================================================
 
-/// Pattern that updates func.call to effectful functions to return Step type.
-/// This handles calls inside scf.if/scf.loop regions that weren't processed
-/// by truncate_after_shift (which only processes function entry blocks).
 pub(crate) struct UpdateEffectfulCallResultTypePattern {
     pub(crate) effectful_funcs: Rc<HashSet<Symbol>>,
 }
 
-impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
+impl ArenaRewritePattern for UpdateEffectfulCallResultTypePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        // Only handle func.call operations
-        let Ok(call) = func::Call::from_operation(db, *op) else {
+        let Ok(call) = arena_func::Call::from_op(ctx, op) else {
             return false;
         };
 
-        let callee = call.callee(db);
+        let callee = call.callee(ctx);
 
-        // Skip if not an effectful function
         if !self.effectful_funcs.contains(&callee) {
             return false;
         }
 
-        // Skip if already returns Step
-        let step_ty = trampoline::Step::new(db).as_type();
-        if op
-            .results(db)
-            .first()
-            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
-        {
+        let step_ty = step_type(ctx);
+        let result_types = ctx.op_result_types(op);
+
+        // Skip if already returns Step or no results
+        if result_types.is_empty() {
+            return false;
+        }
+        if is_step_type(ctx, result_types[0]) {
             return false;
         }
 
-        // Skip if no results
-        if op.results(db).is_empty() {
-            return false;
-        }
-
-        let location = op.location(db);
-        let original_result_ty = op.results(db).first().copied().unwrap();
+        let location = ctx.op(op).location;
 
         tracing::debug!(
-            "UpdateEffectfulCallResultTypePattern: updating call to {} from {} to Step",
+            "UpdateEffectfulCallResultTypePattern: updating call to {} to Step",
             callee,
-            original_result_ty.name(db)
         );
 
         // Create new call with Step result type
-        let new_call = Operation::new(
-            db,
+        let op_data = ctx.op(op);
+        let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(
             location,
-            op.dialect(db),
-            op.name(db),
-            rewriter.operands().clone(),
-            IdVec::from(vec![step_ty]),
-            op.attributes(db).clone(),
-            op.regions(db).clone(),
-            op.successors(db).clone(),
-        );
+            op_data.dialect,
+            op_data.name,
+        )
+        .operands(ctx.op_operands(op).to_vec())
+        .result(step_ty);
+        for (k, v) in &op_data.attributes {
+            builder = builder.attr(*k, v.clone());
+        }
+        for &r in &op_data.regions {
+            builder = builder.region(r);
+        }
+        let new_data = builder.build(ctx);
+        let new_op = ctx.create_op(new_data);
 
-        // Return the new call directly without adding a cast.
-        // The Step value should propagate up through the effectful context.
-        // Any downstream operations that need the original type will need to handle
-        // Step unpacking appropriately.
-        rewriter.replace_op(new_call);
+        rewriter.replace_op(new_op);
         true
     }
 }
@@ -182,51 +173,35 @@ impl<'db> RewritePattern<'db> for UpdateEffectfulCallResultTypePattern {
 // Pattern: Update scf.if result type when branches contain effectful calls
 // ============================================================================
 
-/// Pattern that updates scf.if result type to Step when its branches
-/// contain calls that return Step (effectful calls that have been transformed).
-///
-/// NOTE: This pattern only changes the result type. The internal scf.yield
-/// operations are updated by UpdateScfYieldToStepPattern which runs after
-/// the nested regions have been processed by PatternApplicator.
 pub(crate) struct UpdateScfIfResultTypePattern;
 
-impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
+impl ArenaRewritePattern for UpdateScfIfResultTypePattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        // Only handle scf.if operations
-        if scf::If::from_operation(db, *op).is_err() {
+        if arena_scf::If::from_op(ctx, op).is_err() {
             return false;
         }
 
-        // Skip if no results
-        if op.results(db).is_empty() {
+        let result_types = ctx.op_result_types(op).to_vec();
+        if result_types.is_empty() {
             return false;
         }
 
-        // Skip if already returns Step
-        let step_ty = trampoline::Step::new(db).as_type();
-        if op
-            .results(db)
-            .first()
-            .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
-        {
+        let step_ty = step_type(ctx);
+        if is_step_type(ctx, result_types[0]) {
             return false;
         }
 
         // Check if any branch contains operations that return Step type
-        // This includes func.call that have been transformed to return Step
-        let branches_have_step_ops = op.regions(db).iter().any(|region| {
-            region.blocks(db).iter().any(|block| {
-                block.operations(db).iter().any(|branch_op| {
-                    // Check if any operation produces Step type result
-                    branch_op
-                        .results(db)
-                        .first()
-                        .is_some_and(|ty| trampoline::Step::from_type(db, *ty).is_some())
+        let branches_have_step_ops = ctx.op(op).regions.iter().any(|&region| {
+            ctx.region(region).blocks.iter().any(|&block| {
+                ctx.block(block).ops.iter().any(|&branch_op| {
+                    let rtypes = ctx.op_result_types(branch_op);
+                    !rtypes.is_empty() && is_step_type(ctx, rtypes[0])
                 })
             })
         });
@@ -235,85 +210,70 @@ impl<'db> RewritePattern<'db> for UpdateScfIfResultTypePattern {
             return false;
         }
 
-        let loc = op.location(db);
+        let location = ctx.op(op).location;
         tracing::debug!(
             "UpdateScfIfResultTypePattern: updating scf.if result to Step at {:?}",
-            loc
+            location
         );
 
-        // Only change the result type - let PatternApplicator handle nested regions
-        // and UpdateScfYieldToStepPattern handle the yield updates
-        let new_if = Operation::new(
-            db,
-            op.location(db),
-            op.dialect(db),
-            op.name(db),
-            op.operands(db).clone(),
-            IdVec::from(vec![step_ty]),
-            op.attributes(db).clone(),
-            op.regions(db).clone(), // Keep original regions - will be processed recursively
-            op.successors(db).clone(),
-        );
+        let op_data = ctx.op(op);
+        let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(
+            location,
+            op_data.dialect,
+            op_data.name,
+        )
+        .operands(ctx.op_operands(op).to_vec())
+        .result(step_ty);
+        for (k, v) in &op_data.attributes {
+            builder = builder.attr(*k, v.clone());
+        }
+        for &r in &op_data.regions {
+            builder = builder.region(r);
+        }
+        let new_data = builder.build(ctx);
+        let new_op = ctx.create_op(new_data);
 
-        rewriter.replace_op(new_if);
+        rewriter.replace_op(new_op);
         true
     }
 }
 
 /// Pattern that updates scf.yield to yield Step value when it's inside
 /// a block that contains effectful operations returning Step.
-///
-/// This pattern is applied after UpdateEffectfulCallResultTypePattern has
-/// changed func.call results to Step, so we can find the actual Step values.
 pub(crate) struct UpdateScfYieldToStepPattern;
 
-impl<'db> RewritePattern<'db> for UpdateScfYieldToStepPattern {
+impl ArenaRewritePattern for UpdateScfYieldToStepPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        // Only handle scf.yield operations
-        let Ok(_yield_op) = scf::Yield::from_operation(db, *op) else {
+        if arena_scf::Yield::from_op(ctx, op).is_err() {
             return false;
-        };
+        }
+
+        let operands = ctx.op_operands(op).to_vec();
+        if operands.is_empty() {
+            return false;
+        }
 
         // Skip if already yielding Step
-        if let Some(operand) = rewriter.operands().first()
-            && let Some(ty) = rewriter.get_raw_value_type(db, *operand)
-            && trampoline::Step::from_type(db, ty).is_some()
-        {
-            return false;
-        }
-
-        // Check the context to find if there's a Step value we should yield instead
-        // We look at the remapped operand types to see what the current value types are
-        let current_operands = rewriter.operands();
-        if current_operands.is_empty() {
-            return false;
-        }
-
-        // Get the actual type of the yielded value
-        let yielded_value = current_operands[0];
-        let Some(yielded_ty) = rewriter.get_raw_value_type(db, yielded_value) else {
-            return false;
-        };
-
-        // If the yielded value is already Step, no change needed
-        if trampoline::Step::from_type(db, yielded_ty).is_some() {
+        let yielded_value = operands[0];
+        let yielded_ty = ctx.value_ty(yielded_value);
+        if is_step_type(ctx, yielded_ty) {
             return false;
         }
 
         // Check if we can find the Step value through cast chain
-        // The yielded value might be a cast result where the input is Step
-        if let Some(step_value) = find_step_source(db, yielded_value, rewriter) {
+        if let Some(step_value) = find_step_source(ctx, yielded_value) {
             tracing::debug!(
                 "UpdateScfYieldToStepPattern: updating scf.yield to yield Step at {:?}",
-                op.location(db)
+                ctx.op(op).location
             );
-            let new_yield = scf::r#yield(db, op.location(db), vec![step_value]);
-            rewriter.replace_op(new_yield.as_operation());
+            let location = ctx.op(op).location;
+            let new_yield = arena_scf::r#yield(ctx, location, [step_value]);
+            rewriter.replace_op(new_yield.op_ref());
             return true;
         }
 
@@ -321,37 +281,27 @@ impl<'db> RewritePattern<'db> for UpdateScfYieldToStepPattern {
     }
 }
 
-/// Find the Step source value by tracing through the value map and cast chain.
-fn find_step_source<'db>(
-    db: &'db dyn salsa::Database,
-    value: Value<'db>,
-    rewriter: &PatternRewriter<'db, '_>,
-) -> Option<Value<'db>> {
-    // Check if the value itself is Step (after remapping)
-    if let Some(ty) = rewriter.get_raw_value_type(db, value)
-        && trampoline::Step::from_type(db, ty).is_some()
-    {
+/// Find the Step source value by tracing through the cast chain.
+fn find_step_source(ctx: &IrContext, value: ValueRef) -> Option<ValueRef> {
+    let ty = ctx.value_ty(value);
+    if is_step_type(ctx, ty) {
         return Some(value);
     }
 
     // Check if the value definition is a cast from Step
-    if let trunk_ir::ValueDef::OpResult(defining_op) = value.def(db) {
-        // If this is a cast, check the input
-        if let Ok(cast) = core::UnrealizedConversionCast::from_operation(db, defining_op) {
-            let input = cast.value(db);
-            if let Some(input_ty) = rewriter.get_raw_value_type(db, input)
-                && trampoline::Step::from_type(db, input_ty).is_some()
-            {
-                return Some(input);
-            }
+    let def_op = value_def_op(ctx, value)?;
+    if let Ok(cast) = arena_core::UnrealizedConversionCast::from_op(ctx, def_op) {
+        let input = cast.value(ctx);
+        let input_ty = ctx.value_ty(input);
+        if is_step_type(ctx, input_ty) {
+            return Some(input);
         }
+    }
 
-        // Check if the defining op produces Step
-        if let Some(ty) = defining_op.results(db).first()
-            && trampoline::Step::from_type(db, *ty).is_some()
-        {
-            return Some(defining_op.result(db, 0));
-        }
+    // Check if the defining op produces Step
+    let result_types = ctx.op_result_types(def_op);
+    if !result_types.is_empty() && is_step_type(ctx, result_types[0]) {
+        return Some(ctx.op_results(def_op)[0]);
     }
 
     None
@@ -363,50 +313,60 @@ fn find_step_source<'db>(
 
 pub(crate) struct LowerPushPromptPattern;
 
-impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
+impl ArenaRewritePattern for LowerPushPromptPattern {
     fn match_and_rewrite(
         &self,
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-        rewriter: &mut PatternRewriter<'db, '_>,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut ArenaPatternRewriter<'_>,
     ) -> bool {
-        let push_prompt = match cont::PushPrompt::from_operation(db, *op) {
-            Ok(p) => p,
-            Err(_) => return false,
+        let Ok(push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
+            return false;
         };
 
-        let location = op.location(db);
-        let i32_ty = core::I32::new(db).as_type();
-        let step_ty = trampoline::Step::new(db).as_type();
-        let tag = push_prompt.tag(db);
+        let location = ctx.op(op).location;
+        let i32_ty = i32_type(ctx);
+        let step_ty = step_type(ctx);
+        let tag_attr = push_prompt.tag(ctx);
+        let tag = match tag_attr {
+            ArenaAttribute::IntBits(v) => v as u32,
+            _ => panic!("push_prompt tag must be IntBits"),
+        };
 
-        // Get the body region (already recursively transformed by applicator)
-        let body = push_prompt.body(db);
-
-        // Get body result value
-        let body_result = get_region_result_value(db, &body);
+        // Get the body region
+        let body = push_prompt.body(ctx);
+        let body_result = get_region_result_value_arena(ctx, body);
 
         let mut all_ops = Vec::new();
 
         // Add all body operations
-        if let Some(body_block) = body.blocks(db).first() {
-            for body_op in body_block.operations(db).iter() {
-                all_ops.push(*body_op);
+        let blocks = &ctx.region(body).blocks;
+        if let Some(&body_block) = blocks.first() {
+            let ops = ctx.block(body_block).ops.to_vec();
+            for body_op in ops {
+                all_ops.push(body_op);
             }
         }
 
         // check_yield
-        let check_yield = trampoline::check_yield(db, location, i32_ty);
-        let is_yielding = check_yield.as_operation().result(db, 0);
-        all_ops.push(check_yield.as_operation());
+        let check_yield = arena_trampoline::check_yield(ctx, location, i32_ty);
+        let is_yielding = check_yield.result(ctx);
+        all_ops.push(check_yield.op_ref());
 
-        // Build yield handling branches (tag is passed as u32, will be converted to constant inside region)
-        let then_region = build_yield_then_branch(db, location, tag, step_ty);
-        let else_region = build_yield_else_branch(db, location, body_result, step_ty);
+        // Build yield handling branches
+        let then_region = build_yield_then_branch(ctx, location, tag, step_ty);
+        let else_region = build_yield_else_branch(ctx, location, body_result, step_ty);
 
         // scf.if for yield check
-        let if_op = scf::r#if(db, location, is_yielding, step_ty, then_region, else_region);
-        all_ops.push(if_op.as_operation());
+        let if_op = arena_scf::r#if(
+            ctx,
+            location,
+            is_yielding,
+            step_ty,
+            then_region,
+            else_region,
+        );
+        all_ops.push(if_op.op_ref());
 
         let last = all_ops.pop().unwrap();
         for o in all_ops {
@@ -417,83 +377,110 @@ impl<'db> RewritePattern<'db> for LowerPushPromptPattern {
     }
 }
 
-fn build_yield_then_branch<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
+fn build_yield_then_branch(
+    ctx: &mut IrContext,
+    location: trunk_ir::arena::types::Location,
     tag: u32,
-    step_ty: Type<'db>,
-) -> Region<'db> {
-    let i32_ty = core::I32::new(db).as_type();
-    let mut builder = BlockBuilder::new(db, location);
+    step_ty: TypeRef,
+) -> trunk_ir::arena::refs::RegionRef {
+    let i32_ty = i32_type(ctx);
+    let cont_ty = super::shift_lower::continuation_type(ctx);
 
-    // Create tag constant inside the region
-    let tag_const = builder.op(arith::r#const(
-        db,
+    let tag_const =
+        arena_arith::r#const(ctx, location, i32_ty, ArenaAttribute::IntBits(tag as u64));
+    let tag_val = tag_const.result(ctx);
+
+    let get_cont = arena_trampoline::get_yield_continuation(ctx, location, cont_ty);
+    let cont_val = get_cont.result(ctx);
+
+    let step_shift = arena_trampoline::step_shift(ctx, location, tag_val, cont_val, step_ty, 0);
+    let step_shift_val = step_shift.result(ctx);
+
+    let yield_op = arena_scf::r#yield(ctx, location, [step_shift_val]);
+
+    let block = ctx.create_block(trunk_ir::arena::context::BlockData {
         location,
-        i32_ty,
-        trunk_ir::Attribute::IntBits(tag as u64),
-    ));
-    let tag_val = tag_const.result(db);
+        args: vec![],
+        ops: trunk_ir::smallvec::smallvec![],
+        parent_region: None,
+    });
+    ctx.push_op(block, tag_const.op_ref());
+    ctx.push_op(block, get_cont.op_ref());
+    ctx.push_op(block, step_shift.op_ref());
+    ctx.push_op(block, yield_op.op_ref());
 
-    let cont_ty = trampoline::Continuation::new(db).as_type();
-    let get_cont = builder.op(trampoline::get_yield_continuation(db, location, cont_ty));
-    let cont_val = get_cont.result(db);
-
-    let step_shift = builder.op(trampoline::step_shift(
-        db, location, tag_val, cont_val, step_ty, 0,
-    ));
-    builder.op(scf::r#yield(db, location, vec![step_shift.result(db)]));
-
-    let block = builder.build();
-    Region::new(db, location, IdVec::from(vec![block]))
+    ctx.create_region(trunk_ir::arena::context::RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
 }
 
-fn build_yield_else_branch<'db>(
-    db: &'db dyn salsa::Database,
-    location: Location<'db>,
-    body_result: Option<Value<'db>>,
-    step_ty: Type<'db>,
-) -> Region<'db> {
-    use trunk_ir::ValueDef;
-
-    let mut builder = BlockBuilder::new(db, location);
+fn build_yield_else_branch(
+    ctx: &mut IrContext,
+    location: trunk_ir::arena::types::Location,
+    body_result: Option<ValueRef>,
+    step_ty: TypeRef,
+) -> trunk_ir::arena::refs::RegionRef {
+    let block = ctx.create_block(trunk_ir::arena::context::BlockData {
+        location,
+        args: vec![],
+        ops: trunk_ir::smallvec::smallvec![],
+        parent_region: None,
+    });
 
     let step_value = if let Some(result) = body_result {
-        // Check if result is already a Step (from effectful call or scf.if returning Step)
-        let is_step = match result.def(db) {
-            ValueDef::OpResult(def_op) => {
-                // Check if this operation produces Step
-                def_op
-                    .results(db)
-                    .first()
-                    .map(|ty| trampoline::Step::from_type(db, *ty).is_some())
-                    .unwrap_or(false)
+        // Check if result is already a Step
+        let is_step = {
+            if let Some(def_op) = value_def_op(ctx, result) {
+                let rtypes = ctx.op_result_types(def_op);
+                !rtypes.is_empty() && is_step_type(ctx, rtypes[0])
+            } else {
+                false
             }
-            ValueDef::BlockArg(_) => false,
         };
 
         if is_step {
-            // Already a Step, return it directly
             result
         } else {
-            // Wrap the value in step_done
-            let step_done = builder.op(trampoline::step_done(db, location, result, step_ty));
-            step_done.result(db)
+            let step_done = arena_trampoline::step_done(ctx, location, result, step_ty);
+            ctx.push_op(block, step_done.op_ref());
+            step_done.result(ctx)
         }
     } else {
-        // No body result - create a step_done with zero value (unit placeholder)
-        let zero = builder.op(arith::Const::i32(db, location, 0));
-        let step_done = builder.op(trampoline::step_done(
-            db,
-            location,
-            zero.result(db),
-            step_ty,
-        ));
-        step_done.result(db)
+        // No body result - create a step_done with zero value
+        let i32_ty = i32_type(ctx);
+        let zero = arena_arith::r#const(ctx, location, i32_ty, ArenaAttribute::IntBits(0));
+        ctx.push_op(block, zero.op_ref());
+        let step_done = arena_trampoline::step_done(ctx, location, zero.result(ctx), step_ty);
+        ctx.push_op(block, step_done.op_ref());
+        step_done.result(ctx)
     };
 
-    builder.op(scf::r#yield(db, location, vec![step_value]));
+    let yield_op = arena_scf::r#yield(ctx, location, [step_value]);
+    ctx.push_op(block, yield_op.op_ref());
 
-    let block = builder.build();
-    Region::new(db, location, IdVec::from(vec![block]))
+    ctx.create_region(trunk_ir::arena::context::RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Check if a TypeRef is the trampoline.step type.
+pub(crate) fn is_step_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("trampoline") && data.name == Symbol::new("step")
+}
+
+/// Get the defining OpRef of a value, if it's an operation result.
+fn value_def_op(ctx: &IrContext, value: ValueRef) -> Option<OpRef> {
+    match ctx.value_def(value) {
+        trunk_ir::arena::refs::ValueDef::OpResult(op, _) => Some(op),
+        trunk_ir::arena::refs::ValueDef::BlockArg(_, _) => None,
+    }
 }

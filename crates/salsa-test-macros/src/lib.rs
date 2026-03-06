@@ -1,3 +1,6 @@
+// Suppress result_large_err from unsynn! macro expansion (unsynn 0.3.0, Rust 1.94)
+#![allow(clippy::result_large_err)]
+
 use proc_macro::TokenStream as ProcTokenStream;
 use quote::{format_ident, quote};
 use unsynn::{EndOfStream, Group, Parser, ToTokens, TokenStream, unsynn};
