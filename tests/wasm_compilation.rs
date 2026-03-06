@@ -42,7 +42,7 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile literal return");
 
-    let bytes = binary.unwrap().bytes(db);
+    let bytes = binary.unwrap();
     assert_eq!(&bytes[0..4], b"\x00asm", "Should have wasm magic number");
 }
 

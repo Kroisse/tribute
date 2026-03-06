@@ -68,7 +68,7 @@ use tribute_passes::generic_type_converter_arena;
 use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::DialectOp;
 use trunk_ir::Span;
-use trunk_ir::arena::bridge::{export_to_salsa, import_salsa_module};
+use trunk_ir::arena::bridge::export_to_salsa;
 use trunk_ir::arena::{ArenaModule, IrContext};
 use trunk_ir::conversion::resolve_unrealized_casts_arena;
 use trunk_ir::dialect::core::Module;
@@ -343,70 +343,29 @@ pub struct CompilationResult<'db> {
 // and returns a transformed Module. Stages do not call other stages directly;
 // orchestration is handled by the compile() function.
 
-/// Bridge a Salsa `Module` into an arena session, run passes, and bridge back.
-///
-/// This avoids repeated Salsa↔Arena round-trips when multiple arena passes
-/// need to run in sequence.
-fn with_arena_session<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-    f: impl FnOnce(&mut IrContext, ArenaModule),
-) -> Module<'db> {
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-    f(&mut ctx, arena_module);
-    let exported = export_to_salsa(db, &ctx, arena_module);
-    Module::from_operation(db, exported).unwrap()
-}
-
-/// Evidence Parameters (Phase 1).
-///
-/// Adds evidence parameter as first argument to effectful functions.
-/// Evidence is a runtime structure for dynamic handler dispatch.
-/// Pure functions (with empty effect row) are unchanged.
-///
-/// Used by tests that need to inspect state after evidence params insertion.
-#[salsa::tracked]
-pub fn stage_evidence_params<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Module<'db> {
-    // Early exit: check on Salsa side before paying bridge cost
-    let effectful_fns = evidence::collect_effectful_functions(db, &module);
-    if effectful_fns.is_empty() {
-        return module;
-    }
-
-    with_arena_session(db, module, |ctx, m| {
-        evidence::add_evidence_params(ctx, m);
-    })
-}
-
-/// Compile a TrunkIR module to WebAssembly binary.
+/// Compile a TrunkIR module to WebAssembly binary (arena-based).
 ///
 /// Runs all WASM backend passes in a single arena session:
 /// 1. Lowers the module from func/scf/arith dialects to wasm dialect operations
 /// 2. Resolves unrealized conversion casts using WASM-specific type converter
 /// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
-fn compile_to_wasm<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> WasmCompilationResult<WasmBinary<'db>> {
+fn compile_to_wasm_arena(
+    ctx: &mut IrContext,
+    arena_module: ArenaModule,
+) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("compile_to_wasm").entered();
-
-    // Import into arena once
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
 
     // Phase 1 - Lower to wasm dialect (Tribute-specific)
     {
         let _span = tracing::info_span!("lower_to_wasm").entered();
-        tribute_passes::wasm::lower::lower_to_wasm_arena(&mut ctx, arena_module);
+        tribute_passes::wasm::lower::lower_to_wasm_arena(ctx, arena_module);
     }
 
     // Phase 2 - Resolve unrealized_conversion_cast operations (WASM type converter)
     {
         let _span = tracing::info_span!("resolve_unrealized_casts").entered();
-        let tc = tribute_passes::wasm::type_converter::wasm_type_converter(&mut ctx);
-        let result = resolve_unrealized_casts_arena(&mut ctx, arena_module, &tc);
+        let tc = tribute_passes::wasm::type_converter::wasm_type_converter(ctx);
+        let result = resolve_unrealized_casts_arena(ctx, arena_module, &tc);
         if !result.unresolved.is_empty() {
             let details: Vec<String> = result
                 .unresolved
@@ -430,38 +389,7 @@ fn compile_to_wasm<'db>(
 
     // Phase 3 - Emit WASM binary
     let _span = tracing::info_span!("emit_module_to_wasm").entered();
-    let output = trunk_ir_wasm_backend::emit_module_to_wasm_arena(&mut ctx, arena_module)?;
-    Ok(WasmBinary::new(
-        db,
-        output.bytes,
-        output.exports,
-        output.imports,
-    ))
-}
-
-/// Lower to WebAssembly binary.
-///
-/// This stage compiles the fully-typed, resolved TrunkIR module to WebAssembly binary.
-/// Returns None if compilation fails, with error message accumulated.
-#[salsa::tracked]
-fn stage_lower_to_wasm<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
-) -> Option<WasmBinary<'db>> {
-    match compile_to_wasm(db, module) {
-        Ok(binary) => Some(binary),
-        Err(e) => {
-            // Accumulate error as diagnostic for reporting
-            Diagnostic {
-                message: format!("WebAssembly compilation failed: {}", e),
-                span: Span::new(0, 0), // TODO: Extract span from error
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(db);
-            None
-        }
-    }
+    trunk_ir_wasm_backend::emit_module_to_wasm_arena(ctx, arena_module)
 }
 
 // =============================================================================
@@ -536,22 +464,12 @@ fn run_shared_pipeline_arena(
     Some((ctx, m))
 }
 
-/// Run the WASM pipeline in a single arena session:
-/// shared passes + cont_to_trampoline + DCE + resolve_casts.
-///
-/// This produces a module ready for WASM backend lowering (trampoline-based
-/// continuation implementation).
-#[salsa::tracked]
-pub fn run_wasm_pipeline<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    let Some((mut ctx, m)) = run_shared_pipeline_arena(db, source) else {
-        return Ok(empty_module(db, source));
-    };
-
-    // Continuation lowering (trampoline/yield-bubbling strategy for WASM)
-    lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
+/// Run the WASM target pipeline in arena and return IR text for dump-ir.
+fn run_wasm_target_pipeline_arena(
+    ctx: &mut IrContext,
+    m: ArenaModule,
+) -> Result<(), ConversionError> {
+    lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
             .map(|op| trunk_ir::rewrite::IllegalOp {
@@ -561,47 +479,19 @@ pub fn run_wasm_pipeline<'db>(
             .collect(),
     })?;
 
-    // Dead code elimination
-    let dce_result = trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
-    if dce_result.removed_count > 0 {
-        tracing::debug!(
-            "DCE removed {} functions: {:?}",
-            dce_result.removed_count,
-            dce_result.removed_functions
-        );
-    }
+    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(ctx, m);
 
-    // Resolve unrealized conversion casts
-    let tc = generic_type_converter_arena(&mut ctx);
-    let cast_result = resolve_unrealized_casts_arena(&mut ctx, m, &tc);
-    tracing::debug!(
-        "resolve_casts: resolved={}, unresolved={}",
-        cast_result.resolved_count,
-        cast_result.unresolved.len()
-    );
+    let tc = generic_type_converter_arena(ctx);
+    resolve_unrealized_casts_arena(ctx, m, &tc);
 
-    // Export to Salsa at the end
-    let exported = export_to_salsa(db, &ctx, m);
-    Ok(Module::from_operation(db, exported).unwrap())
+    Ok(())
 }
 
-/// Run the native pipeline in a single arena session:
-/// shared passes + cont_to_libmprompt + evidence_to_native + DCE + resolve_casts.
-///
-/// Uses `cont_to_libmprompt` for native delimited continuations via libmprompt FFI.
-#[salsa::tracked]
-pub fn run_native_pipeline<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    let Some((mut ctx, m)) = run_shared_pipeline_arena(db, source) else {
-        return Ok(empty_module(db, source));
-    };
-
-    // Continuation lowering (libmprompt FFI for native)
-    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(&mut ctx, m);
+/// Run the native target pipeline in arena (shared + native-specific passes).
+fn run_native_target_pipeline_arena(ctx: &mut IrContext, m: ArenaModule) {
+    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        let result = trunk_ir::arena::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
@@ -611,10 +501,9 @@ pub fn run_native_pipeline<'db>(
         }
     }
 
-    // Evidence to native lowering
-    tribute_passes::native::evidence::lower_evidence_to_native(&mut ctx, m);
+    tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        let result = trunk_ir::arena::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
@@ -624,73 +513,93 @@ pub fn run_native_pipeline<'db>(
         }
     }
 
-    // Dead code elimination
-    let dce_result = trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
-    if dce_result.removed_count > 0 {
-        tracing::debug!(
-            "DCE removed {} functions: {:?}",
-            dce_result.removed_count,
-            dce_result.removed_functions
-        );
+    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(ctx, m);
+
+    let tc = generic_type_converter_arena(ctx);
+    resolve_unrealized_casts_arena(ctx, m, &tc);
+}
+
+/// Dump IR text after running the pipeline up to the target-specific passes.
+///
+/// If `native` is true, runs the native pipeline; otherwise runs the WASM pipeline.
+/// Returns the IR text as a string, or an error. Diagnostics are accumulated.
+#[salsa::tracked]
+pub fn dump_ir(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    native: bool,
+) -> Result<String, ConversionError> {
+    let Some((mut ctx, m)) = run_shared_pipeline_arena(db, source) else {
+        return Ok(String::new());
+    };
+
+    if native {
+        run_native_target_pipeline_arena(&mut ctx, m);
+    } else {
+        run_wasm_target_pipeline_arena(&mut ctx, m)?;
     }
+
+    Ok(trunk_ir::arena::printer::print_module(&ctx, m.op()))
+}
+
+/// Compile to WebAssembly binary bytes.
+///
+/// Runs the full pipeline (frontend → shared passes → WASM lowering → emit)
+/// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
+///
+/// Returns the raw WASM bytes on success, or `None` with diagnostics accumulated.
+#[salsa::tracked]
+pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
+    let (mut ctx, m) = run_shared_pipeline_arena(db, source)?;
+
+    // WASM-specific: cont_to_trampoline + DCE + resolve_casts
+    if let Err(e) = lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
+        illegal_ops: illegal_ops
+            .into_iter()
+            .map(|op| trunk_ir::rewrite::IllegalOp {
+                dialect: op.dialect.to_string(),
+                name: op.name.to_string(),
+            })
+            .collect(),
+    }) {
+        Diagnostic {
+            message: format!("Pipeline failed: {}", e),
+            span: Span::new(0, 0),
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Lowering,
+        }
+        .accumulate(db);
+        return None;
+    }
+
+    // Dead code elimination
+    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
 
     // Resolve unrealized conversion casts
     let tc = generic_type_converter_arena(&mut ctx);
-    let cast_result = resolve_unrealized_casts_arena(&mut ctx, m, &tc);
-    tracing::debug!(
-        "resolve_casts: resolved={}, unresolved={}",
-        cast_result.resolved_count,
-        cast_result.unresolved.len()
-    );
+    resolve_unrealized_casts_arena(&mut ctx, m, &tc);
 
-    // Export to Salsa at the end
-    let exported = export_to_salsa(db, &ctx, m);
-    Ok(Module::from_operation(db, exported).unwrap())
-}
-
-/// Run the full middle-end pipeline.
-///
-/// Delegates to `run_wasm_pipeline`. Prefer using the backend-specific
-/// `run_wasm_pipeline` or `run_native_pipeline` directly.
-#[salsa::tracked]
-fn run_full_pipeline<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    run_wasm_pipeline(db, source)
-}
-
-/// Compile to WebAssembly binary.
-///
-/// Runs the WASM pipeline and then lowers to WebAssembly.
-#[salsa::tracked]
-pub fn compile_to_wasm_binary<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<WasmBinary<'db>> {
-    let module = match run_wasm_pipeline(db, source) {
-        Ok(m) => m,
+    // WASM backend lowering + emit
+    match compile_to_wasm_arena(&mut ctx, m) {
+        Ok(binary) => Some(binary.bytes),
         Err(e) => {
             Diagnostic {
-                message: format!("Pipeline failed: {}", e),
+                message: format!("WebAssembly compilation failed: {}", e),
                 span: Span::new(0, 0),
                 severity: DiagnosticSeverity::Error,
                 phase: CompilationPhase::Lowering,
             }
             .accumulate(db);
-            return None;
+            None
         }
-    };
-
-    // Lower to WebAssembly
-    stage_lower_to_wasm(db, module)
+    }
 }
 
 // =============================================================================
 // Native Pipeline (Cranelift)
 // =============================================================================
 
-/// Compile a TrunkIR module to a native object file.
+/// Compile a TrunkIR module to a native object file (arena-based).
 ///
 /// This function runs all backend passes in a single arena session:
 /// 1. Generates native entrypoint
@@ -698,51 +607,41 @@ pub fn compile_to_wasm_binary<'db>(
 /// 3. Runs RTTI, RC insertion, and RC lowering passes
 /// 4. Resolves unrealized conversion casts
 /// 5. Validates and emits the native object file via Cranelift
-fn compile_module_to_native<'db>(
-    db: &'db dyn salsa::Database,
-    module: Module<'db>,
+fn compile_module_to_native_arena(
+    ctx: &mut IrContext,
+    arena_module: ArenaModule,
     sanitize: bool,
 ) -> NativeCompilationResult<Vec<u8>> {
-    use trunk_ir::arena::bridge::import_salsa_module;
-    use trunk_ir::conversion::resolve_unrealized_casts_arena;
-
     let _span = tracing::info_span!("compile_module_to_native").entered();
 
-    // Import into arena once
-    let (mut ctx, arena_module) = import_salsa_module(db, module.as_operation());
-
     // Phase -1 - Generate native entrypoint
-    tribute_passes::native::entrypoint::generate_native_entrypoint(
-        &mut ctx,
-        arena_module,
-        sanitize,
-    );
+    tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, arena_module, sanitize);
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
-    trunk_ir::arena::transforms::scf_to_cf::lower_scf_to_cf(&mut ctx, arena_module);
+    trunk_ir::arena::transforms::scf_to_cf::lower_scf_to_cf(ctx, arena_module);
 
     // Phase 1 - Lower func dialect to clif dialect
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        func_to_clif::lower(&mut ctx, arena_module, type_converter);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        func_to_clif::lower(ctx, arena_module, type_converter);
     }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        cf_to_clif::lower(&mut ctx, arena_module, type_converter);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        cf_to_clif::lower(ctx, arena_module, type_converter);
     }
 
     // Phase 1.9-1.95 - RTTI + ADT RC header
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
         let rtti_map =
-            tribute_passes::native::rtti::generate_rtti(&mut ctx, arena_module, &type_converter);
+            tribute_passes::native::rtti::generate_rtti(ctx, arena_module, &type_converter);
         tribute_passes::native::adt_rc_header::lower(
-            &mut ctx,
+            ctx,
             arena_module,
             type_converter,
             &rtti_map.type_to_idx,
@@ -752,31 +651,31 @@ fn compile_module_to_native<'db>(
     // Phase 2 - Lower ADT struct access operations to clif dialect
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        adt_to_clif::lower(&mut ctx, arena_module, type_converter);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        adt_to_clif::lower(ctx, arena_module, type_converter);
     }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        arith_to_clif::lower(&mut ctx, arena_module, type_converter);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        arith_to_clif::lower(ctx, arena_module, type_converter);
     }
 
     // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        tribute_passes::native::tribute_rt_to_clif::lower(&mut ctx, arena_module, type_converter);
-        tribute_passes::native::rc_insertion::insert_rc(&mut ctx, arena_module);
-        tribute_passes::native::cont_rc::rewrite_cont_rc(&mut ctx, arena_module);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        tribute_passes::native::tribute_rt_to_clif::lower(ctx, arena_module, type_converter);
+        tribute_passes::native::rc_insertion::insert_rc(ctx, arena_module);
+        tribute_passes::native::cont_rc::rewrite_cont_rc(ctx, arena_module);
     }
 
     // Phase 3 - Resolve unrealized_conversion_cast operations
     {
         let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter_arena(&mut ctx);
-        let result = resolve_unrealized_casts_arena(&mut ctx, arena_module, &type_converter);
+            tribute_passes::native::type_converter::native_type_converter_arena(ctx);
+        let result = resolve_unrealized_casts_arena(ctx, arena_module, &type_converter);
         if !result.unresolved.is_empty() {
             let details: Vec<String> = result
                 .unresolved
@@ -801,16 +700,18 @@ fn compile_module_to_native<'db>(
     }
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
-    tribute_passes::native::rc_lowering::lower_rc(&mut ctx, arena_module);
+    tribute_passes::native::rc_lowering::lower_rc(ctx, arena_module);
 
     // Phase 4 - Validate and emit
     let _emit_span = tracing::info_span!("emit_module_to_native").entered();
-    emit_module_to_native(&ctx, arena_module)
+    emit_module_to_native(ctx, arena_module)
 }
 
 /// Compile to native object bytes.
 ///
-/// Runs the native pipeline and then lowers to a native object file via Cranelift.
+/// Runs the full pipeline (frontend → shared passes → native lowering → emit)
+/// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
+///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
 #[salsa::tracked]
 pub fn compile_to_native_binary<'db>(
@@ -818,22 +719,43 @@ pub fn compile_to_native_binary<'db>(
     source: SourceCst,
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
-    let module = match run_native_pipeline(db, source) {
-        Ok(m) => m,
-        Err(e) => {
-            Diagnostic {
-                message: format!("Pipeline failed: {}", e),
-                span: Span::new(0, 0),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
-            .accumulate(db);
-            return None;
-        }
-    };
+    let (mut ctx, m) = run_shared_pipeline_arena(db, source)?;
 
+    // Native-specific: cont_to_libmprompt + evidence_to_native + DCE + resolve_casts
+    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(&mut ctx, m);
+    if cfg!(debug_assertions) {
+        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        if !result.is_ok() {
+            tracing::warn!(
+                "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
+                result.stale_errors,
+                result.use_chain_errors
+            );
+        }
+    }
+
+    tribute_passes::native::evidence::lower_evidence_to_native(&mut ctx, m);
+    if cfg!(debug_assertions) {
+        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        if !result.is_ok() {
+            tracing::warn!(
+                "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
+                result.stale_errors,
+                result.use_chain_errors
+            );
+        }
+    }
+
+    // Dead code elimination
+    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
+
+    // Resolve unrealized conversion casts
+    let tc = generic_type_converter_arena(&mut ctx);
+    resolve_unrealized_casts_arena(&mut ctx, m, &tc);
+
+    // Native backend lowering + emit
     let sanitize = config.sanitize_address(db);
-    match compile_module_to_native(db, module, sanitize) {
+    match compile_module_to_native_arena(&mut ctx, m, sanitize) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
             Diagnostic {
@@ -922,15 +844,18 @@ pub fn parse_and_lower_ast<'db>(
 
 /// Compile using the AST-based pipeline.
 ///
-/// The AST pipeline provides better type safety and separation of concerns.
-/// Name resolution, type checking, and TDNR are performed on AST nodes,
-/// then lowered to TrunkIR for further transformations.
+/// Runs the shared pipeline (frontend + evidence/closure/evidence-calls/
+/// resolve-evidence passes) and exports to Salsa Module. Does NOT run
+/// target-specific passes (WASM/native), making it suitable for
+/// diagnostic-only compilation ("none" target) and LSP.
 #[salsa::tracked]
-pub fn compile_ast<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Result<Module<'db>, ConversionError> {
-    run_full_pipeline(db, source)
+pub fn compile_ast<'db>(db: &'db dyn salsa::Database, source: SourceCst) -> Module<'db> {
+    let Some((ctx, m)) = run_shared_pipeline_arena(db, source) else {
+        return empty_module(db, source);
+    };
+
+    let exported = export_to_salsa(db, &ctx, m);
+    Module::from_operation(db, exported).unwrap()
 }
 
 /// Run compilation and return detailed results including diagnostics.
@@ -940,34 +865,13 @@ pub fn compile_with_diagnostics<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> CompilationResult<'db> {
-    // Run the full compilation pipeline
-    // Type checking is performed inside the tracked `compile_ast` function,
-    // so diagnostics are properly accumulated via Salsa.
-    let result = compile_ast(db, source);
+    let module = compile_ast(db, source);
 
     // Collect all accumulated diagnostics from the compilation
-    let mut diagnostics: Vec<Diagnostic> = compile_ast::accumulated::<Diagnostic>(db, source)
+    let diagnostics: Vec<Diagnostic> = compile_ast::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .cloned()
         .collect();
-
-    let module = match result {
-        Ok(module) => module,
-        Err(err) => {
-            // Add conversion error as diagnostic
-            diagnostics.push(Diagnostic {
-                message: format!("{}", err),
-                span: trunk_ir::Span::new(0, 0),
-                severity: tribute_passes::DiagnosticSeverity::Error,
-                phase: tribute_passes::CompilationPhase::Lowering,
-            });
-            // Return a minimal module on error
-            let path = trunk_ir::PathId::new(db, source.uri(db).as_str().to_owned());
-            let location = trunk_ir::Location::new(path, trunk_ir::Span::new(0, 0));
-            let empty_body = trunk_ir::Region::new(db, location, trunk_ir::IdVec::from(Vec::new()));
-            Module::create(db, location, trunk_ir::Symbol::new("error"), empty_body)
-        }
-    };
 
     CompilationResult {
         module,
@@ -1041,7 +945,7 @@ mod tests {
 
     #[salsa::tracked]
     fn test_compile(db: &dyn salsa::Database, source: SourceCst) -> Module<'_> {
-        compile_ast(db, source).expect("compilation should succeed")
+        compile_ast(db, source)
     }
 
     fn source_from_str(path: &str, text: &str) -> SourceCst {

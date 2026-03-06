@@ -11,10 +11,13 @@ use trunk_ir::arena::ops::ArenaDialectOp;
 
 use crate::{CompilationResult, emit_wasm, validate_wasm_ir};
 
-/// Output of arena-based WASM emission.
-pub struct WasmBinaryOutput {
+/// A compiled WebAssembly module with metadata.
+pub struct WasmBinary {
+    /// The compiled WebAssembly binary (bytes that can be written to .wasm file).
     pub bytes: Vec<u8>,
+    /// Exported function names from this module.
     pub exports: Vec<Symbol>,
+    /// Imported functions: (module_name, function_name).
     pub imports: Vec<(Symbol, Symbol)>,
 }
 
@@ -28,7 +31,7 @@ pub struct WasmBinaryOutput {
 pub fn emit_module_to_wasm_arena(
     ctx: &mut IrContext,
     module: ArenaModule,
-) -> CompilationResult<WasmBinaryOutput> {
+) -> CompilationResult<WasmBinary> {
     // Validate IR (check for unresolved types and non-wasm ops)
     validate_wasm_ir(ctx, module)?;
 
@@ -38,7 +41,7 @@ pub fn emit_module_to_wasm_arena(
     // Extract exports and imports from module
     let (exports, imports) = extract_metadata(ctx, module);
 
-    Ok(WasmBinaryOutput {
+    Ok(WasmBinary {
         bytes,
         exports,
         imports,
