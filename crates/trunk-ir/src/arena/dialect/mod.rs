@@ -442,10 +442,10 @@ mod tests {
         let r = super::core::r#ref(&mut ctx, ptr_ty.as_type_ref(), true);
 
         assert_eq!(r.pointee(&ctx), ptr_ty.as_type_ref());
-        assert_eq!(r.nullable(&ctx), true);
+        assert!(r.nullable(&ctx));
 
         let r2 = super::core::Ref::from_type_ref(&ctx, r.as_type_ref()).expect("should match Ref");
-        assert_eq!(r2.nullable(&ctx), true);
+        assert!(r2.nullable(&ctx));
     }
 
     #[test]
