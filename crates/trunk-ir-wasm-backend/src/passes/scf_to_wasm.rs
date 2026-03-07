@@ -267,11 +267,3 @@ impl RewritePattern for ScfBreakPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Intern a core.nil type.
-fn intern_nil_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
-    use trunk_ir::Symbol;
-    use trunk_ir::arena::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
-}
