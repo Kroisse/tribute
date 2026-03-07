@@ -1,7 +1,7 @@
 //! Arena-based function signature conversion patterns.
 //!
 //! Provides MLIR-style signature conversion that automatically converts
-//! function parameter and return types using an `TypeConverter`.
+//! function parameter and return types using a `TypeConverter`.
 //!
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
@@ -144,7 +144,7 @@ fn rewrite_function_signature(
     true
 }
 
-/// Pattern that converts `func.func` operation signatures using an `TypeConverter`.
+/// Pattern that converts `func.func` operation signatures using a `TypeConverter`.
 ///
 /// This pattern:
 /// 1. Matches `func.func` operations
@@ -179,7 +179,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
     }
 }
 
-/// Pattern that converts `wasm.func` operation signatures using an `TypeConverter`.
+/// Pattern that converts `wasm.func` operation signatures using a `TypeConverter`.
 ///
 /// Identical to [`FuncSignatureConversionPattern`] but targets `wasm.func` operations.
 pub struct WasmFuncSignatureConversionPattern;

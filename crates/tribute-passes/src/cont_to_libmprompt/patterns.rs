@@ -52,7 +52,10 @@ impl RewritePattern for LowerShiftPattern {
         let ability_data = ctx.types.get(ability_ref_ty);
         let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
             Some(Attribute::Symbol(s)) => Some(*s),
-            _ => None,
+            _ => panic!(
+                "LowerShiftPattern: cont.shift has invalid ability_ref type (missing or non-Symbol 'name' attribute): {:?}",
+                ability_data,
+            ),
         };
         let op_name = Some(shift_op.op_name(ctx));
         let op_idx = compute_op_idx(ability_name, op_name);

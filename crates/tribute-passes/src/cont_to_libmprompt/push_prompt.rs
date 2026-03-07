@@ -114,15 +114,15 @@ impl RewritePattern for LowerPushPromptPattern {
         rewriter.insert_op(body_fn.op_ref());
 
         // %tag_val
-        let tag_val = if let Attribute::IntBits(bits) = tag {
-            let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(bits));
-            rewriter.insert_op(c.op_ref());
-            c.result(ctx)
-        } else {
-            let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
-            rewriter.insert_op(c.op_ref());
-            c.result(ctx)
+        let tag_bits = match tag {
+            Attribute::IntBits(bits) => bits,
+            other => {
+                unreachable!("cont.push_prompt expected IntBits tag, got {other:?} at {loc:?}")
+            }
         };
+        let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(tag_bits));
+        rewriter.insert_op(c.op_ref());
+        let tag_val = c.result(ctx);
 
         // %result = func.call @__tribute_prompt(%tag_val, %body_fn, %env)
         let prompt_call = arena_func::call(

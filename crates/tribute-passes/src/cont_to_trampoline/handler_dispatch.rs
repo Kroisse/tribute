@@ -409,10 +409,22 @@ pub(crate) fn build_nested_dispatch(
     let then_region = build_arm_region(ctx, location, arm.body, effectful_funcs);
 
     if is_last_arm {
-        // Last arm: always-true condition
+        // Last arm: always-true condition with unreachable else
         let true_const = arith::r#const(ctx, location, i1_ty, Attribute::IntBits(1));
         ctx.push_op(block, true_const.op_ref());
-        let else_region = build_arm_region(ctx, location, arm.body, effectful_funcs);
+        let else_block = ctx.create_block(BlockData {
+            location,
+            args: vec![],
+            ops: trunk_ir::smallvec::smallvec![],
+            parent_region: None,
+        });
+        let unreachable = arena_func::unreachable(ctx, location);
+        ctx.push_op(else_block, unreachable.op_ref());
+        let else_region = ctx.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![else_block],
+            parent_op: None,
+        });
 
         let if_op = arena_scf::r#if(
             ctx,

@@ -194,10 +194,9 @@ impl RewritePattern for NormalizeCallIndirectPattern {
 
         let loc = ctx.op(op).location;
         let operands = ctx.op_operands(op).to_vec();
-        if operands.is_empty() {
-            return false;
-        }
-        let callee = operands[0];
+        let callee = *operands
+            .first()
+            .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
         let args: Vec<_> = operands[1..].to_vec();
 
         let new_op = arena_func::call_indirect(ctx, loc, callee, args, new_result_ty);

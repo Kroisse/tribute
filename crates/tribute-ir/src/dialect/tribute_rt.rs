@@ -13,7 +13,7 @@
 pub const RC_HEADER_SIZE: u64 = 8;
 
 // === Pure operation registrations ===
-// Boxing operations are pure (no side effects)
+// Boxing and unboxing operations are pure (no side effects)
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "box_int") }
 inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "unbox_int") }
