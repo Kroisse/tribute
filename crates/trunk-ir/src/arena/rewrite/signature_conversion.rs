@@ -6,7 +6,6 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
-use crate::Symbol;
 use crate::arena::context::IrContext;
 use crate::arena::dialect::{core, func, wasm};
 use crate::arena::ops::{ArenaDialectType, DialectOp};
@@ -14,7 +13,6 @@ use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::RewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::TypeConverter;
-use crate::arena::types::{Attribute, TypeDataBuilder};
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
