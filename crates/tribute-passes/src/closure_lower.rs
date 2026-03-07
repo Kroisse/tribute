@@ -26,7 +26,6 @@ use tribute_ir::arena::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
@@ -89,9 +88,6 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
             ctx.value_def(value),
             trunk_ir::arena::refs::ValueDef::BlockArg(_, _)
         );
-    }
-    if arena_cont::Continuation::matches(ctx, ty) {
-        return true;
     }
     false
 }
