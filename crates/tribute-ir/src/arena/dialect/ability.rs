@@ -27,6 +27,7 @@ mod ability {
 // These construct canonical Marker and Evidence types using the arena type interner.
 
 use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::refs::TypeRef;
 use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 use trunk_ir::ir::Symbol;
@@ -72,11 +73,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// Get the canonical Evidence ADT type — `core.array(Marker)` (arena version).
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
-    ctx.types.intern(
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-            .param(marker_ty)
-            .build(),
-    )
+    arena_core::array(ctx, marker_ty).as_type_ref()
 }
 
 /// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
@@ -177,11 +174,7 @@ mod tests {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let other_array = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
-                .param(i32_ty)
-                .build(),
-        );
+        let other_array = arena_core::array(&mut ctx, i32_ty).as_type_ref();
         assert!(!is_evidence_type_ref(&ctx, other_array));
 
         // Non-array type should return false

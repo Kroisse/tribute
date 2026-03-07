@@ -461,9 +461,7 @@ fn insert_rc_in_block(
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let loc = ctx.block(block).location;
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
     let live_in = liveness.live_in.get(&block).cloned().unwrap_or_default();
     let live_out = liveness.live_out.get(&block).cloned().unwrap_or_default();
@@ -585,9 +583,7 @@ fn insert_rc_in_block(
         let i64_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-        let nil_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
         let op_loc = ctx.op(op).location;
 
         let before_ops = plan.before.entry(op_idx).or_default();

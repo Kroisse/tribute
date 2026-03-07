@@ -85,15 +85,11 @@ fn build_loop_body(
     suspend_arms: &[ArenaSuspendArm],
     user_result_ty: TypeRef,
 ) -> RegionRef {
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i1_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
 
     // Create loop body block with %current as ptr argument
     let block = ctx.create_block(BlockData {
@@ -239,9 +235,7 @@ fn build_shift_branch(
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
 
     let block = ctx.create_block(BlockData {
         location: loc,

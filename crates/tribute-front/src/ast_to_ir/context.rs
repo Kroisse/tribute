@@ -5,9 +5,13 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::arena::dialect::closure as arena_closure;
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
@@ -378,8 +382,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.nil` type.
     pub fn nil_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+        arena_core::nil(ir).as_type_ref()
     }
 
     /// Get the `core.i1` (bool) type.
@@ -396,38 +399,29 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Get the `core.string` type.
     pub fn string_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("string")).build())
+        arena_core::string(ir).as_type_ref()
     }
 
     /// Get the `core.bytes` type.
     pub fn bytes_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build())
+        arena_core::bytes(ir).as_type_ref()
     }
 
     /// Get the `tribute_rt.any` type.
     pub fn any_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build())
+        arena_tribute_rt::any(ir).as_type_ref()
     }
 
     /// Get the `cont.prompt_tag` type.
     pub fn prompt_tag_type(&self, ir: &mut IrContext) -> TypeRef {
-        ir.types
-            .intern(TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build())
+        arena_cont::prompt_tag(ir).as_type_ref()
     }
 
     /// Create a `core.func` type with params and result.
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result); // result type first
-        for &p in params {
-            builder = builder.param(p);
-        }
-        ir.types.intern(builder.build())
+        arena_core::func(ir, result, params.iter().copied(), None).as_type_ref()
     }
 
     /// Create a `core.func` type with params, result, and effect.
@@ -440,15 +434,7 @@ impl<'db> IrLoweringCtx<'db> {
         result: TypeRef,
         effect: Option<TypeRef>,
     ) -> TypeRef {
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result); // result type first
-        for &p in params {
-            builder = builder.param(p);
-        }
-        if let Some(eff) = effect {
-            builder = builder.attr("effect", Attribute::Type(eff));
-        }
-        ir.types.intern(builder.build())
+        arena_core::func(ir, result, params.iter().copied(), effect).as_type_ref()
     }
 
     /// Create a `cont.continuation` type.
@@ -459,13 +445,7 @@ impl<'db> IrLoweringCtx<'db> {
         result: TypeRef,
         effect: TypeRef,
     ) -> TypeRef {
-        ir.types.intern(
-            TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("continuation"))
-                .param(arg)
-                .param(result)
-                .param(effect)
-                .build(),
-        )
+        arena_cont::continuation(ir, arg, result, effect).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.
@@ -561,11 +541,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create the `closure.closure` type wrapping a function type.
     pub fn closure_type(&self, ir: &mut IrContext, func_type: TypeRef) -> TypeRef {
-        ir.types.intern(
-            TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure"))
-                .param(func_type)
-                .build(),
-        )
+        arena_closure::closure(ir, func_type).as_type_ref()
     }
 
     /// Check if a type is a `closure.closure` type.

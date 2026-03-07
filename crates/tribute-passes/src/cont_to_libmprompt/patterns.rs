@@ -18,19 +18,9 @@ use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
 
 use crate::cont_util::compute_op_idx;
 
-fn ptr_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
-}
-
 fn i32_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
-}
-
-fn nil_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
 }
 
 /// Pattern: Lower `cont.shift` -> `func.call @__tribute_yield`
@@ -49,7 +39,7 @@ impl ArenaRewritePattern for LowerShiftPattern {
 
         let loc = ctx.op(op).location;
         let i32_ty = i32_ty(ctx);
-        let ptr_ty = ptr_ty(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
         let operands: Vec<_> = ctx.op_operands(op).to_vec();
 
@@ -134,7 +124,7 @@ impl ArenaRewritePattern for LowerResumePattern {
         }
 
         let loc = ctx.op(op).location;
-        let ptr_ty = ptr_ty(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
         let operands: Vec<_> = ctx.op_operands(op).to_vec();
         let continuation = operands[0];
@@ -208,8 +198,8 @@ impl ArenaRewritePattern for LowerDropPattern {
         }
 
         let loc = ctx.op(op).location;
-        let ptr_ty = ptr_ty(ctx);
-        let nil_ty = nil_ty(ctx);
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
 
         let operands: Vec<_> = ctx.op_operands(op).to_vec();
         let continuation = operands[0];

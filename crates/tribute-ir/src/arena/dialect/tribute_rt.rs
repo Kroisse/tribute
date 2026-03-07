@@ -2,6 +2,14 @@
 
 #[trunk_ir::arena_dialect]
 mod tribute_rt {
+    // Types
+    struct Int;
+    struct Nat;
+    struct Float;
+    struct Bool;
+    struct Intref;
+    struct Any;
+
     fn box_int(value: ()) -> result {}
     fn unbox_int(value: ()) -> result {}
     fn box_nat(value: ()) -> result {}

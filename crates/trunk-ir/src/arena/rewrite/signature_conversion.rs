@@ -7,14 +7,12 @@
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
 use crate::arena::context::IrContext;
-use crate::arena::dialect::{func, wasm};
-use crate::arena::ops::ArenaDialectOp;
+use crate::arena::dialect::{core, func, wasm};
+use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
 use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::ArenaRewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
 use crate::arena::rewrite::type_converter::ArenaTypeConverter;
-use crate::arena::types::{Attribute, TypeDataBuilder};
-use crate::ir::Symbol;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
@@ -35,19 +33,15 @@ fn convert_func_signature(
     func_type: TypeRef,
     converter: &ArenaTypeConverter,
 ) -> Option<ConvertedSignature> {
-    let type_data = ctx.types.get(func_type);
+    let func = core::Func::from_type_ref(ctx, func_type)?;
 
-    // Verify this is a core.func type
-    if type_data.dialect != Symbol::new("core") || type_data.name != Symbol::new("func") {
+    // Guard against malformed func type with no return type
+    if ctx.types.get(func_type).params.is_empty() {
         return None;
     }
 
-    if type_data.params.is_empty() {
-        return None;
-    }
-
-    let old_result = type_data.params[0];
-    let old_params = &type_data.params[1..];
+    let old_result = func.r#return(ctx);
+    let old_params = func.params(ctx);
 
     let new_result = converter.convert_type_or_identity(ctx, old_result);
     let new_params: Vec<TypeRef> = old_params
@@ -65,13 +59,7 @@ fn convert_func_signature(
         return None;
     }
 
-    let effect = type_data
-        .attrs
-        .get(&Symbol::new("effect"))
-        .and_then(|a| match a {
-            Attribute::Type(ty) => Some(*ty),
-            _ => None,
-        });
+    let effect = func.effect(ctx);
 
     Some(ConvertedSignature {
         new_params,
@@ -83,15 +71,13 @@ fn convert_func_signature(
 
 /// Build a new `core.func` TypeRef from converted params/result/effect.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-        .param(sig.new_result)
-        .params(sig.new_params.iter().copied());
-
-    if let Some(eff) = sig.effect {
-        builder = builder.attr("effect", Attribute::Type(eff));
-    }
-
-    ctx.types.intern(builder.build())
+    crate::arena::dialect::core::func(
+        ctx,
+        sig.new_result,
+        sig.new_params.iter().copied(),
+        sig.effect,
+    )
+    .as_type_ref()
 }
 
 /// Update entry block argument types in-place to match converted params.
@@ -233,6 +219,8 @@ mod tests {
     use crate::arena::rewrite::{
         ArenaConversionTarget, ArenaModule, ArenaTypeConverter, PatternApplicator,
     };
+    use crate::arena::types::{Attribute, TypeDataBuilder};
+    use crate::ir::Symbol;
     use crate::location::Span;
     use smallvec::smallvec;
     use std::collections::BTreeMap;
@@ -255,12 +243,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     fn make_func_type_with_effect(
@@ -269,13 +252,8 @@ mod tests {
         ret: TypeRef,
         effect: TypeRef,
     ) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .attr("effect", Attribute::Type(effect))
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), Some(effect))
+            .as_type_ref()
     }
 
     fn make_module(

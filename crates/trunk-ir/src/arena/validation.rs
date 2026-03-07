@@ -407,12 +407,7 @@ mod tests {
         params: &[super::super::refs::TypeRef],
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     /// Build a valid module: fn add() { 40 + 2 }
@@ -814,11 +809,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let wasm_func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(i32_ty)
-                .build(),
-        );
+        let wasm_func_ty = make_func_type(&mut ctx, &[], i32_ty);
 
         // func_a (func.func) with a constant
         let entry_a = ctx.create_block(BlockData {

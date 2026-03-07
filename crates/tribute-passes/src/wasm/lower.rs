@@ -7,6 +7,7 @@
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::wasm as arena_wasm;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -227,12 +228,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    // core.func layout: params[0] = return type, params[1..] = param types (matches Salsa convention)
-    let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(result);
-    for p in params {
-        builder = builder.param(p);
-    }
-    ctx.types.intern(builder.build())
+    arena_core::func(ctx, result, params, None).as_type_ref()
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {

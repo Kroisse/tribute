@@ -159,10 +159,7 @@ impl LowerHandlerDispatchPattern {
         );
 
         // scf.if
-        let nil_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil"))
-                .build(),
-        );
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
         let if_op = arena_scf::r#if(
             ctx,
             location,

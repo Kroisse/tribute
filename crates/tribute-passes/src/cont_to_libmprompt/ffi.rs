@@ -6,6 +6,7 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::rewrite::ArenaModule;
@@ -36,12 +37,8 @@ pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: ArenaModule) {
     let i1_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
-    let nil_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
 
     let mut new_ops = Vec::new();
 
@@ -99,14 +96,7 @@ fn build_extern_func(
     result: trunk_ir::arena::refs::TypeRef,
 ) -> trunk_ir::arena::refs::OpRef {
     // Build func type: core.func layout is params[0]=result, params[1..]=params
-    let func_ty = ctx.types.intern({
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result);
-        for &p in params {
-            builder = builder.param(p);
-        }
-        builder.build()
-    });
+    let func_ty = arena_core::func(ctx, result, params.iter().copied(), None).as_type_ref();
 
     // Build entry block with params and unreachable
     let args: Vec<BlockArgData> = params

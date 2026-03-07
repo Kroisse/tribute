@@ -602,12 +602,7 @@ mod tests {
     /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
     /// in `TypeData.params`, matching the convention used by `core::Func`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret)
-                .params(params.iter().copied())
-                .build(),
-        )
+        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     #[test]
@@ -621,12 +616,7 @@ mod tests {
     fn test_print_type_with_params() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let tuple_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("tuple"))
-                .param(i32_ty)
-                .param(i32_ty)
-                .build(),
-        );
+        let tuple_ty = crate::arena::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
     }
 

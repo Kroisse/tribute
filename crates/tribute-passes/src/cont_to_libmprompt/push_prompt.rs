@@ -52,9 +52,7 @@ impl ArenaRewritePattern for LowerPushPromptPattern {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let ptr_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+        let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
         let tag = push_prompt.tag(ctx);
         let body = push_prompt.body(ctx);
@@ -255,9 +253,7 @@ fn generate_outlined_body(
     use super::handler_dispatch::clone_op_into_block_with_remap;
     use std::collections::HashMap;
 
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -378,12 +374,7 @@ fn generate_outlined_body(
         parent_op: None,
     });
 
-    let func_ty = ctx.types.intern({
-        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-            .param(ptr_ty)
-            .param(ptr_ty)
-            .build()
-    });
+    let func_ty = arena_core::func(ctx, ptr_ty, [ptr_ty], None).as_type_ref();
 
     let func_op = arena_func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body);
     func_op.op_ref()

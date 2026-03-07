@@ -370,6 +370,5 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a wasm.funcref type.
 fn intern_funcref_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("funcref")).build())
+    arena_wasm::funcref(ctx).as_type_ref()
 }

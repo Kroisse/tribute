@@ -11,6 +11,7 @@
 
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
@@ -69,9 +70,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
     builder = builder.param(i64_ty).param(ptr_ty);
     builder = builder.attr(
@@ -95,9 +94,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+    arena_core::ptr(ctx).as_type_ref()
 }
 
 fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
@@ -160,20 +157,9 @@ impl ArenaRewritePattern for FuncFuncPattern {
                 let new_ret = ret_ty.map(|r| tc.convert_type_or_identity(ctx, r));
 
                 // Build new func type in Layout A: params[0] = return type
-                use trunk_ir::arena::types::TypeDataBuilder;
-                let mut ft_builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-                if let Some(r) = new_ret {
-                    ft_builder = ft_builder.param(r);
-                } else {
-                    let nil_ty = ctx.types.intern(
-                        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build(),
-                    );
-                    ft_builder = ft_builder.param(nil_ty);
-                }
-                for &p in &new_params {
-                    ft_builder = ft_builder.param(p);
-                }
-                let new_func_ty = ctx.types.intern(ft_builder.build());
+                let ret_ty = new_ret.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+                let new_func_ty =
+                    arena_core::func(ctx, ret_ty, new_params.iter().copied(), None).as_type_ref();
                 new_attrs.insert(Symbol::new("type"), ArenaAttribute::Type(new_func_ty));
             }
         }
@@ -249,21 +235,8 @@ impl ArenaRewritePattern for FuncCallIndirectPattern {
 
         // Build sig type matching translate_signature layout:
         // params[0] = return type, params[1..] = parameter types
-        use trunk_ir::arena::types::TypeDataBuilder;
-        let mut sig_builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        if let Some(r) = result_ty {
-            sig_builder = sig_builder.param(r);
-        } else {
-            // nil return type
-            let nil_ty = ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build());
-            sig_builder = sig_builder.param(nil_ty);
-        }
-        for &p in &param_types {
-            sig_builder = sig_builder.param(p);
-        }
-        let sig_ty = ctx.types.intern(sig_builder.build());
+        let ret_ty = result_ty.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+        let sig_ty = arena_core::func(ctx, ret_ty, param_types.iter().copied(), None).as_type_ref();
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,

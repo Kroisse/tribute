@@ -2,6 +2,9 @@
 
 #[trunk_ir::arena_dialect]
 mod closure {
+    // Types
+    struct Closure<FuncType>;
+
     #[attr(func_ref: Symbol)]
     fn new(env: ()) -> result {}
 

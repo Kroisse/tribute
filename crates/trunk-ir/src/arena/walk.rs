@@ -200,9 +200,8 @@ mod tests {
         });
 
         // Outer func op containing inner region
-        let func_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build());
+        let nil_ty = crate::arena::dialect::core::nil(&mut ctx).as_type_ref();
+        let func_ty = crate::arena::dialect::core::func(&mut ctx, nil_ty, [], None).as_type_ref();
         let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .result(func_ty)
             .region(inner_region)

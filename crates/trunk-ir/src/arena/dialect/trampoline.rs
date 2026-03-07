@@ -2,6 +2,12 @@
 
 #[crate::arena_dialect(crate = crate)]
 mod trampoline {
+    // Types
+    struct Step;
+    struct Continuation;
+    struct State;
+    struct ResumeWrapper;
+
     fn check_yield() -> result {}
 
     #[attr(op_idx: u32)]

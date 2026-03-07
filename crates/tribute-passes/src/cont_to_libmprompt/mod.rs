@@ -26,6 +26,7 @@ mod tests;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
+use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
 use trunk_ir::arena::rewrite::{
     ArenaConversionTarget, ArenaModule, ArenaTypeConverter,
@@ -47,9 +48,7 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: ArenaModule) {
 
     // Step 2: Apply lowering patterns with type conversion
     // Pre-intern types before the closure (closure receives &IrContext, not &mut)
-    let prompt_tag_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build());
+    let prompt_tag_ty = arena_cont::prompt_tag(ctx).as_type_ref();
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());

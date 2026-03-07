@@ -34,8 +34,8 @@ use std::collections::BTreeMap;
 use smallvec::SmallVec;
 
 use crate::arena::context::{BlockArgData, BlockData, IrContext};
-use crate::arena::dialect::{arith, cf, scf};
-use crate::arena::ops::ArenaDialectOp;
+use crate::arena::dialect::{arith, cf, core, scf};
+use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 use crate::arena::rewrite::ArenaModule;
 use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};
@@ -127,9 +127,8 @@ fn lower_scf_if(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Locati
         None
     } else {
         let ty = ctx.value_ty(results[0]);
-        let ty_data = ctx.types.get(ty);
         // Skip nil type (void)
-        if ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("nil") {
+        if core::Nil::matches(ctx, ty) {
             None
         } else {
             Some(ty)
@@ -264,8 +263,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         None
     } else {
         let ty = ctx.value_ty(results[0]);
-        let ty_data = ctx.types.get(ty);
-        if ty_data.dialect == Symbol::new("core") && ty_data.name == Symbol::new("nil") {
+        if core::Nil::matches(ctx, ty) {
             None
         } else {
             Some(ty)
@@ -518,13 +516,12 @@ mod tests {
     }
 
     fn nil_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build())
+        core::nil(ctx).as_type_ref()
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
+        let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
+        crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> ArenaModule {

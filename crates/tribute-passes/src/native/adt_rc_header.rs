@@ -23,6 +23,7 @@ use trunk_ir::adt_layout::{
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt;
 use trunk_ir::arena::dialect::clif;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::ops::ArenaDialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
@@ -43,9 +44,7 @@ pub fn lower(
     rtti_map: &HashMap<TypeRef, u32>,
 ) {
     // Pre-intern types
-    let ptr_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -368,12 +367,8 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
 
         // Build function type: (field_types...) -> ptr
-        let mut ft_builder =
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).param(ptr_ty);
-        for &ft in field_types {
-            ft_builder = ft_builder.param(ft);
-        }
-        let func_ty = ctx.types.intern(ft_builder.build());
+        let func_ty =
+            arena_core::func(ctx, ptr_ty, field_types.iter().copied(), None).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types

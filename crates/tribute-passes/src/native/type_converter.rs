@@ -28,10 +28,13 @@
 //! types, the native backend uses opaque pointers (`core.ptr`) for all
 //! reference types. Most conversions between pointer types are no-ops.
 
+use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use tribute_ir::dialect::{ability, closure, tribute_rt};
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
+use trunk_ir::arena::dialect::cont as arena_cont;
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::ArenaTypeConverter;
 use trunk_ir::arena::types::{Location, TypeDataBuilder};
@@ -474,30 +477,16 @@ impl NativeTypeRefs {
     pub fn new(ctx: &mut IrContext) -> Self {
         use tribute_ir::arena::dialect::ability as arena_ability;
         Self {
-            tribute_rt_int: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("int")).build(),
-            ),
-            tribute_rt_nat: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("nat")).build(),
-            ),
-            tribute_rt_bool: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("bool")).build(),
-            ),
-            tribute_rt_float: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("float")).build(),
-            ),
-            tribute_rt_intref: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("intref")).build(),
-            ),
-            tribute_rt_any: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("any")).build(),
-            ),
+            tribute_rt_int: arena_tribute_rt::int(ctx).as_type_ref(),
+            tribute_rt_nat: arena_tribute_rt::nat(ctx).as_type_ref(),
+            tribute_rt_bool: arena_tribute_rt::bool(ctx).as_type_ref(),
+            tribute_rt_float: arena_tribute_rt::float(ctx).as_type_ref(),
+            tribute_rt_intref: arena_tribute_rt::intref(ctx).as_type_ref(),
+            tribute_rt_any: arena_tribute_rt::any(ctx).as_type_ref(),
             core_i1: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
-            cont_prompt_tag: ctx.types.intern(
-                TypeDataBuilder::new(Symbol::new("cont"), Symbol::new("prompt_tag")).build(),
-            ),
+            cont_prompt_tag: arena_cont::prompt_tag(ctx).as_type_ref(),
 
             core_i32: ctx
                 .types
@@ -508,12 +497,8 @@ impl NativeTypeRefs {
             core_f64: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build()),
-            core_ptr: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build()),
-            core_nil: ctx
-                .types
-                .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("nil")).build()),
+            core_ptr: arena_core::ptr(ctx).as_type_ref(),
+            core_nil: arena_core::nil(ctx).as_type_ref(),
             core_i8: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build()),

@@ -25,11 +25,10 @@ pub mod type_converter;
 use std::collections::BTreeMap;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::{
-    Attribute as ArenaAttribute, Location as ArenaLocation, TypeDataBuilder,
-};
+use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location as ArenaLocation};
 use trunk_ir::smallvec::smallvec;
 
 /// Build an extern `func.func` with an unreachable body and `abi = "C"`.
@@ -43,14 +42,7 @@ pub(crate) fn build_extern_func(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    let func_ty = ctx.types.intern({
-        let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-        builder = builder.param(result);
-        for &p in params {
-            builder = builder.param(p);
-        }
-        builder.build()
-    });
+    let func_ty = arena_core::func(ctx, result, params.iter().copied(), None).as_type_ref();
 
     let args: Vec<BlockArgData> = params
         .iter()

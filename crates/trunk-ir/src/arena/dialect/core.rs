@@ -9,4 +9,16 @@ mod core {
     }
 
     fn unrealized_conversion_cast(value: ()) -> result {}
+
+    struct Nil;
+    struct Never;
+    struct String;
+    struct Bytes;
+    struct Ptr;
+    struct Array<Element>;
+    #[attr(nullable: bool)]
+    struct Ref<Pointee>;
+    struct Tuple<#[rest] Elements>;
+    #[attr(effect?: Type)]
+    struct Func<Return, #[rest] Params>;
 }

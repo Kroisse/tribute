@@ -18,7 +18,7 @@ pub mod wasm;
 mod tests {
     use crate::Span;
     use crate::Symbol;
-    use crate::arena::ops::ArenaDialectOp;
+    use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
     use crate::arena::refs::PathRef;
     use crate::arena::types::Location;
     use crate::arena::{
@@ -33,8 +33,9 @@ mod tests {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_func_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
-        types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func")).build())
+    fn make_func_type(ctx: &mut IrContext) -> crate::arena::TypeRef {
+        let nil_ty = super::core::nil(ctx).as_type_ref();
+        super::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     // ================================================================
@@ -127,7 +128,7 @@ mod tests {
     fn test_func_with_region() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let func_ty = make_func_type(&mut ctx.types);
+        let func_ty = make_func_type(&mut ctx);
 
         // Create a region for the function body
         let block = ctx.create_block(BlockData {
@@ -398,5 +399,160 @@ mod tests {
         assert_eq!(super::arith::DIALECT_NAME(), Symbol::new("arith"));
         assert_eq!(super::wasm::DIALECT_NAME(), Symbol::new("wasm"));
         assert_eq!(super::clif::DIALECT_NAME(), Symbol::new("clif"));
+    }
+
+    // ================================================================
+    // Arena dialect types
+    // ================================================================
+
+    #[test]
+    fn test_nil_type_round_trip() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+
+        // from_type_ref round-trip
+        let nil2 =
+            super::core::Nil::from_type_ref(&ctx, nil.as_type_ref()).expect("should match Nil");
+        assert_eq!(nil.as_type_ref(), nil2.as_type_ref());
+
+        // matches
+        assert!(super::core::Nil::matches(&ctx, nil.as_type_ref()));
+    }
+
+    #[test]
+    fn test_array_type_with_param() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let arr = super::core::array(&mut ctx, i32_ty);
+
+        // element accessor
+        assert_eq!(arr.element(&ctx), i32_ty);
+
+        // from_type_ref
+        let arr2 =
+            super::core::Array::from_type_ref(&ctx, arr.as_type_ref()).expect("should match Array");
+        assert_eq!(arr.as_type_ref(), arr2.as_type_ref());
+        assert_eq!(arr2.element(&ctx), i32_ty);
+    }
+
+    #[test]
+    fn test_ref_type_with_attr() {
+        let mut ctx = IrContext::new();
+        let ptr_ty = super::core::ptr(&mut ctx);
+        let r = super::core::r#ref(&mut ctx, ptr_ty.as_type_ref(), true);
+
+        assert_eq!(r.pointee(&ctx), ptr_ty.as_type_ref());
+        assert!(r.nullable(&ctx));
+
+        let r2 = super::core::Ref::from_type_ref(&ctx, r.as_type_ref()).expect("should match Ref");
+        assert!(r2.nullable(&ctx));
+    }
+
+    #[test]
+    fn test_type_matches_wrong_type() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+        // Nil should not match as Array
+        assert!(!super::core::Array::matches(&ctx, nil.as_type_ref()));
+        assert!(super::core::Array::from_type_ref(&ctx, nil.as_type_ref()).is_none());
+    }
+
+    #[test]
+    fn test_type_into_type_ref() {
+        let mut ctx = IrContext::new();
+        let nil = super::core::nil(&mut ctx);
+        let ty_ref: crate::arena::TypeRef = nil.into();
+        assert_eq!(ty_ref, nil.as_type_ref());
+    }
+
+    #[test]
+    fn test_type_name_constant() {
+        assert_eq!(super::core::NIL(), Symbol::new("nil"));
+        assert_eq!(super::core::NEVER(), Symbol::new("never"));
+        assert_eq!(super::core::PTR(), Symbol::new("ptr"));
+        assert_eq!(super::core::ARRAY(), Symbol::new("array"));
+        assert_eq!(super::core::REF(), Symbol::new("ref"));
+    }
+
+    #[test]
+    fn test_type_trait_constants() {
+        assert_eq!(super::core::Nil::DIALECT_NAME, "core");
+        assert_eq!(super::core::Nil::TYPE_NAME, "nil");
+        assert_eq!(super::core::Array::DIALECT_NAME, "core");
+        assert_eq!(super::core::Array::TYPE_NAME, "array");
+    }
+
+    // ================================================================
+    // Variadic type params (Tuple, Func)
+    // ================================================================
+
+    #[test]
+    fn test_tuple_type_variadic() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let func_ty = make_func_type(&mut ctx);
+
+        let tup = super::core::tuple(&mut ctx, [i32_ty, func_ty]);
+
+        assert!(super::core::Tuple::matches(&ctx, tup.as_type_ref()));
+        let elements = tup.elements(&ctx);
+        assert_eq!(elements.len(), 2);
+        assert_eq!(elements[0], i32_ty);
+        assert_eq!(elements[1], func_ty);
+    }
+
+    #[test]
+    fn test_tuple_type_empty() {
+        let mut ctx = IrContext::new();
+        let tup = super::core::tuple(&mut ctx, []);
+        assert_eq!(tup.elements(&ctx).len(), 0);
+    }
+
+    #[test]
+    fn test_func_type_variadic() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+
+        // func(i32, i32) -> i32  (no effect)
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty, i32_ty], None);
+
+        assert!(super::core::Func::matches(&ctx, f.as_type_ref()));
+        assert_eq!(f.r#return(&ctx), i32_ty);
+        assert_eq!(f.params(&ctx), &[i32_ty, i32_ty]);
+        assert_eq!(f.effect(&ctx), None);
+    }
+
+    #[test]
+    fn test_func_type_with_effect() {
+        let mut ctx = IrContext::new();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let effect_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
+
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty], Some(effect_ty));
+
+        assert_eq!(f.r#return(&ctx), i32_ty);
+        assert_eq!(f.params(&ctx), &[i32_ty]);
+        assert_eq!(f.effect(&ctx), Some(effect_ty));
+    }
+
+    #[test]
+    fn test_func_type_no_params() {
+        let mut ctx = IrContext::new();
+        let nil_ty = super::core::nil(&mut ctx);
+
+        let f = super::core::func(&mut ctx, nil_ty.as_type_ref(), [], None);
+
+        assert_eq!(f.r#return(&ctx), nil_ty.as_type_ref());
+        assert!(f.params(&ctx).is_empty());
+    }
+
+    #[test]
+    fn test_type_name_constants_extended() {
+        assert_eq!(super::core::TUPLE(), Symbol::new("tuple"));
+        assert_eq!(super::core::FUNC(), Symbol::new("func"));
+        assert_eq!(super::core::STRING(), Symbol::new("string"));
+        assert_eq!(super::core::BYTES(), Symbol::new("bytes"));
     }
 }
