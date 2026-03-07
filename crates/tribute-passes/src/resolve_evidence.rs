@@ -28,7 +28,7 @@ use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{ArenaDialectType, DialectOp};
+use trunk_ir::arena::ops::{DialectOp, DialectType};
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};

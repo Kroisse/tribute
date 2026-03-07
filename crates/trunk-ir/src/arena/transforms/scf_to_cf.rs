@@ -35,7 +35,7 @@ use smallvec::SmallVec;
 
 use crate::arena::context::{BlockArgData, BlockData, IrContext};
 use crate::arena::dialect::{arith, cf, core, scf};
-use crate::arena::ops::{ArenaDialectType, DialectOp};
+use crate::arena::ops::{DialectOp, DialectType};
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
 use crate::arena::rewrite::Module;
 use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};

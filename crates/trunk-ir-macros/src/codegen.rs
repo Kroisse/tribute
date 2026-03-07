@@ -463,7 +463,7 @@ fn gen_type_struct_and_trait(
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub struct #sname(#crate_path::arena::TypeRef);
 
-        impl #crate_path::arena::ops::ArenaDialectType for #sname {
+        impl #crate_path::arena::ops::DialectType for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const TYPE_NAME: &'static str = #type_name;
 

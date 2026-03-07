@@ -8,7 +8,7 @@
 
 use crate::arena::context::IrContext;
 use crate::arena::dialect::{core, func, wasm};
-use crate::arena::ops::{ArenaDialectType, DialectOp};
+use crate::arena::ops::{DialectOp, DialectType};
 use crate::arena::refs::{OpRef, RegionRef, TypeRef};
 use crate::arena::rewrite::pattern::RewritePattern;
 use crate::arena::rewrite::rewriter::PatternRewriter;
