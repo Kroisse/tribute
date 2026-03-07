@@ -91,7 +91,12 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: ArenaModule, sani
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
     let nil_ty = arena_core::nil(ctx).as_type_ref();
 
-    let tribute_main_return_ty = main_return_ty.unwrap_or(nil_ty);
+    let tribute_main_return_ty = main_return_ty.unwrap_or_else(|| {
+        panic!(
+            "entrypoint: `func.func @main` has no return type in its signature; \
+             expected a valid `core.func` type with at least a return type parameter"
+        )
+    });
 
     // Step 1: Rename main -> _tribute_main (in-place attribute mutation)
     for &op in &ops {

@@ -809,8 +809,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let wasm_func_ty =
-            crate::arena::dialect::core::func(&mut ctx, i32_ty, [], None).as_type_ref();
+        let wasm_func_ty = make_func_type(&mut ctx, &[], i32_ty);
 
         // func_a (func.func) with a constant
         let entry_a = ctx.create_block(BlockData {
