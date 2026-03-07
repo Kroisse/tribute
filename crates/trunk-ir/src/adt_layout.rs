@@ -28,12 +28,15 @@
 //! | `core.i64`  | 8    | 8         |
 //! | `core.f32`  | 4    | 4         |
 //! | `core.f64`  | 8    | 8         |
+//! | `core.i1`   | 4    | 4         |
 //! | `core.ptr`  | 8    | 8         |
 //! | other       | 8    | 8         |
 
-use crate::dialect::{adt, core};
-use crate::rewrite::TypeConverter;
-use crate::{DialectType, Symbol, Type};
+use crate::Symbol;
+use crate::arena::context::IrContext;
+use crate::arena::refs::TypeRef;
+use crate::arena::rewrite::type_converter::TypeConverter;
+use crate::arena::types::Attribute;
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -45,49 +48,6 @@ pub struct StructLayout {
     /// Maximum alignment of any field.
     pub alignment: u32,
 }
-
-/// Compute the memory layout for an `adt.struct` type.
-///
-/// Uses the `TypeConverter` to determine the native size of each field type.
-/// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
-pub fn compute_struct_layout<'db>(
-    db: &'db dyn salsa::Database,
-    struct_ty: Type<'db>,
-    type_converter: &TypeConverter,
-) -> Option<StructLayout> {
-    let fields = adt::get_struct_fields(db, struct_ty)?;
-
-    let mut offset: u32 = 0;
-    let mut max_align: u32 = 1;
-    let mut field_offsets = Vec::with_capacity(fields.len());
-
-    for (_name, field_ty) in &fields {
-        // Convert the field type to its native representation
-        let native_ty = type_converter
-            .convert_type(db, *field_ty)
-            .unwrap_or(*field_ty);
-        let (size, align) = type_size_align(db, native_ty);
-
-        // Align offset
-        offset = (offset + align - 1) & !(align - 1);
-        field_offsets.push(offset);
-        offset += size;
-        max_align = max_align.max(align);
-    }
-
-    // Pad total size to alignment
-    let total_size = (offset + max_align - 1) & !(max_align - 1);
-
-    Some(StructLayout {
-        field_offsets,
-        total_size,
-        alignment: max_align,
-    })
-}
-
-// =============================================================================
-// Enum Layout
-// =============================================================================
 
 /// Fixed offset from payload start to variant fields (tag 4B + padding 4B).
 pub const ENUM_FIELDS_OFFSET: u32 = 8;
@@ -125,39 +85,191 @@ pub struct VariantFieldLayout {
     pub fields_size: u32,
 }
 
+/// Get the size and alignment of a native type in bytes.
+///
+/// After type conversion, all types should be one of the core types.
+/// Unknown types default to pointer size (8 bytes) for safety.
+pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("core") {
+        return (8, 8);
+    }
+    let name = data.name;
+    if name == Symbol::new("i8") {
+        (1, 1)
+    } else if name == Symbol::new("i16") {
+        (2, 2)
+    } else if name == Symbol::new("i32") || name == Symbol::new("i1") {
+        (4, 4)
+    } else if name == Symbol::new("i64") {
+        (8, 8)
+    } else if name == Symbol::new("f32") {
+        (4, 4)
+    } else {
+        // f64, ptr, and any unknown types default to 8-byte size/align
+        (8, 8)
+    }
+}
+
+/// Extract struct fields from an arena TypeRef.
+///
+/// Returns `None` if the type is not `adt.struct`.
+pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
+        return None;
+    }
+
+    let fields_attr = data.attrs.get(&Symbol::new("fields"))?;
+    let Attribute::List(fields) = fields_attr else {
+        return None;
+    };
+
+    let mut result = Vec::new();
+    for (i, field) in fields.iter().enumerate() {
+        let Attribute::List(pair) = field else {
+            panic!("get_struct_fields: field[{i}] expected List, got {field:?}");
+        };
+        assert!(
+            pair.len() >= 2,
+            "get_struct_fields: field[{i}] pair too short (len={})",
+            pair.len()
+        );
+        let Attribute::Symbol(name) = &pair[0] else {
+            panic!(
+                "get_struct_fields: field[{i}] name expected Symbol, got {:?}",
+                pair[0]
+            );
+        };
+        let Attribute::Type(field_ty) = &pair[1] else {
+            panic!(
+                "get_struct_fields: field[{i}] type expected Type, got {:?}",
+                pair[1]
+            );
+        };
+        result.push((*name, *field_ty));
+    }
+
+    Some(result)
+}
+
+/// Extract enum variants from an arena TypeRef.
+///
+/// Returns `None` if the type is not `adt.enum`.
+pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
+        return None;
+    }
+
+    let variants_attr = data.attrs.get(&Symbol::new("variants"))?;
+    let Attribute::List(variants) = variants_attr else {
+        return None;
+    };
+
+    let mut result = Vec::new();
+    for (i, variant) in variants.iter().enumerate() {
+        let Attribute::List(pair) = variant else {
+            panic!("get_enum_variants: variant[{i}] expected List, got {variant:?}");
+        };
+        assert!(
+            pair.len() >= 2,
+            "get_enum_variants: variant[{i}] pair too short (len={})",
+            pair.len()
+        );
+        let Attribute::Symbol(name) = &pair[0] else {
+            panic!(
+                "get_enum_variants: variant[{i}] name expected Symbol, got {:?}",
+                pair[0]
+            );
+        };
+        let Attribute::List(field_types_attr) = &pair[1] else {
+            panic!(
+                "get_enum_variants: variant[{i}] fields expected List, got {:?}",
+                pair[1]
+            );
+        };
+
+        let field_types: Vec<TypeRef> = field_types_attr
+            .iter()
+            .enumerate()
+            .map(|(j, a)| {
+                let Attribute::Type(ty) = a else {
+                    panic!("get_enum_variants: variant[{i}] field[{j}] expected Type, got {a:?}");
+                };
+                *ty
+            })
+            .collect();
+
+        result.push((*name, field_types));
+    }
+
+    Some(result)
+}
+
+/// Compute the memory layout for an `adt.struct` type.
+///
+/// Uses the `TypeConverter` to determine the native size of each field type.
+/// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
+pub fn compute_struct_layout(
+    ctx: &IrContext,
+    struct_ty: TypeRef,
+    type_converter: &TypeConverter,
+) -> Option<StructLayout> {
+    let fields = get_struct_fields(ctx, struct_ty)?;
+
+    let mut offset: u32 = 0;
+    let mut max_align: u32 = 1;
+    let mut field_offsets = Vec::with_capacity(fields.len());
+
+    for (_name, field_ty) in &fields {
+        let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
+        let (size, align) = type_size_align(ctx, native_ty);
+
+        offset = (offset + align - 1) & !(align - 1);
+        field_offsets.push(offset);
+        offset += size;
+        max_align = max_align.max(align);
+    }
+
+    let total_size = (offset + max_align - 1) & !(max_align - 1);
+
+    Some(StructLayout {
+        field_offsets,
+        total_size,
+        alignment: max_align,
+    })
+}
+
 /// Compute the memory layout for an `adt.enum` type.
 ///
 /// Uses the `TypeConverter` to determine the native size of each field type.
 /// Returns `None` if the type is not an `adt.enum` or variants cannot be extracted.
-pub fn compute_enum_layout<'db>(
-    db: &'db dyn salsa::Database,
-    enum_ty: Type<'db>,
+pub fn compute_enum_layout(
+    ctx: &IrContext,
+    enum_ty: TypeRef,
     type_converter: &TypeConverter,
 ) -> Option<EnumLayout> {
-    let variants = adt::get_enum_variants(db, enum_ty)?;
+    let variants = get_enum_variants(ctx, enum_ty)?;
 
     let mut variant_layouts = Vec::with_capacity(variants.len());
     let mut max_fields_size: u32 = 0;
-    let mut max_align: u32 = 8; // minimum alignment = 8 (pointer-aligned)
+    let mut max_align: u32 = 8;
 
     for (tag_value, (variant_name, field_types)) in variants.iter().enumerate() {
         let mut offset: u32 = 0;
         let mut field_offsets = Vec::with_capacity(field_types.len());
 
         for field_ty in field_types {
-            let native_ty = type_converter
-                .convert_type(db, *field_ty)
-                .unwrap_or(*field_ty);
-            let (size, align) = type_size_align(db, native_ty);
+            let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
+            let (size, align) = type_size_align(ctx, native_ty);
 
-            // Align offset
             offset = (offset + align - 1) & !(align - 1);
             field_offsets.push(offset);
             offset += size;
             max_align = max_align.max(align);
         }
 
-        // Pad to alignment
         let fields_size = (offset + max_align - 1) & !(max_align - 1);
         max_fields_size = max_fields_size.max(fields_size);
 
@@ -184,448 +296,4 @@ pub fn compute_enum_layout<'db>(
 /// Find the variant layout for a given tag name.
 pub fn find_variant_layout(layout: &EnumLayout, tag: Symbol) -> Option<&VariantFieldLayout> {
     layout.variant_layouts.iter().find(|v| v.name == tag)
-}
-
-/// Get the size and alignment of a native type in bytes.
-///
-/// After type conversion, all types should be one of the core types.
-/// Unknown types default to pointer size (8 bytes) for safety.
-pub fn type_size_align(db: &dyn salsa::Database, ty: Type<'_>) -> (u32, u32) {
-    if core::I8::from_type(db, ty).is_some() {
-        return (1, 1);
-    }
-    if core::I16::from_type(db, ty).is_some() {
-        return (2, 2);
-    }
-    if core::I32::from_type(db, ty).is_some() {
-        return (4, 4);
-    }
-    if core::I64::from_type(db, ty).is_some() {
-        return (8, 8);
-    }
-    if core::F32::from_type(db, ty).is_some() {
-        return (4, 4);
-    }
-    if core::F64::from_type(db, ty).is_some() {
-        return (8, 8);
-    }
-    if core::Ptr::from_type(db, ty).is_some() {
-        return (8, 8);
-    }
-    // Default: treat as pointer (8 bytes on 64-bit)
-    (8, 8)
-}
-
-// =============================================================================
-// Arena-based layout computation
-// =============================================================================
-
-use crate::arena::context::IrContext;
-use crate::arena::refs::TypeRef;
-use crate::arena::rewrite::type_converter::ArenaTypeConverter;
-use crate::arena::types::Attribute as ArenaAttribute;
-
-/// Get the size and alignment of a native type in bytes (arena version).
-///
-/// After type conversion, all types should be one of the core types.
-/// Unknown types default to pointer size (8 bytes) for safety.
-pub fn type_size_align_arena(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
-    let data = ctx.types.get(ty);
-    if data.dialect != Symbol::new("core") {
-        return (8, 8);
-    }
-    let name = data.name;
-    if name == Symbol::new("i8") {
-        (1, 1)
-    } else if name == Symbol::new("i16") {
-        (2, 2)
-    } else if name == Symbol::new("i32") || name == Symbol::new("i1") {
-        (4, 4)
-    } else if name == Symbol::new("i64") {
-        (8, 8)
-    } else if name == Symbol::new("f32") {
-        (4, 4)
-    } else {
-        // f64, ptr, and any unknown types default to 8-byte size/align
-        (8, 8)
-    }
-}
-
-/// Extract struct fields from an arena TypeRef.
-///
-/// Returns `None` if the type is not `adt.struct`.
-pub fn get_struct_fields_arena(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
-    let data = ctx.types.get(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return None;
-    }
-
-    let fields_attr = data.attrs.get(&Symbol::new("fields"))?;
-    let ArenaAttribute::List(fields) = fields_attr else {
-        return None;
-    };
-
-    let mut result = Vec::new();
-    for (i, field) in fields.iter().enumerate() {
-        let ArenaAttribute::List(pair) = field else {
-            panic!("get_struct_fields_arena: field[{i}] expected List, got {field:?}");
-        };
-        assert!(
-            pair.len() >= 2,
-            "get_struct_fields_arena: field[{i}] pair too short (len={})",
-            pair.len()
-        );
-        let ArenaAttribute::Symbol(name) = &pair[0] else {
-            panic!(
-                "get_struct_fields_arena: field[{i}] name expected Symbol, got {:?}",
-                pair[0]
-            );
-        };
-        let ArenaAttribute::Type(field_ty) = &pair[1] else {
-            panic!(
-                "get_struct_fields_arena: field[{i}] type expected Type, got {:?}",
-                pair[1]
-            );
-        };
-        result.push((*name, *field_ty));
-    }
-
-    Some(result)
-}
-
-/// Extract enum variants from an arena TypeRef.
-///
-/// Returns `None` if the type is not `adt.enum`.
-pub fn get_enum_variants_arena(
-    ctx: &IrContext,
-    ty: TypeRef,
-) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
-    let data = ctx.types.get(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
-        return None;
-    }
-
-    let variants_attr = data.attrs.get(&Symbol::new("variants"))?;
-    let ArenaAttribute::List(variants) = variants_attr else {
-        return None;
-    };
-
-    let mut result = Vec::new();
-    for (i, variant) in variants.iter().enumerate() {
-        let ArenaAttribute::List(pair) = variant else {
-            panic!("get_enum_variants_arena: variant[{i}] expected List, got {variant:?}");
-        };
-        assert!(
-            pair.len() >= 2,
-            "get_enum_variants_arena: variant[{i}] pair too short (len={})",
-            pair.len()
-        );
-        let ArenaAttribute::Symbol(name) = &pair[0] else {
-            panic!(
-                "get_enum_variants_arena: variant[{i}] name expected Symbol, got {:?}",
-                pair[0]
-            );
-        };
-        let ArenaAttribute::List(field_types_attr) = &pair[1] else {
-            panic!(
-                "get_enum_variants_arena: variant[{i}] fields expected List, got {:?}",
-                pair[1]
-            );
-        };
-
-        let field_types: Vec<TypeRef> = field_types_attr
-            .iter()
-            .enumerate()
-            .map(|(j, a)| {
-                let ArenaAttribute::Type(ty) = a else {
-                    panic!(
-                        "get_enum_variants_arena: variant[{i}] field[{j}] expected Type, got {a:?}"
-                    );
-                };
-                *ty
-            })
-            .collect();
-
-        result.push((*name, field_types));
-    }
-
-    Some(result)
-}
-
-/// Compute the memory layout for an `adt.struct` type (arena version).
-///
-/// Uses the `ArenaTypeConverter` to determine the native size of each field type.
-/// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
-pub fn compute_struct_layout_arena(
-    ctx: &IrContext,
-    struct_ty: TypeRef,
-    type_converter: &ArenaTypeConverter,
-) -> Option<StructLayout> {
-    let fields = get_struct_fields_arena(ctx, struct_ty)?;
-
-    let mut offset: u32 = 0;
-    let mut max_align: u32 = 1;
-    let mut field_offsets = Vec::with_capacity(fields.len());
-
-    for (_name, field_ty) in &fields {
-        let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
-        let (size, align) = type_size_align_arena(ctx, native_ty);
-
-        offset = (offset + align - 1) & !(align - 1);
-        field_offsets.push(offset);
-        offset += size;
-        max_align = max_align.max(align);
-    }
-
-    let total_size = (offset + max_align - 1) & !(max_align - 1);
-
-    Some(StructLayout {
-        field_offsets,
-        total_size,
-        alignment: max_align,
-    })
-}
-
-/// Compute the memory layout for an `adt.enum` type (arena version).
-///
-/// Uses the `ArenaTypeConverter` to determine the native size of each field type.
-/// Returns `None` if the type is not an `adt.enum` or variants cannot be extracted.
-pub fn compute_enum_layout_arena(
-    ctx: &IrContext,
-    enum_ty: TypeRef,
-    type_converter: &ArenaTypeConverter,
-) -> Option<EnumLayout> {
-    let variants = get_enum_variants_arena(ctx, enum_ty)?;
-
-    let mut variant_layouts = Vec::with_capacity(variants.len());
-    let mut max_fields_size: u32 = 0;
-    let mut max_align: u32 = 8;
-
-    for (tag_value, (variant_name, field_types)) in variants.iter().enumerate() {
-        let mut offset: u32 = 0;
-        let mut field_offsets = Vec::with_capacity(field_types.len());
-
-        for field_ty in field_types {
-            let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
-            let (size, align) = type_size_align_arena(ctx, native_ty);
-
-            offset = (offset + align - 1) & !(align - 1);
-            field_offsets.push(offset);
-            offset += size;
-            max_align = max_align.max(align);
-        }
-
-        let fields_size = (offset + max_align - 1) & !(max_align - 1);
-        max_fields_size = max_fields_size.max(fields_size);
-
-        variant_layouts.push(VariantFieldLayout {
-            name: *variant_name,
-            tag_value: tag_value as u32,
-            field_offsets,
-            fields_size,
-        });
-    }
-
-    let total_size = ENUM_FIELDS_OFFSET + max_fields_size;
-
-    Some(EnumLayout {
-        tag_offset: 0,
-        tag_size: 4,
-        fields_offset: ENUM_FIELDS_OFFSET,
-        variant_layouts,
-        total_size,
-        alignment: max_align,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Symbol;
-    use salsa_test_macros::salsa_test;
-
-    fn test_converter() -> TypeConverter {
-        TypeConverter::new()
-    }
-
-    #[salsa_test]
-    fn test_empty_struct_layout(db: &salsa::DatabaseImpl) {
-        let struct_ty = adt::struct_type(db, Symbol::new("Empty"), vec![]);
-        let layout = compute_struct_layout(db, struct_ty, &test_converter()).unwrap();
-
-        assert!(layout.field_offsets.is_empty());
-        assert_eq!(layout.total_size, 0);
-        assert_eq!(layout.alignment, 1);
-    }
-
-    #[salsa_test]
-    fn test_single_i32_field(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let struct_ty =
-            adt::struct_type(db, Symbol::new("Wrapper"), vec![(Symbol::new("x"), i32_ty)]);
-        let layout = compute_struct_layout(db, struct_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.field_offsets, vec![0]);
-        assert_eq!(layout.total_size, 4);
-        assert_eq!(layout.alignment, 4);
-    }
-
-    #[salsa_test]
-    fn test_two_i32_fields(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let struct_ty = adt::struct_type(
-            db,
-            Symbol::new("Point"),
-            vec![(Symbol::new("x"), i32_ty), (Symbol::new("y"), i32_ty)],
-        );
-        let layout = compute_struct_layout(db, struct_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.field_offsets, vec![0, 4]);
-        assert_eq!(layout.total_size, 8);
-        assert_eq!(layout.alignment, 4);
-    }
-
-    #[salsa_test]
-    fn test_mixed_types_with_padding(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let i64_ty = core::I64::new(db).as_type();
-        let struct_ty = adt::struct_type(
-            db,
-            Symbol::new("Mixed"),
-            vec![(Symbol::new("a"), i32_ty), (Symbol::new("b"), i64_ty)],
-        );
-        let layout = compute_struct_layout(db, struct_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.field_offsets, vec![0, 8]);
-        assert_eq!(layout.total_size, 16);
-        assert_eq!(layout.alignment, 8);
-    }
-
-    #[salsa_test]
-    fn test_ptr_fields(db: &salsa::DatabaseImpl) {
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let i32_ty = core::I32::new(db).as_type();
-        let struct_ty = adt::struct_type(
-            db,
-            Symbol::new("Closure"),
-            vec![
-                (Symbol::new("func"), ptr_ty),
-                (Symbol::new("env"), ptr_ty),
-                (Symbol::new("tag"), i32_ty),
-            ],
-        );
-        let layout = compute_struct_layout(db, struct_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.field_offsets, vec![0, 8, 16]);
-        assert_eq!(layout.total_size, 24);
-        assert_eq!(layout.alignment, 8);
-    }
-
-    #[salsa_test]
-    fn test_not_struct_returns_none(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        assert!(compute_struct_layout(db, i32_ty, &test_converter()).is_none());
-    }
-
-    // === Enum layout tests ===
-
-    #[salsa_test]
-    fn test_enum_empty_variants(db: &salsa::DatabaseImpl) {
-        // enum Color { Red, Green, Blue }
-        let enum_ty = adt::enum_type(
-            db,
-            Symbol::new("Color"),
-            vec![
-                (Symbol::new("Red"), vec![]),
-                (Symbol::new("Green"), vec![]),
-                (Symbol::new("Blue"), vec![]),
-            ],
-        );
-        let layout = compute_enum_layout(db, enum_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.tag_offset, 0);
-        assert_eq!(layout.tag_size, 4);
-        assert_eq!(layout.fields_offset, ENUM_FIELDS_OFFSET);
-        assert_eq!(layout.variant_layouts.len(), 3);
-        assert_eq!(layout.variant_layouts[0].tag_value, 0);
-        assert_eq!(layout.variant_layouts[1].tag_value, 1);
-        assert_eq!(layout.variant_layouts[2].tag_value, 2);
-        // All variants have no fields
-        assert!(layout.variant_layouts[0].field_offsets.is_empty());
-        // total_size = 8 (tag + padding) + 0 (no fields)
-        assert_eq!(layout.total_size, 8);
-    }
-
-    #[salsa_test]
-    fn test_enum_with_fields(db: &salsa::DatabaseImpl) {
-        // enum Shape { Circle(i32), Square(i32) }
-        let i32_ty = core::I32::new(db).as_type();
-        let enum_ty = adt::enum_type(
-            db,
-            Symbol::new("Shape"),
-            vec![
-                (Symbol::new("Circle"), vec![i32_ty]),
-                (Symbol::new("Square"), vec![i32_ty]),
-            ],
-        );
-        let layout = compute_enum_layout(db, enum_ty, &test_converter()).unwrap();
-
-        assert_eq!(layout.fields_offset, ENUM_FIELDS_OFFSET);
-        // Each variant has one i32 field at offset 0 (relative to fields_offset)
-        assert_eq!(layout.variant_layouts[0].field_offsets, vec![0]);
-        assert_eq!(layout.variant_layouts[1].field_offsets, vec![0]);
-        // total_size = 8 (tag + padding) + 8 (padded i32)
-        assert_eq!(layout.total_size, 16);
-    }
-
-    #[salsa_test]
-    fn test_enum_mixed_variants(db: &salsa::DatabaseImpl) {
-        // enum Expr { Lit(i32), Add(ptr, ptr) }
-        let i32_ty = core::I32::new(db).as_type();
-        let ptr_ty = core::Ptr::new(db).as_type();
-        let enum_ty = adt::enum_type(
-            db,
-            Symbol::new("Expr"),
-            vec![
-                (Symbol::new("Lit"), vec![i32_ty]),
-                (Symbol::new("Add"), vec![ptr_ty, ptr_ty]),
-            ],
-        );
-        let layout = compute_enum_layout(db, enum_ty, &test_converter()).unwrap();
-
-        // Lit variant: one i32 field at offset 0
-        assert_eq!(layout.variant_layouts[0].field_offsets, vec![0]);
-        // Add variant: two ptr fields at offsets 0, 8
-        assert_eq!(layout.variant_layouts[1].field_offsets, vec![0, 8]);
-        // max variant size = 16 (two ptrs), total = 8 + 16 = 24
-        assert_eq!(layout.total_size, 24);
-    }
-
-    #[salsa_test]
-    fn test_find_variant_layout(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        let enum_ty = adt::enum_type(
-            db,
-            Symbol::new("Shape"),
-            vec![
-                (Symbol::new("Circle"), vec![i32_ty]),
-                (Symbol::new("Square"), vec![i32_ty]),
-            ],
-        );
-        let layout = compute_enum_layout(db, enum_ty, &test_converter()).unwrap();
-
-        let circle = find_variant_layout(&layout, Symbol::new("Circle")).unwrap();
-        assert_eq!(circle.tag_value, 0);
-
-        let square = find_variant_layout(&layout, Symbol::new("Square")).unwrap();
-        assert_eq!(square.tag_value, 1);
-
-        assert!(find_variant_layout(&layout, Symbol::new("Triangle")).is_none());
-    }
-
-    #[salsa_test]
-    fn test_not_enum_returns_none(db: &salsa::DatabaseImpl) {
-        let i32_ty = core::I32::new(db).as_type();
-        assert!(compute_enum_layout(db, i32_ty, &test_converter()).is_none());
-    }
 }

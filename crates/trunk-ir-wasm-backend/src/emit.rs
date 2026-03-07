@@ -37,12 +37,12 @@ use std::sync::LazyLock;
 use tracing::debug;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::Module as IrModule;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -254,7 +254,7 @@ struct FunctionEmitContext {
     func_return_type: Option<TypeRef>,
 }
 
-pub fn emit_wasm(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<Vec<u8>> {
+pub fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
     debug!("emit_wasm: collecting module info...");
     let module_info = match collect_module_info(ctx, module) {
         Ok(info) => {
@@ -600,27 +600,27 @@ fn collect_wasm_ops_from_region(
                 continue;
             }
 
-            if let Ok(func_op) = arena_wasm::Func::from_op(ctx, op) {
+            if let Ok(func_op) = wasm_dialect::Func::from_op(ctx, op) {
                 if let Ok(func_def) = extract_function_def(ctx, func_op) {
                     debug!("Including function: {}", func_def.name);
                     info.funcs.push(func_def);
                 }
-            } else if let Ok(import_op) = arena_wasm::ImportFunc::from_op(ctx, op) {
+            } else if let Ok(import_op) = wasm_dialect::ImportFunc::from_op(ctx, op) {
                 info.imports.push(extract_import_def(ctx, import_op)?);
-            } else if let Ok(export_op) = arena_wasm::ExportFunc::from_op(ctx, op) {
+            } else if let Ok(export_op) = wasm_dialect::ExportFunc::from_op(ctx, op) {
                 info.exports.push(extract_export_func(ctx, export_op)?);
-            } else if let Ok(export_mem_op) = arena_wasm::ExportMemory::from_op(ctx, op) {
+            } else if let Ok(export_mem_op) = wasm_dialect::ExportMemory::from_op(ctx, op) {
                 info.exports
                     .push(extract_export_memory(ctx, export_mem_op)?);
-            } else if let Ok(memory_op) = arena_wasm::Memory::from_op(ctx, op) {
+            } else if let Ok(memory_op) = wasm_dialect::Memory::from_op(ctx, op) {
                 info.memory = Some(extract_memory_def(ctx, memory_op)?);
-            } else if let Ok(data_op) = arena_wasm::Data::from_op(ctx, op) {
+            } else if let Ok(data_op) = wasm_dialect::Data::from_op(ctx, op) {
                 info.data.push(extract_data_def(ctx, data_op)?);
-            } else if let Ok(table_op) = arena_wasm::Table::from_op(ctx, op) {
+            } else if let Ok(table_op) = wasm_dialect::Table::from_op(ctx, op) {
                 info.tables.push(extract_table_def(ctx, table_op)?);
-            } else if let Ok(elem_op) = arena_wasm::Elem::from_op(ctx, op) {
+            } else if let Ok(elem_op) = wasm_dialect::Elem::from_op(ctx, op) {
                 info.elements.push(extract_element_def(ctx, elem_op)?);
-            } else if let Ok(global_op) = arena_wasm::Global::from_op(ctx, op) {
+            } else if let Ok(global_op) = wasm_dialect::Global::from_op(ctx, op) {
                 info.globals.push(extract_global_def(ctx, global_op)?);
             }
         }
@@ -629,7 +629,7 @@ fn collect_wasm_ops_from_region(
     Ok(())
 }
 
-fn collect_module_info(ctx: &mut IrContext, module: ArenaModule) -> CompilationResult<ModuleInfo> {
+fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResult<ModuleInfo> {
     let mut info = ModuleInfo::default();
 
     let body = module
@@ -813,14 +813,14 @@ fn assign_locals_in_region(
             if let Some(&result_ty) = result_types.first() {
                 let effective_ty = result_ty;
 
-                let is_ref_cast = arena_wasm::RefCast::matches(ctx, op);
-                let is_struct_new = arena_wasm::StructNew::matches(ctx, op);
+                let is_ref_cast = wasm_dialect::RefCast::matches(ctx, op);
+                let is_struct_new = wasm_dialect::StructNew::matches(ctx, op);
                 let val_type = if is_ref_cast || is_struct_new {
                     let attrs = &ctx.op(op).attributes;
 
                     let placeholder_ty = if is_ref_cast {
                         attrs.get(&ATTR_TARGET_TYPE()).and_then(|attr| {
-                            if let ArenaAttribute::Type(ty) = attr {
+                            if let Attribute::Type(ty) = attr {
                                 if is_type(ctx, *ty, "wasm", "structref") {
                                     Some(*ty)
                                 } else {
@@ -834,7 +834,7 @@ fn assign_locals_in_region(
                         attrs
                             .get(&Symbol::new("type"))
                             .and_then(|attr| {
-                                if let ArenaAttribute::Type(ty) = attr {
+                                if let Attribute::Type(ty) = attr {
                                     if is_type(ctx, *ty, "wasm", "structref") {
                                         Some(*ty)
                                     } else {
@@ -862,7 +862,7 @@ fn assign_locals_in_region(
                             Some(ctx.op_operands(op).len())
                         } else {
                             attrs.get(&Symbol::new("field_count")).and_then(|attr| {
-                                if let ArenaAttribute::IntBits(fc) = attr {
+                                if let Attribute::IntBits(fc) = attr {
                                     usize::try_from(*fc).ok()
                                 } else {
                                     None
@@ -956,12 +956,12 @@ fn emit_region_ops_nested(
     let ops = ctx.block(block_ref).ops.clone();
     let mut iter = ops.iter().peekable();
     while let Some(&op) = iter.next() {
-        if let Ok(yield_op) = arena_wasm::Yield::from_op(ctx, op) {
+        if let Ok(yield_op) = wasm_dialect::Yield::from_op(ctx, op) {
             let followed_by_br = iter
                 .peek()
-                .is_some_and(|&&next| arena_wasm::Br::from_op(ctx, next).is_ok());
+                .is_some_and(|&&next| wasm_dialect::Br::from_op(ctx, next).is_ok());
             if followed_by_br {
-                let br_op = arena_wasm::Br::from_op(ctx, **iter.peek().unwrap()).unwrap();
+                let br_op = wasm_dialect::Br::from_op(ctx, **iter.peek().unwrap()).unwrap();
                 let depth = br_op.target(ctx) as usize;
                 let value = yield_op.value(ctx);
                 let index = *emit_ctx.value_locals.get(&value).ok_or_else(|| {
@@ -993,7 +993,7 @@ fn region_result_value(ctx: &IrContext, region: RegionRef) -> Option<ValueRef> {
     let ops = &ctx.block(block_ref).ops;
     let &op = ops.last()?;
 
-    if let Ok(yield_op) = arena_wasm::Yield::from_op(ctx, op) {
+    if let Ok(yield_op) = wasm_dialect::Yield::from_op(ctx, op) {
         return Some(yield_op.value(ctx));
     }
 
@@ -1027,7 +1027,7 @@ fn emit_op_nested(
     debug!("emit_op: wasm.{}", name);
 
     // Handle wasm.nop
-    if arena_wasm::Nop::matches(ctx, op) {
+    if wasm_dialect::Nop::matches(ctx, op) {
         if let Some(&result_ty) = ctx.op_result_types(op).first() {
             let ty_data = ctx.types.get(result_ty);
             debug!("wasm.nop: result_ty={}.{}", ty_data.dialect, ty_data.name);
@@ -1071,119 +1071,119 @@ fn emit_op_nested(
     }
 
     // Special cases
-    if let Ok(const_op) = arena_wasm::I32Const::from_op(ctx, op) {
+    if let Ok(const_op) = wasm_dialect::I32Const::from_op(ctx, op) {
         handle_i32_const(ctx, const_op, emit_ctx, function)
-    } else if let Ok(const_op) = arena_wasm::I64Const::from_op(ctx, op) {
+    } else if let Ok(const_op) = wasm_dialect::I64Const::from_op(ctx, op) {
         handle_i64_const(ctx, const_op, emit_ctx, function)
-    } else if let Ok(const_op) = arena_wasm::F32Const::from_op(ctx, op) {
+    } else if let Ok(const_op) = wasm_dialect::F32Const::from_op(ctx, op) {
         handle_f32_const(ctx, const_op, emit_ctx, function)
-    } else if let Ok(const_op) = arena_wasm::F64Const::from_op(ctx, op) {
+    } else if let Ok(const_op) = wasm_dialect::F64Const::from_op(ctx, op) {
         handle_f64_const(ctx, const_op, emit_ctx, function)
-    } else if arena_wasm::If::matches(ctx, op) {
+    } else if wasm_dialect::If::matches(ctx, op) {
         handle_if(ctx, op, emit_ctx, module_info, function, nesting)
-    } else if arena_wasm::Block::matches(ctx, op) {
+    } else if wasm_dialect::Block::matches(ctx, op) {
         handle_block(ctx, op, emit_ctx, module_info, function, nesting)
-    } else if arena_wasm::Loop::matches(ctx, op) {
+    } else if wasm_dialect::Loop::matches(ctx, op) {
         handle_loop(ctx, op, emit_ctx, module_info, function, nesting)
-    } else if let Ok(br_op) = arena_wasm::Br::from_op(ctx, op) {
+    } else if let Ok(br_op) = wasm_dialect::Br::from_op(ctx, op) {
         handle_br(ctx, br_op, function)
-    } else if let Ok(br_if_op) = arena_wasm::BrIf::from_op(ctx, op) {
+    } else if let Ok(br_if_op) = wasm_dialect::BrIf::from_op(ctx, op) {
         handle_br_if(ctx, br_if_op, emit_ctx, module_info, function)
-    } else if let Ok(call_op) = arena_wasm::Call::from_op(ctx, op) {
+    } else if let Ok(call_op) = wasm_dialect::Call::from_op(ctx, op) {
         handle_call(ctx, call_op, emit_ctx, module_info, function)
-    } else if arena_wasm::CallIndirect::matches(ctx, op) {
+    } else if wasm_dialect::CallIndirect::matches(ctx, op) {
         handle_call_indirect(ctx, op, emit_ctx, module_info, function)
-    } else if let Ok(return_call_op) = arena_wasm::ReturnCall::from_op(ctx, op) {
+    } else if let Ok(return_call_op) = wasm_dialect::ReturnCall::from_op(ctx, op) {
         handle_return_call(ctx, return_call_op, emit_ctx, module_info, function)
-    } else if let Ok(local_op) = arena_wasm::LocalGet::from_op(ctx, op) {
+    } else if let Ok(local_op) = wasm_dialect::LocalGet::from_op(ctx, op) {
         handle_local_get(ctx, local_op, emit_ctx, function)
-    } else if let Ok(local_op) = arena_wasm::LocalSet::from_op(ctx, op) {
+    } else if let Ok(local_op) = wasm_dialect::LocalSet::from_op(ctx, op) {
         handle_local_set(ctx, local_op, emit_ctx, function)
-    } else if let Ok(local_op) = arena_wasm::LocalTee::from_op(ctx, op) {
+    } else if let Ok(local_op) = wasm_dialect::LocalTee::from_op(ctx, op) {
         handle_local_tee(ctx, local_op, emit_ctx, function)
-    } else if let Ok(global_op) = arena_wasm::GlobalGet::from_op(ctx, op) {
+    } else if let Ok(global_op) = wasm_dialect::GlobalGet::from_op(ctx, op) {
         handle_global_get(ctx, global_op, emit_ctx, module_info, function)
-    } else if let Ok(global_op) = arena_wasm::GlobalSet::from_op(ctx, op) {
+    } else if let Ok(global_op) = wasm_dialect::GlobalSet::from_op(ctx, op) {
         handle_global_set(ctx, global_op, emit_ctx, function)
-    } else if arena_wasm::StructNew::matches(ctx, op) {
+    } else if wasm_dialect::StructNew::matches(ctx, op) {
         handle_struct_new(ctx, op, emit_ctx, module_info, function)
-    } else if arena_wasm::StructGet::matches(ctx, op) {
+    } else if wasm_dialect::StructGet::matches(ctx, op) {
         handle_struct_get(ctx, op, emit_ctx, module_info, function)
-    } else if let Ok(struct_set_op) = arena_wasm::StructSet::from_op(ctx, op) {
+    } else if let Ok(struct_set_op) = wasm_dialect::StructSet::from_op(ctx, op) {
         handle_struct_set(ctx, struct_set_op, emit_ctx, module_info, function)
-    } else if let Ok(array_new_op) = arena_wasm::ArrayNew::from_op(ctx, op) {
+    } else if let Ok(array_new_op) = wasm_dialect::ArrayNew::from_op(ctx, op) {
         handle_array_new(ctx, array_new_op, emit_ctx, module_info, function)
-    } else if arena_wasm::ArrayNewDefault::matches(ctx, op) {
+    } else if wasm_dialect::ArrayNewDefault::matches(ctx, op) {
         handle_array_new_default(ctx, op, emit_ctx, module_info, function)
-    } else if let Ok(array_get_op) = arena_wasm::ArrayGet::from_op(ctx, op) {
+    } else if let Ok(array_get_op) = wasm_dialect::ArrayGet::from_op(ctx, op) {
         handle_array_get(ctx, array_get_op, emit_ctx, module_info, function)
-    } else if let Ok(array_get_s_op) = arena_wasm::ArrayGetS::from_op(ctx, op) {
+    } else if let Ok(array_get_s_op) = wasm_dialect::ArrayGetS::from_op(ctx, op) {
         handle_array_get_s(ctx, array_get_s_op, emit_ctx, module_info, function)
-    } else if let Ok(array_get_u_op) = arena_wasm::ArrayGetU::from_op(ctx, op) {
+    } else if let Ok(array_get_u_op) = wasm_dialect::ArrayGetU::from_op(ctx, op) {
         handle_array_get_u(ctx, array_get_u_op, emit_ctx, module_info, function)
-    } else if let Ok(array_set_op) = arena_wasm::ArraySet::from_op(ctx, op) {
+    } else if let Ok(array_set_op) = wasm_dialect::ArraySet::from_op(ctx, op) {
         handle_array_set(ctx, array_set_op, emit_ctx, module_info, function)
-    } else if let Ok(array_copy_op) = arena_wasm::ArrayCopy::from_op(ctx, op) {
+    } else if let Ok(array_copy_op) = wasm_dialect::ArrayCopy::from_op(ctx, op) {
         handle_array_copy(ctx, array_copy_op, emit_ctx, module_info, function)
-    } else if arena_wasm::RefNull::matches(ctx, op) {
+    } else if wasm_dialect::RefNull::matches(ctx, op) {
         handle_ref_null(ctx, op, emit_ctx, module_info, function)
-    } else if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, op) {
+    } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
         handle_ref_func(ctx, ref_func_op, emit_ctx, module_info, function)
-    } else if arena_wasm::RefCast::matches(ctx, op) {
+    } else if wasm_dialect::RefCast::matches(ctx, op) {
         handle_ref_cast(ctx, op, emit_ctx, module_info, function)
-    } else if arena_wasm::RefTest::matches(ctx, op) {
+    } else if wasm_dialect::RefTest::matches(ctx, op) {
         handle_ref_test(ctx, op, emit_ctx, module_info, function)
-    } else if let Ok(bytes_op) = arena_wasm::BytesFromData::from_op(ctx, op) {
+    } else if let Ok(bytes_op) = wasm_dialect::BytesFromData::from_op(ctx, op) {
         handle_bytes_from_data(ctx, bytes_op, emit_ctx, function)
-    } else if let Ok(mem_size_op) = arena_wasm::MemorySize::from_op(ctx, op) {
+    } else if let Ok(mem_size_op) = wasm_dialect::MemorySize::from_op(ctx, op) {
         handle_memory_size(ctx, mem_size_op, emit_ctx, function)
-    } else if let Ok(mem_grow_op) = arena_wasm::MemoryGrow::from_op(ctx, op) {
+    } else if let Ok(mem_grow_op) = wasm_dialect::MemoryGrow::from_op(ctx, op) {
         handle_memory_grow(ctx, mem_grow_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I32Load::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I32Load::from_op(ctx, op) {
         handle_i32_load(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load::from_op(ctx, op) {
         handle_i64_load(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::F32Load::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::F32Load::from_op(ctx, op) {
         handle_f32_load(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::F64Load::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::F64Load::from_op(ctx, op) {
         handle_f64_load(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I32Load8S::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I32Load8S::from_op(ctx, op) {
         handle_i32_load8_s(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I32Load8U::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I32Load8U::from_op(ctx, op) {
         handle_i32_load8_u(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I32Load16S::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I32Load16S::from_op(ctx, op) {
         handle_i32_load16_s(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I32Load16U::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I32Load16U::from_op(ctx, op) {
         handle_i32_load16_u(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load8S::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load8S::from_op(ctx, op) {
         handle_i64_load8_s(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load8U::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load8U::from_op(ctx, op) {
         handle_i64_load8_u(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load16S::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load16S::from_op(ctx, op) {
         handle_i64_load16_s(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load16U::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load16U::from_op(ctx, op) {
         handle_i64_load16_u(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load32S::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load32S::from_op(ctx, op) {
         handle_i64_load32_s(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(load_op) = arena_wasm::I64Load32U::from_op(ctx, op) {
+    } else if let Ok(load_op) = wasm_dialect::I64Load32U::from_op(ctx, op) {
         handle_i64_load32_u(ctx, load_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I32Store::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I32Store::from_op(ctx, op) {
         handle_i32_store(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I64Store::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I64Store::from_op(ctx, op) {
         handle_i64_store(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::F32Store::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::F32Store::from_op(ctx, op) {
         handle_f32_store(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::F64Store::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::F64Store::from_op(ctx, op) {
         handle_f64_store(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I32Store8::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I32Store8::from_op(ctx, op) {
         handle_i32_store8(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I32Store16::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I32Store16::from_op(ctx, op) {
         handle_i32_store16(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I64Store8::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I64Store8::from_op(ctx, op) {
         handle_i64_store8(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I64Store16::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I64Store16::from_op(ctx, op) {
         handle_i64_store16(ctx, store_op, emit_ctx, module_info, function)
-    } else if let Ok(store_op) = arena_wasm::I64Store32::from_op(ctx, op) {
+    } else if let Ok(store_op) = wasm_dialect::I64Store32::from_op(ctx, op) {
         handle_i64_store32(ctx, store_op, emit_ctx, module_info, function)
     } else {
         let op_data = ctx.op(op);
@@ -1231,7 +1231,7 @@ fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u
 fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bool {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if arena_wasm::If::matches(ctx, op) {
+            if wasm_dialect::If::matches(ctx, op) {
                 let regions = &ctx.op(op).regions;
                 if let Some(&else_region) = regions.get(1) {
                     let has_call_indirect = region_contains_call_indirect(ctx, else_region);
@@ -1258,7 +1258,7 @@ fn should_adjust_handler_return_to_i32(ctx: &IrContext, region: RegionRef) -> bo
 fn region_contains_call_indirect(ctx: &IrContext, region: RegionRef) -> bool {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            if arena_wasm::CallIndirect::matches(ctx, op) {
+            if wasm_dialect::CallIndirect::matches(ctx, op) {
                 return true;
             }
             for &nested_region in &ctx.op(op).regions {
@@ -1304,10 +1304,7 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
 /// Intern a named adt.struct type (e.g., _Step, _Continuation).
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = std::collections::BTreeMap::new();
-    attrs.insert(
-        Symbol::new("name"),
-        ArenaAttribute::Symbol(Symbol::new(name)),
-    );
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(trunk_ir::arena::types::TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),

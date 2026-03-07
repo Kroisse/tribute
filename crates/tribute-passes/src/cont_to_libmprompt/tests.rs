@@ -3,7 +3,7 @@
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::parser::parse_test_module;
 use trunk_ir::arena::printer::print_module;
 

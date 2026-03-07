@@ -31,11 +31,12 @@ use salsa::{Database, Setter};
 use tree_sitter::{InputEdit, Point};
 
 use super::completion_index::{
-    complete_keywords, completion_items, filter_completions, find_signature, function_signatures,
+    self, complete_keywords, completion_items, filter_completions, find_signature,
+    function_signatures,
 };
 use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
-use tribute::{TributeDatabaseImpl, compile_for_lsp, database::parse_with_thread_local};
+use tribute::{TributeDatabaseImpl, database::parse_with_thread_local};
 
 /// Main LSP server state.
 struct LspServer {
@@ -631,8 +632,12 @@ impl LspServer {
         let result = self
             .db
             .attach(|db| {
-                let module = compile_for_lsp(db, source_cst);
-                Some(extract_symbols_from_module(db, &module, rope))
+                let ast_symbols = completion_index::document_symbols(db, source_cst);
+                let lsp_symbols: Vec<DocumentSymbol> = ast_symbols
+                    .iter()
+                    .map(|s| convert_document_symbol_info(s, rope))
+                    .collect();
+                Some(lsp_symbols)
             })
             .map(DocumentSymbolResponse::Nested);
 
@@ -1008,73 +1013,36 @@ fn cast_notification<N: lsp_types::notification::Notification>(
     }
 }
 
-/// Extract all symbols from a TrunkIR module.
-fn extract_symbols_from_module<'db>(
-    db: &'db dyn salsa::Database,
-    module: &trunk_ir::dialect::core::Module<'db>,
+/// Convert a `DocumentSymbolInfo` from the AST-based index into an LSP `DocumentSymbol`.
+fn convert_document_symbol_info(
+    info: &completion_index::DocumentSymbolInfo,
     rope: &Rope,
-) -> Vec<DocumentSymbol> {
-    module
-        .body(db)
-        .blocks(db)
-        .iter()
-        .flat_map(|block| block.operations(db))
-        .filter_map(|op| extract_symbol_from_operation(db, op, rope))
-        .collect()
-}
-
-/// Extract a DocumentSymbol from a single operation, if applicable.
-#[allow(clippy::collapsible_if)]
-fn extract_symbol_from_operation<'db>(
-    db: &'db dyn salsa::Database,
-    op: &trunk_ir::Operation<'db>,
-    rope: &Rope,
-) -> Option<DocumentSymbol> {
-    use trunk_ir::DialectOp;
-    use trunk_ir::dialect::{core, func};
-
-    if let Ok(module_op) = core::Module::from_operation(db, *op) {
-        return Some(create_symbol(
-            module_op.sym_name(db),
-            SymbolKind::MODULE,
-            op.location(db).span,
-            rope,
-            extract_symbols_from_module(db, &module_op, rope),
-        ));
-    }
-
-    // Try function
-    if let Ok(func_op) = func::Func::from_operation(db, *op) {
-        return Some(create_symbol(
-            func_op.name(db),
-            SymbolKind::FUNCTION,
-            op.location(db).span,
-            rope,
-            vec![],
-        ));
-    }
-
-    None
-}
-
-/// Create a DocumentSymbol with the given parameters.
-fn create_symbol(
-    name: trunk_ir::Symbol,
-    kind: SymbolKind,
-    span: trunk_ir::Span,
-    rope: &Rope,
-    children: Vec<DocumentSymbol>,
 ) -> DocumentSymbol {
-    let range = span_to_range(rope, span);
-    let selection_range = range; // TODO: Use name span when available
-    let children = if children.is_empty() {
+    let range = span_to_range(rope, info.span);
+    let selection_range = range;
+
+    let kind = match info.kind {
+        completion_index::SymbolKind::Function => SymbolKind::FUNCTION,
+        completion_index::SymbolKind::Struct => SymbolKind::STRUCT,
+        completion_index::SymbolKind::Enum => SymbolKind::ENUM,
+        completion_index::SymbolKind::Ability => SymbolKind::CLASS,
+        completion_index::SymbolKind::Field => SymbolKind::FIELD,
+        completion_index::SymbolKind::Variant => SymbolKind::ENUM_MEMBER,
+    };
+
+    let children = if info.children.is_empty() {
         None
     } else {
-        Some(children)
+        Some(
+            info.children
+                .iter()
+                .map(|c| convert_document_symbol_info(c, rope))
+                .collect(),
+        )
     };
 
     DocumentSymbol {
-        name: name.to_string(),
+        name: info.name.to_string(),
         detail: None,
         kind,
         tags: None,

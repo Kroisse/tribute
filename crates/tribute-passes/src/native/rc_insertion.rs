@@ -38,8 +38,8 @@ use trunk_ir::arena::TypeDataBuilder;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
@@ -408,7 +408,7 @@ fn is_yield_call(ctx: &IrContext, op: OpRef) -> bool {
 }
 
 /// Insert reference counting operations for all pointer-typed values.
-pub fn insert_rc(ctx: &mut IrContext, module: ArenaModule) {
+pub fn insert_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };

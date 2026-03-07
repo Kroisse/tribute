@@ -12,7 +12,6 @@ cranelift-frontend.workspace = true
 cranelift-module.workspace = true
 cranelift-object.workspace = true
 derive_more.workspace = true
-salsa.workspace = true
 target-lexicon.workspace = true
 rustc-hash.workspace = true
 tracing.workspace = true
@@ -20,4 +19,3 @@ trunk-ir.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
-salsa-test-macros = { path = "../salsa-test-macros" }

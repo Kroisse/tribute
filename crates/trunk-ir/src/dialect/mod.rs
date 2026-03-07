@@ -1,24 +1,13 @@
 //! TrunkIR dialect modules.
 //!
-//! Each dialect defines a set of operations with the `<dialect>.<operation>` naming convention.
-//! See `new-plans/ir.md` for the full dialect hierarchy.
+//! These modules only contain `register_pure_op!` and `register_isolated_op!` entries
+//! for the `inventory`-based operation property registries.
 //!
-//! Note: Tribute-specific dialects (ability, case, closure, list, pat, src, ty)
-//! have moved to the `tribute-ir` crate.
+//! Arena dialect definitions with full operation wrappers are in `arena/dialect/`.
 
-// === Infrastructure ===
-pub mod core;
-
-// === Mid-level (target independent) ===
 pub mod adt;
 pub mod arith;
-pub mod cf;
 pub mod cont;
+pub mod core;
 pub mod func;
 pub mod mem;
-pub mod scf;
-pub mod trampoline;
-
-// === Low-level (target specific) ===
-pub mod clif;
-pub mod wasm;

@@ -8,27 +8,26 @@
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `clif.{band,bor,bxor,ishl,sshr,ushr}`
 //! - `arith.{cast,trunc,extend,convert}` -> `clif.{ireduce,sextend,fpromote,fdemote,fcvt_*}`
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith as arena_arith;
+use trunk_ir::arena::dialect::arith;
 use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::Attribute;
 
 /// Lower arith dialect to clif dialect.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
-    use trunk_ir::arena::rewrite::ArenaConversionTarget;
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    use trunk_ir::arena::rewrite::ConversionTarget;
 
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("arith");
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(target)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -107,14 +106,14 @@ fn is_wider_int(ctx: &IrContext, dst: TypeRef, src: Option<TypeRef>) -> bool {
 
 struct ArithConstPattern;
 
-impl ArenaRewritePattern for ArithConstPattern {
+impl RewritePattern for ArithConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(const_op) = arena_arith::Const::from_op(ctx, op) else {
+        let Ok(const_op) = arith::Const::from_op(ctx, op) else {
             return false;
         };
 
@@ -140,21 +139,21 @@ impl ArenaRewritePattern for ArithConstPattern {
 
         let new_op_ref = match category {
             "f32" => {
-                if let ArenaAttribute::FloatBits(v) = value {
+                if let Attribute::FloatBits(v) = value {
                     arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
                 } else {
                     arena_clif::f32const(ctx, loc, result_ty, 0.0).op_ref()
                 }
             }
             "f64" => {
-                if let ArenaAttribute::FloatBits(v) = value {
+                if let Attribute::FloatBits(v) = value {
                     arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
                 } else {
                     arena_clif::f64const(ctx, loc, result_ty, 0.0).op_ref()
                 }
             }
             _ => {
-                if let ArenaAttribute::IntBits(v) = value {
+                if let Attribute::IntBits(v) = value {
                     arena_clif::iconst(ctx, loc, result_ty, v as i64).op_ref()
                 } else {
                     arena_clif::iconst(ctx, loc, result_ty, 0).op_ref()
@@ -169,12 +168,12 @@ impl ArenaRewritePattern for ArithConstPattern {
 
 struct ArithBinOpPattern;
 
-impl ArenaRewritePattern for ArithBinOpPattern {
+impl RewritePattern for ArithBinOpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -243,12 +242,12 @@ impl ArenaRewritePattern for ArithBinOpPattern {
 
 struct ArithCmpPattern;
 
-impl ArenaRewritePattern for ArithCmpPattern {
+impl RewritePattern for ArithCmpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -335,14 +334,14 @@ impl ArenaRewritePattern for ArithCmpPattern {
 
 struct ArithNegPattern;
 
-impl ArenaRewritePattern for ArithNegPattern {
+impl RewritePattern for ArithNegPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arena_arith::Neg::from_op(ctx, op) else {
+        let Ok(neg_op) = arith::Neg::from_op(ctx, op) else {
             return false;
         };
 
@@ -366,12 +365,12 @@ impl ArenaRewritePattern for ArithNegPattern {
 
 struct ArithBitwisePattern;
 
-impl ArenaRewritePattern for ArithBitwisePattern {
+impl RewritePattern for ArithBitwisePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {
@@ -421,12 +420,12 @@ impl ArenaRewritePattern for ArithBitwisePattern {
 
 struct ArithConversionPattern;
 
-impl ArenaRewritePattern for ArithConversionPattern {
+impl RewritePattern for ArithConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
         if data.dialect != Symbol::new("arith") {

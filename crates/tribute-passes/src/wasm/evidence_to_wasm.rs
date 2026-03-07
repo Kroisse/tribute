@@ -23,15 +23,15 @@
 use std::collections::BTreeMap;
 
 use tribute_ir::arena::dialect::ability as arena_ability;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
@@ -41,19 +41,19 @@ use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 /// 1. Replaces stub function declarations with real binary search implementations
 /// 2. Lowers remaining `ability.evidence_lookup` and `ability.evidence_extend`
 ///    operations to calls to the generated functions.
-pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_evidence_to_wasm(ctx: &mut IrContext, module: Module) {
     // Phase 1: Replace stubs with real implementations
     replace_evidence_function_stubs(ctx, module);
 
     // Phase 2: Pattern-based lowering for remaining ability ops
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(EvidenceLookupPattern)
         .add_pattern(EvidenceExtendPattern);
     applicator.apply_partial(ctx, module);
 }
 
 /// Replace evidence runtime function stubs with real implementations.
-fn replace_evidence_function_stubs(ctx: &mut IrContext, module: ArenaModule) {
+fn replace_evidence_function_stubs(ctx: &mut IrContext, module: Module) {
     let ops = module.ops(ctx);
 
     for op in ops {
@@ -86,7 +86,7 @@ fn replace_evidence_function_stubs(ctx: &mut IrContext, module: ArenaModule) {
 }
 
 /// Replace a top-level module operation with a new one.
-fn replace_module_op(ctx: &mut IrContext, module: ArenaModule, old_op: OpRef, new_op: OpRef) {
+fn replace_module_op(ctx: &mut IrContext, module: Module, old_op: OpRef, new_op: OpRef) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -105,7 +105,7 @@ fn replace_module_op(ctx: &mut IrContext, module: ArenaModule, old_op: OpRef, ne
 /// `wasm.call @__tribute_evidence_lookup`.
 struct EvidenceLookupPattern;
 
-impl ArenaRewritePattern for EvidenceLookupPattern {
+impl RewritePattern for EvidenceLookupPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -127,10 +127,10 @@ impl ArenaRewritePattern for EvidenceLookupPattern {
         let i32_ty = intern_i32(ctx);
 
         // Create: %id = wasm.i32_const(ability_id)
-        let id_const = arena_wasm::i32_const(ctx, loc, i32_ty, ability_id);
+        let id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
 
         // Create: %result = wasm.call @__tribute_evidence_lookup(%ev, %id)
-        let call_op = arena_wasm::call(
+        let call_op = wasm_dialect::call(
             ctx,
             loc,
             [evidence_val, id_const.result(ctx)],
@@ -158,7 +158,7 @@ impl ArenaRewritePattern for EvidenceLookupPattern {
 /// `wasm.call @__tribute_evidence_extend`.
 struct EvidenceExtendPattern;
 
-impl ArenaRewritePattern for EvidenceExtendPattern {
+impl RewritePattern for EvidenceExtendPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -191,20 +191,20 @@ impl ArenaRewritePattern for EvidenceExtendPattern {
         let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
         // Create: %ability_id = wasm.i32_const(ability_id)
-        let ability_id_const = arena_wasm::i32_const(ctx, loc, i32_ty, ability_id);
+        let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
 
         // Create: %prompt_tag = wasm.i32_const(prompt_tag)
         let prompt_tag_val = match &prompt_tag_attr {
             Attribute::IntBits(v) => *v as i32,
             _ => 0,
         };
-        let prompt_tag_const = arena_wasm::i32_const(ctx, loc, i32_ty, prompt_tag_val);
+        let prompt_tag_const = wasm_dialect::i32_const(ctx, loc, i32_ty, prompt_tag_val);
 
         // Create: %op_table_idx = wasm.i32_const(0)
-        let op_table_const = arena_wasm::i32_const(ctx, loc, i32_ty, 0);
+        let op_table_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
 
         // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %op_table_idx)
-        let marker_op = arena_wasm::struct_new(
+        let marker_op = wasm_dialect::struct_new(
             ctx,
             loc,
             [
@@ -217,7 +217,7 @@ impl ArenaRewritePattern for EvidenceExtendPattern {
         );
 
         // Create: %result = wasm.call @__tribute_evidence_extend(%ev, %marker)
-        let call_op = arena_wasm::call(
+        let call_op = wasm_dialect::call(
             ctx,
             loc,
             [evidence_val, marker_op.result(ctx)],
@@ -283,25 +283,25 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     let target_id_val = ctx.block_arg(body_block, 1);
 
     // Initialize low = 0
-    let zero = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+    let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
     ctx.push_op(body_block, zero.op_ref());
-    let low_init = arena_wasm::local_set(ctx, location, zero.result(ctx), locals::LOW);
+    let low_init = wasm_dialect::local_set(ctx, location, zero.result(ctx), locals::LOW);
     ctx.push_op(body_block, low_init.op_ref());
 
     // Initialize high = array.len(ev)
-    let len_op = arena_wasm::array_len(ctx, location, ev_val, i32_ty);
+    let len_op = wasm_dialect::array_len(ctx, location, ev_val, i32_ty);
     ctx.push_op(body_block, len_op.op_ref());
-    let high_init = arena_wasm::local_set(ctx, location, len_op.result(ctx), locals::HIGH);
+    let high_init = wasm_dialect::local_set(ctx, location, len_op.result(ctx), locals::HIGH);
     ctx.push_op(body_block, high_init.op_ref());
 
     // Build the search loop
     let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
     let loop_region = build_lookup_loop_body(ctx, location, ev_val, target_id_val, i32_ty);
-    let loop_op = arena_wasm::r#loop(ctx, location, [], nil_ty, loop_region);
+    let loop_op = wasm_dialect::r#loop(ctx, location, [], nil_ty, loop_region);
     ctx.push_op(body_block, loop_op.op_ref());
 
     // unreachable after loop (should never reach here - loop always returns)
-    let unreachable_op = arena_wasm::unreachable(ctx, location);
+    let unreachable_op = wasm_dialect::unreachable(ctx, location);
     ctx.push_op(body_block, unreachable_op.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -310,7 +310,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
         parent_op: None,
     });
 
-    let func_op = arena_wasm::func(
+    let func_op = wasm_dialect::func(
         ctx,
         location,
         Symbol::new("__tribute_evidence_lookup"),
@@ -339,17 +339,17 @@ fn build_lookup_loop_body(
     });
 
     // low = local.get LOW
-    let get_low = arena_wasm::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_low = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
     let low = get_low.result(ctx);
     ctx.push_op(block, get_low.op_ref());
 
     // high = local.get HIGH
-    let get_high = arena_wasm::local_get(ctx, location, i32_ty, locals::HIGH);
+    let get_high = wasm_dialect::local_get(ctx, location, i32_ty, locals::HIGH);
     let high = get_high.result(ctx);
     ctx.push_op(block, get_high.op_ref());
 
     // Check low >= high -> unreachable (ability not found = compiler bug)
-    let ge_check = arena_wasm::i32_ge_s(ctx, location, low, high, i32_ty);
+    let ge_check = wasm_dialect::i32_ge_s(ctx, location, low, high, i32_ty);
     ctx.push_op(block, ge_check.op_ref());
 
     let unreachable_then = {
@@ -359,7 +359,7 @@ fn build_lookup_loop_body(
             ops: smallvec![],
             parent_region: None,
         });
-        let unreachable_op = arena_wasm::unreachable(ctx, location);
+        let unreachable_op = wasm_dialect::unreachable(ctx, location);
         ctx.push_op(inner_block, unreachable_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -380,7 +380,7 @@ fn build_lookup_loop_body(
             parent_op: None,
         })
     };
-    let bound_check_if = arena_wasm::r#if(
+    let bound_check_if = wasm_dialect::r#if(
         ctx,
         location,
         ge_check.result(ctx),
@@ -391,26 +391,27 @@ fn build_lookup_loop_body(
     ctx.push_op(block, bound_check_if.op_ref());
 
     // mid = (low + high) / 2
-    let add_op = arena_wasm::i32_add(ctx, location, low, high, i32_ty);
+    let add_op = wasm_dialect::i32_add(ctx, location, low, high, i32_ty);
     ctx.push_op(block, add_op.op_ref());
-    let two = arena_wasm::i32_const(ctx, location, i32_ty, 2);
+    let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
     ctx.push_op(block, two.op_ref());
-    let mid_op = arena_wasm::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
+    let mid_op =
+        wasm_dialect::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
     let mid = mid_op.result(ctx);
     ctx.push_op(block, mid_op.op_ref());
 
     // marker = array.get(ev, mid)
-    let marker_op = arena_wasm::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
+    let marker_op = wasm_dialect::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
     let marker = marker_op.result(ctx);
     ctx.push_op(block, marker_op.op_ref());
 
     // marker_ability_id = struct.get(marker, 0)
-    let marker_id_op = arena_wasm::struct_get(ctx, location, marker, i32_ty, MARKER_IDX, 0);
+    let marker_id_op = wasm_dialect::struct_get(ctx, location, marker, i32_ty, MARKER_IDX, 0);
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(block, marker_id_op.op_ref());
 
     // Check marker_ability_id == target -> return marker
-    let eq_check = arena_wasm::i32_eq(ctx, location, marker_id, target_id_val, i32_ty);
+    let eq_check = wasm_dialect::i32_eq(ctx, location, marker_id, target_id_val, i32_ty);
     ctx.push_op(block, eq_check.op_ref());
 
     let found_then = {
@@ -421,7 +422,7 @@ fn build_lookup_loop_body(
             ops: smallvec![],
             parent_region: None,
         });
-        let return_op = arena_wasm::r#return(ctx, location, [marker]);
+        let return_op = wasm_dialect::r#return(ctx, location, [marker]);
         ctx.push_op(inner_block, return_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -439,7 +440,7 @@ fn build_lookup_loop_body(
             parent_region: None,
         });
 
-        let lt_check = arena_wasm::i32_lt_s(ctx, location, marker_id, target_id_val, i32_ty);
+        let lt_check = wasm_dialect::i32_lt_s(ctx, location, marker_id, target_id_val, i32_ty);
         ctx.push_op(inner_block, lt_check.op_ref());
 
         let update_low = {
@@ -450,11 +451,11 @@ fn build_lookup_loop_body(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let one = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
             ctx.push_op(ub, one.op_ref());
-            let add_one = arena_wasm::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
+            let add_one = wasm_dialect::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
             ctx.push_op(ub, add_one.op_ref());
-            let set_low = arena_wasm::local_set(ctx, location, add_one.result(ctx), locals::LOW);
+            let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
             ctx.push_op(ub, set_low.op_ref());
             ctx.create_region(RegionData {
                 location,
@@ -471,7 +472,7 @@ fn build_lookup_loop_body(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let set_high = arena_wasm::local_set(ctx, location, mid, locals::HIGH);
+            let set_high = wasm_dialect::local_set(ctx, location, mid, locals::HIGH);
             ctx.push_op(ub, set_high.op_ref());
             ctx.create_region(RegionData {
                 location,
@@ -480,7 +481,7 @@ fn build_lookup_loop_body(
             })
         };
 
-        let update_if = arena_wasm::r#if(
+        let update_if = wasm_dialect::r#if(
             ctx,
             location,
             lt_check.result(ctx),
@@ -491,7 +492,7 @@ fn build_lookup_loop_body(
         ctx.push_op(inner_block, update_if.op_ref());
 
         // br $loop (target = 0, since loop is innermost)
-        let br_loop = arena_wasm::br(ctx, location, 0);
+        let br_loop = wasm_dialect::br(ctx, location, 0);
         ctx.push_op(inner_block, br_loop.op_ref());
 
         ctx.create_region(RegionData {
@@ -501,7 +502,7 @@ fn build_lookup_loop_body(
         })
     };
 
-    let found_if = arena_wasm::r#if(
+    let found_if = wasm_dialect::r#if(
         ctx,
         location,
         eq_check.result(ctx),
@@ -552,29 +553,29 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
 
     // Get marker's ability_id for binary search
-    let marker_id_op = arena_wasm::struct_get(ctx, location, marker_val, i32_ty, MARKER_IDX, 0);
+    let marker_id_op = wasm_dialect::struct_get(ctx, location, marker_val, i32_ty, MARKER_IDX, 0);
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(body_block, marker_id_op.op_ref());
 
     // old_len = array.len(ev)
-    let len_op = arena_wasm::array_len(ctx, location, ev_val, i32_ty);
+    let len_op = wasm_dialect::array_len(ctx, location, ev_val, i32_ty);
     let old_len = len_op.result(ctx);
     ctx.push_op(body_block, len_op.op_ref());
 
     // Initialize low = 0
-    let zero = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+    let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
     ctx.push_op(body_block, zero.op_ref());
-    let low_init = arena_wasm::local_set(ctx, location, zero.result(ctx), locals::LOW);
+    let low_init = wasm_dialect::local_set(ctx, location, zero.result(ctx), locals::LOW);
     ctx.push_op(body_block, low_init.op_ref());
 
     // Initialize high = old_len
-    let high_init = arena_wasm::local_set(ctx, location, old_len, locals::HIGH);
+    let high_init = wasm_dialect::local_set(ctx, location, old_len, locals::HIGH);
     ctx.push_op(body_block, high_init.op_ref());
 
     // Binary search loop to find insertion point
     // After loop, LOW contains the insertion index
     let search_loop = build_extend_search_loop(ctx, location, ev_val, marker_id, i32_ty);
-    let loop_op = arena_wasm::r#loop(ctx, location, [], nil_ty, search_loop);
+    let loop_op = wasm_dialect::r#loop(ctx, location, [], nil_ty, search_loop);
 
     // Wrap loop in block for br_if(..., 1) target
     let loop_wrapper_block = ctx.create_block(BlockData {
@@ -589,33 +590,33 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         blocks: smallvec![loop_wrapper_block],
         parent_op: None,
     });
-    let block_op = arena_wasm::block(ctx, location, nil_ty, loop_region);
+    let block_op = wasm_dialect::block(ctx, location, nil_ty, loop_region);
     ctx.push_op(body_block, block_op.op_ref());
 
     // insert_idx = local.get LOW
-    let get_insert_idx = arena_wasm::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_insert_idx = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
     let insert_idx = get_insert_idx.result(ctx);
     ctx.push_op(body_block, get_insert_idx.op_ref());
 
     // new_len = old_len + 1
-    let one = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+    let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
     ctx.push_op(body_block, one.op_ref());
-    let add_len_op = arena_wasm::i32_add(ctx, location, old_len, one.result(ctx), i32_ty);
+    let add_len_op = wasm_dialect::i32_add(ctx, location, old_len, one.result(ctx), i32_ty);
     let new_len = add_len_op.result(ctx);
     ctx.push_op(body_block, add_len_op.op_ref());
 
     // new_ev = array.new_default(new_len)
     let new_array_op =
-        arena_wasm::array_new_default(ctx, location, new_len, evidence_ty, EVIDENCE_IDX);
+        wasm_dialect::array_new_default(ctx, location, new_len, evidence_ty, EVIDENCE_IDX);
     let new_ev = new_array_op.result(ctx);
     ctx.push_op(body_block, new_array_op.op_ref());
 
     // Copy elements before insertion point: array.copy(new_ev, 0, ev, 0, insert_idx)
     // Only if insert_idx > 0
-    let zero2 = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+    let zero2 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
     ctx.push_op(body_block, zero2.op_ref());
 
-    let gt_zero = arena_wasm::i32_gt_s(ctx, location, insert_idx, zero2.result(ctx), i32_ty);
+    let gt_zero = wasm_dialect::i32_gt_s(ctx, location, insert_idx, zero2.result(ctx), i32_ty);
     ctx.push_op(body_block, gt_zero.op_ref());
 
     let copy_prefix_then = {
@@ -625,9 +626,9 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             ops: smallvec![],
             parent_region: None,
         });
-        let zero3 = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+        let zero3 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
         ctx.push_op(inner_block, zero3.op_ref());
-        let copy_op = arena_wasm::array_copy(
+        let copy_op = wasm_dialect::array_copy(
             ctx,
             location,
             new_ev,
@@ -658,7 +659,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             parent_op: None,
         })
     };
-    let copy_prefix_if = arena_wasm::r#if(
+    let copy_prefix_if = wasm_dialect::r#if(
         ctx,
         location,
         gt_zero.result(ctx),
@@ -669,19 +670,20 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     ctx.push_op(body_block, copy_prefix_if.op_ref());
 
     // Set marker at insert_idx: array.set(new_ev, insert_idx, marker)
-    let set_op = arena_wasm::array_set(ctx, location, new_ev, insert_idx, marker_val, EVIDENCE_IDX);
+    let set_op =
+        wasm_dialect::array_set(ctx, location, new_ev, insert_idx, marker_val, EVIDENCE_IDX);
     ctx.push_op(body_block, set_op.op_ref());
 
     // Copy elements after insertion point: array.copy(new_ev, insert_idx+1, ev, insert_idx, old_len - insert_idx)
     // suffix_len = old_len - insert_idx
-    let suffix_len_op = arena_wasm::i32_sub(ctx, location, old_len, insert_idx, i32_ty);
+    let suffix_len_op = wasm_dialect::i32_sub(ctx, location, old_len, insert_idx, i32_ty);
     let suffix_len = suffix_len_op.result(ctx);
     ctx.push_op(body_block, suffix_len_op.op_ref());
 
     // Only if suffix_len > 0
-    let zero4 = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+    let zero4 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
     ctx.push_op(body_block, zero4.op_ref());
-    let gt_zero2 = arena_wasm::i32_gt_s(ctx, location, suffix_len, zero4.result(ctx), i32_ty);
+    let gt_zero2 = wasm_dialect::i32_gt_s(ctx, location, suffix_len, zero4.result(ctx), i32_ty);
     ctx.push_op(body_block, gt_zero2.op_ref());
 
     let copy_suffix_then = {
@@ -691,12 +693,12 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             ops: smallvec![],
             parent_region: None,
         });
-        let one2 = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+        let one2 = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(inner_block, one2.op_ref());
         let dst_offset_op =
-            arena_wasm::i32_add(ctx, location, insert_idx, one2.result(ctx), i32_ty);
+            wasm_dialect::i32_add(ctx, location, insert_idx, one2.result(ctx), i32_ty);
         ctx.push_op(inner_block, dst_offset_op.op_ref());
-        let copy_op = arena_wasm::array_copy(
+        let copy_op = wasm_dialect::array_copy(
             ctx,
             location,
             new_ev,
@@ -727,7 +729,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             parent_op: None,
         })
     };
-    let copy_suffix_if = arena_wasm::r#if(
+    let copy_suffix_if = wasm_dialect::r#if(
         ctx,
         location,
         gt_zero2.result(ctx),
@@ -738,7 +740,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     ctx.push_op(body_block, copy_suffix_if.op_ref());
 
     // Return new_ev
-    let return_op = arena_wasm::r#return(ctx, location, [new_ev]);
+    let return_op = wasm_dialect::r#return(ctx, location, [new_ev]);
     ctx.push_op(body_block, return_op.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -747,7 +749,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         parent_op: None,
     });
 
-    let func_op = arena_wasm::func(
+    let func_op = wasm_dialect::func(
         ctx,
         location,
         Symbol::new("__tribute_evidence_extend"),
@@ -779,45 +781,47 @@ fn build_extend_search_loop(
     });
 
     // low = local.get LOW
-    let get_low = arena_wasm::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_low = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
     let low = get_low.result(ctx);
     ctx.push_op(block, get_low.op_ref());
 
     // high = local.get HIGH
-    let get_high = arena_wasm::local_get(ctx, location, i32_ty, locals::HIGH);
+    let get_high = wasm_dialect::local_get(ctx, location, i32_ty, locals::HIGH);
     let high = get_high.result(ctx);
     ctx.push_op(block, get_high.op_ref());
 
     // if low >= high: break (insertion point found at LOW)
-    let ge_check = arena_wasm::i32_ge_s(ctx, location, low, high, i32_ty);
+    let ge_check = wasm_dialect::i32_ge_s(ctx, location, low, high, i32_ty);
     ctx.push_op(block, ge_check.op_ref());
 
     // br_if to exit loop (target = 1 to break out of loop to outer block)
-    let br_if_done = arena_wasm::br_if(ctx, location, ge_check.result(ctx), 1);
+    let br_if_done = wasm_dialect::br_if(ctx, location, ge_check.result(ctx), 1);
     ctx.push_op(block, br_if_done.op_ref());
 
     // mid = (low + high) / 2
-    let add_op = arena_wasm::i32_add(ctx, location, low, high, i32_ty);
+    let add_op = wasm_dialect::i32_add(ctx, location, low, high, i32_ty);
     ctx.push_op(block, add_op.op_ref());
-    let two = arena_wasm::i32_const(ctx, location, i32_ty, 2);
+    let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
     ctx.push_op(block, two.op_ref());
-    let mid_op = arena_wasm::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
+    let mid_op =
+        wasm_dialect::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
     let mid = mid_op.result(ctx);
     ctx.push_op(block, mid_op.op_ref());
 
     // mid_marker = array.get(ev, mid)
-    let mid_marker_op = arena_wasm::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
+    let mid_marker_op =
+        wasm_dialect::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
     let mid_marker = mid_marker_op.result(ctx);
     ctx.push_op(block, mid_marker_op.op_ref());
 
     // mid_ability_id = struct.get(mid_marker, 0)
-    let mid_id_op = arena_wasm::struct_get(ctx, location, mid_marker, i32_ty, MARKER_IDX, 0);
+    let mid_id_op = wasm_dialect::struct_get(ctx, location, mid_marker, i32_ty, MARKER_IDX, 0);
     let mid_id = mid_id_op.result(ctx);
     ctx.push_op(block, mid_id_op.op_ref());
 
     // if mid_ability_id < marker_id: low = mid + 1
     // else: high = mid
-    let lt_check = arena_wasm::i32_lt_s(ctx, location, mid_id, marker_id, i32_ty);
+    let lt_check = wasm_dialect::i32_lt_s(ctx, location, mid_id, marker_id, i32_ty);
     ctx.push_op(block, lt_check.op_ref());
 
     let update_low = {
@@ -827,11 +831,11 @@ fn build_extend_search_loop(
             ops: smallvec![],
             parent_region: None,
         });
-        let one = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+        let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(inner_block, one.op_ref());
-        let add_one = arena_wasm::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
+        let add_one = wasm_dialect::i32_add(ctx, location, mid, one.result(ctx), i32_ty);
         ctx.push_op(inner_block, add_one.op_ref());
-        let set_low = arena_wasm::local_set(ctx, location, add_one.result(ctx), locals::LOW);
+        let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
         ctx.push_op(inner_block, set_low.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -847,7 +851,7 @@ fn build_extend_search_loop(
             ops: smallvec![],
             parent_region: None,
         });
-        let set_high = arena_wasm::local_set(ctx, location, mid, locals::HIGH);
+        let set_high = wasm_dialect::local_set(ctx, location, mid, locals::HIGH);
         ctx.push_op(inner_block, set_high.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -856,7 +860,7 @@ fn build_extend_search_loop(
         })
     };
 
-    let update_if = arena_wasm::r#if(
+    let update_if = wasm_dialect::r#if(
         ctx,
         location,
         lt_check.result(ctx),
@@ -867,7 +871,7 @@ fn build_extend_search_loop(
     ctx.push_op(block, update_if.op_ref());
 
     // br $loop (continue searching)
-    let br_loop = arena_wasm::br(ctx, location, 0);
+    let br_loop = wasm_dialect::br(ctx, location, 0);
     ctx.push_op(block, br_loop.op_ref());
 
     ctx.create_region(RegionData {

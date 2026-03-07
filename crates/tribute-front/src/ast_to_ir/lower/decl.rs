@@ -6,7 +6,7 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::{adt, core, func};
 use trunk_ir::arena::refs::{BlockRef, PathRef, TypeRef};
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module as IrModule;
 use trunk_ir::arena::types::{Attribute, Location};
 
 use crate::ast::{
@@ -82,7 +82,7 @@ fn prescan_struct_fields<'db>(
 
 /// Lower a module to arena TrunkIR.
 ///
-/// Returns an `ArenaModule` inside the given `IrContext`.
+/// Returns an `Module` inside the given `IrContext`.
 pub fn lower_module<'db>(
     db: &'db dyn salsa::Database,
     ir: &mut IrContext,
@@ -91,7 +91,7 @@ pub fn lower_module<'db>(
     module: Module<TypedRef<'db>>,
     function_types: HashMap<Symbol, TypeScheme<'db>>,
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
-) -> ArenaModule {
+) -> IrModule {
     let module_location = span_map.get_or_default(module.id);
     let location = Location::new(path, module_location);
     let module_name = module.name.unwrap_or_else(|| Symbol::new("main"));
@@ -131,7 +131,7 @@ pub fn lower_module<'db>(
     });
 
     let module_op = core::module(ir, location, module_name, module_region);
-    ArenaModule::new(ir, module_op.op_ref()).expect("valid core.module operation")
+    IrModule::new(ir, module_op.op_ref()).expect("valid core.module operation")
 }
 
 /// Lower a declaration to arena TrunkIR.

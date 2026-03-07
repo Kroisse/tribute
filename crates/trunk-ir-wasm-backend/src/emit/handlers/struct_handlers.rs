@@ -7,10 +7,10 @@ use std::collections::BTreeMap;
 use tracing::debug;
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
 use crate::gc_types::{
@@ -41,14 +41,14 @@ pub(crate) fn handle_struct_new(
 
     // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
     // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
-    let type_idx = if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+    let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
         Some(u32::try_from(*idx).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "struct_new: type_idx value {} out of u32 range",
                 idx
             ))
         })?)
-    } else if let Some(ArenaAttribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+    } else if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
         if helpers::is_type(ctx, *ty, "wasm", "structref") {
             // Use placeholder map for wasm.structref
             // All (type, field_count) pairs are registered by collect_gc_types upfront
@@ -210,7 +210,7 @@ fn resolve_struct_get_type_idx(
     ctx: &IrContext,
     op: OpRef,
     operand: Option<ValueRef>,
-    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &BTreeMap<Symbol, Attribute>,
     module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
     let Some(op_val) = operand else {
@@ -226,7 +226,7 @@ fn resolve_struct_get_type_idx(
             "struct_get: operand defined by {}.{}",
             op_data.dialect, op_data.name
         );
-        if arena_wasm::RefCast::matches(ctx, def_op) {
+        if wasm_dialect::RefCast::matches(ctx, def_op) {
             return resolve_from_ref_cast(ctx, op, def_op, attrs, module_info);
         }
         // Not a ref_cast, use normal lookup
@@ -243,7 +243,7 @@ fn resolve_struct_get_type_idx(
 fn resolve_type_idx_from_inferred(
     ctx: &IrContext,
     inferred_type: Option<TypeRef>,
-    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &BTreeMap<Symbol, Attribute>,
     module_info: &ModuleInfo,
     closure_debug_label: &str,
 ) -> CompilationResult<u32> {
@@ -279,11 +279,11 @@ fn resolve_from_ref_cast(
     ctx: &IrContext,
     struct_get_op: OpRef,
     ref_cast_op: OpRef,
-    struct_get_attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    struct_get_attrs: &BTreeMap<Symbol, Attribute>,
     module_info: &ModuleInfo,
 ) -> CompilationResult<u32> {
     let def_attrs = &ctx.op(ref_cast_op).attributes;
-    if let Some(ArenaAttribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
+    if let Some(Attribute::Type(target_ty)) = def_attrs.get(&ATTR_TARGET_TYPE()) {
         // For placeholder types like wasm.structref, we MUST use field_count
         // to distinguish between different concrete types with same abstract type.
         let is_placeholder = helpers::is_type(ctx, *target_ty, "wasm", "structref");
@@ -291,7 +291,7 @@ fn resolve_from_ref_cast(
         if is_placeholder {
             // For placeholder types like wasm.structref, try to find the concrete type
             // from struct_get's type attribute first (this has the actual adt.struct/typeref type)
-            if let Some(ArenaAttribute::Type(struct_ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+            if let Some(Attribute::Type(struct_ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
                 // Try direct lookup with the concrete struct type
                 if let Some(&idx) = module_info.type_idx_by_type.get(struct_ty) {
                     let data = ctx.types.get(*struct_ty);
@@ -304,7 +304,7 @@ fn resolve_from_ref_cast(
             }
 
             // Use placeholder lookup with field_count as fallback
-            let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
+            let field_count = if let Some(Attribute::IntBits(fc)) =
                 def_attrs.get(&ATTR_FIELD_COUNT())
             {
                 debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
@@ -314,7 +314,7 @@ fn resolve_from_ref_cast(
                         fc
                     ))
                 })?
-            } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+            } else if let Some(Attribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
                 debug!(
                     "struct_get: ref_cast (placeholder) has NO field_count, inferring from type attr"
                 );
@@ -350,7 +350,7 @@ fn resolve_from_ref_cast(
             Ok(idx)
         } else {
             // Non-placeholder but not found - try placeholder lookup as fallback
-            let field_count = if let Some(ArenaAttribute::IntBits(fc)) =
+            let field_count = if let Some(Attribute::IntBits(fc)) =
                 def_attrs.get(&ATTR_FIELD_COUNT())
             {
                 usize::try_from(*fc).map_err(|_| {
@@ -359,7 +359,7 @@ fn resolve_from_ref_cast(
                         fc
                     ))
                 })?
-            } else if let Some(ArenaAttribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
+            } else if let Some(Attribute::Type(ty)) = struct_get_attrs.get(&ATTR_TYPE()) {
                 get_struct_field_count(ctx, *ty).ok_or_else(|| {
                     CompilationError::invalid_attribute(
                         "struct_get: placeholder structref requires field_count but type attr has no field info",
@@ -399,7 +399,7 @@ fn get_struct_field_count(ctx: &IrContext, ty: TypeRef) -> Option<usize> {
     }
     // In arena types, the "fields" attribute stores field information
     match data.attrs.get(&Symbol::new("fields")) {
-        Some(ArenaAttribute::List(fields)) => Some(fields.len()),
+        Some(Attribute::List(fields)) => Some(fields.len()),
         _ => {
             // Field types are stored as type params in arena adt.struct types
             if !data.params.is_empty() {
@@ -467,7 +467,7 @@ fn check_struct_get_needs_boxing(
 /// Handle struct.set operation
 pub(crate) fn handle_struct_set(
     ctx: &IrContext,
-    struct_set_op: arena_wasm::StructSet,
+    struct_set_op: wasm_dialect::StructSet,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,

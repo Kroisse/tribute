@@ -60,8 +60,8 @@ use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::rewrite::helpers::erase_op;
 use trunk_ir::arena::{BlockData, BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
@@ -72,7 +72,7 @@ const DEEP_RELEASE_FN: &str = "__tribute_deep_release";
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
-pub fn lower_rc(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };

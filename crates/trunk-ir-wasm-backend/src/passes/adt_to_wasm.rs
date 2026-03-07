@@ -40,22 +40,22 @@
 //! emit can infer type_idx from result/operand types without the attribute.
 
 use tracing::warn;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern)
         .add_pattern(StructGetPattern)
@@ -77,7 +77,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
 struct StructNewPattern;
 
-impl ArenaRewritePattern for StructNewPattern {
+impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -95,7 +95,7 @@ impl ArenaRewritePattern for StructNewPattern {
         // Keep type attribute, emit will convert to type_idx
         // Note: Result type is preserved as-is; emit phase uses type_to_field_type
         // for wasm type conversion.
-        let new_op = arena_wasm::struct_new(ctx, loc, fields, result_ty, 0);
+        let new_op = wasm_dialect::struct_new(ctx, loc, fields, result_ty, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -107,7 +107,7 @@ impl ArenaRewritePattern for StructNewPattern {
 /// is handled by the emit stage in `struct_handlers.rs`, not here.
 struct StructGetPattern;
 
-impl ArenaRewritePattern for StructGetPattern {
+impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -125,7 +125,7 @@ impl ArenaRewritePattern for StructGetPattern {
 
         // Build wasm.struct_get: just change dialect/name
         // field attribute is already u32, emit will read it directly
-        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        let new_op = wasm_dialect::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -134,7 +134,7 @@ impl ArenaRewritePattern for StructGetPattern {
 /// Pattern for `adt.struct_set` -> `wasm.struct_set`
 struct StructSetPattern;
 
-impl ArenaRewritePattern for StructSetPattern {
+impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -152,7 +152,7 @@ impl ArenaRewritePattern for StructSetPattern {
 
         // Build wasm.struct_set: just change dialect/name
         // field attribute is already u32, emit will read it directly
-        let new_op = arena_wasm::struct_set(ctx, loc, ref_val, value, 0, field_idx);
+        let new_op = wasm_dialect::struct_set(ctx, loc, ref_val, value, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -164,7 +164,7 @@ impl ArenaRewritePattern for StructSetPattern {
 /// without an explicit tag field. The type itself serves as the discriminant.
 struct VariantNewPattern;
 
-impl ArenaRewritePattern for VariantNewPattern {
+impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -185,7 +185,7 @@ impl ArenaRewritePattern for VariantNewPattern {
 
         // Create wasm.struct_new with variant-specific type (no tag field)
         // Result type is the variant-specific type - emit infers type_idx from it
-        let new_op = arena_wasm::struct_new(ctx, loc, fields, variant_type, 0);
+        let new_op = wasm_dialect::struct_new(ctx, loc, fields, variant_type, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -213,7 +213,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
             .attrs
             .get(&Symbol::new("name"))
             .and_then(|a| match a {
-                ArenaAttribute::Symbol(s) => Some(*s),
+                Attribute::Symbol(s) => Some(*s),
                 _ => None,
             })
             .unwrap_or(base_data.name)
@@ -229,9 +229,9 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
     // Add variant type attributes for proper detection (instead of name-based heuristics)
     let builder = TypeDataBuilder::new(dialect, variant_name)
         .params(params)
-        .attr(Symbol::new("is_variant"), ArenaAttribute::Bool(true))
-        .attr(Symbol::new("base_enum"), ArenaAttribute::Type(base_type))
-        .attr(Symbol::new("variant_tag"), ArenaAttribute::Symbol(tag));
+        .attr(Symbol::new("is_variant"), Attribute::Bool(true))
+        .attr(Symbol::new("base_enum"), Attribute::Type(base_type))
+        .attr(Symbol::new("variant_tag"), Attribute::Symbol(tag));
 
     ctx.types.intern(builder.build())
 }
@@ -241,7 +241,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
 /// Tests if a variant reference is of a specific variant type.
 struct VariantIsPattern;
 
-impl ArenaRewritePattern for VariantIsPattern {
+impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -271,7 +271,7 @@ impl ArenaRewritePattern for VariantIsPattern {
         let variant_type = make_variant_type(ctx, enum_type, tag);
 
         // Create wasm.ref_test with variant-specific type
-        let new_op = arena_wasm::ref_test(ctx, loc, ref_val, result_ty, variant_type, None);
+        let new_op = wasm_dialect::ref_test(ctx, loc, ref_val, result_ty, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -282,7 +282,7 @@ impl ArenaRewritePattern for VariantIsPattern {
 /// Casts a variant reference to a specific variant type after pattern matching.
 struct VariantCastPattern;
 
-impl ArenaRewritePattern for VariantCastPattern {
+impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -312,7 +312,7 @@ impl ArenaRewritePattern for VariantCastPattern {
 
         // Create wasm.ref_cast with variant-specific type
         // Result type is the variant-specific type - emit infers type_idx from it
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, variant_type, variant_type, None);
+        let new_op = wasm_dialect::ref_cast(ctx, loc, ref_val, variant_type, variant_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -325,7 +325,7 @@ impl ArenaRewritePattern for VariantCastPattern {
 /// The type for struct.get comes from the operand (the variant_cast result).
 struct VariantGetPattern;
 
-impl ArenaRewritePattern for VariantGetPattern {
+impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -343,7 +343,7 @@ impl ArenaRewritePattern for VariantGetPattern {
 
         // Infer type from the operand (the cast result has the variant-specific type)
         // field attribute is already u32 and will be used directly
-        let new_op = arena_wasm::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
+        let new_op = wasm_dialect::struct_get(ctx, loc, ref_val, result_ty, 0, field_idx);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -352,7 +352,7 @@ impl ArenaRewritePattern for VariantGetPattern {
 /// Pattern for `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
 struct ArrayNewPattern;
 
-impl ArenaRewritePattern for ArrayNewPattern {
+impl RewritePattern for ArrayNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -374,13 +374,13 @@ impl ArenaRewritePattern for ArrayNewPattern {
             }
             1 => {
                 // Only size operand -> array_new_default
-                let new_op = arena_wasm::array_new_default(ctx, loc, operands[0], result_ty, 0);
+                let new_op = wasm_dialect::array_new_default(ctx, loc, operands[0], result_ty, 0);
                 rewriter.replace_op(new_op.op_ref());
             }
             2 => {
                 // size + init value -> array_new
                 let new_op =
-                    arena_wasm::array_new(ctx, loc, operands[0], operands[1], result_ty, 0);
+                    wasm_dialect::array_new(ctx, loc, operands[0], operands[1], result_ty, 0);
                 rewriter.replace_op(new_op.op_ref());
             }
             n => {
@@ -396,7 +396,7 @@ impl ArenaRewritePattern for ArrayNewPattern {
 /// Pattern for `adt.array_get` -> `wasm.array_get`
 struct ArrayGetPattern;
 
-impl ArenaRewritePattern for ArrayGetPattern {
+impl RewritePattern for ArrayGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -412,7 +412,7 @@ impl ArenaRewritePattern for ArrayGetPattern {
         let index = array_get.index(ctx);
         let result_ty = array_get.result_ty(ctx);
 
-        let new_op = arena_wasm::array_get(ctx, loc, ref_val, index, result_ty, 0);
+        let new_op = wasm_dialect::array_get(ctx, loc, ref_val, index, result_ty, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -421,7 +421,7 @@ impl ArenaRewritePattern for ArrayGetPattern {
 /// Pattern for `adt.array_set` -> `wasm.array_set`
 struct ArraySetPattern;
 
-impl ArenaRewritePattern for ArraySetPattern {
+impl RewritePattern for ArraySetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -437,7 +437,7 @@ impl ArenaRewritePattern for ArraySetPattern {
         let index = array_set.index(ctx);
         let value = array_set.value(ctx);
 
-        let new_op = arena_wasm::array_set(ctx, loc, ref_val, index, value, 0);
+        let new_op = wasm_dialect::array_set(ctx, loc, ref_val, index, value, 0);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -446,7 +446,7 @@ impl ArenaRewritePattern for ArraySetPattern {
 /// Pattern for `adt.array_len` -> `wasm.array_len`
 struct ArrayLenPattern;
 
-impl ArenaRewritePattern for ArrayLenPattern {
+impl RewritePattern for ArrayLenPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -461,7 +461,7 @@ impl ArenaRewritePattern for ArrayLenPattern {
         let ref_val = array_len.r#ref(ctx);
         let result_ty = array_len.result_ty(ctx);
 
-        let new_op = arena_wasm::array_len(ctx, loc, ref_val, result_ty);
+        let new_op = wasm_dialect::array_len(ctx, loc, ref_val, result_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -470,7 +470,7 @@ impl ArenaRewritePattern for ArrayLenPattern {
 /// Pattern for `adt.ref_null` -> `wasm.ref_null`
 struct RefNullPattern;
 
-impl ArenaRewritePattern for RefNullPattern {
+impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -488,7 +488,7 @@ impl ArenaRewritePattern for RefNullPattern {
         let adt_type = ref_null.r#type(ctx);
         let heap_type = ctx.types.get(adt_type).name;
 
-        let new_op = arena_wasm::ref_null(ctx, loc, result_ty, heap_type, None);
+        let new_op = wasm_dialect::ref_null(ctx, loc, result_ty, heap_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -497,7 +497,7 @@ impl ArenaRewritePattern for RefNullPattern {
 /// Pattern for `adt.ref_is_null` -> `wasm.ref_is_null`
 struct RefIsNullPattern;
 
-impl ArenaRewritePattern for RefIsNullPattern {
+impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -512,7 +512,7 @@ impl ArenaRewritePattern for RefIsNullPattern {
         let ref_val = ref_is_null.r#ref(ctx);
         let result_ty = ref_is_null.result_ty(ctx);
 
-        let new_op = arena_wasm::ref_is_null(ctx, loc, ref_val, result_ty);
+        let new_op = wasm_dialect::ref_is_null(ctx, loc, ref_val, result_ty);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -521,7 +521,7 @@ impl ArenaRewritePattern for RefIsNullPattern {
 /// Pattern for `adt.ref_cast` -> `wasm.ref_cast`
 struct RefCastPattern;
 
-impl ArenaRewritePattern for RefCastPattern {
+impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -539,7 +539,7 @@ impl ArenaRewritePattern for RefCastPattern {
         // Get the target type from the adt type attribute
         let adt_type = ref_cast.r#type(ctx);
 
-        let new_op = arena_wasm::ref_cast(ctx, loc, ref_val, result_ty, adt_type, None);
+        let new_op = wasm_dialect::ref_cast(ctx, loc, ref_val, result_ty, adt_type, None);
         rewriter.replace_op(new_op.op_ref());
         true
     }

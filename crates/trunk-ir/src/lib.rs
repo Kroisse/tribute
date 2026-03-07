@@ -5,49 +5,45 @@
 
 #![recursion_limit = "512"]
 
+// === Salsa-independent primitives ===
+pub mod symbol;
+
 // === ADT layout computation ===
 pub mod adt_layout;
 
 // === Arena-based IR ===
 pub mod arena;
 
-// === Dialect modules ===
+// === Dialect operation registrations (inventory-based) ===
 pub mod dialect;
 
-// === IR infrastructure ===
-pub mod conversion;
-pub mod ir;
+// === Source location types ===
 pub mod location;
+
+// === Operation interface (purity, isolation) ===
 pub mod op_interface;
+
+// === Operation utilities (ConversionError, raw_ident_str macro) ===
 pub mod ops;
+
+// === Dialect conversion utilities ===
+pub mod conversion;
+
+// === IR text format parser ===
 pub mod parser;
-pub mod printer;
-pub mod rewrite;
-pub mod transforms;
-pub mod type_interface;
-pub mod types;
-pub mod validation;
-pub mod walk;
 
 // Re-export proc macro for arena dialect definitions
 pub use trunk_ir_macros::arena_dialect;
 
-// Re-export paste for use in macros (still used by Salsa dialect! macro)
+// Re-export paste for use in macros
 #[doc(hidden)]
 pub use paste;
 
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 
-pub use ir::{Block, BlockArg, BlockBuilder, BlockId, Operation, Region, Symbol, Value, ValueDef};
-pub use location::{Location, PathId, Span, Spanned};
-pub use ops::{ConversionError, DialectOp};
-pub use types::{Attribute, Attrs, DialectType, Type};
-pub use walk::{OperationWalk, WalkAction};
+pub use location::{Span, Spanned};
+pub use ops::ConversionError;
+pub use symbol::{BlockId, IdVec, Symbol, SymbolVec};
 
-/// Small vector for values tracked by Salsa framework.
-pub type IdVec<T> = smallvec::SmallVec<[T; 2]>;
 pub use smallvec::smallvec as idvec;
-
-/// Small vector for symbols.
-pub type SymbolVec = smallvec::SmallVec<[Symbol; 4]>;

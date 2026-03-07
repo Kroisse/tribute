@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use crate::Symbol;
 use crate::arena::{IrContext, OpRef};
-use crate::{Operation, Symbol};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -72,35 +72,15 @@ impl PureOps {
         PureOpRegistration { dialect, op_name }
     }
 
-    /// Check if an operation is pure (no side effects, safe to remove if unused).
-    ///
-    /// Returns true only if the operation has been explicitly registered as pure.
-    /// Returns false for all unregistered operations (conservative by default).
-    pub fn is_pure<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
-        let dialect = op.dialect(db);
-        let op_name = op.name(db);
-        REGISTRY.lookup(dialect, op_name)
-    }
-
-    /// Check if an operation is pure and eligible for DCE removal.
-    ///
-    /// Returns true if the operation is registered as pure (has no side effects).
-    ///
-    /// Note: This only checks purity. The caller must separately verify that
-    /// the operation's results are unused before removing it.
-    pub fn is_removable<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
-        Self::is_pure(db, op)
-    }
-
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
-    pub fn is_pure_arena(ctx: &IrContext, op: OpRef) -> bool {
+    pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
         REGISTRY.lookup(data.dialect, data.name)
     }
 
     /// Check if an arena operation is pure and eligible for DCE removal.
-    pub fn is_removable_arena(ctx: &IrContext, op: OpRef) -> bool {
-        Self::is_pure_arena(ctx, op)
+    pub fn is_removable(ctx: &IrContext, op: OpRef) -> bool {
+        Self::is_pure(ctx, op)
     }
 }
 
@@ -108,42 +88,21 @@ impl PureOps {
 ///
 /// # Example
 /// ```text
-/// // New syntax: just provide the operation type
-/// register_pure_op!(arith::Add);
-/// register_pure_op!(adt::StructNew);
-///
-/// // Legacy syntax: dialect.op_name (still supported)
 /// register_pure_op!(arith.add);
 /// register_pure_op!(adt.struct_new);
 /// ```
 ///
-/// This expands to both the trait implementation and inventory registration:
+/// This expands to an inventory registration:
 /// ```text
-/// impl op_interface::Pure for dialect::arith::Add<'_> {}
 /// inventory::submit! {
 ///     op_interface::PureOps::register("arith", "add")
 /// }
 /// ```
 #[macro_export]
 macro_rules! register_pure_op {
-    // New syntax: provide the type path directly
-    // The type must implement DialectOp with DIALECT_NAME and OP_NAME constants
-    ($op_type:ty) => {
-        impl $crate::op_interface::Pure for $op_type {}
-
-        ::inventory::submit! {
-            $crate::op_interface::PureOps::register(
-                <$op_type as $crate::DialectOp>::DIALECT_NAME,
-                <$op_type as $crate::DialectOp>::OP_NAME
-            )
-        }
-    };
-
-    // Legacy syntax: dialect.op_name (for backwards compatibility within trunk-ir)
+    // Legacy syntax: dialect.op_name
     ($dialect:ident . $op_name:ident) => {
         $crate::paste::paste! {
-            impl $crate::op_interface::Pure for $crate::dialect::$dialect::[<$op_name:camel>]<'_> {}
-
             ::inventory::submit! {
                 $crate::op_interface::PureOps::register(
                     $crate::raw_ident_str!($dialect),
@@ -228,7 +187,7 @@ impl IsolatedFromAboveOps {
     ///
     /// Use the `register_isolated_op!` macro instead:
     /// ```text
-    /// register_isolated_op!(func::Func);
+    /// register_isolated_op!(func.func);
     /// ```
     #[doc(hidden)]
     pub const fn register(
@@ -238,148 +197,31 @@ impl IsolatedFromAboveOps {
         IsolatedFromAboveRegistration { dialect, op_name }
     }
 
-    /// Check if an operation's regions are isolated from above.
-    ///
-    /// Returns true only if the operation has been explicitly registered as isolated.
-    /// Returns false for all unregistered operations (conservative by default).
-    pub fn is_isolated<'db>(db: &'db dyn salsa::Database, op: &Operation<'db>) -> bool {
-        let dialect = op.dialect(db);
-        let op_name = op.name(db);
-        ISOLATED_REGISTRY.lookup(dialect, op_name)
-    }
-
     /// Check if an arena operation's regions are isolated from above.
-    pub fn is_isolated_arena(ctx: &IrContext, op: OpRef) -> bool {
+    pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
         ISOLATED_REGISTRY.lookup(data.dialect, data.name)
     }
-
-    /// Verify that an isolated operation doesn't have references to outer values.
-    ///
-    /// Returns a list of (operation, referenced_value) pairs that violate the constraint.
-    /// Empty list means the operation is valid.
-    ///
-    /// This only checks the immediate regions of the operation, not nested isolated
-    /// operations (they are their own verification scope).
-    pub fn verify_isolation<'db>(
-        db: &'db dyn salsa::Database,
-        op: &Operation<'db>,
-    ) -> Vec<IsolationViolation<'db>> {
-        if !Self::is_isolated(db, op) {
-            return vec![];
-        }
-
-        let mut violations = Vec::new();
-        let mut valid_values: HashSet<crate::Value<'db>> = HashSet::new();
-
-        // Collect block arguments as valid values
-        for region in op.regions(db).iter() {
-            for block in region.blocks(db).iter() {
-                let num_args = block.args(db).len();
-                for idx in 0..num_args {
-                    valid_values.insert(block.arg(db, idx));
-                }
-            }
-        }
-
-        // Walk regions and check for violations
-        for region in op.regions(db).iter() {
-            Self::verify_region(db, *region, &mut valid_values, &mut violations);
-        }
-
-        violations
-    }
-
-    fn verify_region<'db>(
-        db: &'db dyn salsa::Database,
-        region: crate::Region<'db>,
-        valid_values: &mut HashSet<crate::Value<'db>>,
-        violations: &mut Vec<IsolationViolation<'db>>,
-    ) {
-        for block in region.blocks(db).iter() {
-            for op in block.operations(db).iter() {
-                // Check operands
-                for operand in op.operands(db).iter() {
-                    if !valid_values.contains(operand) {
-                        violations.push(IsolationViolation {
-                            operation: *op,
-                            external_value: *operand,
-                        });
-                    }
-                }
-
-                // Add results to valid values
-                let num_results = op.results(db).len();
-                for idx in 0..num_results {
-                    let result = crate::Value::new(db, crate::ValueDef::OpResult(*op), idx);
-                    valid_values.insert(result);
-                }
-
-                // Recurse into nested regions (but stop at nested isolated ops)
-                if !Self::is_isolated(db, op) {
-                    for nested_region in op.regions(db).iter() {
-                        // Add block arguments of nested region
-                        for block in nested_region.blocks(db).iter() {
-                            let num_args = block.args(db).len();
-                            for idx in 0..num_args {
-                                valid_values.insert(block.arg(db, idx));
-                            }
-                        }
-                        Self::verify_region(db, *nested_region, valid_values, violations);
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Represents a violation of the IsolatedFromAbove constraint.
-#[derive(Debug, Clone)]
-pub struct IsolationViolation<'db> {
-    /// The operation that has the invalid reference.
-    pub operation: Operation<'db>,
-    /// The value that is referenced from outside the isolated region.
-    pub external_value: crate::Value<'db>,
 }
 
 /// Register an isolated operation with simplified syntax.
 ///
 /// # Example
 /// ```text
-/// // Provide the operation type directly
-/// register_isolated_op!(func::Func);
-///
-/// // Legacy syntax: dialect.op_name (still supported)
 /// register_isolated_op!(func.func);
 /// ```
 ///
-/// This expands to both the trait implementation and inventory registration:
+/// This expands to an inventory registration:
 /// ```text
-/// impl op_interface::IsolatedFromAbove for dialect::func::Func<'_> {}
 /// inventory::submit! {
 ///     op_interface::IsolatedFromAboveOps::register("func", "func")
 /// }
 /// ```
 #[macro_export]
 macro_rules! register_isolated_op {
-    // New syntax: provide the type path directly
-    // The type must implement DialectOp with DIALECT_NAME and OP_NAME constants
-    ($op_type:ty) => {
-        impl $crate::op_interface::IsolatedFromAbove for $op_type {}
-
-        ::inventory::submit! {
-            $crate::op_interface::IsolatedFromAboveOps::register(
-                <$op_type as $crate::DialectOp>::DIALECT_NAME,
-                <$op_type as $crate::DialectOp>::OP_NAME
-            )
-        }
-    };
-
-    // Legacy syntax: dialect.op_name (for backwards compatibility within trunk-ir)
+    // Legacy syntax: dialect.op_name
     ($dialect:ident . $op_name:ident) => {
         $crate::paste::paste! {
-            impl $crate::op_interface::IsolatedFromAbove for $crate::dialect::$dialect::[<$op_name:camel>]<'_> {}
-
             ::inventory::submit! {
                 $crate::op_interface::IsolatedFromAboveOps::register(
                     $crate::raw_ident_str!($dialect),

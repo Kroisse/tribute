@@ -20,8 +20,8 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::arena::rewrite::Module;
 use trunk_ir::arena::rewrite::helpers::erase_op;
 use trunk_ir::arena::{BlockRef, OpRef, RegionRef, ValueRef};
 
@@ -32,7 +32,7 @@ use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 /// This pass ensures that captured continuation stacks properly manage
 /// RC-protected heap objects by wrapping raw resume pointers in
 /// `TributeContinuation` structs that carry RC root metadata.
-pub fn rewrite_cont_rc(ctx: &mut IrContext, module: ArenaModule) {
+pub fn rewrite_cont_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };

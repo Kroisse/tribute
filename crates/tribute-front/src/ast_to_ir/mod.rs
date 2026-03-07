@@ -23,7 +23,7 @@
 //!
 //! ## Arena IR
 //!
-//! This module emits arena-based IR (`IrContext` + `ArenaModule`) directly,
+//! This module emits arena-based IR (`IrContext` + `Module`) directly,
 //! bypassing the Salsa-interned IR layer.
 
 mod context;
@@ -33,7 +33,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::rewrite::ArenaModule;
+use trunk_ir::arena::rewrite::Module as IrModule;
 
 use crate::ast::{Module, NodeId, SpanMap, Type, TypeScheme, TypedRef};
 
@@ -43,7 +43,7 @@ pub use lower::lower_module;
 /// Lower a typed AST module to arena TrunkIR.
 ///
 /// This is the main entry point for AST-to-IR transformation.
-/// Emits directly into the given `IrContext`, returning an `ArenaModule`.
+/// Emits directly into the given `IrContext`, returning an `Module`.
 ///
 /// # Parameters
 /// - `db`: Salsa database (for AST type access and diagnostics)
@@ -61,9 +61,9 @@ pub fn lower_ast_to_ir<'db>(
     source_uri: &str,
     function_types: HashMap<Symbol, TypeScheme<'db>>,
     node_types: HashMap<NodeId, Type<'db>>,
-) -> ArenaModule {
+) -> IrModule {
     let path = ir.paths.intern(source_uri.to_owned());
-    lower_module(db, ir, path, span_map, module, function_types, node_types)
+    lower::lower_module(db, ir, path, span_map, module, function_types, node_types)
 }
 
 #[cfg(test)]

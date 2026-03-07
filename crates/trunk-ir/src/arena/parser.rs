@@ -17,7 +17,7 @@ use winnow::prelude::*;
 
 use super::context::{IrContext, OperationDataBuilder};
 use super::refs::*;
-use super::rewrite::ArenaModule;
+use super::rewrite::Module;
 use super::types::*;
 use super::{BlockArgData, BlockData, RegionData};
 use crate::Symbol;
@@ -474,17 +474,17 @@ pub fn parse_module(ctx: &mut IrContext, input: &str) -> Result<OpRef, ParseErro
     builder.build_operation(&raw_op)
 }
 
-/// Parse textual IR into an [`ArenaModule`], panicking on failure.
+/// Parse textual IR into an [`Module`], panicking on failure.
 ///
 /// Convenience wrapper around [`parse_module`] for tests.
-pub fn parse_test_module(ctx: &mut IrContext, input: &str) -> ArenaModule {
+pub fn parse_test_module(ctx: &mut IrContext, input: &str) -> Module {
     let op = parse_module(ctx, input).unwrap_or_else(|e| {
         panic!(
             "Failed to parse test IR at offset {}:\n  {}\n\nInput:\n{}",
             e.offset, e.message, input
         );
     });
-    ArenaModule::new(ctx, op).unwrap_or_else(|| {
+    Module::new(ctx, op).unwrap_or_else(|| {
         panic!(
             "Parsed operation is not a core.module.\n\nInput:\n{}",
             input

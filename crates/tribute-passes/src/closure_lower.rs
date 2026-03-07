@@ -17,7 +17,7 @@
 //! %result = func.call_indirect %funcref, %env, %args...
 //! ```
 //!
-//! Uses `ArenaRewritePattern` + `PatternApplicator` for declarative transformation.
+//! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use std::collections::HashSet;
 
@@ -28,15 +28,14 @@ use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{ArenaDialectOp, ArenaDialectType};
+use trunk_ir::arena::ops::{DialectOp, DialectType};
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
-use crate::evidence::collect_effectful_functions_arena;
+use crate::evidence::collect_effectful_functions;
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
@@ -48,7 +47,7 @@ fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(i32_ty)
             .param(anyref_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_closure")))
+            .attr("name", Attribute::Symbol(Symbol::new("_closure")))
             .build(),
     )
 }
@@ -61,18 +60,18 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     matches!(
         data.attrs.get(&Symbol::new("name")),
-        Some(ArenaAttribute::Symbol(s)) if *s == Symbol::new("_closure")
+        Some(Attribute::Symbol(s)) if *s == Symbol::new("_closure")
     )
 }
 
 /// Check if an arena value is a closure value (for pre-lowering collection).
-fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
-    use trunk_ir::arena::refs::ValueDef as ArenaValueDef;
+fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
+    use trunk_ir::arena::refs::ValueDef;
 
     let ty = ctx.value_ty(value);
 
     // Direct check for closure.new result
-    if let ArenaValueDef::OpResult(op, _) = ctx.value_def(value)
+    if let ValueDef::OpResult(op, _) = ctx.value_def(value)
         && arena_closure::New::from_op(ctx, op).is_ok()
     {
         return true;
@@ -97,33 +96,30 @@ fn is_any_closure_value_arena(ctx: &IrContext, value: ValueRef) -> bool {
 ///
 /// We use `(span.start, span.end)` instead of `OpRef` because Phase 1 pattern
 /// application destroys original ops and creates new ones with different OpRefs.
-fn collect_all_closure_calls_arena(
-    ctx: &IrContext,
-    module: ArenaModule,
-) -> HashSet<(usize, usize)> {
+fn collect_all_closure_calls(ctx: &IrContext, module: Module) -> HashSet<(usize, usize)> {
     let mut closure_calls = HashSet::new();
     for op in module.ops(ctx) {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
             let body = func_op.body(ctx);
-            collect_closure_calls_in_region_arena(ctx, body, &mut closure_calls);
+            collect_closure_calls_in_region(ctx, body, &mut closure_calls);
         }
     }
     closure_calls
 }
 
-fn collect_closure_calls_in_region_arena(
+fn collect_closure_calls_in_region(
     ctx: &IrContext,
     region: trunk_ir::arena::refs::RegionRef,
     closure_calls: &mut HashSet<(usize, usize)>,
 ) {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
-            collect_closure_calls_in_op_arena(ctx, op, closure_calls);
+            collect_closure_calls_in_op(ctx, op, closure_calls);
         }
     }
 }
 
-fn collect_closure_calls_in_op_arena(
+fn collect_closure_calls_in_op(
     ctx: &IrContext,
     op: OpRef,
     closure_calls: &mut HashSet<(usize, usize)>,
@@ -132,7 +128,7 @@ fn collect_closure_calls_in_op_arena(
     if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
         let operands = ctx.op_operands(op);
         if let Some(&callee) = operands.first()
-            && is_any_closure_value_arena(ctx, callee)
+            && is_any_closure_value(ctx, callee)
         {
             let loc = ctx.op(op).location;
             closure_calls.insert((loc.span.start, loc.span.end));
@@ -141,7 +137,7 @@ fn collect_closure_calls_in_op_arena(
 
     // Recurse into regions
     for &region in ctx.op(op).regions.iter() {
-        collect_closure_calls_in_region_arena(ctx, region, closure_calls);
+        collect_closure_calls_in_region(ctx, region, closure_calls);
     }
 }
 
@@ -152,12 +148,12 @@ fn collect_closure_calls_in_op_arena(
 /// Update function signatures to convert `core.func` params to `closure.closure`.
 struct UpdateFuncSignatureArena;
 
-impl ArenaRewritePattern for UpdateFuncSignatureArena {
+impl RewritePattern for UpdateFuncSignatureArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
             return false;
@@ -200,10 +196,10 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
         // Build new func type preserving effect attribute
         let return_ty = new_params[0];
         let effect = match effect_attr {
-            Some(ArenaAttribute::Type(t)) => Some(t),
+            Some(Attribute::Type(t)) => Some(t),
             None => None,
             Some(other) => panic!(
-                "UpdateFuncSignatureArena: expected ArenaAttribute::Type for effect, got {:?}",
+                "UpdateFuncSignatureArena: expected Attribute::Type for effect, got {:?}",
                 other,
             ),
         };
@@ -228,12 +224,12 @@ impl ArenaRewritePattern for UpdateFuncSignatureArena {
 /// Lower `closure.new` to `func.constant` + `adt.struct_new`.
 struct LowerClosureNewArena;
 
-impl ArenaRewritePattern for LowerClosureNewArena {
+impl RewritePattern for LowerClosureNewArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(closure_new) = arena_closure::New::from_op(ctx, op) else {
             return false;
@@ -271,12 +267,12 @@ impl ArenaRewritePattern for LowerClosureNewArena {
 /// Lower `func.call_indirect` on closure values.
 struct LowerClosureCallArena;
 
-impl ArenaRewritePattern for LowerClosureCallArena {
+impl RewritePattern for LowerClosureCallArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_func::CallIndirect::from_op(ctx, op).is_err() {
             return false;
@@ -350,12 +346,12 @@ impl ArenaRewritePattern for LowerClosureCallArena {
 /// Lower `closure.func` to `adt.struct_get` field 0.
 struct LowerClosureFuncArena;
 
-impl ArenaRewritePattern for LowerClosureFuncArena {
+impl RewritePattern for LowerClosureFuncArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_closure::Func::from_op(ctx, op).is_err() {
             return false;
@@ -381,12 +377,12 @@ impl ArenaRewritePattern for LowerClosureFuncArena {
 /// Lower `closure.env` to `adt.struct_get` field 1.
 struct LowerClosureEnvArena;
 
-impl ArenaRewritePattern for LowerClosureEnvArena {
+impl RewritePattern for LowerClosureEnvArena {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_closure::Env::from_op(ctx, op).is_err() {
             return false;
@@ -415,9 +411,9 @@ impl ArenaRewritePattern for LowerClosureEnvArena {
 ///
 /// After pattern application, closure calls have been expanded. Now we insert
 /// evidence as the first argument to all closure call_indirect operations.
-fn transform_closure_calls_with_evidence_arena(
+fn transform_closure_calls_with_evidence(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     effectful_fns: &HashSet<Symbol>,
     closure_calls: &HashSet<(usize, usize)>,
 ) {
@@ -460,12 +456,12 @@ fn transform_closure_calls_with_evidence_arena(
         };
 
         let loc = ctx.op(func_op_ref).location;
-        transform_closure_calls_in_region_arena(ctx, body, evidence_from_param, closure_calls, loc);
+        transform_closure_calls_in_region(ctx, body, evidence_from_param, closure_calls, loc);
     }
 }
 
 /// Transform closure calls in a region, inserting evidence arguments.
-fn transform_closure_calls_in_region_arena(
+fn transform_closure_calls_in_region(
     ctx: &mut IrContext,
     region: trunk_ir::arena::refs::RegionRef,
     evidence_from_param: Option<ValueRef>,
@@ -474,7 +470,7 @@ fn transform_closure_calls_in_region_arena(
 ) {
     let blocks: Vec<_> = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        transform_closure_calls_in_block_arena(
+        transform_closure_calls_in_block(
             ctx,
             block,
             evidence_from_param,
@@ -485,7 +481,7 @@ fn transform_closure_calls_in_region_arena(
 }
 
 /// Transform closure calls in a block, inserting evidence arguments.
-fn transform_closure_calls_in_block_arena(
+fn transform_closure_calls_in_block(
     ctx: &mut IrContext,
     block: trunk_ir::arena::refs::BlockRef,
     evidence_from_param: Option<ValueRef>,
@@ -502,7 +498,7 @@ fn transform_closure_calls_in_block_arena(
         // Process nested regions first
         let regions: Vec<_> = ctx.op(op).regions.to_vec();
         for region in regions {
-            transform_closure_calls_in_region_arena(
+            transform_closure_calls_in_region(
                 ctx,
                 region,
                 evidence_from_param,
@@ -583,15 +579,15 @@ fn transform_closure_calls_in_block_arena(
 ///
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
-pub fn lower_closures(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_closures(ctx: &mut IrContext, module: Module) {
     // Collect effectful functions BEFORE lowering (while closure types are intact)
-    let effectful_fns = collect_effectful_functions_arena(ctx, module);
+    let effectful_fns = collect_effectful_functions(ctx, module);
 
     // Collect ALL closure calls before pattern application
-    let all_closure_calls = collect_all_closure_calls_arena(ctx, module);
+    let all_closure_calls = collect_all_closure_calls(ctx, module);
 
     // Phase 1: Pattern application
-    let applicator = ArenaPatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(UpdateFuncSignatureArena)
         .add_pattern(LowerClosureCallArena)
         .add_pattern(LowerClosureNewArena)
@@ -600,5 +596,5 @@ pub fn lower_closures(ctx: &mut IrContext, module: ArenaModule) {
     applicator.apply_partial(ctx, module);
 
     // Phase 2: Evidence passing for closure calls
-    transform_closure_calls_with_evidence_arena(ctx, module, &effectful_fns, &all_closure_calls);
+    transform_closure_calls_with_evidence(ctx, module, &effectful_fns, &all_closure_calls);
 }

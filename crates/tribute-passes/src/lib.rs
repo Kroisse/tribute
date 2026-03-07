@@ -25,18 +25,12 @@ pub mod type_converter;
 pub mod wasm;
 
 // Re-exports
-#[allow(deprecated)]
-pub use boxing::insert_boxing; // DEPRECATED: kept for compatibility
 pub use closure_lower::lower_closures;
 pub use cont_to_libmprompt::lower_cont_to_libmprompt;
 pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-pub use evidence::{
-    collect_effectful_functions, collect_functions_with_evidence_param, is_effectful_type,
-};
-pub use native::type_converter::native_type_converter;
 pub use resolve_evidence::resolve_evidence_dispatch;
-pub use trunk_ir::rewrite::{
-    ApplyResult, PatternApplicator, PatternRewriter, RewriteContext, RewritePattern,
+pub use trunk_ir::arena::rewrite::{
+    ApplyResult, PatternApplicator, PatternRewriter, RewritePattern,
 };
-pub use type_converter::generic_type_converter_arena;
+pub use type_converter::generic_type_converter;

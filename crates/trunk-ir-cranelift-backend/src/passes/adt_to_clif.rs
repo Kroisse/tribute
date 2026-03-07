@@ -24,21 +24,19 @@
 use tracing::warn;
 
 use crate::adt_layout::{
-    compute_enum_layout_arena, compute_struct_layout_arena, find_variant_layout,
-    get_enum_variants_arena,
+    compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
 use trunk_ir::arena::dialect::clif as arena_clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter,
-    PatternApplicator as ArenaPatternApplicator, PatternRewriter as ArenaPatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::arena::types::TypeDataBuilder;
-use trunk_ir::ir::Symbol;
 
 /// Lower ADT operations to clif dialect.
 ///
@@ -47,14 +45,14 @@ use trunk_ir::ir::Symbol;
 ///
 /// The `type_converter` parameter is used to determine field sizes for
 /// layout computation.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
-    use trunk_ir::arena::rewrite::ArenaConversionTarget;
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    use trunk_ir::arena::rewrite::ConversionTarget;
 
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
     target.add_illegal_dialect("adt");
 
-    let applicator = ArenaPatternApplicator::new(type_converter)
+    let applicator = PatternApplicator::new(type_converter)
         .with_target(target)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
@@ -79,12 +77,12 @@ fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
 
 struct StructGetPattern;
 
-impl ArenaRewritePattern for StructGetPattern {
+impl RewritePattern for StructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(struct_get) = arena_adt::StructGet::from_op(ctx, op) else {
             return false;
@@ -94,7 +92,7 @@ impl ArenaRewritePattern for StructGetPattern {
         let field_idx = struct_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute layout for struct_get");
             return false;
         };
@@ -125,12 +123,12 @@ impl ArenaRewritePattern for StructGetPattern {
 
 struct StructSetPattern;
 
-impl ArenaRewritePattern for StructSetPattern {
+impl RewritePattern for StructSetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(struct_set) = arena_adt::StructSet::from_op(ctx, op) else {
             return false;
@@ -140,7 +138,7 @@ impl ArenaRewritePattern for StructSetPattern {
         let field_idx = struct_set.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute layout for struct_set");
             return false;
         };
@@ -163,12 +161,12 @@ impl ArenaRewritePattern for StructSetPattern {
 
 struct VariantIsPattern;
 
-impl ArenaRewritePattern for VariantIsPattern {
+impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(variant_is) = arena_adt::VariantIs::from_op(ctx, op) else {
             return false;
@@ -178,7 +176,7 @@ impl ArenaRewritePattern for VariantIsPattern {
         let tag = variant_is.tag(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute enum layout for variant_is");
             return false;
         };
@@ -217,12 +215,12 @@ impl ArenaRewritePattern for VariantIsPattern {
 
 struct VariantCastPattern;
 
-impl ArenaRewritePattern for VariantCastPattern {
+impl RewritePattern for VariantCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(variant_cast) = arena_adt::VariantCast::from_op(ctx, op) else {
             return false;
@@ -235,12 +233,12 @@ impl ArenaRewritePattern for VariantCastPattern {
 
 struct VariantGetPattern;
 
-impl ArenaRewritePattern for VariantGetPattern {
+impl RewritePattern for VariantGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(variant_get) = arena_adt::VariantGet::from_op(ctx, op) else {
             return false;
@@ -251,7 +249,7 @@ impl ArenaRewritePattern for VariantGetPattern {
         let field_idx = variant_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             warn!("adt_to_clif arena: cannot compute enum layout for variant_get");
             return false;
         };
@@ -275,7 +273,7 @@ impl ArenaRewritePattern for VariantGetPattern {
         // The field was stored with its native type, so we must load with the
         // same type rather than the type-erased result type (which may be
         // tribute_rt.any instead of core.ptr).
-        let load_ty = get_enum_variants_arena(ctx, enum_ty)
+        let load_ty = get_enum_variants(ctx, enum_ty)
             .and_then(|variants| {
                 variants
                     .iter()
@@ -305,12 +303,12 @@ impl ArenaRewritePattern for VariantGetPattern {
 
 struct RefNullPattern;
 
-impl ArenaRewritePattern for RefNullPattern {
+impl RewritePattern for RefNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if arena_adt::RefNull::from_op(ctx, op).is_err() {
             return false;
@@ -325,12 +323,12 @@ impl ArenaRewritePattern for RefNullPattern {
 
 struct RefCastPattern;
 
-impl ArenaRewritePattern for RefCastPattern {
+impl RewritePattern for RefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(ref_cast) = arena_adt::RefCast::from_op(ctx, op) else {
             return false;
@@ -343,12 +341,12 @@ impl ArenaRewritePattern for RefCastPattern {
 
 struct RefIsNullPattern;
 
-impl ArenaRewritePattern for RefIsNullPattern {
+impl RewritePattern for RefIsNullPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(ref_is_null) = arena_adt::RefIsNull::from_op(ctx, op) else {
             return false;
@@ -379,12 +377,12 @@ mod tests {
     use trunk_ir::arena::context::IrContext;
     use trunk_ir::arena::parser::parse_test_module;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaTypeConverter;
+    use trunk_ir::arena::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let type_converter = ArenaTypeConverter::new();
+        let type_converter = TypeConverter::new();
         super::lower(&mut ctx, module, type_converter);
         print_module(&ctx, module.op())
     }

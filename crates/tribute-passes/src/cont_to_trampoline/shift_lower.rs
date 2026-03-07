@@ -8,10 +8,10 @@ use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
 use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::PatternRewriter as ArenaPatternRewriter;
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::rewrite::PatternRewriter;
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 use trunk_ir::location::Span;
 
 use super::{ResumeCounter, ResumeFuncSpec, ResumeSpecs, ShiftAnalysis, compute_op_idx};
@@ -66,7 +66,7 @@ fn resolve_shift_op_idx(
     let ability_ref_type = shift_op.ability_ref(ctx);
     let ability_data = ctx.types.get(ability_ref_type);
     let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-        Some(ArenaAttribute::Symbol(s)) => Some(*s),
+        Some(Attribute::Symbol(s)) => Some(*s),
         _ => None,
     };
     let op_name_sym = shift_op.op_name(ctx);
@@ -120,21 +120,18 @@ pub(crate) fn adt_struct_type(
     name: Symbol,
     fields: &[(Symbol, TypeRef)],
 ) -> TypeRef {
-    let fields_attr = ArenaAttribute::List(
+    let fields_attr = Attribute::List(
         fields
             .iter()
             .map(|(fname, fty)| {
-                ArenaAttribute::List(vec![
-                    ArenaAttribute::Symbol(*fname),
-                    ArenaAttribute::Type(*fty),
-                ])
+                Attribute::List(vec![Attribute::Symbol(*fname), Attribute::Type(*fty)])
             })
             .collect(),
     );
 
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", ArenaAttribute::Symbol(name))
+            .attr("name", Attribute::Symbol(name))
             .attr("fields", fields_attr)
             .build(),
     )
@@ -151,12 +148,12 @@ pub(crate) struct LowerShiftPattern {
     pub(crate) module_name: Symbol,
 }
 
-impl trunk_ir::arena::rewrite::ArenaRewritePattern for LowerShiftPattern {
+impl trunk_ir::arena::rewrite::RewritePattern for LowerShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Match cont.shift with tag as first operand
         let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) else {
@@ -303,7 +300,7 @@ pub(crate) fn create_resume_function_with_continuation(
         TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
             .param(evidence_ty)
             .param(wrapper_ty)
-            .attr("result", ArenaAttribute::Type(step_ty))
+            .attr("result", Attribute::Type(step_ty))
             .build(),
     );
 
@@ -573,8 +570,8 @@ pub(crate) fn create_resume_function_with_continuation(
         Symbol::new("func"),
         Symbol::new("func"),
     )
-    .attr("sym_name", ArenaAttribute::Symbol(name))
-    .attr("type", ArenaAttribute::Type(func_ty_ref))
+    .attr("sym_name", Attribute::Symbol(name))
+    .attr("type", Attribute::Type(func_ty_ref))
     .region(body_region)
     .build(ctx);
 

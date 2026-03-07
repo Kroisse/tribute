@@ -7,13 +7,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::debug;
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
+use trunk_ir::arena::Module;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
+use trunk_ir::arena::types::{Attribute, TypeData};
 use trunk_ir::smallvec::SmallVec;
 
 use crate::errors::CompilationResult;
@@ -45,10 +45,7 @@ fn intern_simple_wasm_type(ctx: &mut IrContext, name: &str) -> TypeRef {
 /// Intern an adt.struct type with the given name attribute.
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = BTreeMap::new();
-    attrs.insert(
-        Symbol::new("name"),
-        ArenaAttribute::Symbol(Symbol::new(name)),
-    );
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
@@ -73,7 +70,7 @@ fn fmt_type(ctx: &IrContext, ty: TypeRef) -> String {
 /// Returns a vector of (type_idx, func_type) pairs sorted by type index.
 pub(crate) fn collect_call_indirect_types(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     type_idx_by_type: &mut HashMap<TypeRef, u32>,
     gc_type_count: usize,
     func_type_count: usize,
@@ -101,7 +98,7 @@ pub(crate) fn collect_call_indirect_types(
                 }
                 // Check if this is a function definition to track return type
                 // NOTE: In lowered wasm IR, functions are wasm.func, not func.func
-                let func_return_ty = if let Ok(wasm_fn) = arena_wasm::Func::from_op(ctx, op) {
+                let func_return_ty = if let Ok(wasm_fn) = wasm_dialect::Func::from_op(ctx, op) {
                     // Get the function's return type from wasm.func
                     let func_type = wasm_fn.r#type(ctx);
                     debug!(
@@ -144,7 +141,7 @@ pub(crate) fn collect_call_indirect_types(
                 }
 
                 // Check if this is a call_indirect
-                if arena_wasm::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op) {
                     // Build function type from operands and results
                     let operands: Vec<_> = ctx.op_operands(op).to_vec();
 
@@ -303,7 +300,7 @@ pub(crate) fn collect_call_indirect_types(
 /// Collect function names referenced via wasm.ref_func.
 ///
 /// These functions need to be declared in a declarative elem segment.
-pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet<Symbol> {
+pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     fn collect_from_region(
         ctx: &IrContext,
         region_ref: RegionRef,
@@ -317,7 +314,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet
                 }
 
                 // Check if this is a ref_func
-                if let Ok(ref_func_op) = arena_wasm::RefFunc::from_op(ctx, op) {
+                if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
                     ref_funcs.insert(ref_func_op.func_name(ctx));
                 }
             }
@@ -331,7 +328,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: ArenaModule) -> HashSet
 }
 
 /// Check if the module contains any call_indirect operations.
-pub(crate) fn has_call_indirect(ctx: &IrContext, module: ArenaModule) -> bool {
+pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
     fn check_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {
@@ -343,7 +340,7 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: ArenaModule) -> bool {
                 }
 
                 // Check if this is a call_indirect
-                if arena_wasm::CallIndirect::matches(ctx, op) {
+                if wasm_dialect::CallIndirect::matches(ctx, op) {
                     return true;
                 }
             }

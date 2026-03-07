@@ -4,7 +4,7 @@ use derive_more::{Display, From};
 
 pub type CompilationResult<T> = Result<T, CompilationError>;
 
-#[derive(Clone, Display, Debug, From, PartialEq, salsa::Update)]
+#[derive(Clone, Display, Debug, From, PartialEq)]
 #[display("{kind}")]
 pub struct CompilationError {
     #[from]

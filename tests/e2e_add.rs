@@ -8,7 +8,8 @@ use salsa::Database;
 use tribute::TributeDatabaseImpl;
 use tribute_front::SourceCst;
 use tribute_ir::ModulePathExt as _;
-use trunk_ir::DialectOp;
+use trunk_ir::Symbol;
+use trunk_ir::arena::{IrContext, Module, RegionRef};
 
 #[test]
 fn test_add_compiles_and_runs() {
@@ -292,7 +293,7 @@ fn main() { }
 #[test]
 fn test_nested_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::parse_and_lower_ast;
+    use tribute::pipeline::compile_with_diagnostics;
 
     let source_code = Rope::from_str(
         r#"
@@ -315,21 +316,16 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "nested_function_type.trb", source_code.clone(), tree);
 
-        // Run typecheck stage
-        let _module = parse_and_lower_ast(db, source_file);
+        let result = compile_with_diagnostics(db, source_file);
 
-        // Check for type errors
-        let diagnostics: Vec<_> =
-            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
+        for diag in &result.diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no type errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
     });
 }
@@ -339,7 +335,7 @@ fn main() { }
 #[test]
 fn test_generic_function_type() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::parse_and_lower_ast;
+    use tribute::pipeline::compile_with_diagnostics;
 
     let source_code = Rope::from_str(
         r#"
@@ -363,21 +359,16 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "generic_function_type.trb", source_code.clone(), tree);
 
-        // Run typecheck stage
-        let _module = parse_and_lower_ast(db, source_file);
+        let result = compile_with_diagnostics(db, source_file);
 
-        // Check for type errors
-        let diagnostics: Vec<_> =
-            parse_and_lower_ast::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
+        for diag in &result.diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no type errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
     });
 }
@@ -410,7 +401,7 @@ fn test_calc_eval() {
 #[test]
 fn test_lambda_identity() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_through_evidence_params;
+    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
 
     let source_code = Rope::from_str(
         r#"
@@ -427,33 +418,38 @@ fn main() { }
         let source_file =
             SourceCst::from_path(db, "lambda_identity.trb", source_code.clone(), tree);
 
-        // Run lambda lifting stage
-        let module = run_through_evidence_params(db, source_file);
+        // Collect diagnostics via compile_with_diagnostics
+        let result = compile_with_diagnostics(db, source_file);
 
-        // Verify no diagnostics
-        let diagnostics: Vec<_> =
-            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
+        for diag in &result.diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
 
-        // Verify the module has a lifted function (name starts with __lambda_)
-        let body = module.body(db);
-        let blocks = body.blocks(db);
-        let ops = blocks[0].operations(db);
+        // Run through evidence params to get arena IR for structural checks
+        let (ctx, m) = run_through_evidence_params(db, source_file)
+            .expect("run_through_evidence_params should succeed");
 
-        let has_lifted = ops.iter().any(|op| {
-            if let Ok(f) = trunk_ir::dialect::func::Func::from_operation(db, *op) {
-                f.sym_name(db)
-                    .last_segment()
-                    .with_str(|s: &str| s.starts_with("__lambda_"))
+        // Verify the module has a lifted function (name starts with __lambda_)
+        let func_dialect = Symbol::new("func");
+        let func_name = Symbol::new("func");
+
+        let has_lifted = m.ops(&ctx).iter().any(|&op_ref| {
+            let op_data = ctx.op(op_ref);
+            if op_data.dialect == func_dialect && op_data.name == func_name {
+                if let Some(trunk_ir::arena::Attribute::Symbol(name)) =
+                    op_data.attributes.get(&Symbol::new("sym_name"))
+                {
+                    name.last_segment()
+                        .with_str(|s: &str| s.starts_with("__lambda_"))
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -470,7 +466,7 @@ fn main() { }
 #[test]
 fn test_lambda_with_capture() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_through_evidence_params;
+    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
 
     let source_code = Rope::from_str(
         r#"
@@ -488,22 +484,21 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "lambda_capture.trb", source_code.clone(), tree);
 
-        // Run lambda lifting stage
-        let module = run_through_evidence_params(db, source_file);
-
-        // Verify no diagnostics
-        let diagnostics: Vec<_> =
-            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
+        // Collect diagnostics
+        let result = compile_with_diagnostics(db, source_file);
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
 
+        // Run through evidence params to get arena IR
+        let (ctx, m) = run_through_evidence_params(db, source_file)
+            .expect("run_through_evidence_params should succeed");
+
         // Check for closure.new in the output
-        let body = module.body(db);
-        let has_closure_new = check_for_closure_new(db, &body);
+        let has_closure_new = check_for_closure_new_in_module(&ctx, m);
 
         assert!(
             has_closure_new,
@@ -512,18 +507,35 @@ fn main() { }
     });
 }
 
-/// Helper to recursively check for closure.new in a region
-fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> bool {
-    use tribute_ir::dialect::closure;
+/// Helper to check for closure.new in a module (arena version)
+fn check_for_closure_new_in_module(ctx: &IrContext, m: Module) -> bool {
+    for &op_ref in &m.ops(ctx) {
+        let op_data = ctx.op(op_ref);
+        for &region_ref in &op_data.regions {
+            if check_for_closure_new_in_region(ctx, region_ref) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if op.dialect(db) == closure::DIALECT_NAME() && op.name(db) == closure::NEW() {
+/// Helper to recursively check for closure.new in a region (arena version)
+fn check_for_closure_new_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
+    let closure_dialect = Symbol::new("closure");
+    let closure_new_name = Symbol::new("new");
+
+    let region = ctx.region(region_ref);
+    for &block_ref in &region.blocks {
+        let block = ctx.block(block_ref);
+        for &op_ref in &block.ops {
+            let op_data = ctx.op(op_ref);
+            if op_data.dialect == closure_dialect && op_data.name == closure_new_name {
                 return true;
             }
             // Recurse into nested regions
-            for nested in op.regions(db).iter() {
-                if check_for_closure_new(db, nested) {
+            for &nested_region in &op_data.regions {
+                if check_for_closure_new_in_region(ctx, nested_region) {
                     return true;
                 }
             }
@@ -540,7 +552,7 @@ fn check_for_closure_new(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>
 #[test]
 fn test_indirect_call_ir_generation() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_through_evidence_params;
+    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
 
     let source_code = Rope::from_str(
         r#"
@@ -556,21 +568,21 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "indirect_call.trb", source_code.clone(), tree);
 
-        let module = run_through_evidence_params(db, source_file);
-
-        // Verify no diagnostics
-        let diagnostics: Vec<_> =
-            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
+        // Collect diagnostics
+        let result = compile_with_diagnostics(db, source_file);
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
 
-        // Check for func.call_indirect in main function
-        let body = module.body(db);
-        let has_call_indirect = check_for_call_indirect(db, &body);
+        // Run through evidence params to get arena IR
+        let (ctx, m) = run_through_evidence_params(db, source_file)
+            .expect("run_through_evidence_params should succeed");
+
+        // Check for func.call_indirect in the module
+        let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
 
         assert!(
             has_call_indirect,
@@ -583,7 +595,7 @@ fn main() { }
 #[test]
 fn test_higher_order_function_ir() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_through_evidence_params;
+    use tribute::pipeline::{compile_with_diagnostics, run_through_evidence_params};
 
     let source_code = Rope::from_str(
         r#"
@@ -602,25 +614,25 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "higher_order.trb", source_code.clone(), tree);
 
-        let module = run_through_evidence_params(db, source_file);
+        // Collect diagnostics
+        let result = compile_with_diagnostics(db, source_file);
 
-        // Verify no diagnostics
-        let diagnostics: Vec<_> =
-            run_through_evidence_params::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
+        for diag in &result.diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
 
+        // Run through evidence params to get arena IR
+        let (ctx, m) = run_through_evidence_params(db, source_file)
+            .expect("run_through_evidence_params should succeed");
+
         // Check that apply function has func.call_indirect
-        let body = module.body(db);
-        let has_call_indirect = check_for_call_indirect(db, &body);
+        let has_call_indirect = check_for_call_indirect_in_module(&ctx, m);
 
         assert!(
             has_call_indirect,
@@ -629,18 +641,35 @@ fn main() { }
     });
 }
 
-/// Helper to recursively check for func.call_indirect in a region
-fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'_>) -> bool {
-    use trunk_ir::dialect::func;
+/// Helper to check for func.call_indirect in a module (arena version)
+fn check_for_call_indirect_in_module(ctx: &IrContext, m: Module) -> bool {
+    for &op_ref in &m.ops(ctx) {
+        let op_data = ctx.op(op_ref);
+        for &region_ref in &op_data.regions {
+            if check_for_call_indirect_in_region(ctx, region_ref) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            if op.dialect(db) == func::DIALECT_NAME() && op.name(db) == func::CALL_INDIRECT() {
+/// Helper to recursively check for func.call_indirect in a region (arena version)
+fn check_for_call_indirect_in_region(ctx: &IrContext, region_ref: RegionRef) -> bool {
+    let func_dialect = Symbol::new("func");
+    let call_indirect_name = Symbol::new("call_indirect");
+
+    let region = ctx.region(region_ref);
+    for &block_ref in &region.blocks {
+        let block = ctx.block(block_ref);
+        for &op_ref in &block.ops {
+            let op_data = ctx.op(op_ref);
+            if op_data.dialect == func_dialect && op_data.name == call_indirect_name {
                 return true;
             }
             // Recurse into nested regions
-            for nested in op.regions(db).iter() {
-                if check_for_call_indirect(db, nested) {
+            for &nested_region in &op_data.regions {
+                if check_for_call_indirect_in_region(ctx, nested_region) {
                     return true;
                 }
             }
@@ -658,7 +687,7 @@ fn check_for_call_indirect(db: &dyn salsa::Database, region: &trunk_ir::Region<'
 #[test]
 fn test_closure_lowering() {
     use tribute::database::parse_with_thread_local;
-    use tribute::pipeline::run_through_closure_lower;
+    use tribute::pipeline::{compile_with_diagnostics, run_through_closure_lower};
 
     let source_code = Rope::from_str(
         r#"
@@ -677,25 +706,25 @@ fn main() { }
         let tree = parse_with_thread_local(&source_code, None);
         let source_file = SourceCst::from_path(db, "closure_lower.trb", source_code.clone(), tree);
 
-        let module = run_through_closure_lower(db, source_file);
+        // Collect diagnostics
+        let result = compile_with_diagnostics(db, source_file);
 
-        // Verify no diagnostics
-        let diagnostics: Vec<_> =
-            run_through_closure_lower::accumulated::<tribute::Diagnostic>(db, source_file);
-
-        for diag in &diagnostics {
+        for diag in &result.diagnostics {
             eprintln!("Diagnostic: {:?}", diag);
         }
 
         assert!(
-            diagnostics.is_empty(),
+            result.diagnostics.is_empty(),
             "Expected no errors, got {} diagnostics",
-            diagnostics.len()
+            result.diagnostics.len()
         );
 
+        // Run through closure lower to get arena IR
+        let (ctx, m) = run_through_closure_lower(db, source_file)
+            .expect("run_through_closure_lower should succeed");
+
         // Check that closure operations are lowered
-        let body = module.body(db);
-        let lowered_ops = check_for_lowered_closure_ops(db, &body);
+        let lowered_ops = check_for_lowered_closure_ops_in_module(&ctx, m);
 
         // Verify closure.func/closure.env are lowered to adt.struct_get
         assert!(
@@ -712,12 +741,37 @@ struct LoweredClosureOps {
     has_struct_get: bool,
 }
 
-/// Helper to check for lowered closure operations
-fn check_for_lowered_closure_ops(
-    db: &dyn salsa::Database,
-    region: &trunk_ir::Region<'_>,
+/// Helper to check for lowered closure operations in a module (arena version)
+fn check_for_lowered_closure_ops_in_module(ctx: &IrContext, m: Module) -> LoweredClosureOps {
+    let mut result = LoweredClosureOps {
+        has_func_constant: false,
+        has_struct_new: false,
+        has_struct_get: false,
+    };
+
+    for &op_ref in &m.ops(ctx) {
+        let op_data = ctx.op(op_ref);
+        for &region_ref in &op_data.regions {
+            let nested_result = check_for_lowered_closure_ops_in_region(ctx, region_ref);
+            result.has_func_constant = result.has_func_constant || nested_result.has_func_constant;
+            result.has_struct_new = result.has_struct_new || nested_result.has_struct_new;
+            result.has_struct_get = result.has_struct_get || nested_result.has_struct_get;
+        }
+    }
+
+    result
+}
+
+/// Helper to check for lowered closure operations in a region (arena version)
+fn check_for_lowered_closure_ops_in_region(
+    ctx: &IrContext,
+    region_ref: RegionRef,
 ) -> LoweredClosureOps {
-    use trunk_ir::dialect::{adt, func};
+    let func_dialect = Symbol::new("func");
+    let func_constant_name = Symbol::new("constant");
+    let adt_dialect = Symbol::new("adt");
+    let adt_struct_new_name = Symbol::new("struct_new");
+    let adt_struct_get_name = Symbol::new("struct_get");
 
     let mut result = LoweredClosureOps {
         has_func_constant: false,
@@ -725,27 +779,30 @@ fn check_for_lowered_closure_ops(
         has_struct_get: false,
     };
 
-    for block in region.blocks(db).iter() {
-        for op in block.operations(db).iter() {
-            let dialect = op.dialect(db);
-            let op_name = op.name(db);
+    let region = ctx.region(region_ref);
+    for &block_ref in &region.blocks {
+        let block = ctx.block(block_ref);
+        for &op_ref in &block.ops {
+            let op_data = ctx.op(op_ref);
+            let dialect = op_data.dialect;
+            let op_name = op_data.name;
 
             // Check for func.constant (from closure.new lowering)
-            if dialect == func::DIALECT_NAME() && op_name == func::CONSTANT() {
+            if dialect == func_dialect && op_name == func_constant_name {
                 result.has_func_constant = true;
             }
             // Check for adt.struct_new (from closure.new lowering)
-            if dialect == adt::DIALECT_NAME() && op_name == adt::STRUCT_NEW() {
+            if dialect == adt_dialect && op_name == adt_struct_new_name {
                 result.has_struct_new = true;
             }
             // Check for adt.struct_get (from closure.func/closure.env lowering)
-            if dialect == adt::DIALECT_NAME() && op_name == adt::STRUCT_GET() {
+            if dialect == adt_dialect && op_name == adt_struct_get_name {
                 result.has_struct_get = true;
             }
 
             // Recurse into nested regions
-            for nested in op.regions(db).iter() {
-                let nested_result = check_for_lowered_closure_ops(db, nested);
+            for &nested_region in &op_data.regions {
+                let nested_result = check_for_lowered_closure_ops_in_region(ctx, nested_region);
                 result.has_func_constant =
                     result.has_func_constant || nested_result.has_func_constant;
                 result.has_struct_new = result.has_struct_new || nested_result.has_struct_new;

@@ -10,22 +10,22 @@
 
 use tracing::warn;
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith as arena_arith;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::arith;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::Attribute;
 
 /// Lower arith dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
         .add_pattern(ArithBinOpPattern)
@@ -39,14 +39,14 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
 /// Pattern for `arith.const` -> `wasm.{type}_const`
 struct ArithConstPattern;
 
-impl ArenaRewritePattern for ArithConstPattern {
+impl RewritePattern for ArithConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_const_op) = arena_arith::Const::from_op(ctx, op) else {
+        let Ok(_const_op) = arith::Const::from_op(ctx, op) else {
             return false;
         };
 
@@ -59,7 +59,7 @@ impl ArenaRewritePattern for ArithConstPattern {
         let type_name = type_suffix(ctx, Some(result_ty));
         if type_name == "nil" {
             let loc = ctx.op(op).location;
-            let nop = arena_wasm::nop(ctx, loc, result_ty);
+            let nop = wasm_dialect::nop(ctx, loc, result_ty);
             rewriter.replace_op(nop.op_ref());
             return true;
         }
@@ -69,32 +69,32 @@ impl ArenaRewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => {
-                let ArenaAttribute::IntBits(v) = value else {
+                let Attribute::IntBits(v) = value else {
                     warn!("arith.const: expected IntBits for i32, got {:?}", value);
                     return false;
                 };
-                arena_wasm::i32_const(ctx, loc, result_ty, v as i32).op_ref()
+                wasm_dialect::i32_const(ctx, loc, result_ty, v as i32).op_ref()
             }
             "i64" => {
-                let ArenaAttribute::IntBits(v) = value else {
+                let Attribute::IntBits(v) = value else {
                     warn!("arith.const: expected IntBits for i64, got {:?}", value);
                     return false;
                 };
-                arena_wasm::i64_const(ctx, loc, result_ty, v as i64).op_ref()
+                wasm_dialect::i64_const(ctx, loc, result_ty, v as i64).op_ref()
             }
             "f32" => {
-                let ArenaAttribute::FloatBits(v) = value else {
+                let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f32, got {:?}", value);
                     return false;
                 };
-                arena_wasm::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
+                wasm_dialect::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                let ArenaAttribute::FloatBits(v) = value else {
+                let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f64, got {:?}", value);
                     return false;
                 };
-                arena_wasm::f64_const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
+                wasm_dialect::f64_const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
             }
             _ => {
                 warn!("arith.const: unsupported type suffix '{}'", type_name);
@@ -110,7 +110,7 @@ impl ArenaRewritePattern for ArithConstPattern {
 /// Pattern for `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 struct ArithBinOpPattern;
 
-impl ArenaRewritePattern for ArithBinOpPattern {
+impl RewritePattern for ArithBinOpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -146,40 +146,40 @@ impl ArenaRewritePattern for ArithBinOpPattern {
 
         let new_op = if name == Symbol::new("add") {
             match suffix {
-                "i32" => arena_wasm::i32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("sub") {
             match suffix {
-                "i32" => arena_wasm::i32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("mul") {
             match suffix {
-                "i32" => arena_wasm::i32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("div") {
             match suffix {
-                "i32" => arena_wasm::i32_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("rem") {
             match suffix {
-                "i32" => arena_wasm::i32_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else {
@@ -194,7 +194,7 @@ impl ArenaRewritePattern for ArithBinOpPattern {
 /// Pattern for `arith.cmp_*` -> `wasm.{type}_{cmp}`
 struct ArithCmpPattern;
 
-impl ArenaRewritePattern for ArithCmpPattern {
+impl RewritePattern for ArithCmpPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -235,50 +235,50 @@ impl ArenaRewritePattern for ArithCmpPattern {
 
         let new_op = if name == Symbol::new("cmp_eq") {
             match suffix {
-                "i32" => arena_wasm::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("cmp_ne") {
             match suffix {
-                "i32" => arena_wasm::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => arena_wasm::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => arena_wasm::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => arena_wasm::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f64" => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("cmp_lt") {
             match (suffix, is_integer) {
-                ("i32", true) => arena_wasm::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => arena_wasm::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => arena_wasm::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => arena_wasm::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", true) => wasm_dialect::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => wasm_dialect::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => wasm_dialect::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => wasm_dialect::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("cmp_le") {
             match (suffix, is_integer) {
-                ("i32", true) => arena_wasm::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => arena_wasm::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => arena_wasm::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => arena_wasm::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", true) => wasm_dialect::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => wasm_dialect::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => wasm_dialect::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => wasm_dialect::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("cmp_gt") {
             match (suffix, is_integer) {
-                ("i32", true) => arena_wasm::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => arena_wasm::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => arena_wasm::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => arena_wasm::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", true) => wasm_dialect::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => wasm_dialect::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => wasm_dialect::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => wasm_dialect::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("cmp_ge") {
             match (suffix, is_integer) {
-                ("i32", true) => arena_wasm::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => arena_wasm::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => arena_wasm::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => arena_wasm::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", true) => wasm_dialect::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", true) => wasm_dialect::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", false) => wasm_dialect::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", false) => wasm_dialect::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else {
@@ -293,14 +293,14 @@ impl ArenaRewritePattern for ArithCmpPattern {
 /// Pattern for `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 struct ArithNegPattern;
 
-impl ArenaRewritePattern for ArithNegPattern {
+impl RewritePattern for ArithNegPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arena_arith::Neg::from_op(ctx, op) else {
+        let Ok(neg_op) = arith::Neg::from_op(ctx, op) else {
             return false;
         };
 
@@ -313,20 +313,20 @@ impl ArenaRewritePattern for ArithNegPattern {
         match suffix {
             "f32" => {
                 let f32_ty = result_ty.unwrap_or_else(|| intern_f32_type(ctx));
-                let new_op = arena_wasm::f32_neg(ctx, loc, operand, f32_ty);
+                let new_op = wasm_dialect::f32_neg(ctx, loc, operand, f32_ty);
                 rewriter.replace_op(new_op.op_ref());
                 true
             }
             "f64" => {
                 let f64_ty = result_ty.unwrap_or_else(|| intern_f64_type(ctx));
-                let new_op = arena_wasm::f64_neg(ctx, loc, operand, f64_ty);
+                let new_op = wasm_dialect::f64_neg(ctx, loc, operand, f64_ty);
                 rewriter.replace_op(new_op.op_ref());
                 true
             }
             "i64" => {
                 let i64_ty = intern_i64_type(ctx);
-                let zero = arena_wasm::i64_const(ctx, loc, i64_ty, 0);
-                let sub = arena_wasm::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
+                let zero = wasm_dialect::i64_const(ctx, loc, i64_ty, 0);
+                let sub = wasm_dialect::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
                 rewriter.insert_op(zero.op_ref());
                 rewriter.replace_op(sub.op_ref());
                 true
@@ -339,7 +339,7 @@ impl ArenaRewritePattern for ArithNegPattern {
 /// Pattern for `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
 struct ArithBitwisePattern;
 
-impl ArenaRewritePattern for ArithBitwisePattern {
+impl RewritePattern for ArithBitwisePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -376,33 +376,33 @@ impl ArenaRewritePattern for ArithBitwisePattern {
 
         let new_op = if name == Symbol::new("and") {
             match suffix {
-                "i64" => arena_wasm::i64_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else if name == Symbol::new("or") {
             match suffix {
-                "i64" => arena_wasm::i64_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else if name == Symbol::new("xor") {
             match suffix {
-                "i64" => arena_wasm::i64_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else if name == Symbol::new("shl") {
             match suffix {
-                "i64" => arena_wasm::i64_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else if name == Symbol::new("shr") {
             match suffix {
-                "i64" => arena_wasm::i64_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else if name == Symbol::new("shru") {
             match suffix {
-                "i64" => arena_wasm::i64_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_wasm::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => wasm_dialect::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
             }
         } else {
             return false;
@@ -416,7 +416,7 @@ impl ArenaRewritePattern for ArithBitwisePattern {
 /// Pattern for `arith.{cast,trunc,extend,convert}` -> wasm conversion ops
 struct ArithConversionPattern;
 
-impl ArenaRewritePattern for ArithConversionPattern {
+impl RewritePattern for ArithConversionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -457,37 +457,49 @@ impl ArenaRewritePattern for ArithConversionPattern {
 
         let new_op = if name == Symbol::new("cast") {
             match (src_suffix, dst_suffix) {
-                ("i64", "i32") => arena_wasm::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
-                ("i32", "i64") => arena_wasm::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i64", "i32") => wasm_dialect::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "i64") => {
+                    wasm_dialect::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref()
+                }
                 _ => return false,
             }
         } else if name == Symbol::new("trunc") {
             match (src_suffix, dst_suffix) {
-                ("f32", "i32") => arena_wasm::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i32") => arena_wasm::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "i64") => arena_wasm::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i64") => arena_wasm::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("i64", "i32") => arena_wasm::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i32") => wasm_dialect::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i32") => wasm_dialect::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i64") => wasm_dialect::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i64") => wasm_dialect::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("i64", "i32") => wasm_dialect::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("extend") {
             match (src_suffix, dst_suffix) {
-                ("i32", "i64") => arena_wasm::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "f64") => arena_wasm::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "i64") => {
+                    wasm_dialect::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref()
+                }
+                ("f32", "f64") => wasm_dialect::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("convert") {
             match (src_suffix, dst_suffix) {
-                ("i32", "f32") => arena_wasm::f32_convert_i32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("i32", "f64") => arena_wasm::f64_convert_i32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("i64", "f32") => arena_wasm::f32_convert_i64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("i64", "f64") => arena_wasm::f64_convert_i64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "i32") => arena_wasm::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i32") => arena_wasm::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "i64") => arena_wasm::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i64") => arena_wasm::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "f64") => arena_wasm::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "f32") => arena_wasm::f32_demote_f64(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "f32") => {
+                    wasm_dialect::f32_convert_i32_s(ctx, loc, operand, dst_ty).op_ref()
+                }
+                ("i32", "f64") => {
+                    wasm_dialect::f64_convert_i32_s(ctx, loc, operand, dst_ty).op_ref()
+                }
+                ("i64", "f32") => {
+                    wasm_dialect::f32_convert_i64_s(ctx, loc, operand, dst_ty).op_ref()
+                }
+                ("i64", "f64") => {
+                    wasm_dialect::f64_convert_i64_s(ctx, loc, operand, dst_ty).op_ref()
+                }
+                ("f32", "i32") => wasm_dialect::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i32") => wasm_dialect::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i64") => wasm_dialect::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "i64") => wasm_dialect::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "f64") => wasm_dialect::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
+                ("f64", "f32") => wasm_dialect::f32_demote_f64(ctx, loc, operand, dst_ty).op_ref(),
                 _ => return false,
             }
         } else {

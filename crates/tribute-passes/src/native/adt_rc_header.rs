@@ -17,18 +17,16 @@ use std::collections::HashMap;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::{
-    compute_enum_layout_arena, compute_struct_layout_arena, find_variant_layout,
-};
+use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt;
 use trunk_ir::arena::dialect::clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
-use trunk_ir::arena::rewrite::type_converter::ArenaTypeConverter;
-use trunk_ir::arena::rewrite::{ArenaModule, ArenaRewritePattern, PatternApplicator};
+use trunk_ir::arena::rewrite::type_converter::TypeConverter;
+use trunk_ir::arena::rewrite::{Module, PatternApplicator, RewritePattern};
 use trunk_ir::arena::types::TypeDataBuilder;
 
 /// Name of the runtime allocation function.
@@ -39,8 +37,8 @@ const ALLOC_FN: &str = "__tribute_alloc";
 /// The `rtti_map` maps arena type refs to their RTTI indices.
 pub fn lower(
     ctx: &mut IrContext,
-    module: ArenaModule,
-    type_converter: ArenaTypeConverter,
+    module: Module,
+    type_converter: TypeConverter,
     rtti_map: &HashMap<TypeRef, u32>,
 ) {
     // Pre-intern types
@@ -93,7 +91,7 @@ struct StructNewPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for StructNewPattern {
+impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -107,7 +105,7 @@ impl ArenaRewritePattern for StructNewPattern {
         let struct_ty = struct_new.r#type(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout_arena(ctx, struct_ty, tc) else {
+        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
             panic!(
                 "adt_rc_header: cannot compute layout for struct_new type {:?}; \
                  the struct type matched adt.struct_new but has no valid layout",
@@ -217,7 +215,7 @@ struct VariantNewPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for VariantNewPattern {
+impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -232,7 +230,7 @@ impl ArenaRewritePattern for VariantNewPattern {
         let tag = variant_new.tag(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout_arena(ctx, enum_ty, tc) else {
+        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
             panic!(
                 "adt_rc_header: cannot compute enum layout for variant_new type {:?}; \
                  the enum type matched adt.variant_new but has no valid layout",
@@ -341,15 +339,15 @@ mod tests {
     };
     use trunk_ir::arena::dialect::func as arena_func;
     use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::ArenaModule;
-    use trunk_ir::arena::types::Attribute as ArenaAttribute;
-    use trunk_ir::arena::types::Location as ArenaLocation;
+    use trunk_ir::arena::rewrite::Module;
+    use trunk_ir::arena::types::Attribute;
+    use trunk_ir::arena::types::Location;
     use trunk_ir::smallvec::smallvec;
 
-    fn test_ctx() -> (IrContext, ArenaLocation) {
+    fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("file:///test.trb".to_owned());
-        let loc = ArenaLocation::new(path, Span::new(0, 0));
+        let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
@@ -360,7 +358,7 @@ mod tests {
 
     fn build_and_lower(
         ctx: &mut IrContext,
-        loc: ArenaLocation,
+        loc: Location,
         struct_ty: TypeRef,
         field_types: &[TypeRef],
     ) -> String {
@@ -395,7 +393,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
                 .operands(field_vals)
                 .result(struct_ty)
-                .attr("type", ArenaAttribute::Type(struct_ty))
+                .attr("type", Attribute::Type(struct_ty))
                 .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
@@ -428,14 +426,14 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", ArenaAttribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        let module = ArenaModule::new(ctx, module_op).expect("valid arena module");
+        let module = Module::new(ctx, module_op).expect("valid arena module");
 
         // Run RTTI pass first (needed for rtti_map)
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(ctx);
         let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc);
 
         // Run adt_rc_header pass

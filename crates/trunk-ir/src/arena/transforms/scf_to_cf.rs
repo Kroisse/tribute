@@ -35,15 +35,15 @@ use smallvec::SmallVec;
 
 use crate::arena::context::{BlockArgData, BlockData, IrContext};
 use crate::arena::dialect::{arith, cf, core, scf};
-use crate::arena::ops::{ArenaDialectOp, ArenaDialectType};
+use crate::arena::ops::{DialectOp, DialectType};
 use crate::arena::refs::{BlockRef, OpRef, RegionRef};
-use crate::arena::rewrite::ArenaModule;
+use crate::arena::rewrite::Module;
 use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::arena::types::{Attribute, Location};
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 /// Lower all `scf` operations in a module to `cf` operations.
-pub fn lower_scf_to_cf(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
     let body = match module.body(ctx) {
         Some(r) => r,
         None => return,
@@ -493,8 +493,8 @@ mod tests {
     use super::*;
     use crate::arena::dialect::{arith, func, scf};
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
     use std::ops::ControlFlow;
 
@@ -524,7 +524,7 @@ mod tests {
         crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
-    fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> ArenaModule {
+    fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -545,7 +545,7 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).unwrap()
+        Module::new(ctx, module_op).unwrap()
     }
 
     /// Collect all op names from a region (dialect.name format).

@@ -26,11 +26,11 @@ mod ability {
 // Arena equivalents of the Salsa type helpers in `crate::dialect::ability`.
 // These construct canonical Marker and Evidence types using the arena type interner.
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::refs::TypeRef;
 use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
 
 /// Get the canonical Marker ADT type for evidence-based dispatch (arena version).
 ///

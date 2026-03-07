@@ -15,10 +15,10 @@ use std::ops::ControlFlow;
 
 use crate::arena::context::IrContext;
 use crate::arena::refs::OpRef;
-use crate::arena::rewrite::ArenaModule;
+use crate::arena::rewrite::Module;
 use crate::arena::types::Attribute;
 use crate::arena::walk::{WalkAction, walk_region};
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -47,14 +47,14 @@ pub struct GlobalDceResult {
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
-pub fn eliminate_dead_functions(ctx: &mut IrContext, module: ArenaModule) -> GlobalDceResult {
+pub fn eliminate_dead_functions(ctx: &mut IrContext, module: Module) -> GlobalDceResult {
     eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default())
 }
 
 /// Eliminate unreachable functions with custom configuration.
 pub fn eliminate_dead_functions_with_config(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
     config: GlobalDceConfig,
 ) -> GlobalDceResult {
     let mut pass = GlobalDcePass::new(config);
@@ -128,7 +128,7 @@ impl GlobalDcePass {
         }
     }
 
-    fn run(&mut self, ctx: &mut IrContext, module: ArenaModule) -> GlobalDceResult {
+    fn run(&mut self, ctx: &mut IrContext, module: Module) -> GlobalDceResult {
         // Phase 1: Analyze — collect functions, call graph, reachability roots
         if let Some(body) = module.body(ctx) {
             self.analyze_module_region(ctx, body, &[]);
@@ -331,7 +331,7 @@ impl GlobalDcePass {
     fn remove_dead_functions(
         &self,
         ctx: &mut IrContext,
-        module: ArenaModule,
+        module: Module,
         reachable: &HashSet<Symbol>,
     ) -> GlobalDceResult {
         let mut removed = Vec::new();
@@ -396,8 +396,8 @@ mod tests {
     use super::*;
     use crate::arena::dialect::func;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {
@@ -460,7 +460,7 @@ mod tests {
         func::func(ctx, loc, sym_name, fn_ty, body).op_ref()
     }
 
-    fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> ArenaModule {
+    fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -481,10 +481,10 @@ mod tests {
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
-        ArenaModule::new(ctx, module_op).unwrap()
+        Module::new(ctx, module_op).unwrap()
     }
 
-    fn count_funcs(ctx: &IrContext, module: ArenaModule) -> usize {
+    fn count_funcs(ctx: &IrContext, module: Module) -> usize {
         module
             .ops(ctx)
             .iter()

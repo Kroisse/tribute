@@ -8,13 +8,11 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::{
-    arith as arena_arith, cont as arena_cont, core as arena_core, func as arena_func,
-};
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::{arith, cont as arena_cont, core as arena_core, func as arena_func};
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::OpRef;
-use trunk_ir::arena::rewrite::{ArenaRewritePattern, PatternRewriter as ArenaPatternRewriter};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
+use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
 
 use crate::cont_util::compute_op_idx;
 
@@ -26,12 +24,12 @@ fn i32_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
 /// Pattern: Lower `cont.shift` -> `func.call @__tribute_yield`
 pub(crate) struct LowerShiftPattern;
 
-impl ArenaRewritePattern for LowerShiftPattern {
+impl RewritePattern for LowerShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) else {
             return false;
@@ -53,15 +51,17 @@ impl ArenaRewritePattern for LowerShiftPattern {
         let ability_ref_ty = shift_op.ability_ref(ctx);
         let ability_data = ctx.types.get(ability_ref_ty);
         let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-            Some(ArenaAttribute::Symbol(s)) => Some(*s),
-            _ => None,
+            Some(Attribute::Symbol(s)) => Some(*s),
+            _ => panic!(
+                "LowerShiftPattern: cont.shift has invalid ability_ref type (missing or non-Symbol 'name' attribute): {:?}",
+                ability_data,
+            ),
         };
         let op_name = Some(shift_op.op_name(ctx));
         let op_idx = compute_op_idx(ability_name, op_name);
 
         // %op_idx = arith.const <op_idx>
-        let op_idx_const =
-            arena_arith::r#const(ctx, loc, i32_ty, ArenaAttribute::IntBits(op_idx as u64));
+        let op_idx_const = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_idx as u64));
         rewriter.insert_op(op_idx_const.op_ref());
 
         // %shift_val = shift_value or null ptr
@@ -74,7 +74,7 @@ impl ArenaRewritePattern for LowerShiftPattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };
@@ -112,12 +112,12 @@ impl ArenaRewritePattern for LowerShiftPattern {
 /// Pattern: Lower `cont.resume` -> `func.call @__tribute_resume`
 pub(crate) struct LowerResumePattern;
 
-impl ArenaRewritePattern for LowerResumePattern {
+impl RewritePattern for LowerResumePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if !arena_cont::Resume::matches(ctx, op) {
             return false;
@@ -149,7 +149,7 @@ impl ArenaRewritePattern for LowerResumePattern {
                 v
             }
         } else {
-            let null = arena_arith::r#const(ctx, loc, ptr_ty, ArenaAttribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         };
@@ -186,12 +186,12 @@ impl ArenaRewritePattern for LowerResumePattern {
 /// Pattern: Lower `cont.drop` -> `func.call @__tribute_resume_drop`
 pub(crate) struct LowerDropPattern;
 
-impl ArenaRewritePattern for LowerDropPattern {
+impl RewritePattern for LowerDropPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        rewriter: &mut ArenaPatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         if !arena_cont::Drop::matches(ctx, op) {
             return false;

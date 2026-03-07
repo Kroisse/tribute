@@ -1,6 +1,6 @@
 //! Generic type converter for target-agnostic IR transformations.
 //!
-//! This module provides an arena-based `ArenaTypeConverter` configuration for
+//! This module provides an arena-based `TypeConverter` configuration for
 //! converting high-level Tribute types to their core representations. This
 //! converter handles target-agnostic transformations that apply to all backends.
 //!
@@ -18,11 +18,11 @@
 //! type converters.
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::refs::TypeRef;
-use trunk_ir::arena::rewrite::type_converter::{ArenaTypeConverter, MaterializeResult};
+use trunk_ir::arena::rewrite::type_converter::{MaterializeResult, TypeConverter};
 use trunk_ir::arena::types::TypeDataBuilder;
-use trunk_ir::ir::Symbol;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
     ctx.types
@@ -41,12 +41,12 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, Symbol::new("adt"), Symbol::new("typeref"))
 }
 
-/// Create an ArenaTypeConverter configured for target-agnostic type conversions.
+/// Create an TypeConverter configured for target-agnostic type conversions.
 ///
 /// This converter handles the IR-level type transformations that are common
 /// across all backends. Backend-specific converters can extend this with
 /// additional conversions.
-pub fn generic_type_converter_arena(ctx: &mut IrContext) -> ArenaTypeConverter {
+pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-intern commonly used types (TypeRef is Copy)
     let tribute_rt_int = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("int"));
     let tribute_rt_nat = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("nat"));
@@ -57,7 +57,7 @@ pub fn generic_type_converter_arena(ctx: &mut IrContext) -> ArenaTypeConverter {
     let core_i1 = intern_type(ctx, Symbol::new("core"), Symbol::new("i1"));
     let core_f64 = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
 
-    let mut tc = ArenaTypeConverter::new();
+    let mut tc = TypeConverter::new();
 
     // Convert tribute_rt.int → core.i32 (Phase 1: arbitrary precision as i32)
     tc.add_conversion(move |_ctx, ty| {

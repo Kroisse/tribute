@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::live_vars::ArenaFunctionAnalysis;
+use crate::live_vars::FunctionAnalysis;
 use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::cont as arena_cont;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use trunk_ir::arena::walk;
 use trunk_ir::location::Span;
 
@@ -51,7 +51,7 @@ fn analyze_shift_points_in_region(
                 if effectful_funcs.contains(&func_name) {
                     // Analyze this effectful function
                     let body = func.body(ctx);
-                    if let Some(func_analysis) = ArenaFunctionAnalysis::analyze(ctx, body) {
+                    if let Some(func_analysis) = FunctionAnalysis::analyze(ctx, body) {
                         let total_shifts = func_analysis.shift_points.len();
                         for shift_point in func_analysis.shift_points {
                             let span = ctx.op(shift_point.shift_op).location.span;
@@ -266,7 +266,7 @@ fn has_effectful_type(ctx: &IrContext, func_ty: TypeRef) -> bool {
     if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
         return false;
     }
-    let Some(ArenaAttribute::Type(effect)) = data.attrs.get(&Symbol::new("effect")) else {
+    let Some(Attribute::Type(effect)) = data.attrs.get(&Symbol::new("effect")) else {
         return false;
     };
     let effect_data = ctx.types.get(*effect);

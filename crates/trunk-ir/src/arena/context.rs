@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use super::refs::*;
 use super::types::*;
-use crate::ir::Symbol;
+use crate::symbol::Symbol;
 
 // ============================================================================
 // Use-chain
@@ -665,8 +665,8 @@ impl OperationDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {

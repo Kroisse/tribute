@@ -8,17 +8,17 @@
 
 use std::collections::HashMap;
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::Attribute;
+use trunk_ir::arena::types::TypeDataBuilder;
 
 /// Result of const analysis - maps content to allocated offset.
 pub struct ConstAnalysis {
@@ -96,8 +96,7 @@ impl ConstCollector {
 
         if data.dialect == arena_adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(ArenaAttribute::String(s)) = data.attributes.get(&Symbol::new("value"))
-                {
+                if let Some(Attribute::String(s)) = data.attributes.get(&Symbol::new("value")) {
                     let bytes = s.clone().into_bytes();
                     if !self.string_seen.contains_key(&bytes) {
                         let offset = Self::align_to(self.next_string_offset, 4);
@@ -109,7 +108,7 @@ impl ConstCollector {
                     }
                 }
             } else if data.name == Symbol::new("bytes_const")
-                && let Some(ArenaAttribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
+                && let Some(Attribute::Bytes(b)) = data.attributes.get(&Symbol::new("value"))
             {
                 let bytes: Vec<u8> = b.to_vec();
                 if !self.bytes_seen.contains_key(&bytes) {
@@ -142,7 +141,7 @@ fn walk_ops_in_region(
 }
 
 /// Analyze a module to collect all string/bytes constants and allocate offsets.
-pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
+pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
     // Walk all operations in module body (recursively into nested regions)
@@ -160,11 +159,11 @@ pub fn analyze_consts(ctx: &IrContext, module: ArenaModule) -> ConstAnalysis {
 }
 
 /// Lower const operations using pre-computed analysis.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, analysis: &ConstAnalysis) {
+pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
     let string_allocations = analysis.string_allocations.clone();
     let bytes_allocations = analysis.bytes_allocations.clone();
 
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(StringConstPattern::new(string_allocations))
         .add_pattern(BytesConstPattern::new(bytes_allocations));
     applicator.apply_partial(ctx, module);
@@ -192,7 +191,7 @@ impl StringConstPattern {
     }
 }
 
-impl ArenaRewritePattern for StringConstPattern {
+impl RewritePattern for StringConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -217,7 +216,7 @@ impl ArenaRewritePattern for StringConstPattern {
 
         // Use typed helper to create wasm.i32_const with just the offset.
         // Length information is available in ConstAnalysis and will be used by emit.rs.
-        let new_op = arena_wasm::i32_const(ctx, location, i32_ty, offset as i32);
+        let new_op = wasm_dialect::i32_const(ctx, location, i32_ty, offset as i32);
 
         rewriter.replace_op(new_op.op_ref());
         true
@@ -250,7 +249,7 @@ impl BytesConstPattern {
     }
 }
 
-impl ArenaRewritePattern for BytesConstPattern {
+impl RewritePattern for BytesConstPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -262,7 +261,7 @@ impl ArenaRewritePattern for BytesConstPattern {
         };
 
         let value_attr = bytes_const.value(ctx);
-        let ArenaAttribute::Bytes(b) = value_attr else {
+        let Attribute::Bytes(b) = value_attr else {
             return false;
         };
         let content: Vec<u8> = b.to_vec();
@@ -272,10 +271,12 @@ impl ArenaRewritePattern for BytesConstPattern {
         };
 
         let location = ctx.op(op).location;
-        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
+        let bytes_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bytes")).build());
 
         // Create wasm.bytes_from_data operation
-        let new_op = arena_wasm::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
+        let new_op = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
 
         rewriter.replace_op(new_op.op_ref());
         true

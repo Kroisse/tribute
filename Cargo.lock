@@ -1499,8 +1499,6 @@ name = "tribute-ir"
 version = "0.1.0"
 dependencies = [
  "inventory",
- "salsa",
- "salsa-test-macros",
  "tracing",
  "trunk-ir",
 ]
@@ -1512,8 +1510,6 @@ dependencies = [
  "im",
  "insta",
  "rustc-hash",
- "salsa",
- "salsa-test-macros",
  "tracing",
  "tribute-core",
  "tribute-ir",
@@ -1560,8 +1556,6 @@ dependencies = [
  "derive_more",
  "insta",
  "rustc-hash",
- "salsa",
- "salsa-test-macros",
  "target-lexicon",
  "tracing",
  "trunk-ir",
@@ -1583,8 +1577,6 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "insta",
- "salsa",
- "salsa-test-macros",
  "tracing",
  "trunk-ir",
  "wasm-encoder",

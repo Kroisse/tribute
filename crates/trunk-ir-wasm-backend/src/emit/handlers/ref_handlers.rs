@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
+use trunk_ir::arena::types::Attribute;
 use wasm_encoder::{AbstractHeapType, Function, HeapType, Instruction};
 
 use crate::gc_types::ATTR_FIELD_COUNT;
@@ -56,7 +56,7 @@ pub(crate) fn handle_ref_null(
 /// Handle ref.func operation
 pub(crate) fn handle_ref_func(
     ctx: &IrContext,
-    ref_func_op: arena_wasm::RefFunc,
+    ref_func_op: wasm_dialect::RefFunc,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -85,11 +85,11 @@ pub(crate) fn handle_ref_cast(
 
     // Check if this is a placeholder struct type (wasm.structref with field_count)
     // If so, use the concrete type index from the placeholder map
-    let heap_type = if let Some(ArenaAttribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
+    let heap_type = if let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE()) {
         if helpers::is_type(ctx, *target_ty, "wasm", "structref") {
             // structref placeholder - try to find concrete type via type attribute first
             // The `type` attribute contains the actual adt.struct/typeref type
-            if let Some(ArenaAttribute::Type(concrete_ty)) = attrs.get(&Symbol::new("type")) {
+            if let Some(Attribute::Type(concrete_ty)) = attrs.get(&Symbol::new("type")) {
                 if let Some(&type_idx) = module_info.type_idx_by_type.get(concrete_ty) {
                     let data = ctx.types.get(*concrete_ty);
                     tracing::debug!(
@@ -159,7 +159,7 @@ pub(crate) fn handle_ref_test(
     // Try attr_heap_type first, then fall back to type-index lookup (mirroring handle_ref_cast)
     // Pass target_type as inferred_type so get_type_idx_from_attrs can find it
     let target_type_ref = attrs.get(&ATTR_TARGET_TYPE()).and_then(|a| {
-        if let ArenaAttribute::Type(ty) = a {
+        if let Attribute::Type(ty) = a {
             Some(*ty)
         } else {
             None
@@ -183,11 +183,11 @@ pub(crate) fn handle_ref_test(
 ///
 /// Falls back to abstract structref if the placeholder is not found in the map.
 fn resolve_placeholder_structref(
-    attrs: &BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &BTreeMap<Symbol, Attribute>,
     target_ty: TypeRef,
     module_info: &ModuleInfo,
 ) -> CompilationResult<HeapType> {
-    if let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&ATTR_FIELD_COUNT()) {
+    if let Some(Attribute::IntBits(fc)) = attrs.get(&ATTR_FIELD_COUNT()) {
         let field_count = usize::try_from(*fc).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "ref_cast: field_count value {} out of usize range",

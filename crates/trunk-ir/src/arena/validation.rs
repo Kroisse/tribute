@@ -16,7 +16,7 @@ use std::fmt;
 
 use super::context::IrContext;
 use super::refs::{BlockRef, OpRef, RegionRef, ValueDef, ValueRef};
-use super::rewrite::ArenaModule;
+use super::rewrite::Module;
 use super::walk;
 
 use crate::Symbol;
@@ -192,7 +192,7 @@ fn check_operands_in_region(
 ///
 /// For each function, checks that every operand references a value defined
 /// within that function's region tree.
-pub fn validate_value_integrity(ctx: &IrContext, module: ArenaModule) -> ValidationResult {
+pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
     let body = match module.body(ctx) {
@@ -262,7 +262,7 @@ fn validate_functions_in_region(
 /// Checks two directions:
 /// 1. For every operand of every op, there must be a corresponding entry in `uses(operand)`.
 /// 2. For every use in the use-chain, the referenced op's operand must point back.
-pub fn validate_use_chains(ctx: &IrContext, module: ArenaModule) -> ValidationResult {
+pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
     let body = match module.body(ctx) {
@@ -353,7 +353,7 @@ fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<V
 }
 
 /// Run both validations and combine results.
-pub fn validate_all(ctx: &IrContext, module: ArenaModule) -> ValidationResult {
+pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
     ValidationResult {
@@ -366,7 +366,7 @@ pub fn validate_all(ctx: &IrContext, module: ArenaModule) -> ValidationResult {
 ///
 /// Only runs under `cfg!(debug_assertions)`. Useful for checkpoints after
 /// IR transformation passes.
-pub fn debug_assert_valid(ctx: &IrContext, module: ArenaModule, pass_name: &str) {
+pub fn debug_assert_valid(ctx: &IrContext, module: Module, pass_name: &str) {
     if !cfg!(debug_assertions) {
         return;
     }
@@ -411,7 +411,7 @@ mod tests {
     }
 
     /// Build a valid module: fn add() { 40 + 2 }
-    fn build_valid_module(ctx: &mut IrContext) -> ArenaModule {
+    fn build_valid_module(ctx: &mut IrContext) -> Module {
         let loc = test_location(ctx);
         let i32_ty = make_i32_type(ctx);
 
@@ -461,7 +461,7 @@ mod tests {
         });
         let module = core::module(ctx, loc, Symbol::new("test"), mod_region);
 
-        ArenaModule::new(ctx, module.op_ref()).unwrap()
+        Module::new(ctx, module.op_ref()).unwrap()
     }
 
     #[test]
@@ -531,7 +531,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale op result");
@@ -604,7 +604,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale block arg");
@@ -720,7 +720,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(
@@ -791,7 +791,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(
@@ -869,7 +869,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(!result.is_ok(), "Should detect stale ref in wasm.func body");
@@ -978,7 +978,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         let result = validate_value_integrity(&ctx, module);
         assert!(
@@ -1048,7 +1048,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::module(&mut ctx, loc, Symbol::new("test"), mod_region);
-        let module = ArenaModule::new(&ctx, module_op.op_ref()).unwrap();
+        let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         // Validate before RAUW
         let result = validate_all(&ctx, module);

@@ -6,13 +6,17 @@ authors.workspace = true
 license.workspace = true
 description = "TrunkIR: A multi-level dialect IR system"
 
+[features]
+default = []
+salsa = ["dep:salsa"]
+
 [dependencies]
 cranelift-entity.workspace = true
 inventory.workspace = true
 lasso.workspace = true
 parking_lot.workspace = true
 paste.workspace = true
-salsa.workspace = true
+salsa = { workspace = true, optional = true }
 serde.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
@@ -22,4 +26,5 @@ winnow.workspace = true
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
+salsa.workspace = true
 salsa-test-macros = { path = "../salsa-test-macros" }

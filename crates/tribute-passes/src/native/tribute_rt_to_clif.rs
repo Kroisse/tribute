@@ -22,13 +22,11 @@ use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::clif;
 use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
-use trunk_ir::arena::rewrite::type_converter::ArenaTypeConverter;
-use trunk_ir::arena::rewrite::{
-    ArenaConversionTarget, ArenaModule, ArenaRewritePattern, PatternApplicator,
-};
+use trunk_ir::arena::rewrite::type_converter::TypeConverter;
+use trunk_ir::arena::rewrite::{ConversionTarget, Module, PatternApplicator, RewritePattern};
 use trunk_ir::arena::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
@@ -106,7 +104,7 @@ fn box_value(
 ///
 /// This is a partial lowering: only box/unbox operations are converted.
 /// `retain`/`release` ops pass through (handled by a future RC lowering pass).
-pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaTypeConverter) {
+pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     // Pre-intern types for patterns
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let i64_ty = ctx
@@ -148,7 +146,7 @@ pub fn lower(ctx: &mut IrContext, module: ArenaModule, type_converter: ArenaType
     applicator.apply_partial(ctx, module);
 
     // Verify: tribute_rt.* ops (except retain/release) should be gone
-    let mut target = ArenaConversionTarget::new();
+    let mut target = ConversionTarget::new();
     target.add_illegal_dialect("tribute_rt");
     target.add_legal_op("tribute_rt", "retain");
     target.add_legal_op("tribute_rt", "release");
@@ -173,7 +171,7 @@ struct BoxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for BoxIntPattern {
+impl RewritePattern for BoxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -210,7 +208,7 @@ struct BoxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for BoxNatPattern {
+impl RewritePattern for BoxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -247,7 +245,7 @@ struct BoxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for BoxBoolPattern {
+impl RewritePattern for BoxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -284,7 +282,7 @@ struct BoxFloatPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for BoxFloatPattern {
+impl RewritePattern for BoxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -323,7 +321,7 @@ struct UnboxIntPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UnboxIntPattern {
+impl RewritePattern for UnboxIntPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -352,7 +350,7 @@ struct UnboxNatPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UnboxNatPattern {
+impl RewritePattern for UnboxNatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -380,7 +378,7 @@ struct UnboxBoolPattern {
     i32_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UnboxBoolPattern {
+impl RewritePattern for UnboxBoolPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -408,7 +406,7 @@ struct UnboxFloatPattern {
     f64_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UnboxFloatPattern {
+impl RewritePattern for UnboxFloatPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -442,7 +440,7 @@ mod tests {
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc);
         print_module(&ctx, module.op())
     }
@@ -562,7 +560,7 @@ mod tests {
   }
 }"#;
         let module = parse_test_module(&mut ctx, ir);
-        let (tc, _) = crate::native::type_converter::native_type_converter_arena(&mut ctx);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         lower(&mut ctx, module, tc);
 
         let output = print_module(&ctx, module.op());

@@ -84,7 +84,7 @@ tree-sitter-tribute.workspace = true
 tribute-front.workspace = true
 tribute-ir.workspace = true
 tribute-passes.workspace = true
-trunk-ir.workspace = true
+trunk-ir = { workspace = true, features = ["salsa"] }
 tempfile.workspace = true
 trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true

@@ -127,8 +127,8 @@ pub fn erase_op(ctx: &mut IrContext, op: OpRef) {
 mod tests {
     use super::*;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
     use smallvec::smallvec;
     use std::collections::BTreeMap;
 

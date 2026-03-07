@@ -6,16 +6,14 @@
 
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
 use trunk_ir::arena::dialect::core as arena_core;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
-    ArenaModule, PatternApplicator, WasmFuncSignatureConversionPattern,
-};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
 
 use super::const_to_wasm::ConstAnalysis;
@@ -24,7 +22,7 @@ use super::type_converter::{self, wasm_type_converter};
 use trunk_ir_wasm_backend::gc_types::{STEP_IDX, STEP_TAG_DONE};
 
 /// Run the full WASM lowering pipeline on arena IR.
-pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) {
     // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
     {
         let _span = tracing::info_span!("arith_to_wasm").entered();
@@ -133,14 +131,14 @@ pub fn lower_to_wasm_arena(ctx: &mut IrContext, module: ArenaModule) {
 // =============================================================================
 
 /// Debug helper to check if all operations in function bodies are in wasm dialect
-fn check_all_wasm_dialect(ctx: &IrContext, module: ArenaModule) {
+fn check_all_wasm_dialect(ctx: &IrContext, module: Module) {
     let Some(body) = module.body(ctx) else {
         return;
     };
     for &block in ctx.region(body).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             let data = ctx.op(op);
-            if data.dialect == arena_wasm::DIALECT_NAME() && data.name == Symbol::new("func") {
+            if data.dialect == wasm_dialect::DIALECT_NAME() && data.name == Symbol::new("func") {
                 check_function_body(ctx, op);
             }
         }
@@ -148,7 +146,7 @@ fn check_all_wasm_dialect(ctx: &IrContext, module: ArenaModule) {
 }
 
 /// Debug helper to trace function parameter types through the pipeline.
-fn debug_func_params(ctx: &IrContext, module: ArenaModule, phase: &str) {
+fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
     let Some(body) = module.body(ctx) else {
         return;
     };
@@ -157,8 +155,7 @@ fn debug_func_params(ctx: &IrContext, module: ArenaModule, phase: &str) {
             let data = ctx.op(op);
             // Check for func.func or wasm.func operations
             if data.dialect == arena_func::DIALECT_NAME() && data.name == Symbol::new("func") {
-                if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
-                {
+                if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
                     let fn_data = ctx.types.get(*fn_ty);
                     let params: Vec<_> = fn_data
                         .params
@@ -175,9 +172,9 @@ fn debug_func_params(ctx: &IrContext, module: ArenaModule, phase: &str) {
                         .unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
-            } else if data.dialect == arena_wasm::DIALECT_NAME()
+            } else if data.dialect == wasm_dialect::DIALECT_NAME()
                 && data.name == Symbol::new("func")
-                && let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
+                && let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type"))
             {
                 let fn_data = ctx.types.get(*fn_ty);
                 let params: Vec<_> = fn_data
@@ -313,7 +310,7 @@ impl<'a> WasmLowerer<'a> {
         }
     }
 
-    fn lower_module(&mut self, ctx: &mut IrContext, module: ArenaModule) {
+    fn lower_module(&mut self, ctx: &mut IrContext, module: Module) {
         let Some(body) = module.body(ctx) else {
             return;
         };
@@ -342,14 +339,14 @@ impl<'a> WasmLowerer<'a> {
             for &op in ctx.block(block).ops.iter() {
                 let data = ctx.op(op);
 
-                if data.dialect == arena_wasm::DIALECT_NAME() {
+                if data.dialect == wasm_dialect::DIALECT_NAME() {
                     // Track wasm module-level metadata
                     if data.name == Symbol::new("memory") {
                         self.memory_plan.has_memory = true;
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
                     } else if data.name == Symbol::new("export_func")
-                        && let Some(ArenaAttribute::String(name)) =
+                        && let Some(Attribute::String(name)) =
                             data.attributes.get(&Symbol::new("name"))
                     {
                         if name == "main" {
@@ -378,7 +375,7 @@ impl<'a> WasmLowerer<'a> {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(ArenaAttribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
+        let Some(Attribute::Symbol(sym_name)) = data.attributes.get(&Symbol::new("sym_name"))
         else {
             return;
         };
@@ -390,7 +387,7 @@ impl<'a> WasmLowerer<'a> {
 
         self.main_exports.saw_main = true;
 
-        if let Some(ArenaAttribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
+        if let Some(Attribute::Type(fn_ty)) = data.attributes.get(&Symbol::new("type")) {
             let fn_data = ctx.types.get(*fn_ty);
             // In arena core.func type, params[0] is the return type
             if let Some(&result_ty) = fn_data.params.first() {
@@ -399,7 +396,7 @@ impl<'a> WasmLowerer<'a> {
         }
 
         // Read original_result_type attribute if present
-        if let Some(ArenaAttribute::Type(original_ty)) =
+        if let Some(Attribute::Type(original_ty)) =
             data.attributes.get(&Symbol::new("original_result_type"))
         {
             self.main_exports.original_result_type = Some(*original_ty);
@@ -429,7 +426,7 @@ impl<'a> WasmLowerer<'a> {
         if self.intrinsic_analysis.needs_fd_write || self.main_exports.saw_main {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
-            let op = arena_wasm::import_func(
+            let op = wasm_dialect::import_func(
                 ctx,
                 location,
                 Symbol::new("wasi_snapshot_preview1"),
@@ -455,7 +452,7 @@ impl<'a> WasmLowerer<'a> {
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
             let total_data_size = const_size + intrinsic_size + start_buf_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
-            let op = arena_wasm::memory(ctx, location, required_pages, 0, false, false);
+            let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
             preamble_ops.push(op.op_ref());
             self.memory_plan.has_memory = true;
         }
@@ -463,39 +460,39 @@ impl<'a> WasmLowerer<'a> {
         // Emit yield globals for continuation support
         if self.has_continuations {
             // Index 0 ($yield_state): i32
-            let g0 = arena_wasm::global(
+            let g0 = wasm_dialect::global(
                 ctx,
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g0.op_ref());
             // Index 1 ($yield_tag): i32
-            let g1 = arena_wasm::global(
+            let g1 = wasm_dialect::global(
                 ctx,
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g1.op_ref());
             // Index 2 ($yield_cont): anyref
-            let g2 = arena_wasm::global(
+            let g2 = wasm_dialect::global(
                 ctx,
                 location,
                 Symbol::new("anyref"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g2.op_ref());
             // Index 3 ($yield_op_idx): i32
-            let g3 = arena_wasm::global(
+            let g3 = wasm_dialect::global(
                 ctx,
                 location,
                 Symbol::new("i32"),
                 true,
-                ArenaAttribute::IntBits(0),
+                Attribute::IntBits(0),
             );
             preamble_ops.push(g3.op_ref());
         }
@@ -514,11 +511,11 @@ impl<'a> WasmLowerer<'a> {
     fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
         // Emit active data segments for string constants (linear memory)
         for (content, offset, _len) in self.const_analysis.string_allocations.iter() {
-            let op = arena_wasm::data(
+            let op = wasm_dialect::data(
                 ctx,
                 location,
                 *offset,
-                ArenaAttribute::Bytes(content.as_slice().into()),
+                Attribute::Bytes(content.as_slice().into()),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -526,11 +523,11 @@ impl<'a> WasmLowerer<'a> {
 
         // Emit passive data segments for bytes constants (for array.new_data)
         for (content, _data_idx, _len) in self.const_analysis.bytes_allocations.iter() {
-            let op = arena_wasm::data(
+            let op = wasm_dialect::data(
                 ctx,
                 location,
                 0,
-                ArenaAttribute::Bytes(content.as_slice().into()),
+                Attribute::Bytes(content.as_slice().into()),
                 true,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -541,11 +538,11 @@ impl<'a> WasmLowerer<'a> {
             let mut iovec_bytes = Vec::with_capacity(8);
             iovec_bytes.extend_from_slice(&ptr.to_le_bytes());
             iovec_bytes.extend_from_slice(&len.to_le_bytes());
-            let op = arena_wasm::data(
+            let op = wasm_dialect::data(
                 ctx,
                 location,
                 *offset,
-                ArenaAttribute::Bytes(iovec_bytes.as_slice().into()),
+                Attribute::Bytes(iovec_bytes.as_slice().into()),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -553,11 +550,11 @@ impl<'a> WasmLowerer<'a> {
 
         // Emit nwritten buffer if needed
         if let Some(nwritten_offset) = self.intrinsic_analysis.nwritten_offset {
-            let op = arena_wasm::data(
+            let op = wasm_dialect::data(
                 ctx,
                 location,
                 nwritten_offset,
-                ArenaAttribute::Bytes(smallvec![0, 0, 0, 0]),
+                Attribute::Bytes(smallvec![0, 0, 0, 0]),
                 false,
             );
             ctx.push_op(module_block, op.op_ref());
@@ -575,13 +572,13 @@ impl<'a> WasmLowerer<'a> {
             && self.memory_plan.has_memory
             && !self.memory_plan.has_exported_memory
         {
-            let op = arena_wasm::export_memory(ctx, location, "memory".into(), 0);
+            let op = wasm_dialect::export_memory(ctx, location, "memory".into(), 0);
             ctx.push_op(module_block, op.op_ref());
             self.memory_plan.has_exported_memory = true;
         }
 
         if self.main_exports.saw_main && !self.main_exports.main_exported {
-            let op = arena_wasm::export_func(ctx, location, "main".into(), Symbol::new("main"));
+            let op = wasm_dialect::export_func(ctx, location, "main".into(), Symbol::new("main"));
             ctx.push_op(module_block, op.op_ref());
             self.main_exports.main_exported = true;
         }
@@ -591,7 +588,7 @@ impl<'a> WasmLowerer<'a> {
             ctx.push_op(module_block, start_func);
 
             let export_op =
-                arena_wasm::export_func(ctx, location, "_start".into(), Symbol::new("_start"));
+                wasm_dialect::export_func(ctx, location, "_start".into(), Symbol::new("_start"));
             ctx.push_op(module_block, export_op.op_ref());
         }
     }
@@ -628,7 +625,8 @@ impl<'a> WasmLowerer<'a> {
         });
 
         let func_ty = intern_func_type(ctx, vec![], nil_ty);
-        let func_op = arena_wasm::func(ctx, location, Symbol::new("_start"), func_ty, body_region);
+        let func_op =
+            wasm_dialect::func(ctx, location, Symbol::new("_start"), func_ty, body_region);
         func_op.op_ref()
     }
 
@@ -660,19 +658,20 @@ impl<'a> WasmLowerer<'a> {
             .unwrap_or(false);
 
         // Call main — returns Step
-        let call_main = arena_wasm::call(ctx, location, vec![], vec![step_ty], Symbol::new("main"));
+        let call_main =
+            wasm_dialect::call(ctx, location, vec![], vec![step_ty], Symbol::new("main"));
         ctx.push_op(body_block, call_main.op_ref());
         let step_result = call_main.results(ctx)[0];
 
         // Extract tag field (field 0) from Step
-        let get_tag = arena_wasm::struct_get(ctx, location, step_result, i32_ty, STEP_IDX, 0);
+        let get_tag = wasm_dialect::struct_get(ctx, location, step_result, i32_ty, STEP_IDX, 0);
         ctx.push_op(body_block, get_tag.op_ref());
         let tag_val = get_tag.result(ctx);
 
         // Compare tag with DONE (0)
-        let done_const = arena_wasm::i32_const(ctx, location, i32_ty, STEP_TAG_DONE);
+        let done_const = wasm_dialect::i32_const(ctx, location, i32_ty, STEP_TAG_DONE);
         ctx.push_op(body_block, done_const.op_ref());
-        let cmp_eq = arena_wasm::i32_eq(ctx, location, tag_val, done_const.result(ctx), i32_ty);
+        let cmp_eq = wasm_dialect::i32_eq(ctx, location, tag_val, done_const.result(ctx), i32_ty);
         ctx.push_op(body_block, cmp_eq.op_ref());
         let is_done = cmp_eq.result(ctx);
 
@@ -687,7 +686,7 @@ impl<'a> WasmLowerer<'a> {
         if !returns_nil {
             // Extract value field (field 1) from Step
             let get_value =
-                arena_wasm::struct_get(ctx, location, step_result, anyref_ty, STEP_IDX, 1);
+                wasm_dialect::struct_get(ctx, location, step_result, anyref_ty, STEP_IDX, 1);
             ctx.push_op(then_block, get_value.op_ref());
             let value_val = get_value.result(ctx);
 
@@ -695,27 +694,27 @@ impl<'a> WasmLowerer<'a> {
                 // Unbox to i32 and print
                 let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
                 let cast =
-                    arena_wasm::ref_cast(ctx, location, value_val, i31ref_ty, i31ref_ty, None);
+                    wasm_dialect::ref_cast(ctx, location, value_val, i31ref_ty, i31ref_ty, None);
                 ctx.push_op(then_block, cast.op_ref());
 
                 let unbox_val = if is_nat {
-                    let get_u = arena_wasm::i31_get_u(ctx, location, cast.result(ctx), i32_ty);
+                    let get_u = wasm_dialect::i31_get_u(ctx, location, cast.result(ctx), i32_ty);
                     ctx.push_op(then_block, get_u.op_ref());
                     get_u.result(ctx)
                 } else {
-                    let get_s = arena_wasm::i31_get_s(ctx, location, cast.result(ctx), i32_ty);
+                    let get_s = wasm_dialect::i31_get_s(ctx, location, cast.result(ctx), i32_ty);
                     ctx.push_op(then_block, get_s.op_ref());
                     get_s.result(ctx)
                 };
                 self.build_print_i32_body(ctx, then_block, location, unbox_val);
             } else {
                 // Drop the anyref value
-                let drop_op = arena_wasm::drop(ctx, location, value_val);
+                let drop_op = wasm_dialect::drop(ctx, location, value_val);
                 ctx.push_op(then_block, drop_op.op_ref());
             }
         }
 
-        let ret_then = arena_wasm::r#return(ctx, location, vec![]);
+        let ret_then = wasm_dialect::r#return(ctx, location, vec![]);
         ctx.push_op(then_block, ret_then.op_ref());
 
         // Build else (unhandled effect) branch — trap
@@ -725,7 +724,7 @@ impl<'a> WasmLowerer<'a> {
             ops: smallvec![],
             parent_region: None,
         });
-        let trap = arena_wasm::unreachable(ctx, location);
+        let trap = wasm_dialect::unreachable(ctx, location);
         ctx.push_op(else_block, trap.op_ref());
 
         let then_region = ctx.create_region(RegionData {
@@ -739,10 +738,10 @@ impl<'a> WasmLowerer<'a> {
             parent_op: None,
         });
 
-        let if_op = arena_wasm::r#if(ctx, location, is_done, nil_ty, then_region, else_region);
+        let if_op = wasm_dialect::r#if(ctx, location, is_done, nil_ty, then_region, else_region);
         ctx.push_op(body_block, if_op.op_ref());
 
-        let trap_end = arena_wasm::unreachable(ctx, location);
+        let trap_end = wasm_dialect::unreachable(ctx, location);
         ctx.push_op(body_block, trap_end.op_ref());
     }
 
@@ -764,7 +763,7 @@ impl<'a> WasmLowerer<'a> {
             .map(|ty| is_type(ctx, ty, "core", "i32"))
             .unwrap_or(false);
 
-        let call = arena_wasm::call(ctx, location, vec![], result_types, Symbol::new("main"));
+        let call = wasm_dialect::call(ctx, location, vec![], result_types, Symbol::new("main"));
         ctx.push_op(body_block, call.op_ref());
 
         if is_i32 {
@@ -772,11 +771,11 @@ impl<'a> WasmLowerer<'a> {
             self.build_print_i32_body(ctx, body_block, location, result_val);
         } else if result_ty.is_some() {
             let result_val = call.results(ctx)[0];
-            let drop_op = arena_wasm::drop(ctx, location, result_val);
+            let drop_op = wasm_dialect::drop(ctx, location, result_val);
             ctx.push_op(body_block, drop_op.op_ref());
         }
 
-        let ret = arena_wasm::r#return(ctx, location, vec![]);
+        let ret = wasm_dialect::r#return(ctx, location, vec![]);
         ctx.push_op(body_block, ret.op_ref());
     }
 
@@ -803,11 +802,11 @@ impl<'a> WasmLowerer<'a> {
         let align_i8: u32 = 0;
 
         // === Step 1: Handle sign — compute absolute value ===
-        let zero = arena_wasm::i32_const(ctx, location, i32_ty, 0);
+        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
         ctx.push_op(block, zero.op_ref());
         let zero_val = zero.result(ctx);
 
-        let is_neg = arena_wasm::i32_lt_s(ctx, location, result_val, zero_val, i32_ty);
+        let is_neg = wasm_dialect::i32_lt_s(ctx, location, result_val, zero_val, i32_ty);
         ctx.push_op(block, is_neg.op_ref());
         let is_neg_val = is_neg.result(ctx);
 
@@ -818,9 +817,9 @@ impl<'a> WasmLowerer<'a> {
             ops: smallvec![],
             parent_region: None,
         });
-        let neg = arena_wasm::i32_sub(ctx, location, zero_val, result_val, i32_ty);
+        let neg = wasm_dialect::i32_sub(ctx, location, zero_val, result_val, i32_ty);
         ctx.push_op(then_abs_block, neg.op_ref());
-        let yield_neg = arena_wasm::r#yield(ctx, location, neg.result(ctx));
+        let yield_neg = wasm_dialect::r#yield(ctx, location, neg.result(ctx));
         ctx.push_op(then_abs_block, yield_neg.op_ref());
 
         let else_abs_block = ctx.create_block(BlockData {
@@ -829,7 +828,7 @@ impl<'a> WasmLowerer<'a> {
             ops: smallvec![],
             parent_region: None,
         });
-        let yield_pos = arena_wasm::r#yield(ctx, location, result_val);
+        let yield_pos = wasm_dialect::r#yield(ctx, location, result_val);
         ctx.push_op(else_abs_block, yield_pos.op_ref());
 
         let then_abs_region = ctx.create_region(RegionData {
@@ -842,7 +841,7 @@ impl<'a> WasmLowerer<'a> {
             blocks: smallvec![else_abs_block],
             parent_op: None,
         });
-        let if_abs = arena_wasm::r#if(
+        let if_abs = wasm_dialect::r#if(
             ctx,
             location,
             is_neg_val,
@@ -854,9 +853,9 @@ impl<'a> WasmLowerer<'a> {
         let abs_value = if_abs.result(ctx);
 
         // === Step 2: Initialize scratch memory ===
-        let rem_addr = arena_wasm::i32_const(ctx, location, i32_ty, scratch_rem as i32);
+        let rem_addr = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
         ctx.push_op(block, rem_addr.op_ref());
-        let store_rem = arena_wasm::i32_store(
+        let store_rem = wasm_dialect::i32_store(
             ctx,
             location,
             rem_addr.result(ctx),
@@ -867,11 +866,11 @@ impl<'a> WasmLowerer<'a> {
         );
         ctx.push_op(block, store_rem.op_ref());
 
-        let pos_addr_c = arena_wasm::i32_const(ctx, location, i32_ty, scratch_pos as i32);
+        let pos_addr_c = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
         ctx.push_op(block, pos_addr_c.op_ref());
-        let buf_end_c = arena_wasm::i32_const(ctx, location, i32_ty, buf_end as i32);
+        let buf_end_c = wasm_dialect::i32_const(ctx, location, i32_ty, buf_end as i32);
         ctx.push_op(block, buf_end_c.op_ref());
-        let store_pos = arena_wasm::i32_store(
+        let store_pos = wasm_dialect::i32_store(
             ctx,
             location,
             pos_addr_c.result(ctx),
@@ -892,9 +891,9 @@ impl<'a> WasmLowerer<'a> {
         {
             let b = loop_body_block;
 
-            let rem_addr_l = arena_wasm::i32_const(ctx, location, i32_ty, scratch_rem as i32);
+            let rem_addr_l = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
             ctx.push_op(b, rem_addr_l.op_ref());
-            let rem = arena_wasm::i32_load(
+            let rem = wasm_dialect::i32_load(
                 ctx,
                 location,
                 rem_addr_l.result(ctx),
@@ -905,9 +904,9 @@ impl<'a> WasmLowerer<'a> {
             );
             ctx.push_op(b, rem.op_ref());
 
-            let pos_addr_l = arena_wasm::i32_const(ctx, location, i32_ty, scratch_pos as i32);
+            let pos_addr_l = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
             ctx.push_op(b, pos_addr_l.op_ref());
-            let pos = arena_wasm::i32_load(
+            let pos = wasm_dialect::i32_load(
                 ctx,
                 location,
                 pos_addr_l.result(ctx),
@@ -918,18 +917,18 @@ impl<'a> WasmLowerer<'a> {
             );
             ctx.push_op(b, pos.op_ref());
 
-            let ten = arena_wasm::i32_const(ctx, location, i32_ty, 10);
+            let ten = wasm_dialect::i32_const(ctx, location, i32_ty, 10);
             ctx.push_op(b, ten.op_ref());
             let digit =
-                arena_wasm::i32_rem_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
+                wasm_dialect::i32_rem_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
             ctx.push_op(b, digit.op_ref());
             let next =
-                arena_wasm::i32_div_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
+                wasm_dialect::i32_div_u(ctx, location, rem.result(ctx), ten.result(ctx), i32_ty);
             ctx.push_op(b, next.op_ref());
 
-            let ascii_0 = arena_wasm::i32_const(ctx, location, i32_ty, 48);
+            let ascii_0 = wasm_dialect::i32_const(ctx, location, i32_ty, 48);
             ctx.push_op(b, ascii_0.op_ref());
-            let ascii = arena_wasm::i32_add(
+            let ascii = wasm_dialect::i32_add(
                 ctx,
                 location,
                 digit.result(ctx),
@@ -937,7 +936,7 @@ impl<'a> WasmLowerer<'a> {
                 i32_ty,
             );
             ctx.push_op(b, ascii.op_ref());
-            let store8 = arena_wasm::i32_store8(
+            let store8 = wasm_dialect::i32_store8(
                 ctx,
                 location,
                 pos.result(ctx),
@@ -948,9 +947,9 @@ impl<'a> WasmLowerer<'a> {
             );
             ctx.push_op(b, store8.op_ref());
 
-            let rem_addr_s = arena_wasm::i32_const(ctx, location, i32_ty, scratch_rem as i32);
+            let rem_addr_s = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_rem as i32);
             ctx.push_op(b, rem_addr_s.op_ref());
-            let store_next = arena_wasm::i32_store(
+            let store_next = wasm_dialect::i32_store(
                 ctx,
                 location,
                 rem_addr_s.result(ctx),
@@ -961,14 +960,14 @@ impl<'a> WasmLowerer<'a> {
             );
             ctx.push_op(b, store_next.op_ref());
 
-            let one = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
             ctx.push_op(b, one.op_ref());
             let new_pos =
-                arena_wasm::i32_sub(ctx, location, pos.result(ctx), one.result(ctx), i32_ty);
+                wasm_dialect::i32_sub(ctx, location, pos.result(ctx), one.result(ctx), i32_ty);
             ctx.push_op(b, new_pos.op_ref());
-            let pos_addr_s = arena_wasm::i32_const(ctx, location, i32_ty, scratch_pos as i32);
+            let pos_addr_s = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
             ctx.push_op(b, pos_addr_s.op_ref());
-            let store_pos2 = arena_wasm::i32_store(
+            let store_pos2 = wasm_dialect::i32_store(
                 ctx,
                 location,
                 pos_addr_s.result(ctx),
@@ -979,7 +978,7 @@ impl<'a> WasmLowerer<'a> {
             );
             ctx.push_op(b, store_pos2.op_ref());
 
-            let br_if = arena_wasm::br_if(ctx, location, next.result(ctx), 0);
+            let br_if = wasm_dialect::br_if(ctx, location, next.result(ctx), 0);
             ctx.push_op(b, br_if.op_ref());
         }
 
@@ -988,13 +987,13 @@ impl<'a> WasmLowerer<'a> {
             blocks: smallvec![loop_body_block],
             parent_op: None,
         });
-        let loop_op = arena_wasm::r#loop(ctx, location, vec![], nil_ty, loop_body_region);
+        let loop_op = wasm_dialect::r#loop(ctx, location, vec![], nil_ty, loop_body_region);
         ctx.push_op(block, loop_op.op_ref());
 
         // === Step 4: Read final position ===
-        let final_pos_addr = arena_wasm::i32_const(ctx, location, i32_ty, scratch_pos as i32);
+        let final_pos_addr = wasm_dialect::i32_const(ctx, location, i32_ty, scratch_pos as i32);
         ctx.push_op(block, final_pos_addr.op_ref());
-        let final_pos = arena_wasm::i32_load(
+        let final_pos = wasm_dialect::i32_load(
             ctx,
             location,
             final_pos_addr.result(ctx),
@@ -1013,9 +1012,9 @@ impl<'a> WasmLowerer<'a> {
             parent_region: None,
         });
         {
-            let minus = arena_wasm::i32_const(ctx, location, i32_ty, 45); // '-'
+            let minus = wasm_dialect::i32_const(ctx, location, i32_ty, 45); // '-'
             ctx.push_op(then_sign_block, minus.op_ref());
-            let store_sign = arena_wasm::i32_store8(
+            let store_sign = wasm_dialect::i32_store8(
                 ctx,
                 location,
                 final_pos.result(ctx),
@@ -1025,7 +1024,7 @@ impl<'a> WasmLowerer<'a> {
                 0,
             );
             ctx.push_op(then_sign_block, store_sign.op_ref());
-            let yield_sign = arena_wasm::r#yield(ctx, location, final_pos.result(ctx));
+            let yield_sign = wasm_dialect::r#yield(ctx, location, final_pos.result(ctx));
             ctx.push_op(then_sign_block, yield_sign.op_ref());
         }
 
@@ -1036,9 +1035,9 @@ impl<'a> WasmLowerer<'a> {
             parent_region: None,
         });
         {
-            let one = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
             ctx.push_op(else_sign_block, one.op_ref());
-            let start = arena_wasm::i32_add(
+            let start = wasm_dialect::i32_add(
                 ctx,
                 location,
                 final_pos.result(ctx),
@@ -1046,7 +1045,7 @@ impl<'a> WasmLowerer<'a> {
                 i32_ty,
             );
             ctx.push_op(else_sign_block, start.op_ref());
-            let yield_start = arena_wasm::r#yield(ctx, location, start.result(ctx));
+            let yield_start = wasm_dialect::r#yield(ctx, location, start.result(ctx));
             ctx.push_op(else_sign_block, yield_start.op_ref());
         }
 
@@ -1060,7 +1059,7 @@ impl<'a> WasmLowerer<'a> {
             blocks: smallvec![else_sign_block],
             parent_op: None,
         });
-        let if_sign = arena_wasm::r#if(
+        let if_sign = wasm_dialect::r#if(
             ctx,
             location,
             is_neg_val,
@@ -1072,15 +1071,16 @@ impl<'a> WasmLowerer<'a> {
         let start_ptr = if_sign.result(ctx);
 
         // === Step 6: Calculate string length ===
-        let buf_end_plus1 = arena_wasm::i32_const(ctx, location, i32_ty, (buf_end + 1) as i32);
+        let buf_end_plus1 = wasm_dialect::i32_const(ctx, location, i32_ty, (buf_end + 1) as i32);
         ctx.push_op(block, buf_end_plus1.op_ref());
-        let len = arena_wasm::i32_sub(ctx, location, buf_end_plus1.result(ctx), start_ptr, i32_ty);
+        let len =
+            wasm_dialect::i32_sub(ctx, location, buf_end_plus1.result(ctx), start_ptr, i32_ty);
         ctx.push_op(block, len.op_ref());
 
         // === Step 7: Set up iovec and call fd_write ===
-        let iovec_addr = arena_wasm::i32_const(ctx, location, i32_ty, iovec_off as i32);
+        let iovec_addr = wasm_dialect::i32_const(ctx, location, i32_ty, iovec_off as i32);
         ctx.push_op(block, iovec_addr.op_ref());
-        let store_iovec_ptr = arena_wasm::i32_store(
+        let store_iovec_ptr = wasm_dialect::i32_store(
             ctx,
             location,
             iovec_addr.result(ctx),
@@ -1091,9 +1091,9 @@ impl<'a> WasmLowerer<'a> {
         );
         ctx.push_op(block, store_iovec_ptr.op_ref());
 
-        let iovec_len_addr = arena_wasm::i32_const(ctx, location, i32_ty, (iovec_off + 4) as i32);
+        let iovec_len_addr = wasm_dialect::i32_const(ctx, location, i32_ty, (iovec_off + 4) as i32);
         ctx.push_op(block, iovec_len_addr.op_ref());
-        let store_iovec_len = arena_wasm::i32_store(
+        let store_iovec_len = wasm_dialect::i32_store(
             ctx,
             location,
             iovec_len_addr.result(ctx),
@@ -1104,14 +1104,14 @@ impl<'a> WasmLowerer<'a> {
         );
         ctx.push_op(block, store_iovec_len.op_ref());
 
-        let stdout = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+        let stdout = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(block, stdout.op_ref());
-        let iovs_count = arena_wasm::i32_const(ctx, location, i32_ty, 1);
+        let iovs_count = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(block, iovs_count.op_ref());
-        let nwr_addr = arena_wasm::i32_const(ctx, location, i32_ty, nwr_off as i32);
+        let nwr_addr = wasm_dialect::i32_const(ctx, location, i32_ty, nwr_off as i32);
         ctx.push_op(block, nwr_addr.op_ref());
 
-        let fd_result = arena_wasm::call(
+        let fd_result = wasm_dialect::call(
             ctx,
             location,
             vec![
@@ -1124,7 +1124,7 @@ impl<'a> WasmLowerer<'a> {
             Symbol::new("fd_write"),
         );
         ctx.push_op(block, fd_result.op_ref());
-        let drop_fd = arena_wasm::drop(ctx, location, fd_result.results(ctx)[0]);
+        let drop_fd = wasm_dialect::drop(ctx, location, fd_result.results(ctx)[0]);
         ctx.push_op(block, drop_fd.op_ref());
     }
 }
@@ -1132,7 +1132,7 @@ impl<'a> WasmLowerer<'a> {
 /// Check if a type is the Step ADT type.
 fn is_step_adt(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    if let Some(ArenaAttribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
+    if let Some(Attribute::Symbol(name)) = data.attrs.get(&Symbol::new("name")) {
         *name == Symbol::new("_Step")
     } else {
         false

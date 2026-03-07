@@ -10,16 +10,16 @@
 use std::collections::HashMap;
 
 use tracing::debug;
+use trunk_ir::Symbol;
 use trunk_ir::arena::ValueDef;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute as ArenaAttribute;
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::Attribute;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 
@@ -107,7 +107,7 @@ impl StructTypeRegistry {
 /// Collect struct types from struct_new operations.
 fn collect_struct_types(
     ctx: &IrContext,
-    module: ArenaModule,
+    module: Module,
     structref_ty: TypeRef,
 ) -> StructTypeRegistry {
     let mut registry = StructTypeRegistry::new();
@@ -134,7 +134,7 @@ fn collect_struct_types(
 
         for &op in ctx.block(block).ops.iter() {
             // Check if this is a struct_new operation with placeholder result type
-            if arena_wasm::StructNew::matches(ctx, op) {
+            if wasm_dialect::StructNew::matches(ctx, op) {
                 // Only process struct_new with placeholder result type (wasm.structref)
                 let result_types = ctx.op_result_types(op);
                 let is_placeholder = result_types
@@ -207,7 +207,7 @@ fn trace_value_to_type_idx(
 
     // Trace through ref_cast operations
     if let ValueDef::OpResult(op, _) = ctx.value_def(value)
-        && arena_wasm::RefCast::matches(ctx, op)
+        && wasm_dialect::RefCast::matches(ctx, op)
     {
         let operands = ctx.op_operands(op);
         if let Some(&operand) = operands.first() {
@@ -223,14 +223,14 @@ struct UpdateStructNewPattern {
     structref_ty: TypeRef,
 }
 
-impl ArenaRewritePattern for UpdateStructNewPattern {
+impl RewritePattern for UpdateStructNewPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::StructNew::matches(ctx, op) {
+        if !wasm_dialect::StructNew::matches(ctx, op) {
             return false;
         }
 
@@ -257,7 +257,7 @@ impl ArenaRewritePattern for UpdateStructNewPattern {
         };
 
         // Check if already has correct type_idx
-        if let Some(ArenaAttribute::IntBits(existing_idx)) =
+        if let Some(Attribute::IntBits(existing_idx)) =
             ctx.op(op).attributes.get(&Symbol::new(ATTR_TYPE_IDX))
             && *existing_idx as u32 == type_idx
         {
@@ -283,7 +283,7 @@ impl ArenaRewritePattern for UpdateStructNewPattern {
         }
         builder = builder.attr(
             Symbol::new(ATTR_TYPE_IDX),
-            ArenaAttribute::IntBits(type_idx as u64),
+            Attribute::IntBits(type_idx as u64),
         );
 
         let new_data = builder.build(ctx);
@@ -308,14 +308,14 @@ struct UpdateStructGetPattern {
     registry: StructTypeRegistry,
 }
 
-impl ArenaRewritePattern for UpdateStructGetPattern {
+impl RewritePattern for UpdateStructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::StructGet::matches(ctx, op) {
+        if !wasm_dialect::StructGet::matches(ctx, op) {
             return false;
         }
 
@@ -332,7 +332,7 @@ impl ArenaRewritePattern for UpdateStructGetPattern {
 
         // Get field_idx from attributes
         let field_idx = match ctx.op(op).attributes.get(&Symbol::new(ATTR_FIELD_IDX)) {
-            Some(ArenaAttribute::IntBits(idx)) => *idx as u32,
+            Some(Attribute::IntBits(idx)) => *idx as u32,
             _ => return false,
         };
 
@@ -347,7 +347,7 @@ impl ArenaRewritePattern for UpdateStructGetPattern {
             .attributes
             .get(&Symbol::new(ATTR_TYPE_IDX))
             .and_then(|a| match a {
-                ArenaAttribute::IntBits(idx) => Some(*idx as u32),
+                Attribute::IntBits(idx) => Some(*idx as u32),
                 _ => None,
             });
         let current_result_type = ctx.op_result_types(op).first().copied();
@@ -372,7 +372,7 @@ impl ArenaRewritePattern for UpdateStructGetPattern {
         }
         builder = builder.attr(
             Symbol::new(ATTR_TYPE_IDX),
-            ArenaAttribute::IntBits(type_idx as u64),
+            Attribute::IntBits(type_idx as u64),
         );
 
         let new_data = builder.build(ctx);
@@ -397,14 +397,14 @@ struct UpdateRefCastPattern {
     registry: StructTypeRegistry,
 }
 
-impl ArenaRewritePattern for UpdateRefCastPattern {
+impl RewritePattern for UpdateRefCastPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !arena_wasm::RefCast::matches(ctx, op) {
+        if !wasm_dialect::RefCast::matches(ctx, op) {
             return false;
         }
 
@@ -427,7 +427,7 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
                     .attributes
                     .get(&Symbol::new(ATTR_TYPE_IDX))
                     .and_then(|a| match a {
-                        ArenaAttribute::IntBits(idx) => Some(*idx as u32),
+                        Attribute::IntBits(idx) => Some(*idx as u32),
                         _ => None,
                     });
 
@@ -452,7 +452,7 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
                     }
                     builder = builder.attr(
                         Symbol::new(ATTR_TYPE_IDX),
-                        ArenaAttribute::IntBits(type_idx as u64),
+                        Attribute::IntBits(type_idx as u64),
                     );
 
                     let new_data = builder.build(ctx);
@@ -483,8 +483,8 @@ impl ArenaRewritePattern for UpdateRefCastPattern {
 /// 1. Each distinct struct type gets a unique type_idx
 /// 2. struct_new operations have type_idx attribute set
 /// 3. struct_get operations have correct type_idx and result types
-pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
-    let structref_ty = arena_wasm::structref(ctx).as_type_ref();
+pub fn assign_gc_type_indices(ctx: &mut IrContext, module: Module) {
+    let structref_ty = wasm_dialect::structref(ctx).as_type_ref();
 
     // Phase 1: Collect all struct types and assign type_idx
     let registry = collect_struct_types(ctx, module, structref_ty);
@@ -496,7 +496,7 @@ pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
 
     // Phase 2: Update struct_new operations
     let applicator =
-        PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(UpdateStructNewPattern {
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateStructNewPattern {
             registry: registry.clone(),
             structref_ty,
         });
@@ -507,13 +507,13 @@ pub fn assign_gc_type_indices(ctx: &mut IrContext, module: ArenaModule) {
 
     // Phase 4: Update struct_get operations
     let applicator =
-        PatternApplicator::new(ArenaTypeConverter::new()).add_pattern(UpdateStructGetPattern {
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateStructGetPattern {
             registry: registry.clone(),
         });
     applicator.apply_partial(ctx, module);
 
     // Phase 5: Update ref_cast operations
-    let applicator = PatternApplicator::new(ArenaTypeConverter::new())
-        .add_pattern(UpdateRefCastPattern { registry });
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(UpdateRefCastPattern { registry });
     applicator.apply_partial(ctx, module);
 }

@@ -5,7 +5,7 @@
 //! - wasm.global_get, wasm.global_set
 
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;
@@ -17,7 +17,7 @@ use super::super::{FunctionEmitContext, ModuleInfo, set_result_local};
 /// Handle wasm.local_get operation
 pub(crate) fn handle_local_get(
     ctx: &IrContext,
-    local_op: arena_wasm::LocalGet,
+    local_op: wasm_dialect::LocalGet,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -30,7 +30,7 @@ pub(crate) fn handle_local_get(
 /// Handle wasm.local_set operation
 pub(crate) fn handle_local_set(
     ctx: &IrContext,
-    local_op: arena_wasm::LocalSet,
+    local_op: wasm_dialect::LocalSet,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -44,7 +44,7 @@ pub(crate) fn handle_local_set(
 /// Handle wasm.local_tee operation
 pub(crate) fn handle_local_tee(
     ctx: &IrContext,
-    local_op: arena_wasm::LocalTee,
+    local_op: wasm_dialect::LocalTee,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {
@@ -63,7 +63,7 @@ pub(crate) fn handle_local_tee(
 /// $yield_cont which store different continuation types as anyref.
 pub(crate) fn handle_global_get(
     ctx: &IrContext,
-    global_op: arena_wasm::GlobalGet,
+    global_op: wasm_dialect::GlobalGet,
     emit_ctx: &FunctionEmitContext,
     module_info: &ModuleInfo,
     function: &mut Function,
@@ -119,7 +119,7 @@ fn concrete_heap_type(vt: &wasm_encoder::ValType) -> Option<wasm_encoder::HeapTy
 /// Handle wasm.global_set operation
 pub(crate) fn handle_global_set(
     ctx: &IrContext,
-    global_op: arena_wasm::GlobalSet,
+    global_op: wasm_dialect::GlobalSet,
     emit_ctx: &FunctionEmitContext,
     function: &mut Function,
 ) -> CompilationResult<()> {

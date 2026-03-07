@@ -26,20 +26,20 @@
 //! and their materializations (boxing/unboxing operations).
 
 use tracing::debug;
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::IrContext;
 use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, FuncSignatureConversionPattern, PatternApplicator,
-    PatternRewriter, WasmFuncSignatureConversionPattern,
+    FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    WasmFuncSignatureConversionPattern,
 };
-use trunk_ir::ir::Symbol;
 
 /// Normalize tribute_rt primitive types to core types.
 ///
 /// This pass should run early in the WASM pipeline, before `trampoline_to_wasm`.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
+pub fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
@@ -126,7 +126,7 @@ fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Normalize func.call operation result types.
 struct NormalizeCallPattern;
 
-impl ArenaRewritePattern for NormalizeCallPattern {
+impl RewritePattern for NormalizeCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -169,7 +169,7 @@ impl ArenaRewritePattern for NormalizeCallPattern {
 /// Normalize func.call_indirect operation result types.
 struct NormalizeCallIndirectPattern;
 
-impl ArenaRewritePattern for NormalizeCallIndirectPattern {
+impl RewritePattern for NormalizeCallIndirectPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -194,7 +194,9 @@ impl ArenaRewritePattern for NormalizeCallIndirectPattern {
 
         let loc = ctx.op(op).location;
         let operands = ctx.op_operands(op).to_vec();
-        let callee = operands[0];
+        let callee = *operands
+            .first()
+            .expect("NormalizeCallIndirectPattern: func.call_indirect matched but has no operands");
         let args: Vec<_> = operands[1..].to_vec();
 
         let new_op = arena_func::call_indirect(ctx, loc, callee, args, new_result_ty);
@@ -213,7 +215,7 @@ impl ArenaRewritePattern for NormalizeCallIndirectPattern {
 /// that weren't handled by more specific patterns.
 struct NormalizeOpResultPattern;
 
-impl ArenaRewritePattern for NormalizeOpResultPattern {
+impl RewritePattern for NormalizeOpResultPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,

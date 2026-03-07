@@ -1,6 +1,6 @@
 //! Lower trampoline dialect operations to WASM and ADT operations.
 //!
-//! This pass converts all trampoline operations using ArenaRewritePattern infrastructure:
+//! This pass converts all trampoline operations using RewritePattern infrastructure:
 //!
 //! ## Struct operations -> ADT operations
 //! - `trampoline.build_continuation` -> `adt.struct_new` (Continuation type)
@@ -20,20 +20,20 @@
 //! - `trampoline.get_yield_shift_value` -> wasm.global_get + adt.struct_get
 //! - `trampoline.check_yield` -> wasm.global_get
 //!
-//! This pass uses ArenaTypeConverter to consistently convert trampoline types to ADT types.
+//! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
+use trunk_ir::Symbol;
 use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
 use trunk_ir::arena::dialect::{
     adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
-    wasm as arena_wasm,
+    wasm as wasm_dialect,
 };
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::arena::rewrite::{
-    ArenaModule, ArenaRewritePattern, ArenaTypeConverter, PatternApplicator, PatternRewriter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, Location, TypeDataBuilder};
-use trunk_ir::ir::Symbol;
+use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 
 use trunk_ir::arena::rewrite::type_converter::MaterializeResult;
 
@@ -57,8 +57,8 @@ pub mod yield_globals {
     pub const OP_IDX: u32 = 3;
 }
 
-/// Lower all trampoline operations to WASM/ADT using ArenaRewritePattern infrastructure.
-pub fn lower(ctx: &mut IrContext, module: ArenaModule) {
+/// Lower all trampoline operations to WASM/ADT using RewritePattern infrastructure.
+pub fn lower(ctx: &mut IrContext, module: Module) {
     let type_converter = create_type_converter(ctx);
 
     let applicator = PatternApplicator::new(type_converter)
@@ -112,7 +112,7 @@ pub fn step_adt_type(ctx: &mut IrContext) -> TypeRef {
             .param(anyref_ty)
             .param(i32_ty)
             .param(i32_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Step")))
+            .attr("name", Attribute::Symbol(Symbol::new("_Step")))
             .build(),
     )
 }
@@ -132,7 +132,7 @@ pub fn continuation_adt_type(ctx: &mut IrContext) -> TypeRef {
             .param(anyref_ty)
             .param(i32_ty)
             .param(anyref_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_Continuation")))
+            .attr("name", Attribute::Symbol(Symbol::new("_Continuation")))
             .build(),
     )
 }
@@ -148,10 +148,7 @@ pub fn resume_wrapper_adt_type(ctx: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(anyref_ty)
             .param(anyref_ty)
-            .attr(
-                "name",
-                ArenaAttribute::Symbol(Symbol::new("_ResumeWrapper")),
-            )
+            .attr("name", Attribute::Symbol(Symbol::new("_ResumeWrapper")))
             .build(),
     )
 }
@@ -165,7 +162,7 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(f64_ty)
-            .attr("name", ArenaAttribute::Symbol(Symbol::new("_BoxedF64")))
+            .attr("name", Attribute::Symbol(Symbol::new("_BoxedF64")))
             .build(),
     )
 }
@@ -174,8 +171,8 @@ fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
 // Type Converter
 // ============================================================================
 
-/// Create an ArenaTypeConverter that converts trampoline types to ADT types.
-fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
+/// Create an TypeConverter that converts trampoline types to ADT types.
+fn create_type_converter(ctx: &mut IrContext) -> TypeConverter {
     // Pre-compute types
     let step_ty = step_adt_type(ctx);
     let cont_ty = continuation_adt_type(ctx);
@@ -186,7 +183,7 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
     let i31ref_ty = intern_type(ctx, "wasm", "i31ref");
     let boxed_f64_ty = boxed_f64_type(ctx);
 
-    let mut tc = ArenaTypeConverter::new();
+    let mut tc = TypeConverter::new();
 
     // Convert trampoline.step -> _Step ADT
     tc.add_conversion(move |ctx, ty| {
@@ -251,12 +248,12 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
 
         if is_from_i32 && is_to_anyref {
             // wasm.ref_i31: i32 -> i31ref
-            let box_op = arena_wasm::ref_i31(ctx, location, value, i31ref_ty);
+            let box_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
             let i31ref_value = ctx.op_result(box_op.op_ref(), 0);
 
             // Upcast i31ref -> anyref (no-op in runtime, but needed for IR type correctness)
             let upcast_op =
-                arena_wasm::ref_cast(ctx, location, i31ref_value, anyref_ty, anyref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, i31ref_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -276,7 +273,7 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
 
             // Upcast BoxedF64 to anyref
             let upcast_op =
-                arena_wasm::ref_cast(ctx, location, boxed_value, anyref_ty, anyref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, boxed_value, anyref_ty, anyref_ty, None);
             let final_value = ctx.op_result(upcast_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -292,11 +289,11 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
         if is_from_anyref && is_to_i32 {
             // Cast anyref to i31ref
             let ref_cast_op =
-                arena_wasm::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
+                wasm_dialect::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
             let i31ref_value = ctx.op_result(ref_cast_op.op_ref(), 0);
 
             // Unbox i31ref to i32
-            let unbox_op = arena_wasm::i31_get_s(ctx, location, i31ref_value, i32_ty);
+            let unbox_op = wasm_dialect::i31_get_s(ctx, location, i31ref_value, i32_ty);
             let final_value = ctx.op_result(unbox_op.op_ref(), 0);
 
             return Some(MaterializeResult {
@@ -343,7 +340,7 @@ fn create_type_converter(ctx: &mut IrContext) -> ArenaTypeConverter {
 
 fn create_i32_const(ctx: &mut IrContext, location: Location, value: i32) -> OpRef {
     let i32_ty = intern_type(ctx, "core", "i32");
-    arena_wasm::i32_const(ctx, location, i32_ty, value).op_ref()
+    wasm_dialect::i32_const(ctx, location, i32_ty, value).op_ref()
 }
 
 /// Push an i32 constant and a global_set operation to set a global variable.
@@ -357,7 +354,7 @@ fn push_set_i32_global(
     let const_op = create_i32_const(ctx, location, value);
     let const_val = ctx.op_result(const_op, 0);
     ops.push(const_op);
-    ops.push(arena_wasm::global_set(ctx, location, const_val, global_idx).op_ref());
+    ops.push(wasm_dialect::global_set(ctx, location, const_val, global_idx).op_ref());
 }
 
 /// Cast a value to anyref type using TypeConverter materializations.
@@ -396,7 +393,7 @@ fn materialize_to_any(
     }
 
     // Fallback: upcast to anyref using ref_cast
-    let cast_op = arena_wasm::ref_cast(ctx, location, value, anyref_ty, anyref_ty, None);
+    let cast_op = wasm_dialect::ref_cast(ctx, location, value, anyref_ty, anyref_ty, None);
     let cast_val = ctx.op_result(cast_op.op_ref(), 0);
     ops.push(cast_op.op_ref());
     cast_val
@@ -486,7 +483,7 @@ fn convert_trampoline_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerBuildContinuationPattern;
 
-impl ArenaRewritePattern for LowerBuildContinuationPattern {
+impl RewritePattern for LowerBuildContinuationPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -550,7 +547,7 @@ impl ArenaRewritePattern for LowerBuildContinuationPattern {
 /// Lower `trampoline.step_done` -> `adt.struct_new` with tag=0
 struct LowerStepDonePattern;
 
-impl ArenaRewritePattern for LowerStepDonePattern {
+impl RewritePattern for LowerStepDonePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -604,7 +601,7 @@ impl ArenaRewritePattern for LowerStepDonePattern {
 /// Takes prompt tag as first operand (dynamic tag from evidence lookup).
 struct LowerStepShiftPattern;
 
-impl ArenaRewritePattern for LowerStepShiftPattern {
+impl RewritePattern for LowerStepShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -667,7 +664,7 @@ impl ArenaRewritePattern for LowerStepShiftPattern {
 /// - `trampoline.state_get` (all fields are anyref)
 struct LowerTrampolineStructGetPattern;
 
-impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
+impl RewritePattern for LowerTrampolineStructGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -692,7 +689,7 @@ impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
             let field_idx = state_get.field(ctx);
             // state_type must be set by the producer pass
             let state_type = match ctx.op(op).attributes.get(&Symbol::new("state_type")) {
-                Some(ArenaAttribute::Type(ty)) => *ty,
+                Some(Attribute::Type(ty)) => *ty,
                 other => unreachable!(
                     "trampoline.state_get op {op:?} missing or invalid 'state_type' attribute: {other:?}"
                 ),
@@ -760,7 +757,7 @@ impl ArenaRewritePattern for LowerTrampolineStructGetPattern {
 /// Lower `trampoline.build_state` -> `adt.struct_new`
 struct LowerBuildStatePattern;
 
-impl ArenaRewritePattern for LowerBuildStatePattern {
+impl RewritePattern for LowerBuildStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -800,7 +797,7 @@ impl ArenaRewritePattern for LowerBuildStatePattern {
 /// Lower `trampoline.build_resume_wrapper` -> `adt.struct_new`
 struct LowerBuildResumeWrapperPattern;
 
-impl ArenaRewritePattern for LowerBuildResumeWrapperPattern {
+impl RewritePattern for LowerBuildResumeWrapperPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -853,7 +850,7 @@ impl ArenaRewritePattern for LowerBuildResumeWrapperPattern {
 /// Takes tag as first operand (dynamic tag from evidence lookup).
 struct LowerSetYieldStatePattern;
 
-impl ArenaRewritePattern for LowerSetYieldStatePattern {
+impl RewritePattern for LowerSetYieldStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -885,12 +882,14 @@ impl ArenaRewritePattern for LowerSetYieldStatePattern {
 
         // Set $yield_tag = tag (cont.prompt_tag has same representation as i32)
         ops.push(
-            arena_wasm::global_set(ctx, location, tag_operand, yield_globals::TAG_IDX).op_ref(),
+            wasm_dialect::global_set(ctx, location, tag_operand, yield_globals::TAG_IDX).op_ref(),
         );
 
         // Set $yield_cont = continuation (as anyref)
         let cont_any = materialize_to_any(ctx, location, cont_val, rewriter, &mut ops);
-        ops.push(arena_wasm::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref());
+        ops.push(
+            wasm_dialect::global_set(ctx, location, cont_any, yield_globals::CONT_IDX).op_ref(),
+        );
 
         // Set $yield_op_idx = op_idx
         let op_idx_i32: i32 = op_idx.try_into().expect("op_idx out of i32 range");
@@ -904,7 +903,7 @@ impl ArenaRewritePattern for LowerSetYieldStatePattern {
 /// Lower `trampoline.reset_yield_state` -> wasm.global_set ($yield_state = 0)
 struct LowerResetYieldStatePattern;
 
-impl ArenaRewritePattern for LowerResetYieldStatePattern {
+impl RewritePattern for LowerResetYieldStatePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -933,7 +932,7 @@ impl ArenaRewritePattern for LowerResetYieldStatePattern {
 /// - `trampoline.get_yield_shift_value` -> load, cast, and extract shift_value field
 struct LowerYieldContinuationAccessPattern;
 
-impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
+impl RewritePattern for LowerYieldContinuationAccessPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -961,13 +960,13 @@ impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
 
         // Load continuation from $yield_cont global
         let get_cont =
-            arena_wasm::global_get(ctx, location, anyref_ty, yield_globals::CONT_IDX).op_ref();
+            wasm_dialect::global_get(ctx, location, anyref_ty, yield_globals::CONT_IDX).op_ref();
         let cont_anyref = ctx.op_result(get_cont, 0);
         ops.push(get_cont);
 
         // Cast anyref to continuation type
         let cont_cast =
-            arena_wasm::ref_cast(ctx, location, cont_anyref, cont_type, cont_type, None).op_ref();
+            wasm_dialect::ref_cast(ctx, location, cont_anyref, cont_type, cont_type, None).op_ref();
         let cont_ref = ctx.op_result(cont_cast, 0);
         ops.push(cont_cast);
 
@@ -990,7 +989,7 @@ impl ArenaRewritePattern for LowerYieldContinuationAccessPattern {
 /// - `trampoline.get_yield_op_idx` -> yield_op_idx global
 struct LowerYieldGlobalGetPattern;
 
-impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
+impl RewritePattern for LowerYieldGlobalGetPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -1012,7 +1011,7 @@ impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
 
         let location = ctx.op(op).location;
         let i32_ty = intern_type(ctx, "core", "i32");
-        let get_global = arena_wasm::global_get(ctx, location, i32_ty, global_idx).op_ref();
+        let get_global = wasm_dialect::global_get(ctx, location, i32_ty, global_idx).op_ref();
 
         rewriter.replace_op(get_global);
         true
@@ -1029,7 +1028,7 @@ impl ArenaRewritePattern for LowerYieldGlobalGetPattern {
 /// when the return type is trampoline.Step.
 struct ConvertFuncTypePattern;
 
-impl ArenaRewritePattern for ConvertFuncTypePattern {
+impl RewritePattern for ConvertFuncTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -1077,7 +1076,7 @@ impl ArenaRewritePattern for ConvertFuncTypePattern {
 
         // Build new function type preserving effect attribute
         let effect_ty = effect_attr.and_then(|eff| match eff {
-            ArenaAttribute::Type(ty) => Some(ty),
+            Attribute::Type(ty) => Some(ty),
             _ => None,
         });
         let new_func_ty = arena_core::func(
@@ -1122,7 +1121,7 @@ impl ArenaRewritePattern for ConvertFuncTypePattern {
 /// Applies to: func.call, func.call_indirect, wasm.if
 struct ConvertTrampolineResultTypePattern;
 
-impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
+impl RewritePattern for ConvertTrampolineResultTypePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -1132,7 +1131,7 @@ impl ArenaRewritePattern for ConvertTrampolineResultTypePattern {
         // Check if this is a supported operation type
         let is_supported = arena_func::Call::from_op(ctx, op).is_ok()
             || arena_func::CallIndirect::from_op(ctx, op).is_ok()
-            || arena_wasm::If::from_op(ctx, op).is_ok();
+            || wasm_dialect::If::from_op(ctx, op).is_ok();
 
         if !is_supported {
             return false;

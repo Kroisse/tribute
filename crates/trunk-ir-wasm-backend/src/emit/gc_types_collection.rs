@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use tracing::debug;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::ArenaModule;
 use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as arena_wasm;
-use trunk_ir::arena::ops::ArenaDialectOp;
+use trunk_ir::arena::Module;
+use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::arena::ops::DialectOp;
 use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::arena::types::{Attribute as ArenaAttribute, TypeData};
+use trunk_ir::arena::types::{Attribute, TypeData};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{
@@ -160,10 +160,10 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
 
     // Check if this is a variant instance type (adt type with "base_enum" attr)
     if data.dialect == Symbol::new("adt")
-        && let Some(ArenaAttribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
+        && let Some(Attribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
     {
         let base_data = ctx.types.get(*base_enum);
-        if let Some(ArenaAttribute::Symbol(name_sym)) = base_data.attrs.get(&Symbol::new("name")) {
+        if let Some(Attribute::Symbol(name_sym)) = base_data.attrs.get(&Symbol::new("name")) {
             return Some(*name_sym);
         }
     }
@@ -171,7 +171,7 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
     // Check if this is an adt.enum type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("enum")
-        && let Some(ArenaAttribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
+        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
     {
         return Some(*name_sym);
     }
@@ -179,7 +179,7 @@ fn get_canonical_type_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
     // Check if this is an adt.struct type
     if data.dialect == Symbol::new("adt")
         && data.name == Symbol::new("struct")
-        && let Some(ArenaAttribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
+        && let Some(Attribute::Symbol(name_sym)) = data.attrs.get(&Symbol::new("name"))
     {
         return Some(*name_sym);
     }
@@ -195,7 +195,7 @@ fn normalize_type_for_gc(ctx: &IrContext, ty: TypeRef) -> TypeRef {
 
     // Normalize variant instance types to their base enum
     if data.dialect == Symbol::new("adt")
-        && let Some(ArenaAttribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
+        && let Some(Attribute::Type(base_enum)) = data.attrs.get(&Symbol::new("base_enum"))
     {
         return *base_enum;
     }
@@ -313,7 +313,7 @@ fn record_array_elem(
 use super::helpers::{attr_field_idx, attr_u32};
 
 /// Convert a TypeRef to a wasm FieldType for GC type building (arena version).
-fn type_to_field_type_arena(
+fn type_to_field_type(
     ctx: &IrContext,
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
@@ -328,10 +328,7 @@ fn type_to_field_type_arena(
 /// Create an adt.struct TypeRef with a given name attribute.
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = std::collections::BTreeMap::new();
-    attrs.insert(
-        Symbol::new("name"),
-        ArenaAttribute::Symbol(Symbol::new(name)),
-    );
+    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
     ctx.types.intern(TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
@@ -381,7 +378,7 @@ fn get_adt_struct_field_count(ctx: &IrContext, ty: TypeRef) -> Option<usize> {
 /// placeholder struct mappings.
 pub(crate) fn collect_gc_types(
     ctx: &mut IrContext,
-    module: ArenaModule,
+    module: Module,
 ) -> CompilationResult<GcTypesResult> {
     use std::collections::HashSet;
 
@@ -403,9 +400,7 @@ pub(crate) fn collect_gc_types(
     ) -> CompilationResult<()> {
         for &block in ctx.region(region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                if let Some(ArenaAttribute::IntBits(idx)) =
-                    ctx.op(op).attributes.get(&ATTR_TYPE_IDX())
-                {
+                if let Some(Attribute::IntBits(idx)) = ctx.op(op).attributes.get(&ATTR_TYPE_IDX()) {
                     reserved.insert(intbits_to_u32(*idx)?);
                 }
                 for &nested_region in ctx.op(op).regions.iter() {
@@ -533,7 +528,7 @@ pub(crate) fn collect_gc_types(
             continue;
         }
 
-        if arena_wasm::StructNew::matches(ctx, op) {
+        if wasm_dialect::StructNew::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
             let operands = ctx.op_operands(op).to_vec();
             let field_count = operands.len();
@@ -544,7 +539,7 @@ pub(crate) fn collect_gc_types(
             // multiple structs with same type but different field counts.
             // Check both the `type` attribute and the result type for placeholder.
             let placeholder_type_from_attr = attrs.get(&ATTR_TYPE()).and_then(|attr| {
-                if let ArenaAttribute::Type(ty) = attr {
+                if let Attribute::Type(ty) = attr {
                     if is_structref(ctx, *ty) {
                         Some(*ty)
                     } else {
@@ -566,7 +561,7 @@ pub(crate) fn collect_gc_types(
             let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
 
             // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
-            let type_idx = if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+            let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
                 let idx = u32::try_from(*idx).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
                         "type_idx value {} out of u32 range",
@@ -653,7 +648,7 @@ pub(crate) fn collect_gc_types(
                     record_struct_field(ctx, type_idx, builder, field_idx_u32, ty)?;
                 }
             }
-        } else if arena_wasm::StructGet::matches(ctx, op) {
+        } else if wasm_dialect::StructGet::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
 
             // Honor explicit type_idx attribute first (set by wasm_gc_type_assign pass),
@@ -672,7 +667,7 @@ pub(crate) fn collect_gc_types(
             let is_placeholder_type = attrs
                 .get(&ATTR_TYPE())
                 .map(|attr| {
-                    if let ArenaAttribute::Type(ty) = attr {
+                    if let Attribute::Type(ty) = attr {
                         is_structref(ctx, *ty)
                     } else {
                         false
@@ -682,7 +677,7 @@ pub(crate) fn collect_gc_types(
 
             // Check if this is a builtin struct type
             let builtin_type_idx = attrs.get(&ATTR_TYPE()).and_then(|attr| {
-                if let ArenaAttribute::Type(ty) = attr {
+                if let Attribute::Type(ty) = attr {
                     get_builtin_struct_idx(ctx, *ty)
                 } else {
                     None
@@ -692,7 +687,7 @@ pub(crate) fn collect_gc_types(
             // Check if this uses an adt.struct type (which should also use placeholder lookup)
             // Returns (adt_struct_type, field_count) if it's an adt.struct type
             let adt_struct_info = attrs.get(&ATTR_TYPE()).and_then(|attr| {
-                if let ArenaAttribute::Type(ty) = attr {
+                if let Attribute::Type(ty) = attr {
                     if is_adt_struct(ctx, *ty) && get_builtin_struct_idx(ctx, *ty).is_none() {
                         get_adt_struct_field_count(ctx, *ty).map(|fc| (*ty, fc))
                     } else {
@@ -711,11 +706,10 @@ pub(crate) fn collect_gc_types(
             } else if is_placeholder_type {
                 // For placeholder types, use (type, field_count) as key
                 let ty = match attrs.get(&ATTR_TYPE()) {
-                    Some(ArenaAttribute::Type(ty)) => *ty,
+                    Some(Attribute::Type(ty)) => *ty,
                     _ => unreachable!("checked above"),
                 };
-                let Some(ArenaAttribute::IntBits(field_count)) =
-                    attrs.get(&Symbol::new("field_count"))
+                let Some(Attribute::IntBits(field_count)) = attrs.get(&Symbol::new("field_count"))
                 else {
                     return Err(CompilationError::missing_attribute("field_count"));
                 };
@@ -788,8 +782,7 @@ pub(crate) fn collect_gc_types(
                 // For placeholder types, set field_count from attribute if not already set
                 if is_placeholder_type
                     && builder.field_count.is_none()
-                    && let Some(ArenaAttribute::IntBits(fc)) =
-                        attrs.get(&Symbol::new("field_count"))
+                    && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
                 {
                     let fc = intbits_to_usize(*fc)?;
                     builder.field_count = Some(fc);
@@ -831,7 +824,7 @@ pub(crate) fn collect_gc_types(
                     record_struct_field(ctx, type_idx, builder, field_idx, result_ty)?;
                 }
             }
-        } else if arena_wasm::StructSet::matches(ctx, op) {
+        } else if wasm_dialect::StructSet::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
             // Infer type from operand[0] (the struct ref)
             let operands = ctx.op_operands(op).to_vec();
@@ -865,8 +858,8 @@ pub(crate) fn collect_gc_types(
                     record_struct_field(ctx, type_idx, builder, field_idx, ty)?;
                 }
             }
-        } else if arena_wasm::ArrayNew::matches(ctx, op)
-            || arena_wasm::ArrayNewDefault::matches(ctx, op)
+        } else if wasm_dialect::ArrayNew::matches(ctx, op)
+            || wasm_dialect::ArrayNewDefault::matches(ctx, op)
         {
             let attrs = &ctx.op(op).attributes;
             // Infer type from result type
@@ -894,9 +887,9 @@ pub(crate) fn collect_gc_types(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if arena_wasm::ArrayGet::matches(ctx, op)
-            || arena_wasm::ArrayGetS::matches(ctx, op)
-            || arena_wasm::ArrayGetU::matches(ctx, op)
+        } else if wasm_dialect::ArrayGet::matches(ctx, op)
+            || wasm_dialect::ArrayGetS::matches(ctx, op)
+            || wasm_dialect::ArrayGetU::matches(ctx, op)
         {
             let attrs = &ctx.op(op).attributes;
             // Infer type from operand[0] (the array ref)
@@ -926,7 +919,7 @@ pub(crate) fn collect_gc_types(
                     record_array_elem(type_idx, builder, result_ty)?;
                 }
             }
-        } else if arena_wasm::ArraySet::matches(ctx, op) {
+        } else if wasm_dialect::ArraySet::matches(ctx, op) {
             let attrs = &ctx.op(op).attributes;
             // Infer type from operand[0] (the array ref)
             let operands = ctx.op_operands(op).to_vec();
@@ -953,26 +946,24 @@ pub(crate) fn collect_gc_types(
                     record_array_elem(type_idx, builder, ty)?;
                 }
             }
-        } else if arena_wasm::ArrayCopy::matches(ctx, op) {
+        } else if wasm_dialect::ArrayCopy::matches(ctx, op) {
             // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
             let attrs = &ctx.op(op).attributes;
-            if let Some(&ArenaAttribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx"))
-            {
+            if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
                 let dst_type_idx = intbits_to_u32(dst_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, dst_type_idx) {
                     builder.kind = GcKind::Array;
                 }
             }
-            if let Some(&ArenaAttribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx"))
-            {
+            if let Some(&Attribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx")) {
                 let src_type_idx = intbits_to_u32(src_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, src_type_idx) {
                     builder.kind = GcKind::Array;
                 }
             }
-        } else if arena_wasm::RefNull::matches(ctx, op)
-            || arena_wasm::RefCast::matches(ctx, op)
-            || arena_wasm::RefTest::matches(ctx, op)
+        } else if wasm_dialect::RefNull::matches(ctx, op)
+            || wasm_dialect::RefCast::matches(ctx, op)
+            || wasm_dialect::RefTest::matches(ctx, op)
         {
             let attrs = &ctx.op(op).attributes;
             // For ref_null: use result type as fallback
@@ -982,16 +973,16 @@ pub(crate) fn collect_gc_types(
 
             // Special handling for ref_cast with placeholder type (wasm.structref + field_count)
             // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
-            if arena_wasm::RefCast::matches(ctx, op)
-                && let Some(ArenaAttribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
+            if wasm_dialect::RefCast::matches(ctx, op)
+                && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && is_structref(ctx, *target_ty)
-                && let Some(ArenaAttribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+                && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
             {
                 let field_count = intbits_to_usize(*fc)?;
                 let target_ty = *target_ty;
 
                 // Check for explicit type_idx attribute first
-                if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+                if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
                     let idx = intbits_to_u32(*idx)?;
                     next_type_idx = next_type_idx.max(idx.saturating_add(1));
                     if let Some(builder) = try_get_builder(&mut builders, idx) {
@@ -1032,7 +1023,7 @@ pub(crate) fn collect_gc_types(
             }
 
             // Try specific attribute names first, then fall back to generic "type" attribute
-            let type_idx = if arena_wasm::RefNull::matches(ctx, op) {
+            let type_idx = if wasm_dialect::RefNull::matches(ctx, op) {
                 match attr_u32(attrs, ATTR_HEAP_TYPE()) {
                     Ok(idx) => Some(idx),
                     Err(_) => get_type_idx(
@@ -1048,11 +1039,11 @@ pub(crate) fn collect_gc_types(
                 match attr_u32(attrs, ATTR_TARGET_TYPE()) {
                     Ok(idx) => Some(idx),
                     Err(_) => {
-                        // If target_type is an ArenaAttribute::Type, prefer it over inferred_type
+                        // If target_type is an Attribute::Type, prefer it over inferred_type
                         let target_type_ref = attrs
                             .get(&ATTR_TARGET_TYPE())
                             .and_then(|a| {
-                                if let ArenaAttribute::Type(ty) = a {
+                                if let Attribute::Type(ty) = a {
                                     Some(*ty)
                                 } else {
                                     None
@@ -1090,7 +1081,7 @@ pub(crate) fn collect_gc_types(
         match builder.kind {
             GcKind::Array => {
                 let elem = match builder.array_elem {
-                    Some(ty) => type_to_field_type_arena(ctx, ty, &type_idx_by_type)?,
+                    Some(ty) => type_to_field_type(ctx, ty, &type_idx_by_type)?,
                     None => FieldType {
                         element_type: StorageType::Val(ValType::I32),
                         mutable: false,
@@ -1103,7 +1094,7 @@ pub(crate) fn collect_gc_types(
                     .fields
                     .into_iter()
                     .map(|ty| match ty {
-                        Some(ty) => type_to_field_type_arena(ctx, ty, &type_idx_by_type),
+                        Some(ty) => type_to_field_type(ctx, ty, &type_idx_by_type),
                         None => Ok(FieldType {
                             element_type: StorageType::Val(ValType::I32),
                             mutable: false,
@@ -1130,7 +1121,7 @@ pub(crate) fn collect_gc_types(
 /// or `Err` if an explicit attribute has an invalid value.
 fn get_type_idx(
     ctx: &IrContext,
-    attrs: &std::collections::BTreeMap<Symbol, ArenaAttribute>,
+    attrs: &std::collections::BTreeMap<Symbol, Attribute>,
     type_idx_by_type: &mut HashMap<TypeRef, u32>,
     next_type_idx: &mut u32,
     inferred_type: Option<TypeRef>,
@@ -1147,7 +1138,7 @@ fn get_type_idx(
     };
 
     // First try type_idx attribute
-    if let Some(ArenaAttribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+    if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
         let idx = u32::try_from(*idx).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "type_idx attribute value {} out of u32 range",
@@ -1159,7 +1150,7 @@ fn get_type_idx(
         return Ok(Some(idx));
     }
     // Fall back to type attribute (legacy, will be removed)
-    if let Some(ArenaAttribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
+    if let Some(Attribute::Type(ty)) = attrs.get(&ATTR_TYPE()) {
         if let Some(idx) = get_builtin_struct_idx(ctx, *ty) {
             return Ok(Some(idx));
         }

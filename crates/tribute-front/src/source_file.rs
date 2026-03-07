@@ -3,7 +3,7 @@ use std::path::Path;
 use fluent_uri::Uri;
 use ropey::Rope;
 use tree_sitter::{Parser, Tree};
-use trunk_ir::{PathId, Symbol};
+use trunk_ir::Symbol;
 
 #[salsa::input(debug)]
 pub struct SourceCst {
@@ -55,12 +55,11 @@ fn chunk_from_byte(rope: &Rope, byte: usize) -> &[u8] {
     &chunk.as_bytes()[start..]
 }
 
-/// Derive a module name from a PathId.
+/// Derive a module name from a URI string.
 ///
 /// Extracts the file stem (filename without extension) from the URI path.
 /// Falls back to "main" if the path cannot be parsed.
-pub fn derive_module_name_from_path(db: &dyn salsa::Database, path: PathId<'_>) -> Symbol {
-    let uri_str = path.uri(db);
+pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
     // Parse URI and extract path component (handle file:// URIs)
     let file_path = Uri::parse(uri_str)
         .ok()
@@ -76,10 +75,6 @@ pub fn derive_module_name_from_path(db: &dyn salsa::Database, path: PathId<'_>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_db() -> salsa::DatabaseImpl {
-        salsa::DatabaseImpl::new()
-    }
 
     mod path_to_uri {
         use super::*;
@@ -108,49 +103,37 @@ mod tests {
 
         #[test]
         fn file_uri_with_extension() {
-            let db = test_db();
-            let path = PathId::new(&db, "file:///home/user/project/foo.trb".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("file:///home/user/project/foo.trb");
             assert_eq!(name, Symbol::new("foo"));
         }
 
         #[test]
         fn file_uri_without_extension() {
-            let db = test_db();
-            let path = PathId::new(&db, "file:///home/user/project/bar".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("file:///home/user/project/bar");
             assert_eq!(name, Symbol::new("bar"));
         }
 
         #[test]
         fn file_uri_nested_path() {
-            let db = test_db();
-            let path = PathId::new(&db, "file:///a/b/c/module.trb".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("file:///a/b/c/module.trb");
             assert_eq!(name, Symbol::new("module"));
         }
 
         #[test]
         fn plain_path_string() {
-            let db = test_db();
-            let path = PathId::new(&db, "/home/user/test.trb".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("/home/user/test.trb");
             assert_eq!(name, Symbol::new("test"));
         }
 
         #[test]
         fn fallback_to_main_for_empty() {
-            let db = test_db();
-            let path = PathId::new(&db, "".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("");
             assert_eq!(name, Symbol::new("main"));
         }
 
         #[test]
         fn module_name_with_dots() {
-            let db = test_db();
-            let path = PathId::new(&db, "file:///project/my.module.trb".to_owned());
-            let name = derive_module_name_from_path(&db, path);
+            let name = derive_module_name_from_path("file:///project/my.module.trb");
             assert_eq!(name, Symbol::new("my.module"));
         }
     }

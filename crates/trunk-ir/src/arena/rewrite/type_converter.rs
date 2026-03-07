@@ -25,14 +25,14 @@ type MaterializerFn =
 ///
 /// Holds a collection of conversion functions and a materialization callback
 /// for inserting cast operations.
-pub struct ArenaTypeConverter {
+pub struct TypeConverter {
     /// Type conversion functions, tried in order.
     conversions: Vec<Box<ConversionFn>>,
     /// Materialization function: creates cast ops when needed.
     materializer: Option<Box<MaterializerFn>>,
 }
 
-impl ArenaTypeConverter {
+impl TypeConverter {
     /// Create a new empty type converter.
     pub fn new() -> Self {
         Self {
@@ -90,7 +90,7 @@ impl ArenaTypeConverter {
     }
 }
 
-impl Default for ArenaTypeConverter {
+impl Default for TypeConverter {
     fn default() -> Self {
         Self::new()
     }
@@ -100,8 +100,8 @@ impl Default for ArenaTypeConverter {
 mod tests {
     use super::*;
     use crate::arena::*;
-    use crate::ir::Symbol;
     use crate::location::Span;
+    use crate::symbol::Symbol;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -122,20 +122,20 @@ mod tests {
 
     #[test]
     fn is_empty_true_when_no_conversions_or_materializer() {
-        let tc = ArenaTypeConverter::new();
+        let tc = TypeConverter::new();
         assert!(tc.is_empty());
     }
 
     #[test]
     fn is_empty_false_with_conversion() {
-        let mut tc = ArenaTypeConverter::new();
+        let mut tc = TypeConverter::new();
         tc.add_conversion(|_, _| None);
         assert!(!tc.is_empty());
     }
 
     #[test]
     fn is_empty_false_with_materializer_only() {
-        let mut tc = ArenaTypeConverter::new();
+        let mut tc = TypeConverter::new();
         tc.set_materializer(|_, _, _, _, _| None);
         assert!(!tc.is_empty());
     }
@@ -144,7 +144,7 @@ mod tests {
     fn convert_type_returns_none_when_empty() {
         let (mut ctx, _) = test_ctx();
         let ty = i32_type(&mut ctx);
-        let tc = ArenaTypeConverter::new();
+        let tc = TypeConverter::new();
         assert!(tc.convert_type(&ctx, ty).is_none());
     }
 
@@ -155,7 +155,7 @@ mod tests {
         let i64_ty = i64_type(&mut ctx);
 
         let target = i64_ty;
-        let mut tc = ArenaTypeConverter::new();
+        let mut tc = TypeConverter::new();
         tc.add_conversion(move |_, _| Some(target));
 
         assert_eq!(tc.convert_type(&ctx, i32_ty), Some(i64_ty));
@@ -165,7 +165,7 @@ mod tests {
     fn convert_type_or_identity_falls_back() {
         let (mut ctx, _) = test_ctx();
         let ty = i32_type(&mut ctx);
-        let tc = ArenaTypeConverter::new();
+        let tc = TypeConverter::new();
         assert_eq!(tc.convert_type_or_identity(&ctx, ty), ty);
     }
 }

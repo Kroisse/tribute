@@ -15,22 +15,20 @@
 //! # Usage
 //!
 //! ```ignore
-//! use trunk_ir::conversion::resolve_unrealized_casts_arena;
-//! use trunk_ir::arena::rewrite::ArenaTypeConverter;
+//! use trunk_ir::conversion::resolve_unrealized_casts;
+//! use trunk_ir::arena::rewrite::TypeConverter;
 //!
-//! let mut tc = ArenaTypeConverter::new();
+//! let mut tc = TypeConverter::new();
 //! tc.set_materializer(|ctx, loc, value, from_ty, to_ty| {
 //!     // Generate actual conversion operations
 //!     Some(MaterializeResult { value, ops: vec![] })
 //! });
 //!
-//! let result = resolve_unrealized_casts_arena(&mut ctx, module, &tc);
+//! let result = resolve_unrealized_casts(&mut ctx, module, &tc);
 //! assert!(result.unresolved.is_empty());
 //! println!("Resolved {} casts", result.resolved_count);
 //! ```
 
 mod resolve_unrealized_casts;
 
-pub use resolve_unrealized_casts::{
-    ArenaResolveResult, ArenaUnresolvedCast, resolve_unrealized_casts_arena,
-};
+pub use resolve_unrealized_casts::{ResolveResult, UnresolvedCast, resolve_unrealized_casts};
