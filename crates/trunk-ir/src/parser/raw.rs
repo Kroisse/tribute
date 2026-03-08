@@ -743,6 +743,27 @@ mod tests {
             .parse_next(&mut input)
             .expect("i128::MIN should parse");
         assert_eq!(val, i128::MIN);
+
+        // i128::MAX should parse
+        let mut input = "170141183460469231731687303715884105727";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i128::MAX should parse");
+        assert_eq!(val, i128::MAX);
+
+        // Beyond i128::MAX should fail
+        let mut input = "170141183460469231731687303715884105728";
+        assert!(
+            integer_lit.parse_next(&mut input).is_err(),
+            "value beyond i128::MAX should fail to parse"
+        );
+
+        // Beyond i128::MIN should fail
+        let mut input = "-170141183460469231731687303715884105729";
+        assert!(
+            integer_lit.parse_next(&mut input).is_err(),
+            "value beyond i128::MIN should fail to parse"
+        );
     }
 
     #[test]
