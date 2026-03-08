@@ -51,11 +51,17 @@ separated responsibilities.
 
 **Key Modules**:
 
-- `ir.rs` - Core IR structures (Operation, Value, Block, Region)
-- `ops.rs` - Dialect operation traits and macros
+- `context.rs` - `IrContext` arena and core data structures
+- `refs.rs` - Reference types (OpRef, ValueRef, BlockRef, etc.)
+- `ops.rs` - `DialectOp`/`DialectType` traits, `ConversionError`
 - `types.rs` - Type system (interned types with attributes)
-- `dialect/` - All dialect definitions
+- `printer.rs` - IR pretty-printing utilities
+- `validation.rs` - IR validation routines
+- `walk.rs` - IR traversal helpers
+- `dialect/` - All dialect definitions (defined via `#[dialect]` macro)
 - `rewrite/` - Pattern-based rewriting infrastructure (PatternRewriter, PatternApplicator)
+- `transforms/` - IR transformation passes (DCE, scf_to_cf)
+- `parser/` - IR text format parser (raw winnow + builder)
 
 **Location**: `crates/trunk-ir/`
 

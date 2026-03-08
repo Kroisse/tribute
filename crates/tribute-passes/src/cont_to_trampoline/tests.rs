@@ -1,8 +1,8 @@
 //! Tests for cont_to_trampoline pass (arena-based).
 
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::parser::parse_test_module;
-use trunk_ir::arena::printer::print_module;
+use trunk_ir::context::IrContext;
+use trunk_ir::parser::parse_test_module;
+use trunk_ir::printer::print_module;
 
 fn run_pass(ir: &str) -> String {
     let mut ctx = IrContext::new();

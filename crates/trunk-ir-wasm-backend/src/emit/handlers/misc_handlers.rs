@@ -3,8 +3,8 @@
 //! This module handles various WebAssembly operations that don't fit into other categories:
 //! - wasm.bytes_from_data (create Bytes struct from passive data segment)
 
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};

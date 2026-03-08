@@ -3,14 +3,14 @@ use std::rc::Rc;
 
 use crate::live_vars::FunctionAnalysis;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::Attribute;
-use trunk_ir::arena::walk;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::func as arena_func;
 use trunk_ir::location::Span;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{RegionRef, TypeRef};
+use trunk_ir::types::Attribute;
+use trunk_ir::walk;
 
 use super::{ShiftAnalysis, ShiftPointInfo};
 
@@ -337,7 +337,7 @@ pub(crate) fn calls_effectful_function(
 /// Helper to check if a block calls effectful functions (for handler arm checking).
 fn block_calls_effectful_inner(
     ctx: &IrContext,
-    block: trunk_ir::arena::refs::BlockRef,
+    block: trunk_ir::refs::BlockRef,
     effectful: &HashSet<Symbol>,
 ) -> bool {
     for &op in &ctx.block(block).ops {

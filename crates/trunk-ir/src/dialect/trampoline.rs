@@ -1,6 +1,6 @@
 //! Arena-based trampoline dialect.
 
-#[crate::arena_dialect(crate = crate)]
+#[crate::dialect(crate = crate)]
 mod trampoline {
     // Types
     struct Step;

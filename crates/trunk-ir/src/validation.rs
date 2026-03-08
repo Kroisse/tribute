@@ -384,11 +384,11 @@ pub fn debug_assert_valid(ctx: &IrContext, module: Module, pass_name: &str) {
 mod tests {
     use super::*;
     use crate::Symbol;
-    use crate::arena::context::OperationDataBuilder;
-    use crate::arena::dialect::{arith, core, func};
-    use crate::arena::types::{Attribute, Location};
-    use crate::arena::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
+    use crate::context::OperationDataBuilder;
+    use crate::dialect::{arith, core, func};
     use crate::location::Span;
+    use crate::types::{Attribute, Location};
+    use crate::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
     use std::collections::BTreeMap;
 
@@ -407,7 +407,7 @@ mod tests {
         params: &[super::super::refs::TypeRef],
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
-        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     /// Build a valid module: fn add() { 40 + 2 }

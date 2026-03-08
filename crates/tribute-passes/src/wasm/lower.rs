@@ -7,14 +7,14 @@
 use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{Module, PatternApplicator, WasmFuncSignatureConversionPattern};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use super::const_to_wasm::ConstAnalysis;
 use super::intrinsic_to_wasm::IntrinsicAnalysis;

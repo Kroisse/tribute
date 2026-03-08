@@ -2,18 +2,18 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::arena::dialect::arith;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::trampoline as arena_trampoline;
 use trunk_ir::location::Span;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::types::{Attribute, Location};
 
 use super::patterns::is_step_type;
 use super::shift_lower::{anyref_type, continuation_type, i32_type, step_type};
@@ -43,8 +43,7 @@ impl RewritePattern for LowerHandlerDispatchPattern {
         let location = ctx.op(op).location;
         let i32_ty = i32_type(ctx);
         let i1_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
-                .build(),
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build(),
         );
         let step_ty = step_type(ctx);
         let anyref_ty = anyref_type(ctx);
@@ -115,7 +114,7 @@ impl LowerHandlerDispatchPattern {
         // Create block with current_step as argument
         let block = ctx.create_block(BlockData {
             location,
-            args: vec![trunk_ir::arena::context::BlockArgData {
+            args: vec![trunk_ir::context::BlockArgData {
                 ty: step_ty,
                 attrs: Default::default(),
             }],
@@ -394,8 +393,7 @@ pub(crate) fn build_nested_dispatch(
     effectful_funcs: &HashSet<Symbol>,
 ) -> ValueRef {
     let i1_ty = ctx.types.intern(
-        trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
-            .build(),
+        trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build(),
     );
 
     if arm_index >= suspend_arms.len() {

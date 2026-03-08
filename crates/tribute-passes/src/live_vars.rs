@@ -8,11 +8,11 @@
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::walk;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::walk;
 
 /// Information about a single shift point in a function.
 #[derive(Debug, Clone)]
@@ -178,12 +178,12 @@ fn collect_used_values(ctx: &IrContext, ops: &[OpRef]) -> HashSet<ValueRef> {
 mod tests {
     use super::*;
     use trunk_ir::Symbol;
-    use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-    use trunk_ir::arena::dialect::{arith, cont as arena_cont, func as arena_func};
-    use trunk_ir::arena::ops::DialectOp;
-    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+    use trunk_ir::context::{BlockData, IrContext, RegionData};
+    use trunk_ir::dialect::{arith, cont as arena_cont, func as arena_func};
     use trunk_ir::location::Span;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::smallvec::smallvec;
+    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

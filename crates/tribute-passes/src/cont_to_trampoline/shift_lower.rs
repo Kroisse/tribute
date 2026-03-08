@@ -2,17 +2,17 @@ use std::collections::HashMap;
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::PatternRewriter;
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::trampoline as arena_trampoline;
 use trunk_ir::location::Span;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::PatternRewriter;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use super::{ResumeCounter, ResumeFuncSpec, ResumeSpecs, ShiftAnalysis, compute_op_idx};
 
@@ -148,7 +148,7 @@ pub(crate) struct LowerShiftPattern {
     pub(crate) module_name: Symbol,
 }
 
-impl trunk_ir::arena::rewrite::RewritePattern for LowerShiftPattern {
+impl trunk_ir::rewrite::RewritePattern for LowerShiftPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -305,14 +305,14 @@ pub(crate) fn create_resume_function_with_continuation(
     );
 
     // Build function body
-    let body_block = ctx.create_block(trunk_ir::arena::context::BlockData {
+    let body_block = ctx.create_block(trunk_ir::context::BlockData {
         location,
         args: vec![
-            trunk_ir::arena::context::BlockArgData {
+            trunk_ir::context::BlockArgData {
                 ty: evidence_ty,
                 attrs: Default::default(),
             },
-            trunk_ir::arena::context::BlockArgData {
+            trunk_ir::context::BlockArgData {
                 ty: wrapper_ty,
                 attrs: Default::default(),
             },
@@ -509,7 +509,7 @@ pub(crate) fn create_resume_function_with_continuation(
         let needs_rebuild = remapped_operands != old_operands;
         if needs_rebuild {
             let op_data = ctx.op(op);
-            let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(
+            let mut builder = trunk_ir::context::OperationDataBuilder::new(
                 op_data.location,
                 op_data.dialect,
                 op_data.name,
@@ -558,14 +558,14 @@ pub(crate) fn create_resume_function_with_continuation(
         ctx.push_op(body_block, ret.op_ref());
     }
 
-    let body_region = ctx.create_region(trunk_ir::arena::context::RegionData {
+    let body_region = ctx.create_region(trunk_ir::context::RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![body_block],
         parent_op: None,
     });
 
     // Create the func.func operation
-    let func_data = trunk_ir::arena::context::OperationDataBuilder::new(
+    let func_data = trunk_ir::context::OperationDataBuilder::new(
         location,
         Symbol::new("func"),
         Symbol::new("func"),

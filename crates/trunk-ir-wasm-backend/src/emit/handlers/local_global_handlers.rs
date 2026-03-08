@@ -4,8 +4,8 @@
 //! - wasm.local_get, wasm.local_set, wasm.local_tee
 //! - wasm.global_get, wasm.global_set
 
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;

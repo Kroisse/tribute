@@ -11,15 +11,15 @@ use std::collections::HashMap;
 
 use tracing::debug;
 use trunk_ir::Symbol;
-use trunk_ir::arena::ValueDef;
-use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::ValueDef;
+use trunk_ir::context::{IrContext, OperationDataBuilder};
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::types::Attribute;
 
 use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
 

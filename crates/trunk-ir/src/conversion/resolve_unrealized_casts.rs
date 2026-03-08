@@ -8,12 +8,12 @@
 //!
 //! If any casts cannot be resolved, the pass returns the unresolved list.
 
-use crate::arena::context::IrContext;
-use crate::arena::dialect::core as arena_core;
-use crate::arena::ops::DialectOp;
-use crate::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
-use crate::arena::rewrite::{Module, TypeConverter};
-use crate::arena::types::Location;
+use crate::context::IrContext;
+use crate::dialect::core as arena_core;
+use crate::ops::DialectOp;
+use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef};
+use crate::rewrite::{Module, TypeConverter};
+use crate::types::Location;
 
 /// Information about an unresolved cast.
 #[derive(Debug, Clone)]
@@ -128,9 +128,17 @@ impl CastResolver {
         let location = ctx.op(op).location;
 
         let Some(&input_value) = operands.first() else {
+            tracing::warn!(
+                ?location,
+                "malformed unrealized_conversion_cast: no operands"
+            );
             return;
         };
         let Some(&original_to_type) = result_types.first() else {
+            tracing::warn!(
+                ?location,
+                "malformed unrealized_conversion_cast: no results"
+            );
             return;
         };
 
@@ -183,16 +191,16 @@ impl CastResolver {
 #[cfg(test)]
 mod tests {
     mod arena_tests {
-        use crate::arena::OperationDataBuilder;
-        use crate::arena::context::{BlockData, IrContext, RegionData};
-        use crate::arena::dialect::arith;
-        use crate::arena::dialect::core as arena_core;
-        use crate::arena::refs::{OpRef, TypeRef};
-        use crate::arena::rewrite::{Module, TypeConverter};
-        use crate::arena::types::{Attribute, Location, TypeDataBuilder};
+        use crate::OperationDataBuilder;
+        use crate::context::{BlockData, IrContext, RegionData};
         use crate::conversion::resolve_unrealized_casts;
+        use crate::dialect::arith;
+        use crate::dialect::core as arena_core;
         use crate::location::Span;
+        use crate::refs::{OpRef, TypeRef};
+        use crate::rewrite::{Module, TypeConverter};
         use crate::symbol::Symbol;
+        use crate::types::{Attribute, Location, TypeDataBuilder};
         use smallvec::smallvec;
 
         fn test_ctx() -> (IrContext, Location) {
@@ -319,7 +327,7 @@ mod tests {
             // Set up a materializer that creates a sextend op
             let mut tc = TypeConverter::new();
             tc.set_materializer(move |ctx, loc, value, _from_ty, to_ty| {
-                use crate::arena::rewrite::type_converter::MaterializeResult;
+                use crate::rewrite::type_converter::MaterializeResult;
                 let op_data =
                     OperationDataBuilder::new(loc, Symbol::new("clif"), Symbol::new("sextend"))
                         .operand(value)

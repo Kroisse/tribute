@@ -36,13 +36,13 @@ use std::sync::LazyLock;
 
 use tracing::debug;
 
+use trunk_ir::IrContext;
+use trunk_ir::Module as IrModule;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::Module as IrModule;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -1293,7 +1293,7 @@ fn compress_locals(locals: &[ValType]) -> Vec<(u32, ValType)> {
 
 /// Intern a simple type with no params or attrs.
 fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.types.intern(trunk_ir::arena::types::TypeData {
+    ctx.types.intern(trunk_ir::types::TypeData {
         dialect: Symbol::new(dialect),
         name: Symbol::new(name),
         params: Default::default(),
@@ -1305,7 +1305,7 @@ fn intern_simple_type(ctx: &mut IrContext, dialect: &'static str, name: &'static
 fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
     let mut attrs = std::collections::BTreeMap::new();
     attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.types.intern(trunk_ir::arena::types::TypeData {
+    ctx.types.intern(trunk_ir::types::TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
         params: Default::default(),

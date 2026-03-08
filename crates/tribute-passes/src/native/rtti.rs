@@ -27,21 +27,21 @@
 use std::collections::{BTreeMap, HashMap};
 
 use trunk_ir::Symbol;
+use trunk_ir::TypeDataBuilder;
 use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
-use trunk_ir::arena::TypeDataBuilder;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::{Module, TypeConverter};
-use trunk_ir::arena::types::Location;
-use trunk_ir::arena::walk::WalkAction;
-use trunk_ir::arena::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::core as arena_core;
 use trunk_ir::location::Span;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::Location;
+use trunk_ir::walk::WalkAction;
+use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 
@@ -164,7 +164,7 @@ fn collect_types(ctx: &IrContext, module: Module, rtti_map: &mut RttiMap) {
     let body = module.body(ctx);
     use std::ops::ControlFlow;
     let Some(body) = body else { return };
-    let _ = trunk_ir::arena::walk::walk_region::<()>(ctx, body, &mut |op| {
+    let _ = trunk_ir::walk::walk_region::<()>(ctx, body, &mut |op| {
         let op_data = ctx.op(op);
         let dialect = op_data.dialect;
         let name = op_data.name;
@@ -393,7 +393,7 @@ fn gen_dealloc_and_return(
 /// Build an `adt.struct` type with named fields (for testing and internal use).
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
-    use trunk_ir::arena::types::Attribute as A;
+    use trunk_ir::types::Attribute as A;
     let fields_list: Vec<A> = fields
         .iter()
         .map(|(name, ty)| A::List(vec![A::Symbol(Symbol::new(name)), A::Type(*ty)]))
@@ -670,11 +670,11 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use trunk_ir::Span;
-    use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
-    use trunk_ir::arena::dialect::func as arena_func;
-    use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::Module;
-    use trunk_ir::arena::types::Attribute;
+    use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
+    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::Module;
+    use trunk_ir::types::Attribute;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -791,7 +791,7 @@ mod tests {
     func.return %0
   }
 }"#;
-        let module = trunk_ir::arena::parser::parse_test_module(&mut ctx, ir);
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         let rtti = generate_rtti(&mut ctx, module, &tc);
         assert!(rtti.type_to_idx.is_empty());

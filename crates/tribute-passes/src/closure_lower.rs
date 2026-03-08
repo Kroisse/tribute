@@ -24,16 +24,16 @@ use std::collections::HashSet;
 use tribute_ir::arena::dialect::closure as arena_closure;
 use tribute_ir::arena::dialect::tribute_rt;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{DialectOp, DialectType};
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use crate::evidence::collect_effectful_functions;
 
@@ -66,7 +66,7 @@ fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 
 /// Check if an arena value is a closure value (for pre-lowering collection).
 fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
-    use trunk_ir::arena::refs::ValueDef;
+    use trunk_ir::refs::ValueDef;
 
     let ty = ctx.value_ty(value);
 
@@ -85,7 +85,7 @@ fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
         // Only treat core.func as closure if it's a block arg (matching LowerClosureCallArena)
         return matches!(
             ctx.value_def(value),
-            trunk_ir::arena::refs::ValueDef::BlockArg(_, _)
+            trunk_ir::refs::ValueDef::BlockArg(_, _)
         );
     }
     false
@@ -109,7 +109,7 @@ fn collect_all_closure_calls(ctx: &IrContext, module: Module) -> HashSet<(usize,
 
 fn collect_closure_calls_in_region(
     ctx: &IrContext,
-    region: trunk_ir::arena::refs::RegionRef,
+    region: trunk_ir::refs::RegionRef,
     closure_calls: &mut HashSet<(usize, usize)>,
 ) {
     for &block in ctx.region(region).blocks.iter() {
@@ -295,11 +295,11 @@ impl RewritePattern for LowerClosureCallArena {
             // core.func: only treat as closure if it's a block arg
             matches!(
                 ctx.value_def(callee),
-                trunk_ir::arena::refs::ValueDef::BlockArg(_, _)
+                trunk_ir::refs::ValueDef::BlockArg(_, _)
             )
         } else {
             // Fallback: check if result of closure.new
-            if let trunk_ir::arena::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
+            if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
                 arena_closure::New::from_op(ctx, def_op).is_ok()
             } else {
                 false
@@ -463,10 +463,10 @@ fn transform_closure_calls_with_evidence(
 /// Transform closure calls in a region, inserting evidence arguments.
 fn transform_closure_calls_in_region(
     ctx: &mut IrContext,
-    region: trunk_ir::arena::refs::RegionRef,
+    region: trunk_ir::refs::RegionRef,
     evidence_from_param: Option<ValueRef>,
     closure_calls: &HashSet<(usize, usize)>,
-    func_location: trunk_ir::arena::types::Location,
+    func_location: trunk_ir::types::Location,
 ) {
     let blocks: Vec<_> = ctx.region(region).blocks.to_vec();
     for block in blocks {
@@ -483,10 +483,10 @@ fn transform_closure_calls_in_region(
 /// Transform closure calls in a block, inserting evidence arguments.
 fn transform_closure_calls_in_block(
     ctx: &mut IrContext,
-    block: trunk_ir::arena::refs::BlockRef,
+    block: trunk_ir::refs::BlockRef,
     evidence_from_param: Option<ValueRef>,
     closure_calls: &HashSet<(usize, usize)>,
-    func_location: trunk_ir::arena::types::Location,
+    func_location: trunk_ir::types::Location,
 ) {
     // We need to track null evidence creation (lazy)
     let mut null_ev_value: Option<ValueRef> = None;

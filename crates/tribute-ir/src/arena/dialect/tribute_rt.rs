@@ -1,6 +1,6 @@
 //! Arena-based tribute_rt dialect.
 
-#[trunk_ir::arena_dialect]
+#[trunk_ir::dialect]
 mod tribute_rt {
     // Types
     struct Int;
@@ -29,20 +29,20 @@ mod tribute_rt {
 mod tests {
     use trunk_ir::Span;
     use trunk_ir::Symbol;
-    use trunk_ir::arena::ops::DialectOp;
-    use trunk_ir::arena::refs::PathRef;
-    use trunk_ir::arena::types::Location;
-    use trunk_ir::arena::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::refs::PathRef;
+    use trunk_ir::types::Location;
+    use trunk_ir::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
-    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::arena::TypeRef {
+    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_ptr_type(types: &mut TypeInterner) -> trunk_ir::arena::TypeRef {
+    fn make_ptr_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
     }
 
@@ -54,8 +54,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a value to box
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
         let val = c.result(&ctx);
 
         // Create tribute_rt.box_int
@@ -86,8 +85,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a boxed value
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
         let boxed_val = c.result(&ctx);
 
         // Create tribute_rt.unbox_int
@@ -116,8 +114,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a ptr value
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.retain
@@ -146,8 +143,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a ptr value
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.release (no result, has alloc_size attr)
@@ -177,8 +173,7 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::IntBits(0));
         let val = c.result(&ctx);
 
         let op = super::box_float(&mut ctx, loc, val, ptr_ty);
@@ -198,8 +193,7 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::IntBits(1));
         let val = c.result(&ctx);
 
         let op = super::box_bool(&mut ctx, loc, val, ptr_ty);
@@ -216,8 +210,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create an arith.const — should not match tribute_rt ops
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
         assert!(super::BoxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());

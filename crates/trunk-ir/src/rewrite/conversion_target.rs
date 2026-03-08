@@ -5,10 +5,10 @@
 
 use std::collections::HashSet;
 
-use crate::arena::context::IrContext;
-use crate::arena::refs::OpRef;
-use crate::arena::walk;
+use crate::context::IrContext;
+use crate::refs::OpRef;
 use crate::symbol::Symbol;
+use crate::walk;
 
 /// Result of a legality check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,11 +133,7 @@ impl ConversionTarget {
     /// Verify that no illegal operations remain in the module.
     ///
     /// Returns a list of illegal operations found.
-    pub fn verify(
-        &self,
-        ctx: &IrContext,
-        module_body: crate::arena::refs::RegionRef,
-    ) -> Vec<IllegalOp> {
+    pub fn verify(&self, ctx: &IrContext, module_body: crate::refs::RegionRef) -> Vec<IllegalOp> {
         let mut illegal = Vec::new();
 
         let _ = walk::walk_region::<()>(ctx, module_body, &mut |op| {

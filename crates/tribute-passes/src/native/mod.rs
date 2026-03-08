@@ -24,12 +24,12 @@ pub mod type_converter;
 
 use std::collections::BTreeMap;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, Location};
 
 /// Build an extern `func.func` with an unreachable body and `abi = "C"`.
 ///

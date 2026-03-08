@@ -23,19 +23,19 @@
 //! This pass uses TypeConverter to consistently convert trampoline types to ADT types.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{IrContext, OperationDataBuilder};
-use trunk_ir::arena::dialect::{
+use trunk_ir::context::{IrContext, OperationDataBuilder};
+use trunk_ir::dialect::{
     adt as arena_adt, core as arena_core, func as arena_func, trampoline as arena_trampoline,
     wasm as wasm_dialect,
 };
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-use trunk_ir::arena::rewrite::type_converter::MaterializeResult;
+use trunk_ir::rewrite::type_converter::MaterializeResult;
 
 /// Tag value for Step::Done variant.
 const STEP_TAG_DONE: i32 = 0;

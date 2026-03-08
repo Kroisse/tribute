@@ -2,8 +2,8 @@
 //!
 //! This module handles the emission of constant values (i32, i64, f32, f64).
 
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction};
 
 use crate::CompilationResult;

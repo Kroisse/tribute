@@ -4,10 +4,10 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
-use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{adt, arith, func, scf};
-use trunk_ir::arena::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{adt, arith, func, scf};
+use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{Arm, Expr, LiteralPattern, Pattern, PatternKind, ResolvedRef, TypedRef};
 
@@ -246,7 +246,7 @@ fn build_guarded_arm_region<'db>(
     guard_expr: &Expr<TypedRef<'db>>,
     result_ty: TypeRef,
     rest: &[Arm<TypedRef<'db>>],
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
         args: vec![],
@@ -340,7 +340,7 @@ fn build_arm_region<'db>(
     scrutinee: ValueRef,
     arm: &Arm<TypedRef<'db>>,
     result_ty: TypeRef,
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
         args: vec![],
@@ -386,7 +386,7 @@ fn build_else_chain_region<'db>(
     scrutinee: ValueRef,
     result_ty: TypeRef,
     arms: &[Arm<TypedRef<'db>>],
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
         args: vec![],

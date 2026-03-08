@@ -19,10 +19,10 @@
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::refs::TypeRef;
-use trunk_ir::arena::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::context::IrContext;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
+use trunk_ir::types::TypeDataBuilder;
 
 fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
     ctx.types

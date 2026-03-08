@@ -27,11 +27,11 @@
 
 use tracing::debug;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::rewrite::{
     FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter, RewritePattern,
     WasmFuncSignatureConversionPattern,
 };
@@ -66,8 +66,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         || is_type(ctx, ty, "tribute_rt", "bool")
     {
         let i32_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
-                .build(),
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build(),
         );
         return Some(i32_ty);
     }
@@ -75,8 +74,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
     // tribute_rt.float -> core.f64
     if is_type(ctx, ty, "tribute_rt", "float") {
         let f64_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64"))
-                .build(),
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build(),
         );
         return Some(f64_ty);
     }
@@ -84,11 +82,8 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
     // tribute_rt.any -> wasm.anyref
     if is_type(ctx, ty, "tribute_rt", "any") {
         let anyref_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(
-                Symbol::new("wasm"),
-                Symbol::new("anyref"),
-            )
-            .build(),
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref"))
+                .build(),
         );
         return Some(anyref_ty);
     }
@@ -96,11 +91,8 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
     // tribute_rt.intref -> wasm.i31ref
     if is_type(ctx, ty, "tribute_rt", "intref") {
         let i31ref_ty = ctx.types.intern(
-            trunk_ir::arena::types::TypeDataBuilder::new(
-                Symbol::new("wasm"),
-                Symbol::new("i31ref"),
-            )
-            .build(),
+            trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("i31ref"))
+                .build(),
         );
         return Some(i31ref_ty);
     }
@@ -277,7 +269,7 @@ impl RewritePattern for NormalizeOpResultPattern {
             ctx.detach_region(region);
         }
 
-        let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(loc, dialect, name)
+        let mut builder = trunk_ir::context::OperationDataBuilder::new(loc, dialect, name)
             .operands(operands)
             .results(new_results);
 

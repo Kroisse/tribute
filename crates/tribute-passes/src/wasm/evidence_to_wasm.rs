@@ -24,15 +24,15 @@ use std::collections::BTreeMap;
 
 use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 /// Lower evidence runtime functions to WASM implementations.
@@ -295,7 +295,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     ctx.push_op(body_block, high_init.op_ref());
 
     // Build the search loop
-    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
+    let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
     let loop_region = build_lookup_loop_body(ctx, location, ev_val, target_id_val, i32_ty);
     let loop_op = wasm_dialect::r#loop(ctx, location, [], nil_ty, loop_region);
     ctx.push_op(body_block, loop_op.op_ref());
@@ -328,7 +328,7 @@ fn build_lookup_loop_body(
     target_id_val: ValueRef,
     i32_ty: TypeRef,
 ) -> RegionRef {
-    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
+    let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
     let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
@@ -550,7 +550,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let ev_val = ctx.block_arg(body_block, 0);
     let marker_val = ctx.block_arg(body_block, 1);
 
-    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
+    let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
 
     // Get marker's ability_id for binary search
     let marker_id_op = wasm_dialect::struct_get(ctx, location, marker_val, i32_ty, MARKER_IDX, 0);
@@ -770,7 +770,7 @@ fn build_extend_search_loop(
     marker_id: ValueRef,
     i32_ty: TypeRef,
 ) -> RegionRef {
-    let nil_ty = trunk_ir::arena::dialect::core::nil(ctx).as_type_ref();
+    let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
     let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
     let block = ctx.create_block(BlockData {
@@ -887,7 +887,7 @@ fn build_extend_search_loop(
 
 /// Get the WASM reference type for Evidence (wasm.arrayref).
 fn evidence_ref_type(ctx: &mut IrContext) -> TypeRef {
-    trunk_ir::arena::dialect::wasm::arrayref(ctx).as_type_ref()
+    trunk_ir::dialect::wasm::arrayref(ctx).as_type_ref()
 }
 
 /// Intern a `core.i32` type.
@@ -898,7 +898,7 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.func` type with the given parameter and return types.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-    trunk_ir::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+    trunk_ir::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
 }
 
 /// Compute a stable ability ID hash from an ability type reference.

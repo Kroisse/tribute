@@ -32,8 +32,8 @@ mod lower;
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::rewrite::Module as IrModule;
+use trunk_ir::context::IrContext;
+use trunk_ir::rewrite::Module as IrModule;
 
 use crate::ast::{Module, NodeId, SpanMap, Type, TypeScheme, TypedRef};
 
@@ -69,7 +69,7 @@ pub fn lower_ast_to_ir<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::IrContext;
+    use trunk_ir::context::IrContext;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()

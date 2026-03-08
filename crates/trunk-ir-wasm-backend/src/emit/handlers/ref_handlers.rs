@@ -5,11 +5,11 @@
 
 use std::collections::BTreeMap;
 
+use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{AbstractHeapType, Function, HeapType, Instruction};
 
 use crate::gc_types::ATTR_FIELD_COUNT;

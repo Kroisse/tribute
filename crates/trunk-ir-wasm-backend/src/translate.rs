@@ -3,11 +3,11 @@
 //! This module provides functions for validating and emitting WebAssembly binaries
 //! from TrunkIR modules that have already been lowered to the wasm dialect.
 
+use trunk_ir::IrContext;
+use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::Module;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
 
 use crate::{CompilationResult, emit_wasm, validate_wasm_ir};
 
@@ -21,7 +21,7 @@ pub struct WasmBinary {
     pub imports: Vec<(Symbol, Symbol)>,
 }
 
-/// Emit a WebAssembly binary from a lowered TrunkIR module (arena version).
+/// Emit a WebAssembly binary from a lowered TrunkIR module.
 ///
 /// This function assumes the module has already been lowered to wasm dialect
 /// and all type conversions have been resolved. It:

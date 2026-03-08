@@ -1,6 +1,6 @@
 //! Proc macros for trunk-ir dialect definitions.
 //!
-//! Provides `#[arena_dialect]` attribute macro for defining arena-based
+//! Provides `#[dialect]` attribute macro for defining
 //! dialect operations with type-safe wrappers, accessors, and constructors.
 
 use proc_macro::TokenStream as ProcTokenStream;
@@ -8,10 +8,10 @@ use proc_macro::TokenStream as ProcTokenStream;
 mod codegen;
 mod parse;
 
-/// Define arena-based dialect operations.
+/// Define dialect operations and types.
 ///
 /// ```ignore
-/// #[arena_dialect]
+/// #[dialect]
 /// mod func {
 ///     #[attr(sym_name: Symbol, r#type: Type)]
 ///     fn func() {
@@ -27,8 +27,8 @@ mod parse;
 ///
 /// ## Crate path
 ///
-/// - `#[arena_dialect] mod ...` — defaults to `trunk_ir` (for external crates)
-/// - `#[arena_dialect(crate = crate)] mod ...` — for use within `trunk-ir` itself
+/// - `#[dialect] mod ...` — defaults to `trunk_ir` (for external crates)
+/// - `#[dialect(crate = crate)] mod ...` — for use within `trunk-ir` itself
 ///
 /// ## Generated code
 ///
@@ -39,14 +39,20 @@ mod parse;
 /// - Operand, result, attribute, region/successor accessors
 /// - Constructor function `op_name(ctx, location, ...)`
 #[proc_macro_attribute]
-pub fn arena_dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
-    match arena_dialect_impl(attr.into(), item.into()) {
+pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    match dialect_impl(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }
 }
 
-fn arena_dialect_impl(
+/// Deprecated alias for [`dialect`]. Use `#[dialect]` instead.
+#[proc_macro_attribute]
+pub fn arena_dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    dialect(attr, item)
+}
+
+fn dialect_impl(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, String> {

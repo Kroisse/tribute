@@ -33,11 +33,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::rewrite::{ConversionTarget, PatternApplicator, TypeConverter};
+use trunk_ir::context::IrContext;
 use trunk_ir::location::Span;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::{ConversionTarget, PatternApplicator, TypeConverter};
 
 // Re-export shared utilities from cont_util so existing internal callers still work.
 pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value};
@@ -48,7 +48,7 @@ pub(crate) use crate::cont_util::{compute_op_idx, get_region_result_value};
 
 /// Create an TypeConverter with standard tribute_rt -> core type conversions.
 fn standard_type_converter(ctx: &mut IrContext) -> TypeConverter {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
 
     let int_dialect = Symbol::new("tribute_rt");
     let core_dialect = Symbol::new("core");
@@ -125,7 +125,7 @@ pub(crate) struct ResumeFuncSpec {
     /// Name of next resume function (if not last)
     pub(crate) next_resume_name: Option<String>,
     /// Location for generating code
-    pub(crate) location: trunk_ir::arena::types::Location,
+    pub(crate) location: trunk_ir::types::Location,
     /// Shift analysis for handling nested shifts in continuation
     pub(crate) shift_analysis: ShiftAnalysis,
     /// Module name for generating unique state type names (for dynamic shifts)
@@ -174,7 +174,7 @@ pub(crate) struct ShiftPointInfo {
 pub fn lower_cont_to_trampoline(
     ctx: &mut IrContext,
     module: Module,
-) -> Result<(), Vec<trunk_ir::arena::rewrite::conversion_target::IllegalOp>> {
+) -> Result<(), Vec<trunk_ir::rewrite::conversion_target::IllegalOp>> {
     let module_body = module.body(ctx).expect("module should have a body");
     let module_name = module.name(ctx).unwrap_or_else(|| Symbol::new(""));
 

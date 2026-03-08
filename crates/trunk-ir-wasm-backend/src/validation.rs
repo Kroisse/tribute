@@ -5,10 +5,10 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
+use trunk_ir::IrContext;
+use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::Module;
-use trunk_ir::arena::refs::{OpRef, RegionRef};
+use trunk_ir::refs::{OpRef, RegionRef};
 
 use crate::{CompilationError, CompilationResult};
 

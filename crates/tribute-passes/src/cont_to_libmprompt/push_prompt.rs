@@ -13,16 +13,16 @@ use std::collections::HashSet;
 
 use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{
     adt as arena_adt, arith, cont as arena_cont, core as arena_core, func as arena_func,
     scf as arena_scf,
 };
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Pattern: Lower `cont.push_prompt` -> body outlining + `__tribute_prompt` call.
 pub(crate) struct LowerPushPromptPattern {
@@ -248,7 +248,7 @@ fn generate_outlined_body(
     name: &str,
     live_ins: &[(ValueRef, TypeRef)],
     body_region: RegionRef,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
 ) -> OpRef {
     use super::handler_dispatch::clone_op_into_block_with_remap;
     use std::collections::HashMap;

@@ -16,7 +16,7 @@
 //!
 //! ```ignore
 //! use trunk_ir::conversion::resolve_unrealized_casts;
-//! use trunk_ir::arena::rewrite::TypeConverter;
+//! use trunk_ir::rewrite::TypeConverter;
 //!
 //! let mut tc = TypeConverter::new();
 //! tc.set_materializer(|ctx, loc, value, from_ty, to_ty| {

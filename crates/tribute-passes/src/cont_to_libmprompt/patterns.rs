@@ -7,16 +7,16 @@
 //! - `cont.drop` -> `func.call @__tribute_resume_drop`
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::{arith, cont as arena_cont, core as arena_core, func as arena_func};
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::OpRef;
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::{arith, cont as arena_cont, core as arena_core, func as arena_func};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::OpRef;
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use crate::cont_util::compute_op_idx;
 
-fn i32_ty(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+fn i32_ty(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }

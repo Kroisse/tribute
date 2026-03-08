@@ -6,11 +6,11 @@
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{RegionRef, ValueRef};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{RegionRef, ValueRef};
 
 // ============================================================================
 // Hash-Based Dispatch
@@ -97,7 +97,7 @@ pub fn collect_suspend_arms(ctx: &IrContext, body: RegionRef) -> Vec<SuspendArm>
         let ability_ref_ty = suspend_op.ability_ref(ctx);
         let ability_data = ctx.types.get(ability_ref_ty);
         let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
-            Some(trunk_ir::arena::types::Attribute::Symbol(s)) => Some(*s),
+            Some(trunk_ir::types::Attribute::Symbol(s)) => Some(*s),
             _ => panic!(
                 "collect_suspend_arms: cont.suspend has invalid ability_ref type: {:?}",
                 ability_data,
@@ -144,12 +144,12 @@ pub fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-    use trunk_ir::arena::dialect::{arith, cont as arena_cont, scf as arena_scf};
-    use trunk_ir::arena::refs::RegionRef;
-    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+    use trunk_ir::context::{BlockData, IrContext, RegionData};
+    use trunk_ir::dialect::{arith, cont as arena_cont, scf as arena_scf};
     use trunk_ir::location::Span;
+    use trunk_ir::refs::RegionRef;
     use trunk_ir::smallvec::smallvec;
+    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
     // ====================================================================
     // compute_op_idx
@@ -199,12 +199,12 @@ mod tests {
         (ctx, loc)
     }
 
-    fn i32_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+    fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
         ctx.types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn ability_ref_type(ctx: &mut IrContext, name: Symbol) -> trunk_ir::arena::refs::TypeRef {
+    fn ability_ref_type(ctx: &mut IrContext, name: Symbol) -> trunk_ir::refs::TypeRef {
         ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
                 .attr("name", Attribute::Symbol(name))

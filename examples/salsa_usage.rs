@@ -6,8 +6,8 @@
 use salsa::Setter;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
+use trunk_ir::Attribute;
 use trunk_ir::Symbol;
-use trunk_ir::arena::Attribute;
 
 fn main() {
     // Example 1: Basic database usage

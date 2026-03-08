@@ -87,9 +87,9 @@ impl Module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {

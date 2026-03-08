@@ -2,8 +2,8 @@
 //!
 //! This module handles memory management and linear memory access operations.
 
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
+use trunk_ir::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
 use wasm_encoder::{Function, Instruction, MemArg};
 
 use crate::CompilationResult;

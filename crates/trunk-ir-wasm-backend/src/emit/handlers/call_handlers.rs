@@ -6,10 +6,10 @@
 //! - wasm.return_call (tail call)
 
 use tracing::debug;
+use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef};
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
 use wasm_encoder::{Function, Instruction};
 
 use crate::{CompilationError, CompilationResult};

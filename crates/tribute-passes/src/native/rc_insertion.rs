@@ -34,13 +34,13 @@
 use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::TypeDataBuilder;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::TypeDataBuilder;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
+use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 
@@ -757,9 +757,9 @@ fn apply_insertion_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::parser::parse_test_module;
-    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();

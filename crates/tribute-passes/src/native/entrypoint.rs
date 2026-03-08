@@ -5,15 +5,15 @@
 //! that calls it and returns exit code 0.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::arith;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef};
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
+use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 /// Generate a native C ABI entrypoint wrapper for the user's `main` function.
 /// (Arena IR version — mutates `ctx` in-place.)
@@ -256,12 +256,12 @@ fn build_entrypoint(
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-    use trunk_ir::arena::dialect::arith;
-    use trunk_ir::arena::dialect::func as arena_func;
-    use trunk_ir::arena::ops::DialectOp;
-    use trunk_ir::arena::rewrite::Module;
-    use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+    use trunk_ir::context::{BlockData, IrContext, RegionData};
+    use trunk_ir::dialect::arith;
+    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::rewrite::Module;
+    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
     fn arena_test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -270,12 +270,12 @@ mod tests {
         (ctx, loc)
     }
 
-    fn arena_i32_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+    fn arena_i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
         ctx.types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn arena_nil_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+    fn arena_nil_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
         arena_core::nil(ctx).as_type_ref()
     }
 
@@ -318,7 +318,7 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data = trunk_ir::arena::context::OperationDataBuilder::new(
+        let module_data = trunk_ir::context::OperationDataBuilder::new(
             loc,
             Symbol::new("core"),
             Symbol::new("module"),
@@ -410,7 +410,7 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data = trunk_ir::arena::context::OperationDataBuilder::new(
+        let module_data = trunk_ir::context::OperationDataBuilder::new(
             loc,
             Symbol::new("core"),
             Symbol::new("module"),
@@ -468,7 +468,7 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data = trunk_ir::arena::context::OperationDataBuilder::new(
+        let module_data = trunk_ir::context::OperationDataBuilder::new(
             loc,
             Symbol::new("core"),
             Symbol::new("module"),

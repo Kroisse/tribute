@@ -33,10 +33,10 @@
 //! | other       | 8    | 8         |
 
 use crate::Symbol;
-use crate::arena::context::IrContext;
-use crate::arena::refs::TypeRef;
-use crate::arena::rewrite::type_converter::TypeConverter;
-use crate::arena::types::Attribute;
+use crate::context::IrContext;
+use crate::refs::TypeRef;
+use crate::rewrite::type_converter::TypeConverter;
+use crate::types::Attribute;
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]

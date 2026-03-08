@@ -6,7 +6,7 @@
 //!
 //! Note: WASI imports and data segments are now handled by intrinsic_to_wasm and const_to_wasm passes.
 
-use trunk_ir::arena::refs::TypeRef;
+use trunk_ir::refs::TypeRef;
 
 /// Linear memory planning.
 ///

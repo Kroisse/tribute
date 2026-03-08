@@ -13,12 +13,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::ControlFlow;
 
-use crate::arena::context::IrContext;
-use crate::arena::refs::OpRef;
-use crate::arena::rewrite::Module;
-use crate::arena::types::Attribute;
-use crate::arena::walk::{WalkAction, walk_region};
+use crate::context::IrContext;
+use crate::refs::OpRef;
+use crate::rewrite::Module;
 use crate::symbol::Symbol;
+use crate::types::Attribute;
+use crate::walk::{WalkAction, walk_region};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -145,7 +145,7 @@ impl GlobalDcePass {
     fn analyze_module_region(
         &mut self,
         ctx: &IrContext,
-        region: crate::arena::refs::RegionRef,
+        region: crate::refs::RegionRef,
         module_path: &[Symbol],
     ) {
         let blocks = ctx.region(region).blocks.to_vec();
@@ -234,7 +234,7 @@ impl GlobalDcePass {
     fn collect_calls_from_region(
         &mut self,
         ctx: &IrContext,
-        region: crate::arena::refs::RegionRef,
+        region: crate::refs::RegionRef,
         caller: Symbol,
     ) {
         let _ = walk_region::<()>(ctx, region, &mut |op| {
@@ -350,7 +350,7 @@ impl GlobalDcePass {
     fn filter_region(
         &self,
         ctx: &mut IrContext,
-        region: crate::arena::refs::RegionRef,
+        region: crate::refs::RegionRef,
         reachable: &HashSet<Symbol>,
         removed: &mut Vec<Symbol>,
         module_path: &[Symbol],
@@ -394,10 +394,10 @@ impl GlobalDcePass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::dialect::func;
-    use crate::arena::*;
+    use crate::dialect::func;
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {
@@ -408,8 +408,8 @@ mod tests {
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
-        crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        crate::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {

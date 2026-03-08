@@ -9,11 +9,11 @@ use tribute_ir::arena::dialect::closure as arena_closure;
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::refs::{BlockRef, PathRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 use crate::ast::{CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
 

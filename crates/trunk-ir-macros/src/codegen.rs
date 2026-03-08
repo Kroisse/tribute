@@ -1,4 +1,4 @@
-//! Code generation for `#[arena_dialect]`.
+//! Code generation for `#[dialect]`.
 
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
@@ -77,15 +77,15 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-        pub struct #sname(#crate_path::arena::OpRef);
+        pub struct #sname(#crate_path::OpRef);
 
-        impl #crate_path::arena::ops::DialectOp for #sname {
+        impl #crate_path::ops::DialectOp for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const OP_NAME: &'static str = #op_name;
 
             fn from_op(
-                ctx: &#crate_path::arena::IrContext,
-                op: #crate_path::arena::OpRef,
+                ctx: &#crate_path::IrContext,
+                op: #crate_path::OpRef,
             ) -> Result<Self, #crate_path::ops::ConversionError> {
                 if !Self::matches(ctx, op) {
                     return Err(#crate_path::ops::ConversionError::WrongOperation {
@@ -98,7 +98,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 Ok(Self(op))
             }
 
-            fn op_ref(&self) -> #crate_path::arena::OpRef {
+            fn op_ref(&self) -> #crate_path::OpRef {
                 self.0
             }
         }
@@ -108,7 +108,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
 fn gen_impl_block(crate_path: &TokenStream, op: &OperationDef) -> TokenStream {
     let sname = struct_name(&op.name);
     let op_ref_method = quote! {
-        pub fn op_ref(&self) -> #crate_path::arena::OpRef {
+        pub fn op_ref(&self) -> #crate_path::OpRef {
             self.0
         }
     };
@@ -141,7 +141,7 @@ fn gen_operand_accessors(crate_path: &TokenStream, operands: &[Operand]) -> Toke
     if operands.len() == 1 && operands[0].variadic {
         let name = &operands[0].raw_ident;
         return quote! {
-            pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::ValueRef] {
+            pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::ValueRef] {
                 ctx.op_operands(self.0)
             }
         };
@@ -156,13 +156,13 @@ fn gen_operand_accessors(crate_path: &TokenStream, operands: &[Operand]) -> Toke
             let idx = fixed_count;
             if idx > 0 {
                 methods.push(quote! {
-                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::ValueRef] {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::ValueRef] {
                         &ctx.op_operands(self.0)[#idx..]
                     }
                 });
             } else {
                 methods.push(quote! {
-                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::ValueRef] {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::ValueRef] {
                         ctx.op_operands(self.0)
                     }
                 });
@@ -170,7 +170,7 @@ fn gen_operand_accessors(crate_path: &TokenStream, operands: &[Operand]) -> Toke
         } else {
             let idx = fixed_count;
             methods.push(quote! {
-                pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::ValueRef {
+                pub fn #name(&self, ctx: &#crate_path::IrContext) -> #crate_path::ValueRef {
                     ctx.op_operands(self.0)[#idx]
                 }
             });
@@ -192,11 +192,11 @@ fn gen_result_accessors(crate_path: &TokenStream, results: &ResultDef) -> TokenS
             let name_ident = format_ident!("{name}");
             let ty_name = format_ident!("{name}_ty");
             quote! {
-                pub fn #name_ident(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::ValueRef {
+                pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::ValueRef {
                     ctx.op_result(self.0, 0)
                 }
 
-                pub fn #ty_name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::TypeRef {
+                pub fn #ty_name(&self, ctx: &#crate_path::IrContext) -> #crate_path::TypeRef {
                     ctx.op_result_types(self.0)[0]
                 }
             }
@@ -209,11 +209,11 @@ fn gen_result_accessors(crate_path: &TokenStream, results: &ResultDef) -> TokenS
                     let name_ident = format_ident!("{name}");
                     let ty_name = format_ident!("{name}_ty");
                     quote! {
-                        pub fn #name_ident(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::ValueRef {
+                        pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::ValueRef {
                             ctx.op_result(self.0, #idx)
                         }
 
-                        pub fn #ty_name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::TypeRef {
+                        pub fn #ty_name(&self, ctx: &#crate_path::IrContext) -> #crate_path::TypeRef {
                             ctx.op_result_types(self.0)[#idx]
                         }
                     }
@@ -224,7 +224,7 @@ fn gen_result_accessors(crate_path: &TokenStream, results: &ResultDef) -> TokenS
         ResultDef::Variadic(name) => {
             let name_ident = format_ident!("{name}");
             quote! {
-                pub fn #name_ident<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::ValueRef] {
+                pub fn #name_ident<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::ValueRef] {
                     ctx.op_results(self.0)
                 }
             }
@@ -252,7 +252,7 @@ fn gen_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
 
     if attr.optional {
         quote! {
-            pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> Option<#rust_ty> {
+            pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
                 ctx.op(self.0).attributes
                     .get(&#crate_path::Symbol::new(#name_str))
                     .map(|attr| #from_attr)
@@ -260,7 +260,7 @@ fn gen_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
         }
     } else {
         quote! {
-            pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #rust_ty {
+            pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
                 let attr = ctx.op(self.0).attributes
                     .get(&#crate_path::Symbol::new(#name_str))
                     .expect(concat!("missing attribute: ", #name_str));
@@ -285,7 +285,7 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
                 let name_ident = format_ident!("{name}");
                 let idx = region_idx;
                 methods.push(quote! {
-                    pub fn #name_ident(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::RegionRef {
+                    pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::RegionRef {
                         ctx.op(self.0).regions[#idx]
                     }
                 });
@@ -295,7 +295,7 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
                 let name_ident = format_ident!("{name}");
                 let idx = succ_idx;
                 methods.push(quote! {
-                    pub fn #name_ident(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::BlockRef {
+                    pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::BlockRef {
                         ctx.op(self.0).successors[#idx]
                     }
                 });
@@ -324,10 +324,10 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
     for operand in &op.operands {
         let name = &operand.raw_ident;
         if operand.variadic {
-            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::arena::ValueRef>));
+            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::ValueRef>));
             body_stmts.push(quote!(__builder = __builder.operands(#name);));
         } else {
-            params.push(quote!(#name: #crate_path::arena::ValueRef));
+            params.push(quote!(#name: #crate_path::ValueRef));
             body_stmts.push(quote!(__builder = __builder.operand(#name);));
         }
     }
@@ -337,19 +337,18 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
         ResultDef::None => {}
         ResultDef::Single(name) => {
             let ty_param = format_ident!("{name}_ty");
-            params.push(quote!(#ty_param: #crate_path::arena::TypeRef));
+            params.push(quote!(#ty_param: #crate_path::TypeRef));
             body_stmts.push(quote!(__builder = __builder.result(#ty_param);));
         }
         ResultDef::Multi(names) => {
             for name in names {
                 let ty_param = format_ident!("{name}_ty");
-                params.push(quote!(#ty_param: #crate_path::arena::TypeRef));
+                params.push(quote!(#ty_param: #crate_path::TypeRef));
                 body_stmts.push(quote!(__builder = __builder.result(#ty_param);));
             }
         }
         ResultDef::Variadic(_) => {
-            params
-                .push(quote!(result_types: impl IntoIterator<Item = #crate_path::arena::TypeRef>));
+            params.push(quote!(result_types: impl IntoIterator<Item = #crate_path::TypeRef>));
             body_stmts.push(quote!(__builder = __builder.results(result_types);));
         }
     }
@@ -389,12 +388,12 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
         match item {
             RegionOrSuccessor::Region(name) => {
                 let name_ident = format_ident!("{name}");
-                params.push(quote!(#name_ident: #crate_path::arena::RegionRef));
+                params.push(quote!(#name_ident: #crate_path::RegionRef));
                 body_stmts.push(quote!(__builder = __builder.region(#name_ident);));
             }
             RegionOrSuccessor::Successor(name) => {
                 let name_ident = format_ident!("{name}");
-                params.push(quote!(#name_ident: #crate_path::arena::BlockRef));
+                params.push(quote!(#name_ident: #crate_path::BlockRef));
                 body_stmts.push(quote!(__builder = __builder.successor(#name_ident);));
             }
         }
@@ -403,12 +402,12 @@ fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -
     quote! {
         #[allow(clippy::too_many_arguments)]
         pub fn #fn_name(
-            ctx: &mut #crate_path::arena::IrContext,
-            location: #crate_path::arena::Location,
+            ctx: &mut #crate_path::IrContext,
+            location: #crate_path::Location,
             #(#params),*
         ) -> #sname {
             #[allow(unused_mut)]
-            let mut __builder = #crate_path::arena::OperationDataBuilder::new(
+            let mut __builder = #crate_path::OperationDataBuilder::new(
                 location,
                 #crate_path::Symbol::new(#dialect),
                 #crate_path::Symbol::new(#op_name),
@@ -461,15 +460,15 @@ fn gen_type_struct_and_trait(
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-        pub struct #sname(#crate_path::arena::TypeRef);
+        pub struct #sname(#crate_path::TypeRef);
 
-        impl #crate_path::arena::ops::DialectType for #sname {
+        impl #crate_path::ops::DialectType for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const TYPE_NAME: &'static str = #type_name;
 
             fn from_type_ref(
-                ctx: &#crate_path::arena::IrContext,
-                ty: #crate_path::arena::TypeRef,
+                ctx: &#crate_path::IrContext,
+                ty: #crate_path::TypeRef,
             ) -> Option<Self> {
                 if !Self::matches(ctx, ty) {
                     return None;
@@ -477,12 +476,12 @@ fn gen_type_struct_and_trait(
                 Some(Self(ty))
             }
 
-            fn as_type_ref(&self) -> #crate_path::arena::TypeRef {
+            fn as_type_ref(&self) -> #crate_path::TypeRef {
                 self.0
             }
         }
 
-        impl From<#sname> for #crate_path::arena::TypeRef {
+        impl From<#sname> for #crate_path::TypeRef {
             fn from(t: #sname) -> Self {
                 t.0
             }
@@ -494,7 +493,7 @@ fn gen_type_impl_block(crate_path: &TokenStream, td: &TypeDefData) -> TokenStrea
     let sname = struct_name(&td.name);
 
     let as_type_ref_method = quote! {
-        pub fn as_type_ref(&self) -> #crate_path::arena::TypeRef {
+        pub fn as_type_ref(&self) -> #crate_path::TypeRef {
             self.0
         }
     };
@@ -530,7 +529,7 @@ fn gen_type_param_accessors(
     if params.len() == 1 && params[0].variadic {
         let name = format_ident!("r#{}", params[0].raw_ident.to_string().to_snake_case());
         return quote! {
-            pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+            pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
                 &ctx.types.get(self.0).params
             }
         };
@@ -545,13 +544,13 @@ fn gen_type_param_accessors(
             let idx = fixed_count;
             if idx > 0 {
                 methods.push(quote! {
-                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
                         &ctx.types.get(self.0).params[#idx..]
                     }
                 });
             } else {
                 methods.push(quote! {
-                    pub fn #name<'a>(&self, ctx: &'a #crate_path::arena::IrContext) -> &'a [#crate_path::arena::TypeRef] {
+                    pub fn #name<'a>(&self, ctx: &'a #crate_path::IrContext) -> &'a [#crate_path::TypeRef] {
                         &ctx.types.get(self.0).params
                     }
                 });
@@ -559,7 +558,7 @@ fn gen_type_param_accessors(
         } else {
             let idx = fixed_count;
             methods.push(quote! {
-                pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #crate_path::arena::TypeRef {
+                pub fn #name(&self, ctx: &#crate_path::IrContext) -> #crate_path::TypeRef {
                     ctx.types.get(self.0).params[#idx]
                 }
             });
@@ -578,7 +577,7 @@ fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStre
 
     if attr.optional {
         quote! {
-            pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> Option<#rust_ty> {
+            pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
                 ctx.types.get(self.0).attrs
                     .get(&#crate_path::Symbol::new(#name_str))
                     .map(|attr| #from_attr)
@@ -586,7 +585,7 @@ fn gen_type_attr_accessor(crate_path: &TokenStream, attr: &AttrDef) -> TokenStre
         }
     } else {
         quote! {
-            pub fn #name(&self, ctx: &#crate_path::arena::IrContext) -> #rust_ty {
+            pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
                 let attr = ctx.types.get(self.0).attrs
                     .get(&#crate_path::Symbol::new(#name_str))
                     .expect(concat!("missing attribute: ", #name_str));
@@ -612,10 +611,10 @@ fn gen_type_constructor(
     for param in &td.params {
         let name = format_ident!("r#{}", param.raw_ident.to_string().to_snake_case());
         if param.variadic {
-            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::arena::TypeRef>));
+            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::TypeRef>));
             body_stmts.push(quote!(__builder = __builder.params(#name);));
         } else {
-            params.push(quote!(#name: #crate_path::arena::TypeRef));
+            params.push(quote!(#name: #crate_path::TypeRef));
             body_stmts.push(quote!(__builder = __builder.param(#name);));
         }
     }
@@ -657,11 +656,11 @@ fn gen_type_constructor(
     quote! {
         #[allow(clippy::too_many_arguments)]
         pub fn #fn_name_snake(
-            ctx: &mut #crate_path::arena::IrContext,
+            ctx: &mut #crate_path::IrContext,
             #(#params),*
         ) -> #sname {
             #[allow(unused_mut)]
-            let mut __builder = #crate_path::arena::TypeDataBuilder::new(
+            let mut __builder = #crate_path::TypeDataBuilder::new(
                 #crate_path::Symbol::new(#dialect),
                 #crate_path::Symbol::new(#type_name),
             );
@@ -679,7 +678,7 @@ fn gen_type_constructor(
 
 fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
     match ty {
-        AttrType::Any => quote!(#crate_path::arena::Attribute),
+        AttrType::Any => quote!(#crate_path::Attribute),
         AttrType::Bool => quote!(bool),
         AttrType::I32 => quote!(i32),
         AttrType::I64 => quote!(i64),
@@ -687,7 +686,7 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::U64 => quote!(u64),
         AttrType::F32 => quote!(f32),
         AttrType::F64 => quote!(f64),
-        AttrType::Type => quote!(#crate_path::arena::TypeRef),
+        AttrType::Type => quote!(#crate_path::TypeRef),
         AttrType::String => quote!(::std::string::String),
         AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
     }
@@ -696,19 +695,19 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
 fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> TokenStream {
     match ty {
         AttrType::Any => quote!(#val),
-        AttrType::Bool => quote!(#crate_path::arena::Attribute::Bool(#val)),
+        AttrType::Bool => quote!(#crate_path::Attribute::Bool(#val)),
         AttrType::I32 | AttrType::I64 | AttrType::U32 => {
-            quote!(#crate_path::arena::Attribute::IntBits(#val as u64))
+            quote!(#crate_path::Attribute::IntBits(#val as u64))
         }
-        AttrType::U64 => quote!(#crate_path::arena::Attribute::IntBits(#val)),
+        AttrType::U64 => quote!(#crate_path::Attribute::IntBits(#val)),
         AttrType::F32 => {
-            quote!(#crate_path::arena::Attribute::FloatBits((#val as f64).to_bits()))
+            quote!(#crate_path::Attribute::FloatBits((#val as f64).to_bits()))
         }
-        AttrType::F64 => quote!(#crate_path::arena::Attribute::FloatBits(#val.to_bits())),
-        AttrType::Type => quote!(#crate_path::arena::Attribute::Type(#val)),
-        AttrType::String => quote!(#crate_path::arena::Attribute::String(#val)),
+        AttrType::F64 => quote!(#crate_path::Attribute::FloatBits(#val.to_bits())),
+        AttrType::Type => quote!(#crate_path::Attribute::Type(#val)),
+        AttrType::String => quote!(#crate_path::Attribute::String(#val)),
         AttrType::Symbol | AttrType::QualifiedName => {
-            quote!(#crate_path::arena::Attribute::Symbol(#val))
+            quote!(#crate_path::Attribute::Symbol(#val))
         }
     }
 }
@@ -718,61 +717,61 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::Any => quote!(attr.clone()),
         AttrType::Bool => quote! {
             match attr {
-                #crate_path::arena::Attribute::Bool(v) => *v,
+                #crate_path::Attribute::Bool(v) => *v,
                 _ => panic!("expected Bool attribute"),
             }
         },
         AttrType::I32 => quote! {
             match attr {
-                #crate_path::arena::Attribute::IntBits(v) => *v as i32,
+                #crate_path::Attribute::IntBits(v) => *v as i32,
                 _ => panic!("expected IntBits attribute"),
             }
         },
         AttrType::I64 => quote! {
             match attr {
-                #crate_path::arena::Attribute::IntBits(v) => *v as i64,
+                #crate_path::Attribute::IntBits(v) => *v as i64,
                 _ => panic!("expected IntBits attribute"),
             }
         },
         AttrType::U32 => quote! {
             match attr {
-                #crate_path::arena::Attribute::IntBits(v) => *v as u32,
+                #crate_path::Attribute::IntBits(v) => *v as u32,
                 _ => panic!("expected IntBits attribute"),
             }
         },
         AttrType::U64 => quote! {
             match attr {
-                #crate_path::arena::Attribute::IntBits(v) => *v,
+                #crate_path::Attribute::IntBits(v) => *v,
                 _ => panic!("expected IntBits attribute"),
             }
         },
         AttrType::F32 => quote! {
             match attr {
-                #crate_path::arena::Attribute::FloatBits(v) => f64::from_bits(*v) as f32,
+                #crate_path::Attribute::FloatBits(v) => f64::from_bits(*v) as f32,
                 _ => panic!("expected FloatBits attribute"),
             }
         },
         AttrType::F64 => quote! {
             match attr {
-                #crate_path::arena::Attribute::FloatBits(v) => f64::from_bits(*v),
+                #crate_path::Attribute::FloatBits(v) => f64::from_bits(*v),
                 _ => panic!("expected FloatBits attribute"),
             }
         },
         AttrType::Type => quote! {
             match attr {
-                #crate_path::arena::Attribute::Type(v) => *v,
+                #crate_path::Attribute::Type(v) => *v,
                 _ => panic!("expected Type attribute"),
             }
         },
         AttrType::String => quote! {
             match attr {
-                #crate_path::arena::Attribute::String(v) => v.clone(),
+                #crate_path::Attribute::String(v) => v.clone(),
                 _ => panic!("expected String attribute"),
             }
         },
         AttrType::Symbol | AttrType::QualifiedName => quote! {
             match attr {
-                #crate_path::arena::Attribute::Symbol(v) => *v,
+                #crate_path::Attribute::Symbol(v) => *v,
                 _ => panic!("expected Symbol attribute"),
             }
         },

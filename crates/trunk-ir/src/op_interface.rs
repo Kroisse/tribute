@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::Symbol;
-use crate::arena::{IrContext, OpRef};
+use crate::{IrContext, OpRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///

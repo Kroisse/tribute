@@ -18,10 +18,10 @@ use tribute::database::parse_with_thread_local;
 use tribute_front::SourceCst;
 use tribute_passes::evidence::{collect_effectful_functions, is_effectful_type};
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::Module;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
 
 /// Helper to compile code through AST pipeline and return arena IR.
 fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
@@ -61,7 +61,7 @@ fn debug_function_effects(ctx: &IrContext, module: &Module) {
                     .attrs
                     .get(&Symbol::new("effect"))
                     .and_then(|a| match a {
-                        trunk_ir::arena::types::Attribute::Type(ty) => Some(*ty),
+                        trunk_ir::types::Attribute::Type(ty) => Some(*ty),
                         _ => None,
                     });
                 eprintln!(

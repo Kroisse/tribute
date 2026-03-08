@@ -585,8 +585,8 @@ fn print_func_op(
 mod tests {
     use super::*;
     use crate::Symbol;
-    use crate::arena::dialect::{arith, core, func};
-    use crate::arena::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
+    use crate::dialect::{arith, core, func};
+    use crate::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
@@ -602,7 +602,7 @@ mod tests {
     /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
     /// in `TypeData.params`, matching the convention used by `core::Func`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     #[test]
@@ -616,7 +616,7 @@ mod tests {
     fn test_print_type_with_params() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
-        let tuple_ty = crate::arena::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
+        let tuple_ty = crate::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
         assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
     }
 

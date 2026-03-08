@@ -31,15 +31,15 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{
     arith, cont as arena_cont, core as arena_core, func as arena_func, scf as arena_scf,
 };
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use crate::cont_util::{SuspendArm, collect_suspend_arms, get_done_region};
 
@@ -79,7 +79,7 @@ impl RewritePattern for LowerHandlerDispatchPattern {
 
 fn build_loop_body(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
     body_region: RegionRef,
     suspend_arms: &[SuspendArm],
     user_result_ty: TypeRef,
@@ -127,7 +127,7 @@ fn build_loop_body(
 
 fn build_done_branch(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
     body_region: RegionRef,
     current: ValueRef,
     user_result_ty: TypeRef,
@@ -227,7 +227,7 @@ fn build_done_branch(
 
 fn build_shift_branch(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
     suspend_arms: &[SuspendArm],
     ptr_ty: TypeRef,
 ) -> RegionRef {
@@ -301,8 +301,8 @@ fn build_shift_branch(
 #[allow(clippy::too_many_arguments)]
 fn build_nested_dispatch(
     ctx: &mut IrContext,
-    block: trunk_ir::arena::refs::BlockRef,
-    loc: trunk_ir::arena::types::Location,
+    block: trunk_ir::refs::BlockRef,
+    loc: trunk_ir::types::Location,
     result_ty: TypeRef,
     current_op_idx: ValueRef,
     k: ValueRef,
@@ -398,7 +398,7 @@ fn build_nested_dispatch(
 /// Build a single-block region from a suspend arm body.
 fn build_arm_region(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
     arm_body: RegionRef,
     k: ValueRef,
     v: ValueRef,
@@ -493,8 +493,8 @@ fn build_arm_region(
 /// Cast a value if types differ, inserting ops into the given block.
 fn cast_if_needed(
     ctx: &mut IrContext,
-    block: trunk_ir::arena::refs::BlockRef,
-    loc: trunk_ir::arena::types::Location,
+    block: trunk_ir::refs::BlockRef,
+    loc: trunk_ir::types::Location,
     value: ValueRef,
     from_ty: TypeRef,
     to_ty: TypeRef,
@@ -517,11 +517,11 @@ fn cast_if_needed(
 /// are remapped correctly.
 pub(crate) fn clone_op_into_block_with_remap(
     ctx: &mut IrContext,
-    dest_block: trunk_ir::arena::refs::BlockRef,
+    dest_block: trunk_ir::refs::BlockRef,
     src_op: OpRef,
     value_remap: &HashMap<ValueRef, ValueRef>,
 ) {
-    use trunk_ir::arena::context::OperationDataBuilder;
+    use trunk_ir::context::OperationDataBuilder;
 
     let data = ctx.op(src_op);
     let loc = data.location;

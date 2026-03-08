@@ -66,8 +66,8 @@ use tribute_passes::evidence;
 use tribute_passes::generic_type_converter;
 use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::Span;
-use trunk_ir::arena::{IrContext, Module};
 use trunk_ir::conversion::resolve_unrealized_casts;
+use trunk_ir::{IrContext, Module};
 /// Error when illegal operations remain after lowering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConversionError {
@@ -450,7 +450,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
             .collect(),
     })?;
 
-    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(ctx, m);
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
 
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
@@ -462,7 +462,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
     tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(ctx, m);
+        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
@@ -474,7 +474,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
 
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(ctx, m);
+        let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
@@ -484,7 +484,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
         }
     }
 
-    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(ctx, m);
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
 
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
@@ -510,7 +510,7 @@ pub fn dump_ir(
         run_wasm_target_pipeline(&mut ctx, m)?;
     }
 
-    Ok(trunk_ir::arena::printer::print_module(&ctx, m.op()))
+    Ok(trunk_ir::printer::print_module(&ctx, m.op()))
 }
 
 /// Compile to WebAssembly binary bytes.
@@ -544,7 +544,7 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
     }
 
     // Dead code elimination
-    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
 
     // Resolve unrealized conversion casts
     let tc = generic_type_converter(&mut ctx);
@@ -589,7 +589,7 @@ fn compile_module_to_native(
     tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
 
     // Phase 0 - Lower structured control flow to CFG-based control flow
-    trunk_ir::arena::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
+    trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
 
     // Phase 1 - Lower func dialect to clif dialect
     {
@@ -694,7 +694,7 @@ pub fn compile_to_native_binary<'db>(
     // Native-specific: cont_to_libmprompt + evidence_to_native + DCE + resolve_casts
     tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(&mut ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        let result = trunk_ir::validation::validate_value_integrity(&ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
@@ -706,7 +706,7 @@ pub fn compile_to_native_binary<'db>(
 
     tribute_passes::native::evidence::lower_evidence_to_native(&mut ctx, m);
     if cfg!(debug_assertions) {
-        let result = trunk_ir::arena::validation::validate_value_integrity(&ctx, m);
+        let result = trunk_ir::validation::validate_value_integrity(&ctx, m);
         if !result.is_ok() {
             tracing::warn!(
                 "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
@@ -717,7 +717,7 @@ pub fn compile_to_native_binary<'db>(
     }
 
     // Dead code elimination
-    trunk_ir::arena::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
 
     // Resolve unrealized conversion casts
     let tc = generic_type_converter(&mut ctx);

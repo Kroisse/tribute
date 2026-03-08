@@ -1,15 +1,15 @@
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::trampoline as arena_trampoline;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::Module;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use super::analysis::calls_effectful_function;
 use super::patterns::is_step_type;

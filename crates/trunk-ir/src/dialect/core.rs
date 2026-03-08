@@ -1,5 +1,27 @@
-//! Core dialect operation registrations.
-//!
-//! Arena dialect definitions are in `arena/dialect/core.rs`.
+//! Arena-based core dialect.
 
+// === Operation registrations ===
 crate::register_isolated_op!(core.module);
+
+#[crate::dialect(crate = crate)]
+mod core {
+    #[attr(sym_name: Symbol)]
+    fn module() {
+        #[region(body)]
+        {}
+    }
+
+    fn unrealized_conversion_cast(value: ()) -> result {}
+
+    struct Nil;
+    struct Never;
+    struct String;
+    struct Bytes;
+    struct Ptr;
+    struct Array<Element>;
+    #[attr(nullable: bool)]
+    struct Ref<Pointee>;
+    struct Tuple<#[rest] Elements>;
+    #[attr(effect?: Type)]
+    struct Func<Return, #[rest] Params>;
+}

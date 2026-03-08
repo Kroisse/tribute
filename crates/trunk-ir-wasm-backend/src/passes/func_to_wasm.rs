@@ -17,16 +17,16 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::TypeDataBuilder;
-use trunk_ir::arena::{BlockData, RegionData};
+use trunk_ir::types::TypeDataBuilder;
+use trunk_ir::{BlockData, RegionData};
 
 use trunk_ir::smallvec::smallvec;
 

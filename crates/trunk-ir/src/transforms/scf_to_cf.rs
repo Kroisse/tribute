@@ -33,14 +33,14 @@ use std::collections::BTreeMap;
 
 use smallvec::SmallVec;
 
-use crate::arena::context::{BlockArgData, BlockData, IrContext};
-use crate::arena::dialect::{arith, cf, core, scf};
-use crate::arena::ops::{DialectOp, DialectType};
-use crate::arena::refs::{BlockRef, OpRef, RegionRef};
-use crate::arena::rewrite::Module;
-use crate::arena::rewrite::helpers::{inline_region_blocks, split_block};
-use crate::arena::types::{Attribute, Location};
+use crate::context::{BlockArgData, BlockData, IrContext};
+use crate::dialect::{arith, cf, core, scf};
+use crate::ops::{DialectOp, DialectType};
+use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::rewrite::Module;
+use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
+use crate::types::{Attribute, Location};
 
 /// Lower all `scf` operations in a module to `cf` operations.
 pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
@@ -322,7 +322,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         let br = cf::br(
             ctx,
             loc,
-            std::iter::empty::<crate::arena::refs::ValueRef>(),
+            std::iter::empty::<crate::refs::ValueRef>(),
             merge_block,
         );
         ctx.push_op(default_block, br.op_ref());
@@ -348,7 +348,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
         let br = cf::br(
             ctx,
             loc,
-            std::iter::empty::<crate::arena::refs::ValueRef>(),
+            std::iter::empty::<crate::refs::ValueRef>(),
             default_entry,
         );
         ctx.push_op(block, br.op_ref());
@@ -367,8 +367,7 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
             ctx.push_op(current_block, case_const.op_ref());
 
             let i1_ty = ctx.types.intern(
-                crate::arena::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
-                    .build(),
+                crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build(),
             );
             let cmp = arith::cmp_eq(ctx, loc, discriminant, case_const.result(ctx), i1_ty);
             ctx.push_op(current_block, cmp.op_ref());
@@ -491,10 +490,10 @@ fn replace_continue_break(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::dialect::{arith, func, scf};
-    use crate::arena::*;
+    use crate::dialect::{arith, func, scf};
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
     use std::ops::ControlFlow;
 
@@ -520,8 +519,8 @@ mod tests {
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
-        crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        crate::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> Module {
@@ -551,7 +550,7 @@ mod tests {
     /// Collect all op names from a region (dialect.name format).
     fn collect_op_names(ctx: &IrContext, region: RegionRef) -> Vec<String> {
         let mut names = Vec::new();
-        let _ = crate::arena::walk::walk_region::<()>(ctx, region, &mut |op| {
+        let _ = crate::walk::walk_region::<()>(ctx, region, &mut |op| {
             let d = ctx.op(op).dialect;
             let n = ctx.op(op).name;
             d.with_str(|ds| n.with_str(|ns| names.push(format!("{ds}.{ns}"))));

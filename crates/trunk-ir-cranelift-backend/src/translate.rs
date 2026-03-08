@@ -16,11 +16,11 @@ use cranelift_module::{
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::Triple;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
-use trunk_ir::arena::rewrite::Module;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
+use trunk_ir::rewrite::Module;
 
 use crate::function::{FunctionTranslator, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};

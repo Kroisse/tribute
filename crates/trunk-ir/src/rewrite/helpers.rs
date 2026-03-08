@@ -5,8 +5,8 @@
 
 use smallvec::SmallVec;
 
-use crate::arena::context::{BlockData, IrContext};
-use crate::arena::refs::{BlockRef, OpRef, RegionRef};
+use crate::context::{BlockData, IrContext};
+use crate::refs::{BlockRef, OpRef, RegionRef};
 
 /// Split a block at `before_op`, moving `before_op` and all subsequent
 /// operations into a new block.
@@ -126,9 +126,9 @@ pub fn erase_op(ctx: &mut IrContext, op: OpRef) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
     use std::collections::BTreeMap;
 

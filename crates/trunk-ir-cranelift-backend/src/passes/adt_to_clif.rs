@@ -27,16 +27,16 @@ use crate::adt_layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::types::TypeDataBuilder;
 
 /// Lower ADT operations to clif dialect.
 ///
@@ -46,7 +46,7 @@ use trunk_ir::arena::types::TypeDataBuilder;
 /// The `type_converter` parameter is used to determine field sizes for
 /// layout computation.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::arena::rewrite::ConversionTarget;
+    use trunk_ir::rewrite::ConversionTarget;
 
     let mut target = ConversionTarget::new();
     target.add_legal_dialect("clif");
@@ -374,10 +374,10 @@ impl RewritePattern for RefIsNullPattern {
 
 #[cfg(test)]
 mod tests {
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::parser::parse_test_module;
-    use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::TypeConverter;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();

@@ -5,10 +5,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::refs::{TypeRef, ValueRef};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::refs::{TypeRef, ValueRef};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::errors::CompilationErrorKind;
