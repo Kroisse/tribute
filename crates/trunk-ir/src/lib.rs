@@ -14,9 +14,6 @@ pub mod adt_layout;
 // === Arena-based IR ===
 pub mod arena;
 
-// === Dialect operation registrations (inventory-based) ===
-pub mod dialect;
-
 // === Source location types ===
 pub mod location;
 

@@ -1,5 +1,9 @@
 //! Arena-based func dialect.
 
+// === Operation registrations ===
+crate::register_pure_op!(func.constant);
+crate::register_isolated_op!(func.func);
+
 #[crate::arena_dialect(crate = crate)]
 mod func {
     #[attr(sym_name: Symbol, r#type: Type)]

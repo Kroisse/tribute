@@ -1,5 +1,8 @@
 //! Arena-based core dialect.
 
+// === Operation registrations ===
+crate::register_isolated_op!(core.module);
+
 #[crate::arena_dialect(crate = crate)]
 mod core {
     #[attr(sym_name: Symbol)]

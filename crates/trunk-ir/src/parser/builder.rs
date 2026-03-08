@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, HashMap};
 use smallvec::smallvec;
 use winnow::prelude::*;
 
-use super::context::{IrContext, OperationDataBuilder};
-use super::refs::*;
-use super::rewrite::Module;
-use super::types::*;
-use super::{BlockArgData, BlockData, RegionData};
+use super::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
 use crate::Symbol;
-use crate::parser::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
+use crate::arena::context::{IrContext, OperationDataBuilder};
+use crate::arena::refs::*;
+use crate::arena::rewrite::Module;
+use crate::arena::types::*;
+use crate::arena::{BlockArgData, BlockData, RegionData};
 
 // ============================================================================
 // ArenaIrBuilder (Raw -> Arena IR)

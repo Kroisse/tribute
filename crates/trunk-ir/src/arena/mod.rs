@@ -10,7 +10,6 @@
 pub mod context;
 pub mod dialect;
 pub mod ops;
-pub mod parser;
 pub mod printer;
 pub mod refs;
 pub mod rewrite;
@@ -18,6 +17,11 @@ pub mod transforms;
 pub mod types;
 pub mod validation;
 pub mod walk;
+
+/// Re-export parser module (moved to `crate::parser::builder`).
+pub mod parser {
+    pub use crate::parser::builder::*;
+}
 
 pub use context::{
     BlockArgData, BlockData, IrContext, OperationData, OperationDataBuilder, RegionData, Use,
