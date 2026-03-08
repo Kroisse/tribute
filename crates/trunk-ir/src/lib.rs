@@ -41,7 +41,10 @@ pub mod conversion;
 // === IR text format parser ===
 pub mod parser;
 
-// Re-export proc macro for arena dialect definitions
+// Re-export proc macro for dialect definitions
+pub use trunk_ir_macros::dialect;
+
+/// Deprecated alias for [`dialect`].
 pub use trunk_ir_macros::arena_dialect;
 
 // Re-export paste for use in macros

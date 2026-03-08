@@ -1,4 +1,4 @@
-//! Code generation for `#[arena_dialect]`.
+//! Code generation for `#[dialect]`.
 
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;

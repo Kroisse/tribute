@@ -25,7 +25,7 @@ crate::register_pure_op!(arith.trunc);
 crate::register_pure_op!(arith.extend);
 crate::register_pure_op!(arith.convert);
 
-#[crate::arena_dialect(crate = crate)]
+#[crate::dialect(crate = crate)]
 mod arith {
     #[attr(value: any)]
     fn r#const() -> result {}

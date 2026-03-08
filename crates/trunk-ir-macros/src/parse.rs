@@ -1,4 +1,4 @@
-//! DSL parser for `#[arena_dialect]`.
+//! DSL parser for `#[dialect]`.
 //!
 //! Parses the module body into structured types for code generation.
 

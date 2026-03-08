@@ -1,6 +1,6 @@
 //! Arena-based cf dialect.
 
-#[crate::arena_dialect(crate = crate)]
+#[crate::dialect(crate = crate)]
 mod cf {
     fn br(#[rest] args: ()) {
         #[successor(dest)]

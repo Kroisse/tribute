@@ -20,7 +20,7 @@ crate::register_pure_op!(adt.ref_cast);
 crate::register_pure_op!(adt.string_const);
 crate::register_pure_op!(adt.bytes_const);
 
-#[crate::arena_dialect(crate = crate)]
+#[crate::dialect(crate = crate)]
 mod adt {
     #[attr(r#type: Type)]
     fn struct_new(#[rest] fields: ()) -> result {}

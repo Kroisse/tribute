@@ -1,6 +1,6 @@
 //! Arena-based tribute_rt dialect.
 
-#[trunk_ir::arena_dialect]
+#[trunk_ir::dialect]
 mod tribute_rt {
     // Types
     struct Int;

@@ -1,6 +1,6 @@
 //! Arena-based cont dialect.
 
-#[crate::arena_dialect(crate = crate)]
+#[crate::dialect(crate = crate)]
 mod cont {
     // Types
     struct Continuation<Arg, Result, Effect>;

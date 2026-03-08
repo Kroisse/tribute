@@ -1,6 +1,6 @@
 //! Arena-based closure dialect.
 
-#[trunk_ir::arena_dialect]
+#[trunk_ir::dialect]
 mod closure {
     // Types
     struct Closure<FuncType>;
