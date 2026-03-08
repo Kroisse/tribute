@@ -4,26 +4,27 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
 
 ## Core Structures
 
-Located in `crates/trunk-ir/src/ir.rs`:
+Located in `crates/trunk-ir/src/context.rs` and `crates/trunk-ir/src/refs.rs`:
 
-- **`Operation`** - Generic IR operation with operands, results, regions,
-  successors, and attributes
-- **`Value`** - SSA value with definition site and index
+- **`IrContext`** - Arena-based IR context holding all operations, blocks,
+  regions, and types
+- **`OpRef`** - Reference to an operation in the arena
+- **`ValueRef`** - Reference to an SSA value
 - **`ValueDef`** - Either operation result or block argument
-- **`Block`** - Basic block with arguments and operations
-- **`Region`** - Control flow region (list of blocks)
+- **`BlockRef`** - Reference to a basic block
+- **`RegionRef`** - Reference to a control flow region
+- **`TypeRef`** - Reference to an interned type
 - **`Attribute`** - Value attributes (bool, int, float, string, type, symbol, span)
 - **`Symbol`** - Interned identifier (4 bytes, O(1) comparison)
   - Can hold simple names or qualified paths (e.g., `"map"` or `"std::List::map"`)
   - Path operations available via `ModulePathExt` trait in `tribute-ir`
-- **`Type`** - Dialect-parametric type (dialect.name + params + attrs)
 
 ## Dialects
 
 Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
+- **tribute-ir** (`crates/tribute-ir/src/arena/dialect/`): Tribute-specific
   high-level dialects
 
 ### Infrastructure (trunk-ir)
@@ -56,24 +57,25 @@ Dialects are split across two crates:
 | ------- | ---- | ------- |
 | `wasm` | `wasm.rs` | WebAssembly target ops |
 
-## dialect! Macro
+## `#[dialect]` Macro
 
-Operations are defined using the `dialect!` macro in `crates/trunk-ir/src/ops.rs`:
+Operations are defined using the `#[dialect]` attribute macro:
 
 ```rust
-dialect! {
-    mod func {
-        // Function definition with body region
-        #[attr(sym_name: Symbol, r#type: Type)]
-        fn func() { #[region(body)] {} };
-
-        // Function call with callee attribute
-        #[attr(callee: SymbolRef)]
-        fn call(#[rest] args) -> result;
-
-        // Return with optional value
-        fn r#return(value);
+#[trunk_ir::dialect]
+mod func {
+    // Function definition with body region
+    #[attr(sym_name: Symbol, r#type: Type)]
+    fn func() {
+        #[region(body)] {}
     }
+
+    // Function call with callee attribute
+    #[attr(callee: Symbol)]
+    fn call(#[rest] args: ()) -> result {}
+
+    // Return with optional value
+    fn r#return(#[rest] values: ()) {}
 }
 ```
 
@@ -89,33 +91,33 @@ dialect! {
 Types are defined per-dialect and interned:
 
 ```rust
-// Creating types
-let i64_ty = core::I64::new(db);
-let func_ty = func::Fn::new(db, param_types, return_type, effect);
+// Creating types via typed constructors
+let nil_ty = core::nil(ctx).as_type_ref();
+let func_ty = core::func(ctx, return_ty, params, effect);
 
 // Type has: dialect, name, params, attrs
-type.dialect()  // "core"
-type.name()     // "i64"
-type.params()   // []
+let data = ctx.types.get(ty);
+data.dialect  // Symbol("core")
+data.name     // Symbol("nil")
+data.params   // []
 ```
 
 ## Working with IR
 
 ```rust
-// Create a module
-let mut module = Module::new(db);
+// Create an IR context
+let mut ctx = IrContext::new();
 
-// Add an operation
-let op = Operation::new(db, "func.func", ...);
-module.add_op(op);
+// Create operations via typed constructors
+let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+let call = func::call(&mut ctx, loc, [c.result(&ctx)], i32_ty, Symbol::new("add"));
 
-// Traverse operations and convert to typed wrappers
-for op in module.ops() {
-    // Use DialectOp::from_operation to get typed wrapper
-    if let Ok(func) = func::Func::from_operation(db, op) {
-        // Work with typed func operation
-        let name = func.sym_name(db);
-        let body = func.body(db);
-    }
+// Match operations via typed wrappers
+if let Ok(func) = func::Func::from_op(&ctx, op) {
+    let name = func.sym_name(&ctx);
+    let body = func.body(&ctx);
 }
+
+// Check operation type
+if func::Call::matches(&ctx, op) { ... }
 ```
