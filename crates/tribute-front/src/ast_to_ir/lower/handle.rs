@@ -6,10 +6,10 @@
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{adt, arith, cont, scf};
-use trunk_ir::arena::refs::{TypeRef, ValueRef};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{adt, arith, cont, scf};
+use trunk_ir::refs::{TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{Expr, HandlerArm, HandlerKind, ResolvedRef, TypedRef};
 
@@ -181,7 +181,7 @@ fn build_handler_dispatch_body<'db>(
     location: Location,
     handlers: &[HandlerArm<TypedRef<'db>>],
     result_ty: TypeRef,
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
         args: vec![],
@@ -228,7 +228,7 @@ fn build_done_handler_region<'db>(
     location: Location,
     result_handler: Option<&HandlerArm<TypedRef<'db>>>,
     result_ty: TypeRef,
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
         args: vec![BlockArgData {
@@ -317,7 +317,7 @@ fn build_suspend_handler_region<'db>(
     ir: &mut IrContext,
     location: Location,
     handler: &HandlerArm<TypedRef<'db>>,
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let HandlerKind::Effect {
         params,
         continuation,

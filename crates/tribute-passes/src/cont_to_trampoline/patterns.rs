@@ -2,17 +2,17 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::trampoline as arena_trampoline;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::types::Attribute;
 
 use super::get_region_result_value;
 use super::shift_lower::{anyref_type, i32_type, step_type};
@@ -101,7 +101,7 @@ impl RewritePattern for LowerResumePattern {
     }
 }
 
-use trunk_ir::arena::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt as arena_adt;
 
 // ============================================================================
 // Pattern: Update func.call result type for effectful functions
@@ -148,13 +148,10 @@ impl RewritePattern for UpdateEffectfulCallResultTypePattern {
 
         // Create new call with Step result type
         let op_data = ctx.op(op);
-        let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(
-            location,
-            op_data.dialect,
-            op_data.name,
-        )
-        .operands(ctx.op_operands(op).to_vec())
-        .result(step_ty);
+        let mut builder =
+            trunk_ir::context::OperationDataBuilder::new(location, op_data.dialect, op_data.name)
+                .operands(ctx.op_operands(op).to_vec())
+                .result(step_ty);
         for (k, v) in &op_data.attributes {
             builder = builder.attr(*k, v.clone());
         }
@@ -217,13 +214,10 @@ impl RewritePattern for UpdateScfIfResultTypePattern {
         );
 
         let op_data = ctx.op(op);
-        let mut builder = trunk_ir::arena::context::OperationDataBuilder::new(
-            location,
-            op_data.dialect,
-            op_data.name,
-        )
-        .operands(ctx.op_operands(op).to_vec())
-        .result(step_ty);
+        let mut builder =
+            trunk_ir::context::OperationDataBuilder::new(location, op_data.dialect, op_data.name)
+                .operands(ctx.op_operands(op).to_vec())
+                .result(step_ty);
         for (k, v) in &op_data.attributes {
             builder = builder.attr(*k, v.clone());
         }
@@ -379,10 +373,10 @@ impl RewritePattern for LowerPushPromptPattern {
 
 fn build_yield_then_branch(
     ctx: &mut IrContext,
-    location: trunk_ir::arena::types::Location,
+    location: trunk_ir::types::Location,
     tag: u32,
     step_ty: TypeRef,
-) -> trunk_ir::arena::refs::RegionRef {
+) -> trunk_ir::refs::RegionRef {
     let i32_ty = i32_type(ctx);
     let cont_ty = super::shift_lower::continuation_type(ctx);
 
@@ -397,7 +391,7 @@ fn build_yield_then_branch(
 
     let yield_op = arena_scf::r#yield(ctx, location, [step_shift_val]);
 
-    let block = ctx.create_block(trunk_ir::arena::context::BlockData {
+    let block = ctx.create_block(trunk_ir::context::BlockData {
         location,
         args: vec![],
         ops: trunk_ir::smallvec::smallvec![],
@@ -408,7 +402,7 @@ fn build_yield_then_branch(
     ctx.push_op(block, step_shift.op_ref());
     ctx.push_op(block, yield_op.op_ref());
 
-    ctx.create_region(trunk_ir::arena::context::RegionData {
+    ctx.create_region(trunk_ir::context::RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
@@ -417,11 +411,11 @@ fn build_yield_then_branch(
 
 fn build_yield_else_branch(
     ctx: &mut IrContext,
-    location: trunk_ir::arena::types::Location,
+    location: trunk_ir::types::Location,
     body_result: Option<ValueRef>,
     step_ty: TypeRef,
-) -> trunk_ir::arena::refs::RegionRef {
-    let block = ctx.create_block(trunk_ir::arena::context::BlockData {
+) -> trunk_ir::refs::RegionRef {
+    let block = ctx.create_block(trunk_ir::context::BlockData {
         location,
         args: vec![],
         ops: trunk_ir::smallvec::smallvec![],
@@ -459,7 +453,7 @@ fn build_yield_else_branch(
     let yield_op = arena_scf::r#yield(ctx, location, [step_value]);
     ctx.push_op(block, yield_op.op_ref());
 
-    ctx.create_region(trunk_ir::arena::context::RegionData {
+    ctx.create_region(trunk_ir::context::RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
@@ -479,7 +473,7 @@ pub(crate) fn is_step_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Get the defining OpRef of a value, if it's an operation result.
 fn value_def_op(ctx: &IrContext, value: ValueRef) -> Option<OpRef> {
     match ctx.value_def(value) {
-        trunk_ir::arena::refs::ValueDef::OpResult(op, _) => Some(op),
-        trunk_ir::arena::refs::ValueDef::BlockArg(_, _) => None,
+        trunk_ir::refs::ValueDef::OpResult(op, _) => Some(op),
+        trunk_ir::refs::ValueDef::BlockArg(_, _) => None,
     }
 }

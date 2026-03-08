@@ -8,9 +8,9 @@
 //! - wasm.br_if (conditional branch)
 
 use tracing::debug;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use wasm_encoder::{BlockType, Function, HeapType, Instruction, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};
@@ -35,14 +35,14 @@ fn emit_value_get(
 ) -> CompilationResult<()> {
     let index = emit_ctx.value_locals.get(&value).ok_or_else(|| {
         let def_info = match ctx.value_def(value) {
-            trunk_ir::arena::refs::ValueDef::OpResult(op, _) => {
+            trunk_ir::refs::ValueDef::OpResult(op, _) => {
                 let op_data = ctx.op(op);
                 format!(
                     "OpResult from {}.{} at {:?}",
                     op_data.dialect, op_data.name, op_data.location
                 )
             }
-            trunk_ir::arena::refs::ValueDef::BlockArg(block_id, idx) => {
+            trunk_ir::refs::ValueDef::BlockArg(block_id, idx) => {
                 format!("BlockArg({:?}) index={}", block_id, idx)
             }
         };

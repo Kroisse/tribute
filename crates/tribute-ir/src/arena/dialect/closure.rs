@@ -17,20 +17,20 @@ mod closure {
 mod tests {
     use trunk_ir::Span;
     use trunk_ir::Symbol;
-    use trunk_ir::arena::ops::DialectOp;
-    use trunk_ir::arena::refs::PathRef;
-    use trunk_ir::arena::types::Location;
-    use trunk_ir::arena::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::refs::PathRef;
+    use trunk_ir::types::Location;
+    use trunk_ir::{Attribute, IrContext, TypeDataBuilder, TypeInterner};
 
     fn dummy_location() -> Location {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
-    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::arena::TypeRef {
+    fn make_i32_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_closure_type(types: &mut TypeInterner) -> trunk_ir::arena::TypeRef {
+    fn make_closure_type(types: &mut TypeInterner) -> trunk_ir::TypeRef {
         types.intern(TypeDataBuilder::new(Symbol::new("closure"), Symbol::new("closure")).build())
     }
 
@@ -43,7 +43,7 @@ mod tests {
 
         // Create an env value via arith.const
         let env_op =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
         let env_val = env_op.result(&ctx);
 
         // Create closure.new with func_ref attribute
@@ -74,7 +74,7 @@ mod tests {
 
         // Create a closure value
         let env_op =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
         let env_val = env_op.result(&ctx);
         let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
         let closure_val = closure_op.result(&ctx);
@@ -108,7 +108,7 @@ mod tests {
 
         // Create a closure value
         let env_op =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
         let env_val = env_op.result(&ctx);
         let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
         let closure_val = closure_op.result(&ctx);
@@ -140,8 +140,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create an arith.const — should not match closure ops
-        let c =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
         assert!(super::New::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Func::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Env::from_op(&ctx, c.op_ref()).is_err());
@@ -155,7 +154,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx.types);
 
         let env_op =
-            trunk_ir::arena::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));

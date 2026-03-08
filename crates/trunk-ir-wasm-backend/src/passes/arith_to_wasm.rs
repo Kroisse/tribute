@@ -11,15 +11,15 @@
 use tracing::warn;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::arith;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::types::Attribute;
 
 /// Lower arith dialect to wasm dialect using arena IR.
 ///
@@ -567,21 +567,21 @@ fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
 
 /// Intern a core.i64 type.
 pub(crate) fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
 }
 
 /// Intern a core.f32 type.
 pub(crate) fn intern_f32_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f32")).build())
 }
 
 /// Intern a core.f64 type.
 pub(crate) fn intern_f64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
 }

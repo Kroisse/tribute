@@ -3,11 +3,11 @@
 use std::collections::HashMap;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{adt, core, func};
-use trunk_ir::arena::refs::{BlockRef, PathRef, TypeRef};
-use trunk_ir::arena::rewrite::Module as IrModule;
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::refs::{BlockRef, PathRef, TypeRef};
+use trunk_ir::rewrite::Module as IrModule;
+use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
     CtorId, Decl, ExternFuncDecl, FuncDecl, Module, NodeId, SpanMap, TypeKind, TypeScheme, TypedRef,

@@ -27,10 +27,10 @@ mod ability {
 // These construct canonical Marker and Evidence types using the arena type interner.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::refs::TypeRef;
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Get the canonical Marker ADT type for evidence-based dispatch (arena version).
 ///

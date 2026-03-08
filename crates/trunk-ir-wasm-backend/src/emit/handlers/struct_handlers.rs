@@ -5,12 +5,12 @@
 use std::collections::BTreeMap;
 
 use tracing::debug;
+use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{Function, HeapType, Instruction, StorageType, ValType};
 
 use crate::gc_types::{

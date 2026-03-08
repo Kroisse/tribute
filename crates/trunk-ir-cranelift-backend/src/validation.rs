@@ -6,9 +6,9 @@
 //! Dialect validation errors prevent emission from proceeding.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef};
-use trunk_ir::arena::rewrite::Module;
+use trunk_ir::context::IrContext;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
+use trunk_ir::rewrite::Module;
 
 use crate::{CompilationError, CompilationResult};
 

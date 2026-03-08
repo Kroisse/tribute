@@ -22,16 +22,16 @@ use std::collections::{HashMap, HashSet};
 
 use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::adt as arena_adt;
-use trunk_ir::arena::dialect::arith;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::{DialectOp, DialectType};
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::arith;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::Module;
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 /// Sentinel value used for unresolved cont.shift tags.
 /// When a shift is generated without an enclosing handler, this value is used
@@ -119,14 +119,14 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty], None).as_type_ref();
 
         // Body with unreachable
-        let body_block = ctx.create_block(trunk_ir::arena::context::BlockData {
+        let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
             args: vec![
-                trunk_ir::arena::context::BlockArgData {
+                trunk_ir::context::BlockArgData {
                     ty: evidence_ty,
                     attrs: Default::default(),
                 },
-                trunk_ir::arena::context::BlockArgData {
+                trunk_ir::context::BlockArgData {
                     ty: i32_ty,
                     attrs: Default::default(),
                 },
@@ -136,7 +136,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         });
         let unreachable_op = arena_func::unreachable(ctx, loc);
         ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::arena::context::RegionData {
+        let body = ctx.create_region(trunk_ir::context::RegionData {
             location: loc,
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
@@ -163,14 +163,14 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let func_ty =
             arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty], None).as_type_ref();
 
-        let body_block = ctx.create_block(trunk_ir::arena::context::BlockData {
+        let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
             args: vec![
-                trunk_ir::arena::context::BlockArgData {
+                trunk_ir::context::BlockArgData {
                     ty: evidence_ty,
                     attrs: Default::default(),
                 },
-                trunk_ir::arena::context::BlockArgData {
+                trunk_ir::context::BlockArgData {
                     ty: marker_ty,
                     attrs: Default::default(),
                 },
@@ -180,7 +180,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         });
         let unreachable_op = arena_func::unreachable(ctx, loc);
         ctx.push_op(body_block, unreachable_op.op_ref());
-        let body = ctx.create_region(trunk_ir::arena::context::RegionData {
+        let body = ctx.create_region(trunk_ir::context::RegionData {
             location: loc,
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
@@ -428,7 +428,7 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             if let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op)
-                && let trunk_ir::arena::refs::ValueDef::OpResult(def_op, 0) =
+                && let trunk_ir::refs::ValueDef::OpResult(def_op, 0) =
                     ctx.value_def(shift_op.tag(ctx))
                 && let Ok(const_op) = arith::Const::from_op(ctx, def_op)
                 && let Attribute::IntBits(value) = const_op.value(ctx)
@@ -965,7 +965,7 @@ pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
 
     #[test]
     fn test_compute_ability_id() {

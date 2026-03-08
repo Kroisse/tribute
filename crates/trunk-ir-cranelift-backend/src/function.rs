@@ -10,10 +10,10 @@ use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -588,8 +588,8 @@ impl<'a> FunctionTranslator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::types::TypeData;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::types::TypeData;
 
     fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
         ctx.types.intern(TypeData {

@@ -2,8 +2,8 @@
 
 use ropey::Rope;
 use tribute_front::SourceCst;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::printer::print_module;
+use trunk_ir::context::IrContext;
+use trunk_ir::printer::print_module;
 
 pub fn source_from_str(path: &str, text: &str) -> SourceCst {
     use tree_sitter::Parser;

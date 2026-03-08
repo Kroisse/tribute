@@ -25,11 +25,11 @@ pub(crate) mod push_prompt;
 mod tests;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::refs::{BlockRef, RegionRef, TypeRef};
-use trunk_ir::arena::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
-use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::refs::{BlockRef, RegionRef, TypeRef};
+use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
+use trunk_ir::types::TypeDataBuilder;
 
 use ffi::ensure_libmprompt_ffi;
 use handler_dispatch::LowerHandlerDispatchPattern;

@@ -6,13 +6,13 @@
 
 use tracing::debug;
 
+use trunk_ir::IrContext;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::types::Attribute;
 use wasm_encoder::{ExportKind, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};

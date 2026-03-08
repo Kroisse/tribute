@@ -6,10 +6,10 @@
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::{adt, func};
-use trunk_ir::arena::refs::{TypeRef, ValueRef};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::{adt, func};
+use trunk_ir::refs::{TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
 
 use tribute_ir::arena::dialect::{ability as arena_ability, closure as arena_closure};
 

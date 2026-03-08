@@ -24,11 +24,11 @@
 
 use tribute_ir::arena::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::arena::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)

@@ -10,20 +10,20 @@
 //! - `func.constant` -> `clif.symbol_addr`
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::Attribute;
+use trunk_ir::types::Attribute;
 
 /// Lower func dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    use trunk_ir::arena::rewrite::ConversionTarget;
+    use trunk_ir::rewrite::ConversionTarget;
 
     // Phase 1: Adapt closure structs for native backend
     adapt_closure_structs(ctx, module);
@@ -65,7 +65,7 @@ fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
     let i64_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
@@ -97,7 +97,7 @@ fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::arena::types::TypeDataBuilder;
+    use trunk_ir::types::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build())
 }
@@ -356,7 +356,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        use trunk_ir::arena::dialect::adt as arena_adt;
+        use trunk_ir::dialect::adt as arena_adt;
 
         let native_ty = native_closure_struct_type(ctx);
 
@@ -417,10 +417,10 @@ impl RewritePattern for ClosureStructAdaptPattern {
 
 #[cfg(test)]
 mod tests {
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::parser::parse_test_module;
-    use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::TypeConverter;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::TypeConverter;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();

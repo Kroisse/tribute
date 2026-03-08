@@ -2,12 +2,12 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::trampoline as arena_trampoline;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use trunk_ir::arena::rewrite::{PatternRewriter, RewritePattern};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::trampoline as arena_trampoline;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
+use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
 use super::patterns::is_step_type;
 use super::shift_lower::step_type;

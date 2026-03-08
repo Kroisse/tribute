@@ -58,12 +58,12 @@ use std::collections::HashSet;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::rewrite::helpers::erase_op;
-use trunk_ir::arena::{BlockData, BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::helpers::erase_op;
+use trunk_ir::{BlockData, BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::arena::dialect::tribute_rt;
 
@@ -329,7 +329,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
 
 /// Intern a type in the arena context.
 fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    use trunk_ir::arena::TypeDataBuilder;
+    use trunk_ir::TypeDataBuilder;
     ctx.types
         .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
 }
@@ -337,7 +337,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 /// Generate retain RC ops (load, increment, store) in a block.
 fn gen_retain_rc_ops(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::Location,
+    loc: trunk_ir::Location,
     block: BlockRef,
     ptr: ValueRef,
     ptr_ty: TypeRef,
@@ -370,7 +370,7 @@ fn gen_retain_rc_ops(
 #[allow(clippy::too_many_arguments)]
 fn gen_release_decrement(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::Location,
+    loc: trunk_ir::Location,
     block: BlockRef,
     ptr: ValueRef,
     ptr_ty: TypeRef,
@@ -418,7 +418,7 @@ fn gen_release_decrement(
 #[allow(clippy::too_many_arguments)]
 fn gen_deep_release_call(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::Location,
+    loc: trunk_ir::Location,
     block: BlockRef,
     payload_ptr: ValueRef,
     alloc_size: u64,
@@ -448,9 +448,9 @@ fn gen_deep_release_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::parser::parse_test_module;
-    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();

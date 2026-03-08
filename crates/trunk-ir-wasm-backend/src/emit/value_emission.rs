@@ -4,8 +4,8 @@
 //! in WebAssembly code generation.
 
 use tracing::debug;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::refs::{ValueDef, ValueRef};
+use trunk_ir::IrContext;
+use trunk_ir::refs::{ValueDef, ValueRef};
 use wasm_encoder::{AbstractHeapType, HeapType, Instruction};
 
 use crate::CompilationResult;

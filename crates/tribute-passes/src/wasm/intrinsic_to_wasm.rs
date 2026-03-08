@@ -12,15 +12,15 @@ use std::collections::HashMap;
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, RegionRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
@@ -41,7 +41,7 @@ struct BytesFields {
 /// Returns the extracted field values and the operations that produced them.
 fn extract_bytes_fields(
     ctx: &mut IrContext,
-    location: trunk_ir::arena::types::Location,
+    location: trunk_ir::types::Location,
     bytes_value: ValueRef,
 ) -> (BytesFields, Vec<OpRef>) {
     let i32_ty = ctx
@@ -132,7 +132,7 @@ fn walk_ops_in_region(
 /// Get literal pointer and length from a value's defining operation.
 fn get_literal_info(ctx: &IrContext, value: ValueRef) -> Option<(u32, u32)> {
     let def = ctx.value_def(value);
-    let trunk_ir::arena::ValueDef::OpResult(op, _) = def else {
+    let trunk_ir::ValueDef::OpResult(op, _) = def else {
         return None;
     };
     let data = ctx.op(op);

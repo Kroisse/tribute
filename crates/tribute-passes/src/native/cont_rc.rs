@@ -17,13 +17,13 @@
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::rewrite::helpers::erase_op;
-use trunk_ir::arena::{BlockRef, OpRef, RegionRef, ValueRef};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::helpers::erase_op;
+use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
 
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 

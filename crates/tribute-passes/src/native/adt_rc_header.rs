@@ -18,16 +18,16 @@ use std::collections::HashMap;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::adt;
-use trunk_ir::arena::dialect::clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef};
-use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
-use trunk_ir::arena::rewrite::type_converter::TypeConverter;
-use trunk_ir::arena::rewrite::{Module, PatternApplicator, RewritePattern};
-use trunk_ir::arena::types::TypeDataBuilder;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::rewrite::rewriter::PatternRewriter;
+use trunk_ir::rewrite::type_converter::TypeConverter;
+use trunk_ir::rewrite::{Module, PatternApplicator, RewritePattern};
+use trunk_ir::types::TypeDataBuilder;
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -334,15 +334,13 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use trunk_ir::Span;
-    use trunk_ir::arena::context::{
-        BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
-    };
-    use trunk_ir::arena::dialect::func as arena_func;
-    use trunk_ir::arena::printer::print_module;
-    use trunk_ir::arena::rewrite::Module;
-    use trunk_ir::arena::types::Attribute;
-    use trunk_ir::arena::types::Location;
+    use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
+    use trunk_ir::dialect::func as arena_func;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::Module;
     use trunk_ir::smallvec::smallvec;
+    use trunk_ir::types::Attribute;
+    use trunk_ir::types::Location;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

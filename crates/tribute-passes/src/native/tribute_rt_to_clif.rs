@@ -19,15 +19,15 @@
 use tribute_ir::arena::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::rewriter::PatternRewriter;
-use trunk_ir::arena::rewrite::type_converter::TypeConverter;
-use trunk_ir::arena::rewrite::{ConversionTarget, Module, PatternApplicator, RewritePattern};
-use trunk_ir::arena::types::{Location, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::rewriter::PatternRewriter;
+use trunk_ir::rewrite::type_converter::TypeConverter;
+use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, RewritePattern};
+use trunk_ir::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -433,9 +433,9 @@ impl RewritePattern for UnboxFloatPattern {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::IrContext;
-    use trunk_ir::arena::parser::parse_test_module;
-    use trunk_ir::arena::printer::print_module;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
 
     fn run_pass(ir: &str) -> String {
         let mut ctx = IrContext::new();

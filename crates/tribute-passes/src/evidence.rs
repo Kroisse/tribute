@@ -44,14 +44,14 @@ use std::collections::{BTreeMap, HashSet};
 
 use tribute_ir::arena::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, IrContext};
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::{BlockArgData, IrContext};
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 // ============================================================================
 // Arena-based evidence pass implementation
@@ -313,10 +313,10 @@ pub fn transform_evidence_calls(ctx: &mut IrContext, module: Module) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::arena::context::{BlockData, OperationDataBuilder, RegionData};
-    use trunk_ir::arena::types::Location;
+    use trunk_ir::context::{BlockData, OperationDataBuilder, RegionData};
     use trunk_ir::location::Span;
     use trunk_ir::smallvec::smallvec;
+    use trunk_ir::types::Location;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -325,16 +325,16 @@ mod tests {
         (ctx, loc)
     }
 
-    fn i32_type(ctx: &mut IrContext) -> trunk_ir::arena::refs::TypeRef {
+    fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
         ctx.types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
     fn make_func_type(
         ctx: &mut IrContext,
-        params: &[trunk_ir::arena::refs::TypeRef],
-        ret: trunk_ir::arena::refs::TypeRef,
-    ) -> trunk_ir::arena::refs::TypeRef {
+        params: &[trunk_ir::refs::TypeRef],
+        ret: trunk_ir::refs::TypeRef,
+    ) -> trunk_ir::refs::TypeRef {
         ctx.types.intern(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
                 .param(ret)
@@ -345,9 +345,9 @@ mod tests {
 
     fn make_effectful_func_type(
         ctx: &mut IrContext,
-        params: &[trunk_ir::arena::refs::TypeRef],
-        ret: trunk_ir::arena::refs::TypeRef,
-    ) -> trunk_ir::arena::refs::TypeRef {
+        params: &[trunk_ir::refs::TypeRef],
+        ret: trunk_ir::refs::TypeRef,
+    ) -> trunk_ir::refs::TypeRef {
         // Create an effect row with a concrete ability
         let i32_ty = ctx
             .types
@@ -376,9 +376,9 @@ mod tests {
         ctx: &mut IrContext,
         loc: Location,
         name: &'static str,
-        func_type: trunk_ir::arena::refs::TypeRef,
-        param_types: &[trunk_ir::arena::refs::TypeRef],
-    ) -> trunk_ir::arena::refs::OpRef {
+        func_type: trunk_ir::refs::TypeRef,
+        param_types: &[trunk_ir::refs::TypeRef],
+    ) -> trunk_ir::refs::OpRef {
         let entry_block = ctx.create_block(BlockData {
             location: loc,
             args: param_types
@@ -400,11 +400,7 @@ mod tests {
         f.op_ref()
     }
 
-    fn make_module(
-        ctx: &mut IrContext,
-        loc: Location,
-        ops: Vec<trunk_ir::arena::refs::OpRef>,
-    ) -> Module {
+    fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<trunk_ir::refs::OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],

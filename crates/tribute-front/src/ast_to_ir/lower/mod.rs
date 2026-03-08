@@ -11,10 +11,10 @@ mod lambda;
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::{arith, core};
-use trunk_ir::arena::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::{arith, core};
+use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
+use trunk_ir::types::{Attribute, Location};
 
 use super::context::IrLoweringCtx;
 

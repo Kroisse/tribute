@@ -5,13 +5,13 @@
 //! following the same pattern as `resolve_evidence::ensure_runtime_functions`.
 
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::rewrite::Module;
-use trunk_ir::arena::types::{Attribute, TypeDataBuilder};
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Ensure all libmprompt FFI function declarations are present in the module.
 ///
@@ -44,8 +44,8 @@ pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: Module) {
 
     let mut declare = |ctx: &mut IrContext,
                        name: &'static str,
-                       params: &[trunk_ir::arena::refs::TypeRef],
-                       result: trunk_ir::arena::refs::TypeRef| {
+                       params: &[trunk_ir::refs::TypeRef],
+                       result: trunk_ir::refs::TypeRef| {
         if existing.contains(&Symbol::new(name)) {
             return;
         }
@@ -90,11 +90,11 @@ pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: Module) {
 /// Build an extern `func.func` with an unreachable body.
 fn build_extern_func(
     ctx: &mut IrContext,
-    loc: trunk_ir::arena::types::Location,
+    loc: trunk_ir::types::Location,
     name: &str,
-    params: &[trunk_ir::arena::refs::TypeRef],
-    result: trunk_ir::arena::refs::TypeRef,
-) -> trunk_ir::arena::refs::OpRef {
+    params: &[trunk_ir::refs::TypeRef],
+    result: trunk_ir::refs::TypeRef,
+) -> trunk_ir::refs::OpRef {
     // Build func type: core.func layout is params[0]=result, params[1..]=params
     let func_ty = arena_core::func(ctx, result, params.iter().copied(), None).as_type_ref();
 

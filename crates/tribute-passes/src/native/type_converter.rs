@@ -31,13 +31,13 @@
 use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::clif as arena_clif;
-use trunk_ir::arena::dialect::cont as arena_cont;
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::refs::{OpRef, TypeRef, ValueRef};
-use trunk_ir::arena::rewrite::TypeConverter;
-use trunk_ir::arena::types::{Location, TypeDataBuilder};
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::clif as arena_clif;
+use trunk_ir::dialect::cont as arena_cont;
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::rewrite::TypeConverter;
+use trunk_ir::types::{Location, TypeDataBuilder};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -228,12 +228,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             }
             if from_ty == r.core_nil {
                 let null_op = arena_clif::iconst(ctx, location, r.core_ptr, 0);
-                return Some(
-                    trunk_ir::arena::rewrite::type_converter::MaterializeResult {
-                        value: null_op.result(ctx),
-                        ops: vec![null_op.op_ref()],
-                    },
-                );
+                return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
+                    value: null_op.result(ctx),
+                    ops: vec![null_op.op_ref()],
+                });
             }
         }
 
@@ -242,30 +240,24 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if from_is_ptr_or_any {
             if to_ty == r.core_i32 || to_ty == r.tribute_rt_int {
                 let load = arena_clif::load(ctx, location, value, r.core_i32, 0);
-                return Some(
-                    trunk_ir::arena::rewrite::type_converter::MaterializeResult {
-                        value: load.result(ctx),
-                        ops: vec![load.op_ref()],
-                    },
-                );
+                return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
+                    value: load.result(ctx),
+                    ops: vec![load.op_ref()],
+                });
             }
             if to_ty == r.core_i64 {
                 let load = arena_clif::load(ctx, location, value, r.core_i64, 0);
-                return Some(
-                    trunk_ir::arena::rewrite::type_converter::MaterializeResult {
-                        value: load.result(ctx),
-                        ops: vec![load.op_ref()],
-                    },
-                );
+                return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
+                    value: load.result(ctx),
+                    ops: vec![load.op_ref()],
+                });
             }
             if to_ty == r.core_f64 {
                 let load = arena_clif::load(ctx, location, value, r.core_f64, 0);
-                return Some(
-                    trunk_ir::arena::rewrite::type_converter::MaterializeResult {
-                        value: load.result(ctx),
-                        ops: vec![load.op_ref()],
-                    },
-                );
+                return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
+                    value: load.result(ctx),
+                    ops: vec![load.op_ref()],
+                });
             }
             if to_ty == r.core_nil {
                 return Some(arena_materialize_result_noop(value));
@@ -281,8 +273,8 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
 /// NoOp materialization result (pass value through unchanged).
 fn arena_materialize_result_noop(
     value: ValueRef,
-) -> trunk_ir::arena::rewrite::type_converter::MaterializeResult {
-    trunk_ir::arena::rewrite::type_converter::MaterializeResult { value, ops: vec![] }
+) -> trunk_ir::rewrite::type_converter::MaterializeResult {
+    trunk_ir::rewrite::type_converter::MaterializeResult { value, ops: vec![] }
 }
 
 /// Generate boxing operations in arena IR: allocate + store RC header + store value.
@@ -294,7 +286,7 @@ fn box_primitive(
     i64_ty: TypeRef,
     i32_ty: TypeRef,
     ptr_ty: TypeRef,
-) -> trunk_ir::arena::rewrite::type_converter::MaterializeResult {
+) -> trunk_ir::rewrite::type_converter::MaterializeResult {
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Allocation size (payload + RC header)
@@ -347,7 +339,7 @@ fn box_primitive(
     );
     ops.push(identity_op.op_ref());
 
-    trunk_ir::arena::rewrite::type_converter::MaterializeResult {
+    trunk_ir::rewrite::type_converter::MaterializeResult {
         value: identity_op.result(ctx),
         ops,
     }
@@ -375,7 +367,7 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
             return true;
         }
         // Check for variant instance (has is_variant=true)
-        if let Some(trunk_ir::arena::types::Attribute::Bool(true)) =
+        if let Some(trunk_ir::types::Attribute::Bool(true)) =
             data.attrs.get(&Symbol::new("is_variant"))
         {
             return true;
@@ -420,7 +412,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
         || data.attrs.contains_key(&Symbol::new("variants"))
         || matches!(
             data.attrs.get(&Symbol::new("is_variant")),
-            Some(trunk_ir::arena::types::Attribute::Bool(true))
+            Some(trunk_ir::types::Attribute::Bool(true))
         )
 }
 

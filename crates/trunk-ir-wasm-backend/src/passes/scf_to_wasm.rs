@@ -7,13 +7,13 @@
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
-use trunk_ir::arena::context::{BlockData, IrContext, RegionData};
-use trunk_ir::arena::dialect::core as arena_core;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::OpRef;
-use trunk_ir::arena::rewrite::{
+use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::dialect::core as arena_core;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::OpRef;
+use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;

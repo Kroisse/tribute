@@ -5,7 +5,7 @@ use salsa_test_macros::salsa_test;
 use tree_sitter::Parser;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
 use trunk_ir::Symbol;
-use trunk_ir::arena::{IrContext, Module};
+use trunk_ir::{IrContext, Module};
 
 /// Helper to check whether a `func.func` with the given `sym_name` exists
 /// among the top-level operations of an arena module.
@@ -19,7 +19,7 @@ fn find_func_by_name(ctx: &IrContext, module: &Module, name: &str) -> bool {
             op_data
                 .attributes
                 .get(&sym_name_key)
-                .map(|attr| matches!(attr, trunk_ir::arena::types::Attribute::Symbol(s) if *s == name))
+                .map(|attr| matches!(attr, trunk_ir::types::Attribute::Symbol(s) if *s == name))
                 .unwrap_or(false)
         } else {
             false

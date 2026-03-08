@@ -7,9 +7,9 @@ use std::collections::{HashMap, HashSet};
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
-use trunk_ir::arena::dialect::{adt, arith, cont, core, func};
-use trunk_ir::arena::refs::ValueRef;
-use trunk_ir::arena::types::{Attribute, Location};
+use trunk_ir::dialect::{adt, arith, cont, core, func};
+use trunk_ir::refs::ValueRef;
+use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{BinOpKind, Expr, ExprKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 

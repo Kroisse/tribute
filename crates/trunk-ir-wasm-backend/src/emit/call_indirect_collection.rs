@@ -6,15 +6,15 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tracing::debug;
+use trunk_ir::IrContext;
+use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::arena::IrContext;
-use trunk_ir::arena::Module;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::wasm as wasm_dialect;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::refs::{RegionRef, TypeRef};
-use trunk_ir::arena::types::{Attribute, TypeData};
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{RegionRef, TypeRef};
 use trunk_ir::smallvec::SmallVec;
+use trunk_ir::types::{Attribute, TypeData};
 
 use crate::errors::CompilationResult;
 

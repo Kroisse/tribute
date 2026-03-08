@@ -1,11 +1,11 @@
 //! Tests for cont_to_libmprompt pass (arena-based).
 
-use trunk_ir::arena::context::IrContext;
-use trunk_ir::arena::dialect::func as arena_func;
-use trunk_ir::arena::dialect::scf as arena_scf;
-use trunk_ir::arena::ops::DialectOp;
-use trunk_ir::arena::parser::parse_test_module;
-use trunk_ir::arena::printer::print_module;
+use trunk_ir::context::IrContext;
+use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::parser::parse_test_module;
+use trunk_ir::printer::print_module;
 
 fn run_pass(ir: &str) -> String {
     let mut ctx = IrContext::new();
