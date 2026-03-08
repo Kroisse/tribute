@@ -6,13 +6,13 @@
 //! - [`FuncSignatureConversionPattern`]: Converts `func.func` signatures
 //! - [`WasmFuncSignatureConversionPattern`]: Converts `wasm.func` signatures
 
-use crate::arena::context::IrContext;
-use crate::arena::dialect::{core, func, wasm};
-use crate::arena::ops::{DialectOp, DialectType};
-use crate::arena::refs::{OpRef, RegionRef, TypeRef};
-use crate::arena::rewrite::pattern::RewritePattern;
-use crate::arena::rewrite::rewriter::PatternRewriter;
-use crate::arena::rewrite::type_converter::TypeConverter;
+use crate::context::IrContext;
+use crate::dialect::{core, func, wasm};
+use crate::ops::{DialectOp, DialectType};
+use crate::refs::{OpRef, RegionRef, TypeRef};
+use crate::rewrite::pattern::RewritePattern;
+use crate::rewrite::rewriter::PatternRewriter;
+use crate::rewrite::type_converter::TypeConverter;
 
 /// Result of converting a `core.func` type's params and result.
 struct ConvertedSignature {
@@ -71,7 +71,7 @@ fn convert_func_signature(
 
 /// Build a new `core.func` TypeRef from converted params/result/effect.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    crate::arena::dialect::core::func(
+    crate::dialect::core::func(
         ctx,
         sig.new_result,
         sig.new_params.iter().copied(),
@@ -214,19 +214,17 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
 mod tests {
     use super::*;
     use crate::Symbol;
-    use crate::arena::context::{
-        BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData,
-    };
-    use crate::arena::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
-    use crate::arena::types::{Attribute, TypeDataBuilder};
+    use crate::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use crate::location::Span;
+    use crate::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
+    use crate::types::{Attribute, TypeDataBuilder};
     use smallvec::smallvec;
     use std::collections::BTreeMap;
 
-    fn test_ctx() -> (IrContext, crate::arena::types::Location) {
+    fn test_ctx() -> (IrContext, crate::types::Location) {
         let mut ctx = IrContext::new();
         let path = ctx.paths.intern("test.trb".to_owned());
-        let loc = crate::arena::types::Location::new(path, Span::new(0, 0));
+        let loc = crate::types::Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
 
@@ -241,7 +239,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
     }
 
     fn make_func_type_with_effect(
@@ -250,15 +248,10 @@ mod tests {
         ret: TypeRef,
         effect: TypeRef,
     ) -> TypeRef {
-        crate::arena::dialect::core::func(ctx, ret, params.iter().copied(), Some(effect))
-            .as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied(), Some(effect)).as_type_ref()
     }
 
-    fn make_module(
-        ctx: &mut IrContext,
-        loc: crate::arena::types::Location,
-        ops: Vec<OpRef>,
-    ) -> Module {
+    fn make_module(ctx: &mut IrContext, loc: crate::types::Location, ops: Vec<OpRef>) -> Module {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -285,7 +278,7 @@ mod tests {
     /// Create a func.func op with a body region containing an entry block with args.
     fn make_func_op(
         ctx: &mut IrContext,
-        loc: crate::arena::types::Location,
+        loc: crate::types::Location,
         name: &'static str,
         func_type: TypeRef,
         param_types: &[TypeRef],
@@ -314,7 +307,7 @@ mod tests {
     /// Create a wasm.func op with a body region containing an entry block with args.
     fn make_wasm_func_op(
         ctx: &mut IrContext,
-        loc: crate::arena::types::Location,
+        loc: crate::types::Location,
         name: &'static str,
         func_type: TypeRef,
         param_types: &[TypeRef],

@@ -3,9 +3,9 @@
 //! Accumulates mutations from pattern rewrites. Unlike the Salsa version,
 //! no value remapping is needed — RAUW handles that directly on the context.
 
-use crate::arena::context::IrContext;
-use crate::arena::refs::{OpRef, TypeRef, ValueRef};
-use crate::arena::rewrite::type_converter::TypeConverter;
+use crate::context::IrContext;
+use crate::refs::{OpRef, TypeRef, ValueRef};
+use crate::rewrite::type_converter::TypeConverter;
 
 /// Accumulated mutations from a pattern rewrite.
 pub(crate) struct Mutations {
@@ -150,7 +150,7 @@ pub(crate) fn apply_mutations(
     ctx: &mut IrContext,
     original_op: OpRef,
     mutations: Mutations,
-    module_first_block: Option<crate::arena::refs::BlockRef>,
+    module_first_block: Option<crate::refs::BlockRef>,
 ) {
     let parent_block = ctx.op(original_op).parent_block;
 

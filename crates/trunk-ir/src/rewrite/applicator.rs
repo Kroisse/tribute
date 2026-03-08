@@ -9,10 +9,10 @@ use super::conversion_target::{ConversionTarget, IllegalOp, LegalityCheck};
 use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
-use crate::arena::context::IrContext;
-use crate::arena::dialect::core as arena_core;
-use crate::arena::ops::DialectOp;
-use crate::arena::refs::{BlockRef, OpRef, RegionRef};
+use crate::context::IrContext;
+use crate::dialect::core as arena_core;
+use crate::ops::DialectOp;
+use crate::refs::{BlockRef, OpRef, RegionRef};
 
 /// Result of applying rewrite patterns.
 pub struct ApplyResult {
@@ -290,10 +290,10 @@ impl PatternApplicator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::rewrite::conversion_target::ConversionTarget;
-    use crate::arena::*;
     use crate::location::Span;
+    use crate::rewrite::conversion_target::ConversionTarget;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
 
     fn test_ctx() -> (IrContext, Location) {

@@ -5,10 +5,10 @@
 //! significantly simpler than the Salsa-based version which requires backward
 //! liveness analysis.
 
-use crate::arena::context::IrContext;
-use crate::arena::refs::{BlockRef, OpRef, RegionRef};
-use crate::arena::rewrite::Module;
+use crate::context::IrContext;
 use crate::op_interface::PureOps;
+use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::rewrite::Module;
 
 /// Configuration for dead code elimination.
 #[derive(Debug, Clone)]
@@ -155,10 +155,10 @@ fn is_dead(ctx: &IrContext, op: OpRef) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::dialect::{arith, func};
-    use crate::arena::*;
+    use crate::dialect::{arith, func};
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
     use smallvec::smallvec;
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -173,8 +173,8 @@ mod tests {
     }
 
     fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
-        crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
+        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+        crate::dialect::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
 
     /// Build a minimal module wrapping the given function ops.
@@ -363,8 +363,8 @@ mod tests {
             });
 
             // Outer op that owns the inner region (use func.func as container)
-            let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
-            let fn_ty = crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref();
+            let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+            let fn_ty = crate::dialect::core::func(ctx, nil_ty, [], None).as_type_ref();
             let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
             ctx.push_op(entry, nested_func.op_ref());
 
@@ -427,8 +427,8 @@ mod tests {
                 parent_op: None,
             });
 
-            let nil_ty = crate::arena::dialect::core::nil(ctx).as_type_ref();
-            let fn_ty = crate::arena::dialect::core::func(ctx, nil_ty, [], None).as_type_ref();
+            let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
+            let fn_ty = crate::dialect::core::func(ctx, nil_ty, [], None).as_type_ref();
             let nested_func = func::func(ctx, loc, Symbol::new("nested"), fn_ty, inner_region);
             ctx.push_op(entry, nested_func.op_ref());
 

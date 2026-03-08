@@ -17,11 +17,11 @@ use winnow::prelude::*;
 
 use super::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
 use crate::Symbol;
-use crate::arena::context::{IrContext, OperationDataBuilder};
-use crate::arena::refs::*;
-use crate::arena::rewrite::Module;
-use crate::arena::types::*;
-use crate::arena::{BlockArgData, BlockData, RegionData};
+use crate::context::{IrContext, OperationDataBuilder};
+use crate::refs::*;
+use crate::rewrite::Module;
+use crate::types::*;
+use crate::{BlockArgData, BlockData, RegionData};
 
 // ============================================================================
 // ArenaIrBuilder (Raw -> Arena IR)
@@ -338,7 +338,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 .return_type
                 .as_ref()
                 .map(|t| self.build_type(t))
-                .unwrap_or_else(|| crate::arena::dialect::core::nil(self.ctx).as_type_ref());
+                .unwrap_or_else(|| crate::dialect::core::nil(self.ctx).as_type_ref());
 
             let param_types: Vec<TypeRef> = raw
                 .func_params
@@ -350,9 +350,8 @@ impl<'a> ArenaIrBuilder<'a> {
                 .as_ref()
                 .map(|effect_raw| self.build_type(effect_raw));
 
-            let func_ty =
-                crate::arena::dialect::core::func(self.ctx, return_ty, param_types, effect_ty)
-                    .as_type_ref();
+            let func_ty = crate::dialect::core::func(self.ctx, return_ty, param_types, effect_ty)
+                .as_type_ref();
             attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
         }
 
@@ -499,9 +498,9 @@ pub fn parse_test_module(ctx: &mut IrContext, input: &str) -> Module {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::dialect::{arith, core, func};
-    use crate::arena::printer::print_module;
-    use crate::arena::validation;
+    use crate::dialect::{arith, core, func};
+    use crate::printer::print_module;
+    use crate::validation;
 
     /// Build IR → print → parse → print, verify texts match.
     fn assert_roundtrip(ctx: &IrContext, module_op: OpRef) {

@@ -4,8 +4,8 @@
 //! No lifetimes needed — arena refs are Copy.
 
 use super::rewriter::PatternRewriter;
-use crate::arena::context::IrContext;
-use crate::arena::refs::OpRef;
+use crate::context::IrContext;
+use crate::refs::OpRef;
 
 /// A pattern that can match and transform arena IR operations.
 ///

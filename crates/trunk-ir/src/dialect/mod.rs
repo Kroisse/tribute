@@ -18,10 +18,10 @@ pub mod wasm;
 mod tests {
     use crate::Span;
     use crate::Symbol;
-    use crate::arena::ops::{DialectOp, DialectType};
-    use crate::arena::refs::PathRef;
-    use crate::arena::types::Location;
-    use crate::arena::{
+    use crate::ops::{DialectOp, DialectType};
+    use crate::refs::PathRef;
+    use crate::types::Location;
+    use crate::{
         Attribute, BlockData, IrContext, RegionData, TypeDataBuilder, TypeInterner, ValueDef,
     };
 
@@ -29,11 +29,11 @@ mod tests {
         Location::new(PathRef::from_u32(0), Span::default())
     }
 
-    fn make_i32_type(types: &mut TypeInterner) -> crate::arena::TypeRef {
+    fn make_i32_type(types: &mut TypeInterner) -> crate::TypeRef {
         types.intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_func_type(ctx: &mut IrContext) -> crate::arena::TypeRef {
+    fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
         let nil_ty = super::core::nil(ctx).as_type_ref();
         super::core::func(ctx, nil_ty, [], None).as_type_ref()
     }
@@ -461,7 +461,7 @@ mod tests {
     fn test_type_into_type_ref() {
         let mut ctx = IrContext::new();
         let nil = super::core::nil(&mut ctx);
-        let ty_ref: crate::arena::TypeRef = nil.into();
+        let ty_ref: crate::TypeRef = nil.into();
         assert_eq!(ty_ref, nil.as_type_ref());
     }
 

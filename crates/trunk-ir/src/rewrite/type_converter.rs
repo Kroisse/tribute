@@ -2,9 +2,9 @@
 //!
 //! Provides type conversion infrastructure for arena IR dialect lowering.
 
-use crate::arena::context::IrContext;
-use crate::arena::refs::{OpRef, TypeRef, ValueRef};
-use crate::arena::types::Location;
+use crate::context::IrContext;
+use crate::refs::{OpRef, TypeRef, ValueRef};
+use crate::types::Location;
 
 /// Result of materializing a type conversion.
 pub struct MaterializeResult {
@@ -99,9 +99,9 @@ impl Default for TypeConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arena::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
+    use crate::*;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

@@ -258,8 +258,8 @@ impl Default for PathInterner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::IrContext;
     use crate::Symbol;
-    use crate::arena::IrContext;
 
     #[test]
     fn type_interner_dedup() {
@@ -286,10 +286,10 @@ mod tests {
         let i32_ref = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let tup = crate::arena::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]);
+        let tup = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]);
         let r1 = tup.as_type_ref();
         // Interning the same tuple again should return the same ref
-        let r2 = crate::arena::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]).as_type_ref();
+        let r2 = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]).as_type_ref();
         assert_eq!(r1, r2);
 
         let data = ctx.types.get(r1);
