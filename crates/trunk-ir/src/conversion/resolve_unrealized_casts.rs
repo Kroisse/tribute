@@ -128,9 +128,17 @@ impl CastResolver {
         let location = ctx.op(op).location;
 
         let Some(&input_value) = operands.first() else {
+            tracing::warn!(
+                ?location,
+                "malformed unrealized_conversion_cast: no operands"
+            );
             return;
         };
         let Some(&original_to_type) = result_types.first() else {
+            tracing::warn!(
+                ?location,
+                "malformed unrealized_conversion_cast: no results"
+            );
             return;
         };
 

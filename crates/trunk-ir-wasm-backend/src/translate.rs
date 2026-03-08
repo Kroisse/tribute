@@ -21,7 +21,7 @@ pub struct WasmBinary {
     pub imports: Vec<(Symbol, Symbol)>,
 }
 
-/// Emit a WebAssembly binary from a lowered TrunkIR module (arena version).
+/// Emit a WebAssembly binary from a lowered TrunkIR module.
 ///
 /// This function assumes the module has already been lowered to wasm dialect
 /// and all type conversions have been resolved. It:

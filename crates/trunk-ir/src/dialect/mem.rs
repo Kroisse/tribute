@@ -2,7 +2,7 @@
 
 // === Pure operation registrations ===
 crate::register_pure_op!(mem.data);
-crate::register_pure_op!(mem.load);
+// mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
 #[crate::dialect(crate = crate)]
 mod mem {

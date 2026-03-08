@@ -93,7 +93,7 @@ Types are defined per-dialect and interned:
 ```rust
 // Creating types via typed constructors
 let nil_ty = core::nil(ctx).as_type_ref();
-let func_ty = core::func(ctx, return_ty, params, effect);
+let func_ty = core::func(ctx, return_ty, params, effect).as_type_ref();
 
 // Type has: dialect, name, params, attrs
 let data = ctx.types.get(ty);
