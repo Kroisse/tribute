@@ -613,7 +613,8 @@ fn transform_shifts_in_block(
             let loc = ctx.op(op).location;
             let tag_attr = push_prompt_op.tag(ctx);
             let tag = match &tag_attr {
-                Attribute::Int(v) => *v as u32,
+                Attribute::Int(v) => u32::try_from(*v)
+                    .unwrap_or_else(|_| panic!("push_prompt tag value {v} out of u32 range")),
                 _ => continue,
             };
 

@@ -293,7 +293,7 @@ pub(crate) fn extract_global_def(
         Some(Attribute::Int(v)) => *v as i64,
         other => {
             debug!(
-                "extract_global_def: missing or non-IntBits 'init' attribute (got {:?}), defaulting to 0",
+                "extract_global_def: missing or non-Int 'init' attribute (got {:?}), defaulting to 0",
                 other
             );
             0

@@ -342,7 +342,7 @@ pub(crate) fn get_type_idx_from_attrs(
         }
         Some(_) => {
             // type_idx present but wrong variant — this is an invariant violation
-            panic!("type_idx attribute has unexpected variant (expected IntBits)");
+            panic!("type_idx attribute has unexpected variant (expected Int)");
         }
         None => {} // not present, continue to fallback
     }
@@ -372,7 +372,7 @@ pub(crate) fn get_type_idx_from_attrs(
 /// Distinguishes three cases:
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
-/// - Key present and IntBits → checked u32 conversion
+/// - Key present and Int → checked u32 conversion
 pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
     match attrs.get(&key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
@@ -382,7 +382,7 @@ pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> Comp
             ))
         }),
         Some(other) => Err(CompilationError::invalid_attribute(format!(
-            "attribute '{}' expected IntBits, got {:?}",
+            "attribute '{}' expected Int, got {:?}",
             key, other
         ))),
         None => Err(CompilationError::missing_attribute("u32")),

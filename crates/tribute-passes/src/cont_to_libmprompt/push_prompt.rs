@@ -117,7 +117,7 @@ impl RewritePattern for LowerPushPromptPattern {
         let tag_bits = match tag {
             Attribute::Int(bits) => bits,
             other => {
-                unreachable!("cont.push_prompt expected IntBits tag, got {other:?} at {loc:?}")
+                unreachable!("cont.push_prompt expected Int tag, got {other:?} at {loc:?}")
             }
         };
         let c = arith::r#const(ctx, loc, i32_ty, Attribute::Int(tag_bits));

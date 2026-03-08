@@ -259,7 +259,7 @@ impl RewritePattern for UpdateStructNewPattern {
         // Check if already has correct type_idx
         if let Some(Attribute::Int(existing_idx)) =
             ctx.op(op).attributes.get(&Symbol::new(ATTR_TYPE_IDX))
-            && *existing_idx as u32 == type_idx
+            && u32::try_from(*existing_idx).ok() == Some(type_idx)
         {
             return false;
         }

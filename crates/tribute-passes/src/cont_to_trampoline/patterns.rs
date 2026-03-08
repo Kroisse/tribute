@@ -323,8 +323,8 @@ impl RewritePattern for LowerPushPromptPattern {
         let step_ty = step_type(ctx);
         let tag_attr = push_prompt.tag(ctx);
         let tag = match tag_attr {
-            Attribute::Int(v) => v as u32,
-            _ => panic!("push_prompt tag must be IntBits"),
+            Attribute::Int(v) => u32::try_from(v).expect("push_prompt tag must fit in u32"),
+            _ => panic!("push_prompt tag must be Int"),
         };
 
         // Get the body region

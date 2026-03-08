@@ -152,11 +152,24 @@ pub(crate) fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<(&'a str, &
 /// Parse an integer literal (signed or unsigned).
 pub(crate) fn integer_lit(input: &mut &str) -> ModalResult<i128> {
     let negative = opt('-').parse_next(input)?.is_some();
-    let value: u64 = ascii::dec_uint(input)?;
+    let digits = take_while(1.., |c: char| c.is_ascii_digit()).parse_next(input)?;
+    let magnitude: u128 = digits
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new()))?;
     if negative {
-        Ok(-(value as i128))
+        let max_neg = (i128::MAX as u128) + 1; // 1<<127
+        if magnitude > max_neg {
+            return Err(winnow::error::ErrMode::Backtrack(
+                winnow::error::ContextError::new(),
+            ));
+        } else if magnitude == max_neg {
+            Ok(i128::MIN)
+        } else {
+            Ok(-(magnitude as i128))
+        }
     } else {
-        Ok(value as i128)
+        i128::try_from(magnitude)
+            .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new()))
     }
 }
 
@@ -712,12 +725,26 @@ mod tests {
             .expect("i64::MAX should parse");
         assert_eq!(val, i64::MAX as i128);
 
+        // u64::MAX should parse
+        let mut input = "18446744073709551615";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("u64::MAX should parse");
+        assert_eq!(val, u64::MAX as i128);
+
         // Negative values
         let mut input = "-42";
         let val = integer_lit
             .parse_next(&mut input)
             .expect("-42 should parse");
         assert_eq!(val, -42i128);
+
+        // i128::MIN should parse
+        let mut input = "-170141183460469231731687303715884105728";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i128::MIN should parse");
+        assert_eq!(val, i128::MIN);
     }
 
     #[test]
