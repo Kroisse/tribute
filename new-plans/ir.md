@@ -84,7 +84,8 @@ ref<T>?         // nullable
 /// lasso::Spur로 구현되어 4바이트, O(1) 비교
 ///
 /// Qualified path는 `::`로 구분된 문자열로 저장됨 (e.g., "std::List::map")
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "salsa", derive(salsa::Update))]
 pub struct Symbol(lasso::Spur);
 
 impl Symbol {
@@ -171,8 +172,11 @@ ability.evidence_lookup : (evidence: EvidencePtr, ability_ref: Type) -> Marker
 ability.evidence_extend : (evidence: EvidencePtr, ability_ref: Type, prompt_tag: PromptTag) -> EvidencePtr
     새 marker로 evidence 확장
 
-ability.marker_prompt : (marker: Marker) -> PromptTag
-    Marker에서 prompt tag 추출
+ability.handler_table : (max_ops_per_handler: u32, entries: Region) -> ()
+    핸들러 테이블 정의 (ability별 핸들러 엔트리 목록)
+
+ability.handler_entry : (tag: u32, op_count: u32, funcs: Region) -> ()
+    핸들러 테이블의 개별 엔트리 (ability op 구현 함수 목록)
 ```
 
 핸들러 lowering은 `cont.push_prompt` + runtime 호출로 직접 처리된다.
@@ -803,7 +807,7 @@ persistent data structure를 고려할 수 있다.
 
 **배경:**
 
-- TrunkIR은 Salsa tracked struct로 immutable
+- TrunkIR은 arena 기반 IR (IrContext가 모든 데이터 소유)
 - 현재 rewrite는 블록 전체를 재구축 (O(n) 복사)
 - 대부분의 rewrite pass에서 변경되는 op은 소수
 
