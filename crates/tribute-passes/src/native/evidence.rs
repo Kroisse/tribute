@@ -182,12 +182,12 @@ fn rewrite_evidence_ops_in_region(ctx: &mut IrContext, region: RegionRef) {
 
 /// Check if a type is an evidence type in arena (adt.array<ability.evidence>).
 fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::arena::dialect::ability::is_evidence_type_ref(ctx, ty)
+    tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
 }
 
 /// Check if a type is a Marker type in arena.
 fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    tribute_ir::arena::dialect::ability::is_marker_type_ref(ctx, ty)
+    tribute_ir::dialect::ability::is_marker_type_ref(ctx, ty)
 }
 
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {

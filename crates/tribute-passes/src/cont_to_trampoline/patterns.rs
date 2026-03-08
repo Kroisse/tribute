@@ -75,7 +75,7 @@ impl RewritePattern for LowerResumePattern {
         ops.push(wrapper_op.op_ref());
 
         // === 5. Call resume function ===
-        let evidence_ty = tribute_ir::arena::dialect::ability::evidence_adt_type_ref(ctx);
+        let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
 
         // Create null evidence
         let null_evidence = arena_adt::ref_null(ctx, location, evidence_ty, evidence_ty);

@@ -21,8 +21,8 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::arena::dialect::closure as arena_closure;
-use tribute_ir::arena::dialect::tribute_rt;
+use tribute_ir::dialect::closure as arena_closure;
+use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;
@@ -442,8 +442,7 @@ fn transform_closure_calls_with_evidence(
             let args = ctx.block_args(entry);
             if !args.is_empty() {
                 let ev = args[0];
-                if tribute_ir::arena::dialect::ability::is_evidence_type_ref(ctx, ctx.value_ty(ev))
-                {
+                if tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ctx.value_ty(ev)) {
                     Some(ev)
                 } else {
                     None
@@ -525,7 +524,7 @@ fn transform_closure_calls_in_block(
         } else {
             // Create null evidence lazily
             if null_ev_value.is_none() {
-                let evidence_ty = tribute_ir::arena::dialect::ability::evidence_adt_type_ref(ctx);
+                let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
                 let null_op = arena_adt::ref_null(ctx, func_location, evidence_ty, evidence_ty);
                 let ev = ctx.op_result(null_op.op_ref(), 0);
                 // Insert null evidence at the beginning of the block

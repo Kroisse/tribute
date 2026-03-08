@@ -17,7 +17,7 @@
 //! `tribute_rt.any` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::TypeRef;

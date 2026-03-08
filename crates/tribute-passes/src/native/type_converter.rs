@@ -28,7 +28,7 @@
 //! types, the native backend uses opaque pointers (`core.ptr`) for all
 //! reference types. Most conversions between pointer types are no-ops.
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -77,7 +77,7 @@ pub struct NativeTypeRefs {
 impl NativeTypeRefs {
     /// Pre-intern all types needed by the native type converter.
     pub fn new(ctx: &mut IrContext) -> Self {
-        use tribute_ir::arena::dialect::ability as arena_ability;
+        use tribute_ir::dialect::ability as arena_ability;
         Self {
             tribute_rt_int: arena_tribute_rt::int(ctx).as_type_ref(),
             tribute_rt_nat: arena_tribute_rt::nat(ctx).as_type_ref(),

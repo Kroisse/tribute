@@ -11,7 +11,7 @@ use trunk_ir::dialect::{adt, func};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use tribute_ir::arena::dialect::{ability as arena_ability, closure as arena_closure};
+use tribute_ir::dialect::{ability as arena_ability, closure as arena_closure};
 
 use crate::ast::{Expr, ExprKind, LocalId, Param, ResolvedRef, Stmt, TypedRef};
 

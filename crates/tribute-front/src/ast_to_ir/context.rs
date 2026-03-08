@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::arena::dialect::closure as arena_closure;
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::closure as arena_closure;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;

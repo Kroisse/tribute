@@ -43,7 +43,7 @@ use trunk_ir::types::Location;
 use trunk_ir::walk::WalkAction;
 use trunk_ir::{BlockRef, OpRef, TypeRef, ValueRef};
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 
 /// Commonly used CLIF primitive types, pre-interned for convenience.
 struct ClifTypes {

@@ -16,7 +16,7 @@
 //! primitive value is stored at offset 0. Phase 3 (RC) will prepend an 8-byte
 //! header (refcount + rtti_idx) before the payload.
 
-use tribute_ir::arena::dialect::tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;

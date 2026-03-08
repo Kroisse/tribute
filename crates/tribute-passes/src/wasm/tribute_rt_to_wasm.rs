@@ -19,7 +19,7 @@
 //! - `tribute_rt.intref` -> `wasm.i31ref`
 //! - `tribute_rt.any` -> `wasm.anyref`
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;

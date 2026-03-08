@@ -24,7 +24,7 @@ Located in `crates/trunk-ir/src/context.rs` and `crates/trunk-ir/src/refs.rs`:
 Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/arena/dialect/`): Tribute-specific
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
   high-level dialects
 
 ### Infrastructure (trunk-ir)
@@ -37,9 +37,10 @@ Dialects are split across two crates:
 
 | Dialect | File | Purpose |
 | ------- | ---- | ------- |
-| `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, marker_prompt |
+| `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, handler_table, handler_entry |
 | `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
 | `closure` | `closure.rs` | Closures and captures |
+| `tribute_rt` | `tribute_rt.rs` | Runtime boxing/unboxing (box_int, unbox_int, etc.) and RC ops (retain, release) |
 
 ### Mid-level (trunk-ir)
 

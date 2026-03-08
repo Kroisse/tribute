@@ -1,10 +1,5 @@
-//! Tribute language-specific dialect modules.
+//! Tribute language-specific dialect definitions.
 
-// === Runtime types and boxing ===
-pub mod tribute_rt;
-
-// === Effect system (runtime ops, lowered to cont) ===
 pub mod ability;
-
-// === Closures ===
 pub mod closure;
+pub mod tribute_rt;
