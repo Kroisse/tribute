@@ -37,8 +37,8 @@ pub enum Attribute {
     /// Unit/nil value.
     Unit,
     Bool(bool),
-    /// Integer constant stored as raw bits (signless).
-    IntBits(u64),
+    /// Integer constant (signed).
+    Int(i128),
     /// Float constant stored as raw bits.
     FloatBits(u64),
     String(String),
@@ -52,15 +52,27 @@ pub enum Attribute {
     Location(Location),
 }
 
+impl From<i32> for Attribute {
+    fn from(value: i32) -> Self {
+        Attribute::Int(value as i128)
+    }
+}
+
+impl From<u32> for Attribute {
+    fn from(value: u32) -> Self {
+        Attribute::Int(value as i128)
+    }
+}
+
 impl From<i64> for Attribute {
     fn from(value: i64) -> Self {
-        Attribute::IntBits(u64::from_ne_bytes(value.to_ne_bytes()))
+        Attribute::Int(value as i128)
     }
 }
 
 impl From<u64> for Attribute {
     fn from(value: u64) -> Self {
-        Attribute::IntBits(value)
+        Attribute::Int(value as i128)
     }
 }
 

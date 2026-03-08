@@ -41,7 +41,7 @@ pub(crate) fn handle_struct_new(
 
     // Priority: explicit type_idx attr > type attr > placeholder result type > inferred result type
     // type_idx attribute takes highest precedence (set by wasm_gc_type_assign pass)
-    let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+    let type_idx = if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
         Some(u32::try_from(*idx).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "struct_new: type_idx value {} out of u32 range",
@@ -304,9 +304,7 @@ fn resolve_from_ref_cast(
             }
 
             // Use placeholder lookup with field_count as fallback
-            let field_count = if let Some(Attribute::IntBits(fc)) =
-                def_attrs.get(&ATTR_FIELD_COUNT())
-            {
+            let field_count = if let Some(Attribute::Int(fc)) = def_attrs.get(&ATTR_FIELD_COUNT()) {
                 debug!("struct_get: ref_cast (placeholder) has field_count={}", *fc);
                 usize::try_from(*fc).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
@@ -350,9 +348,7 @@ fn resolve_from_ref_cast(
             Ok(idx)
         } else {
             // Non-placeholder but not found - try placeholder lookup as fallback
-            let field_count = if let Some(Attribute::IntBits(fc)) =
-                def_attrs.get(&ATTR_FIELD_COUNT())
-            {
+            let field_count = if let Some(Attribute::Int(fc)) = def_attrs.get(&ATTR_FIELD_COUNT()) {
                 usize::try_from(*fc).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
                         "struct_get: field_count value {} out of usize range",

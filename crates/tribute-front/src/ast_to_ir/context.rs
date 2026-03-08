@@ -474,7 +474,7 @@ impl<'db> IrLoweringCtx<'db> {
         for &a in abilities {
             builder = builder.param(a);
         }
-        builder = builder.attr("tail_var_id", Attribute::IntBits(tail_var_id as u64));
+        builder = builder.attr("tail_var_id", Attribute::Int(tail_var_id as i128));
         ir.types.intern(builder.build())
     }
 

@@ -195,12 +195,8 @@ fn emit_literal_check<'db>(
     match lit {
         LiteralPattern::Nat(n) => {
             let value = super::validate_nat_i31(builder.db(), location, *n)?;
-            let const_op = arith::r#const(
-                builder.ir,
-                location,
-                i32_ty,
-                Attribute::IntBits(value as u64),
-            );
+            let const_op =
+                arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, const_op.op_ref());
             let const_val = const_op.result(builder.ir);
             let cmp_op = arith::cmp_eq(builder.ir, location, scrutinee, const_val, bool_ty);
@@ -209,12 +205,8 @@ fn emit_literal_check<'db>(
         }
         LiteralPattern::Int(n) => {
             let value = super::validate_int_i31(builder.db(), location, *n)?;
-            let const_op = arith::r#const(
-                builder.ir,
-                location,
-                i32_ty,
-                Attribute::IntBits(value as u64),
-            );
+            let const_op =
+                arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, const_op.op_ref());
             let const_val = const_op.result(builder.ir);
             let cmp_op = arith::cmp_eq(builder.ir, location, scrutinee, const_val, bool_ty);

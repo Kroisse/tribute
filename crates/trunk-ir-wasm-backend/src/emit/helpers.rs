@@ -251,7 +251,7 @@ pub(crate) fn attr_heap_type(
     key: Symbol,
 ) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => {
+        Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
                     "heap type index {} out of u32 range",
@@ -337,12 +337,12 @@ pub(crate) fn get_type_idx_from_attrs(
 ) -> Option<u32> {
     // First try type_idx attribute
     match attrs.get(&Symbol::new("type_idx")) {
-        Some(Attribute::IntBits(idx)) => {
+        Some(Attribute::Int(idx)) => {
             return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
         }
         Some(_) => {
             // type_idx present but wrong variant — this is an invariant violation
-            panic!("type_idx attribute has unexpected variant (expected IntBits)");
+            panic!("type_idx attribute has unexpected variant (expected Int)");
         }
         None => {} // not present, continue to fallback
     }
@@ -372,17 +372,17 @@ pub(crate) fn get_type_idx_from_attrs(
 /// Distinguishes three cases:
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
-/// - Key present and IntBits → checked u32 conversion
+/// - Key present and Int → checked u32 conversion
 pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
     match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
+        Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",
                 key, bits
             ))
         }),
         Some(other) => Err(CompilationError::invalid_attribute(format!(
-            "attribute '{}' expected IntBits, got {:?}",
+            "attribute '{}' expected Int, got {:?}",
             key, other
         ))),
         None => Err(CompilationError::missing_attribute("u32")),

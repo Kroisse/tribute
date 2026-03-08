@@ -32,17 +32,17 @@ trunk_ir::symbols! {
     ATTR_HEAP_TYPE => "heap_type",
 }
 
-/// Checked conversion from IntBits (u64) to u32.
-fn intbits_to_u32(value: u64) -> CompilationResult<u32> {
+/// Checked conversion from Int (i128) to u32.
+fn int_to_u32(value: i128) -> CompilationResult<u32> {
     u32::try_from(value).map_err(|_| {
-        CompilationError::invalid_attribute(format!("IntBits value {} out of u32 range", value))
+        CompilationError::invalid_attribute(format!("Int value {} out of u32 range", value))
     })
 }
 
-/// Checked conversion from IntBits (u64) to usize.
-fn intbits_to_usize(value: u64) -> CompilationResult<usize> {
+/// Checked conversion from Int (i128) to usize.
+fn int_to_usize(value: i128) -> CompilationResult<usize> {
     usize::try_from(value).map_err(|_| {
-        CompilationError::invalid_attribute(format!("IntBits value {} out of usize range", value))
+        CompilationError::invalid_attribute(format!("Int value {} out of usize range", value))
     })
 }
 
@@ -400,8 +400,8 @@ pub(crate) fn collect_gc_types(
     ) -> CompilationResult<()> {
         for &block in ctx.region(region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                if let Some(Attribute::IntBits(idx)) = ctx.op(op).attributes.get(&ATTR_TYPE_IDX()) {
-                    reserved.insert(intbits_to_u32(*idx)?);
+                if let Some(Attribute::Int(idx)) = ctx.op(op).attributes.get(&ATTR_TYPE_IDX()) {
+                    reserved.insert(int_to_u32(*idx)?);
                 }
                 for &nested_region in ctx.op(op).regions.iter() {
                     collect_reserved_indices(ctx, nested_region, reserved)?;
@@ -561,7 +561,7 @@ pub(crate) fn collect_gc_types(
             let placeholder_type = placeholder_type_from_attr.or(placeholder_type_from_result);
 
             // First check for explicit type_idx attribute (set by wasm_gc_type_assign pass)
-            let type_idx = if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+            let type_idx = if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
                 let idx = u32::try_from(*idx).map_err(|_| {
                     CompilationError::invalid_attribute(format!(
                         "type_idx value {} out of u32 range",
@@ -709,11 +709,11 @@ pub(crate) fn collect_gc_types(
                     Some(Attribute::Type(ty)) => *ty,
                     _ => unreachable!("checked above"),
                 };
-                let Some(Attribute::IntBits(field_count)) = attrs.get(&Symbol::new("field_count"))
+                let Some(Attribute::Int(field_count)) = attrs.get(&Symbol::new("field_count"))
                 else {
                     return Err(CompilationError::missing_attribute("field_count"));
                 };
-                let field_count = intbits_to_usize(*field_count)?;
+                let field_count = int_to_usize(*field_count)?;
                 let key = (ty, field_count);
                 if let Some(&idx) = placeholder_struct_type_idx.get(&key) {
                     idx
@@ -782,9 +782,9 @@ pub(crate) fn collect_gc_types(
                 // For placeholder types, set field_count from attribute if not already set
                 if is_placeholder_type
                     && builder.field_count.is_none()
-                    && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+                    && let Some(Attribute::Int(fc)) = attrs.get(&Symbol::new("field_count"))
                 {
-                    let fc = intbits_to_usize(*fc)?;
+                    let fc = int_to_usize(*fc)?;
                     builder.field_count = Some(fc);
                     if builder.fields.len() < fc {
                         builder.fields.resize_with(fc, || None);
@@ -949,14 +949,14 @@ pub(crate) fn collect_gc_types(
         } else if wasm_dialect::ArrayCopy::matches(ctx, op) {
             // array_copy has dst_type_idx: u32 and src_type_idx: u32 attributes
             let attrs = &ctx.op(op).attributes;
-            if let Some(&Attribute::IntBits(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
-                let dst_type_idx = intbits_to_u32(dst_idx)?;
+            if let Some(&Attribute::Int(dst_idx)) = attrs.get(&Symbol::new("dst_type_idx")) {
+                let dst_type_idx = int_to_u32(dst_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, dst_type_idx) {
                     builder.kind = GcKind::Array;
                 }
             }
-            if let Some(&Attribute::IntBits(src_idx)) = attrs.get(&Symbol::new("src_type_idx")) {
-                let src_type_idx = intbits_to_u32(src_idx)?;
+            if let Some(&Attribute::Int(src_idx)) = attrs.get(&Symbol::new("src_type_idx")) {
+                let src_type_idx = int_to_u32(src_idx)?;
                 if let Some(builder) = try_get_builder(&mut builders, src_type_idx) {
                     builder.kind = GcKind::Array;
                 }
@@ -976,14 +976,14 @@ pub(crate) fn collect_gc_types(
             if wasm_dialect::RefCast::matches(ctx, op)
                 && let Some(Attribute::Type(target_ty)) = attrs.get(&ATTR_TARGET_TYPE())
                 && is_structref(ctx, *target_ty)
-                && let Some(Attribute::IntBits(fc)) = attrs.get(&Symbol::new("field_count"))
+                && let Some(Attribute::Int(fc)) = attrs.get(&Symbol::new("field_count"))
             {
-                let field_count = intbits_to_usize(*fc)?;
+                let field_count = int_to_usize(*fc)?;
                 let target_ty = *target_ty;
 
                 // Check for explicit type_idx attribute first
-                if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
-                    let idx = intbits_to_u32(*idx)?;
+                if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+                    let idx = int_to_u32(*idx)?;
                     next_type_idx = next_type_idx.max(idx.saturating_add(1));
                     if let Some(builder) = try_get_builder(&mut builders, idx) {
                         builder.kind = GcKind::Struct;
@@ -1138,7 +1138,7 @@ fn get_type_idx(
     };
 
     // First try type_idx attribute
-    if let Some(Attribute::IntBits(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
+    if let Some(Attribute::Int(idx)) = attrs.get(&ATTR_TYPE_IDX()) {
         let idx = u32::try_from(*idx).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "type_idx attribute value {} out of u32 range",

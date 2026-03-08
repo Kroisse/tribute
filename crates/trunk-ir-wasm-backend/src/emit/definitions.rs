@@ -290,10 +290,12 @@ pub(crate) fn extract_global_def(
     let mutable = global_op.mutable(ctx);
     let op_data = ctx.op(global_op.op_ref());
     let init = match op_data.attributes.get(&Symbol::new("init")) {
-        Some(Attribute::IntBits(v)) => *v as i64,
+        Some(Attribute::Int(v)) => i64::try_from(*v).map_err(|_| {
+            CompilationError::invalid_attribute(format!("global init value {} out of i64 range", v))
+        })?,
         other => {
             debug!(
-                "extract_global_def: missing or non-IntBits 'init' attribute (got {:?}), defaulting to 0",
+                "extract_global_def: missing or non-Int 'init' attribute (got {:?}), defaulting to 0",
                 other
             );
             0

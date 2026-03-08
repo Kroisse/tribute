@@ -75,7 +75,7 @@ pub(crate) struct RawType<'a> {
 #[derive(Debug, Clone)]
 pub(crate) enum RawAttribute<'a> {
     Bool(bool),
-    Int(u64),
+    Int(i128),
     Float(f64),
     String(String),
     Symbol(String),
@@ -149,28 +149,25 @@ pub(crate) fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<(&'a str, &
         .parse_next(input)
 }
 
-/// Parse an integer literal (unsigned or negative via two's complement).
-pub(crate) fn integer_lit(input: &mut &str) -> ModalResult<u64> {
+/// Parse an integer literal (signed or unsigned).
+pub(crate) fn integer_lit(input: &mut &str) -> ModalResult<i128> {
     let negative = opt('-').parse_next(input)?.is_some();
-    let value: u64 = ascii::dec_uint(input)?;
+    let digits = take_while(1.., |c: char| c.is_ascii_digit()).parse_next(input)?;
+    let magnitude: u128 = digits
+        .parse()
+        .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new()))?;
     if negative {
-        // Two's complement: the magnitude must fit in i64 range.
-        // i64::MIN magnitude (9223372036854775808) needs special handling.
-        let i64_min_magnitude = i64::MAX as u64 + 1; // 9223372036854775808
-        if value > i64_min_magnitude {
-            return Err(winnow::error::ErrMode::Backtrack(
+        let max_neg = (i128::MAX as u128) + 1; // 1<<127
+        match magnitude.cmp(&max_neg) {
+            std::cmp::Ordering::Greater => Err(winnow::error::ErrMode::Backtrack(
                 winnow::error::ContextError::new(),
-            ));
-        }
-        if value == i64_min_magnitude {
-            // Exactly i64::MIN
-            Ok(u64::from_ne_bytes(i64::MIN.to_ne_bytes()))
-        } else {
-            let signed = -(value as i64);
-            Ok(u64::from_ne_bytes(signed.to_ne_bytes()))
+            )),
+            std::cmp::Ordering::Equal => Ok(i128::MIN),
+            std::cmp::Ordering::Less => Ok(-(magnitude as i128)),
         }
     } else {
-        Ok(value)
+        i128::try_from(magnitude)
+            .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new()))
     }
 }
 
@@ -704,25 +701,69 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_integer_lit_overflow() {
-        // i64::MIN magnitude is valid
+    fn test_parse_integer_lit_signed() {
+        // i64::MIN is valid
         let mut input = "-9223372036854775808";
         let val = integer_lit
             .parse_next(&mut input)
             .expect("i64::MIN should parse");
-        assert_eq!(val, u64::from_ne_bytes(i64::MIN.to_ne_bytes()));
+        assert_eq!(val, i64::MIN as i128);
 
-        // One beyond i64::MIN magnitude should fail
+        // Beyond i64::MIN is also valid in i128
         let mut input = "-9223372036854775809";
-        let result = integer_lit.parse_next(&mut input);
-        assert!(result.is_err(), "beyond i64::MIN should fail");
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("beyond i64::MIN should parse in i128");
+        assert_eq!(val, -9223372036854775809i128);
 
         // Positive i64::MAX should be fine
         let mut input = "9223372036854775807";
         let val = integer_lit
             .parse_next(&mut input)
             .expect("i64::MAX should parse");
-        assert_eq!(val, i64::MAX as u64);
+        assert_eq!(val, i64::MAX as i128);
+
+        // u64::MAX should parse
+        let mut input = "18446744073709551615";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("u64::MAX should parse");
+        assert_eq!(val, u64::MAX as i128);
+
+        // Negative values
+        let mut input = "-42";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("-42 should parse");
+        assert_eq!(val, -42i128);
+
+        // i128::MIN should parse
+        let mut input = "-170141183460469231731687303715884105728";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i128::MIN should parse");
+        assert_eq!(val, i128::MIN);
+
+        // i128::MAX should parse
+        let mut input = "170141183460469231731687303715884105727";
+        let val = integer_lit
+            .parse_next(&mut input)
+            .expect("i128::MAX should parse");
+        assert_eq!(val, i128::MAX);
+
+        // Beyond i128::MAX should fail
+        let mut input = "170141183460469231731687303715884105728";
+        assert!(
+            integer_lit.parse_next(&mut input).is_err(),
+            "value beyond i128::MAX should fail to parse"
+        );
+
+        // Beyond i128::MIN should fail
+        let mut input = "-170141183460469231731687303715884105729";
+        assert!(
+            integer_lit.parse_next(&mut input).is_err(),
+            "value beyond i128::MIN should fail to parse"
+        );
     }
 
     #[test]

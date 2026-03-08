@@ -460,22 +460,12 @@ impl<'a> WasmLowerer<'a> {
         // Emit yield globals for continuation support
         if self.has_continuations {
             // Index 0 ($yield_state): i32
-            let g0 = wasm_dialect::global(
-                ctx,
-                location,
-                Symbol::new("i32"),
-                true,
-                Attribute::IntBits(0),
-            );
+            let g0 =
+                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
             preamble_ops.push(g0.op_ref());
             // Index 1 ($yield_tag): i32
-            let g1 = wasm_dialect::global(
-                ctx,
-                location,
-                Symbol::new("i32"),
-                true,
-                Attribute::IntBits(0),
-            );
+            let g1 =
+                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
             preamble_ops.push(g1.op_ref());
             // Index 2 ($yield_cont): anyref
             let g2 = wasm_dialect::global(
@@ -483,17 +473,12 @@ impl<'a> WasmLowerer<'a> {
                 location,
                 Symbol::new("anyref"),
                 true,
-                Attribute::IntBits(0),
+                Attribute::Int(0),
             );
             preamble_ops.push(g2.op_ref());
             // Index 3 ($yield_op_idx): i32
-            let g3 = wasm_dialect::global(
-                ctx,
-                location,
-                Symbol::new("i32"),
-                true,
-                Attribute::IntBits(0),
-            );
+            let g3 =
+                wasm_dialect::global(ctx, location, Symbol::new("i32"), true, Attribute::Int(0));
             preamble_ops.push(g3.op_ref());
         }
 

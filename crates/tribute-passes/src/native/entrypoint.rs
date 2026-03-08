@@ -230,7 +230,7 @@ fn build_entrypoint(
     ctx.push_op(entry_block, main_call.op_ref());
 
     // Return exit code 0
-    let zero = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
+    let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
     ctx.push_op(entry_block, zero.op_ref());
 
     let ret = arena_func::r#return(ctx, loc, [zero.result(ctx)]);
@@ -291,7 +291,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c42 = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c42 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry, c42.op_ref());
         let ret = arena_func::r#return(ctx, loc, [c42.result(ctx)]);
         ctx.push_op(entry, ret.op_ref());
@@ -382,7 +382,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry, c1.op_ref());
         let c1_val = c1.result(&ctx);
         let ret = arena_func::r#return(&mut ctx, loc, [c1_val]);

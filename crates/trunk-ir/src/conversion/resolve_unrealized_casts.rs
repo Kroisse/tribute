@@ -251,7 +251,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
@@ -274,7 +274,7 @@ mod tests {
             let i32_ty = i32_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i32 (same type)
@@ -303,7 +303,7 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64

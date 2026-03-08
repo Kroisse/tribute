@@ -129,7 +129,7 @@ impl LowerHandlerDispatchPattern {
         let step_tag = get_tag.result(ctx);
 
         // Compare with DONE (0)
-        let done_const = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
+        let done_const = arith::r#const(ctx, location, i32_ty, Attribute::Int(0));
         ctx.push_op(block, done_const.op_ref());
         let is_done = arith::cmp_eq(ctx, location, step_tag, done_const.result(ctx), i1_ty);
         ctx.push_op(block, is_done.op_ref());
@@ -251,8 +251,7 @@ impl LowerHandlerDispatchPattern {
         let step_prompt = get_prompt.result(ctx);
 
         // Compare with our handler's tag
-        let our_tag_const =
-            arith::r#const(ctx, location, i32_ty, Attribute::IntBits(our_tag as u64));
+        let our_tag_const = arith::r#const(ctx, location, i32_ty, Attribute::Int(our_tag as i128));
         ctx.push_op(block, our_tag_const.op_ref());
         let tag_matches =
             arith::cmp_eq(ctx, location, step_prompt, our_tag_const.result(ctx), i1_ty);
@@ -408,7 +407,7 @@ pub(crate) fn build_nested_dispatch(
 
     if is_last_arm {
         // Last arm: always-true condition with unreachable else
-        let true_const = arith::r#const(ctx, location, i1_ty, Attribute::IntBits(1));
+        let true_const = arith::r#const(ctx, location, i1_ty, Attribute::Int(1));
         ctx.push_op(block, true_const.op_ref());
         let else_block = ctx.create_block(BlockData {
             location,
@@ -442,7 +441,7 @@ pub(crate) fn build_nested_dispatch(
         ctx,
         location,
         i32_ty,
-        Attribute::IntBits(arm.expected_op_idx as u64),
+        Attribute::Int(arm.expected_op_idx as i128),
     );
     ctx.push_op(block, expected_const.op_ref());
     let cmp_op = arith::cmp_eq(

@@ -257,9 +257,9 @@ impl RewritePattern for UpdateStructNewPattern {
         };
 
         // Check if already has correct type_idx
-        if let Some(Attribute::IntBits(existing_idx)) =
+        if let Some(Attribute::Int(existing_idx)) =
             ctx.op(op).attributes.get(&Symbol::new(ATTR_TYPE_IDX))
-            && *existing_idx as u32 == type_idx
+            && u32::try_from(*existing_idx).ok() == Some(type_idx)
         {
             return false;
         }
@@ -281,10 +281,7 @@ impl RewritePattern for UpdateStructNewPattern {
             }
             builder = builder.attr(*key, val.clone());
         }
-        builder = builder.attr(
-            Symbol::new(ATTR_TYPE_IDX),
-            Attribute::IntBits(type_idx as u64),
-        );
+        builder = builder.attr(Symbol::new(ATTR_TYPE_IDX), Attribute::Int(type_idx as i128));
 
         let new_data = builder.build(ctx);
         let new_op = ctx.create_op(new_data);
@@ -332,7 +329,7 @@ impl RewritePattern for UpdateStructGetPattern {
 
         // Get field_idx from attributes
         let field_idx = match ctx.op(op).attributes.get(&Symbol::new(ATTR_FIELD_IDX)) {
-            Some(Attribute::IntBits(idx)) => *idx as u32,
+            Some(Attribute::Int(idx)) => *idx as u32,
             _ => return false,
         };
 
@@ -347,7 +344,7 @@ impl RewritePattern for UpdateStructGetPattern {
             .attributes
             .get(&Symbol::new(ATTR_TYPE_IDX))
             .and_then(|a| match a {
-                Attribute::IntBits(idx) => Some(*idx as u32),
+                Attribute::Int(idx) => Some(*idx as u32),
                 _ => None,
             });
         let current_result_type = ctx.op_result_types(op).first().copied();
@@ -370,10 +367,7 @@ impl RewritePattern for UpdateStructGetPattern {
             }
             builder = builder.attr(*key, val.clone());
         }
-        builder = builder.attr(
-            Symbol::new(ATTR_TYPE_IDX),
-            Attribute::IntBits(type_idx as u64),
-        );
+        builder = builder.attr(Symbol::new(ATTR_TYPE_IDX), Attribute::Int(type_idx as i128));
 
         let new_data = builder.build(ctx);
         let new_op = ctx.create_op(new_data);
@@ -427,7 +421,7 @@ impl RewritePattern for UpdateRefCastPattern {
                     .attributes
                     .get(&Symbol::new(ATTR_TYPE_IDX))
                     .and_then(|a| match a {
-                        Attribute::IntBits(idx) => Some(*idx as u32),
+                        Attribute::Int(idx) => Some(*idx as u32),
                         _ => None,
                     });
 
@@ -450,10 +444,8 @@ impl RewritePattern for UpdateRefCastPattern {
                         }
                         builder = builder.attr(*key, val.clone());
                     }
-                    builder = builder.attr(
-                        Symbol::new(ATTR_TYPE_IDX),
-                        Attribute::IntBits(type_idx as u64),
-                    );
+                    builder =
+                        builder.attr(Symbol::new(ATTR_TYPE_IDX), Attribute::Int(type_idx as i128));
 
                     let new_data = builder.build(ctx);
                     let new_op = ctx.create_op(new_data);

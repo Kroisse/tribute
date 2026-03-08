@@ -76,7 +76,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a value to box
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let val = c.result(&ctx);
 
         // Create tribute_rt.box_int
@@ -107,7 +107,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a boxed value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
         let boxed_val = c.result(&ctx);
 
         // Create tribute_rt.unbox_int
@@ -136,7 +136,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.retain
@@ -165,7 +165,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.release (no result, has alloc_size attr)
@@ -195,7 +195,7 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build());
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::IntBits(0));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::Int(0));
         let val = c.result(&ctx);
 
         let op = super::box_float(&mut ctx, loc, val, ptr_ty);
@@ -215,7 +215,7 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("bool")).build());
         let ptr_ty = make_ptr_type(&mut ctx.types);
 
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::Int(1));
         let val = c.result(&ctx);
 
         let op = super::box_bool(&mut ctx, loc, val, ptr_ty);
@@ -232,7 +232,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create an arith.const — should not match tribute_rt ops
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         assert!(super::BoxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());

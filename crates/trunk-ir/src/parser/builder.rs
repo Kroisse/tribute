@@ -75,7 +75,7 @@ impl<'a> ArenaIrBuilder<'a> {
     fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Attribute {
         match raw {
             RawAttribute::Bool(b) => Attribute::Bool(*b),
-            RawAttribute::Int(n) => Attribute::IntBits(*n),
+            RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => Attribute::String(s.clone()),
             RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
@@ -578,7 +578,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry, c.op_ref());
         let c_val = c.result(&ctx);
         let ret = func::r#return(&mut ctx, loc, [c_val]);
@@ -657,7 +657,7 @@ mod tests {
         let param = ctx.block_arg(entry, 0);
 
         // Condition
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::IntBits(1));
+        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(entry, cond.op_ref());
         let cond_val = cond.result(&ctx);
 
@@ -686,7 +686,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
         let sum = arith::add(&mut ctx, loc, param, c1_val, i32_ty);
@@ -742,7 +742,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(7));
+        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(7));
         ctx.push_op(entry, c.op_ref());
         let c_val = c.result(&ctx);
         let ret = func::r#return(&mut ctx, loc, [c_val]);
@@ -766,14 +766,14 @@ mod tests {
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
 
         let mut funcs = vec![];
-        for (name, val) in &[("foo", 1u64), ("bar", 2)] {
+        for (name, val) in &[("foo", 1i128), ("bar", 2)] {
             let entry = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],
                 ops: smallvec![],
                 parent_region: None,
             });
-            let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(*val));
+            let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(*val));
             ctx.push_op(entry, c.op_ref());
             let c_val = c.result(&ctx);
             let ret = func::r#return(&mut ctx, loc, [c_val]);
@@ -805,7 +805,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry1, c.op_ref());
         let c_val = c.result(&ctx);
         let ret1 = func::r#return(&mut ctx, loc, [c_val]);

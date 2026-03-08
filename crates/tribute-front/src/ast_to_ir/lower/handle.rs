@@ -48,7 +48,7 @@ pub(super) fn lower_ability_op_call<'db>(
         builder.ir,
         location,
         prompt_tag_ty,
-        Attribute::IntBits(tag as u64),
+        Attribute::Int(tag as i128),
     );
     builder.ir.push_op(builder.block, tag_const.op_ref());
     let tag_value = tag_const.result(builder.ir);
@@ -143,7 +143,7 @@ pub(super) fn lower_handle<'db>(
         location,
         std::iter::empty(), // no args
         step_ty,
-        Attribute::IntBits(tag as u64),
+        Attribute::Int(tag as i128),
         push_prompt_body,
         empty_handlers,
     );

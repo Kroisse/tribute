@@ -104,12 +104,12 @@ mod tests {
 
         let op1_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
             .result(i32_ty)
-            .attr("value", Attribute::IntBits(1))
+            .attr("value", Attribute::Int(1))
             .build(&mut ctx);
         let op1 = ctx.create_op(op1_data);
         let op2_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
             .result(i32_ty)
-            .attr("value", Attribute::IntBits(2))
+            .attr("value", Attribute::Int(2))
             .build(&mut ctx);
         let op2 = ctx.create_op(op2_data);
 

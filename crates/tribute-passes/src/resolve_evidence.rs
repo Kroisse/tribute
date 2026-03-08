@@ -431,8 +431,8 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
                 && let trunk_ir::refs::ValueDef::OpResult(def_op, 0) =
                     ctx.value_def(shift_op.tag(ctx))
                 && let Ok(const_op) = arith::Const::from_op(ctx, def_op)
-                && let Attribute::IntBits(value) = const_op.value(ctx)
-                && value == UNRESOLVED_SHIFT_TAG as u64
+                && let Attribute::Int(value) = const_op.value(ctx)
+                && value == UNRESOLVED_SHIFT_TAG as i128
             {
                 let ability_ref = shift_op.ability_ref(ctx);
                 let op_name = shift_op.op_name(ctx);
@@ -482,7 +482,7 @@ fn transform_handler_roots(
         let i32_ty = i32_type_ref(ctx);
 
         // Create empty evidence: arith.const 0 + adt.array_new
-        let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(0));
+        let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
         let empty_evidence = arena_adt::array_new(
             ctx,
             loc,
@@ -613,8 +613,9 @@ fn transform_shifts_in_block(
             let loc = ctx.op(op).location;
             let tag_attr = push_prompt_op.tag(ctx);
             let tag = match &tag_attr {
-                Attribute::IntBits(v) => *v as u32,
-                _ => continue,
+                Attribute::Int(v) => u32::try_from(*v)
+                    .unwrap_or_else(|_| panic!("push_prompt tag value {v} out of u32 range")),
+                other => panic!("push_prompt tag attribute has unexpected type: {other:?}"),
             };
 
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
@@ -653,13 +654,13 @@ fn transform_shifts_in_block(
             let op_table_idx = registry.register(abilities.clone(), operations, loc);
 
             // Create tag constant
-            let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(tag as u64));
+            let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::Int(tag as i128));
             let tag_val = ctx.op_result(tag_const.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_const.op_ref());
 
             // Create op_table_index constant
             let op_table_idx_const =
-                arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(op_table_idx as u64));
+                arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_table_idx as i128));
             let op_table_idx_val = ctx.op_result(op_table_idx_const.op_ref(), 0);
             ctx.insert_op_before(block, op, op_table_idx_const.op_ref());
 
@@ -669,7 +670,7 @@ fn transform_shifts_in_block(
                 let ability_id = compute_ability_id(ctx, ability_ref);
 
                 let ability_id_const =
-                    arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
+                    arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
                 let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                 ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
@@ -732,7 +733,7 @@ fn transform_shifts_in_block(
 
             // %ability_id_const = arith.const ability_id
             let ability_id_const =
-                arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(ability_id as u64));
+                arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
             let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
