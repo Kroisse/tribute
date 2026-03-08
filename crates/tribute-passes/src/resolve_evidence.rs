@@ -615,7 +615,7 @@ fn transform_shifts_in_block(
             let tag = match &tag_attr {
                 Attribute::Int(v) => u32::try_from(*v)
                     .unwrap_or_else(|_| panic!("push_prompt tag value {v} out of u32 range")),
-                _ => continue,
+                other => panic!("push_prompt tag attribute has unexpected type: {other:?}"),
             };
 
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
