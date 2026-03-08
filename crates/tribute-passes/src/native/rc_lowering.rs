@@ -65,7 +65,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
 use trunk_ir::{BlockData, BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
-use tribute_ir::arena::dialect::tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 
 /// Name of the deep release dispatch function.
 const DEEP_RELEASE_FN: &str = "__tribute_deep_release";

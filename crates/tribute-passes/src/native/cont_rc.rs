@@ -25,7 +25,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::rewrite::helpers::erase_op;
 use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 
 /// Rewrite continuation operations to use RC-safe wrappers.
 ///

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;
@@ -288,7 +288,7 @@ pub(crate) fn create_resume_function_with_continuation(
     ctx: &mut IrContext,
     spec: &ResumeFuncSpec,
 ) -> OpRef {
-    let evidence_ty = tribute_ir::arena::dialect::ability::evidence_adt_type_ref(ctx);
+    let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
     let wrapper_ty = resume_wrapper_type(ctx);
     let step_ty = step_type(ctx);
     let anyref_ty = anyref_type(ctx);

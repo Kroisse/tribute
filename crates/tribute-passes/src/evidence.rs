@@ -42,7 +42,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 
-use tribute_ir::arena::dialect::ability as arena_ability;
+use tribute_ir::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, IrContext};
 use trunk_ir::dialect::func as arena_func;

@@ -42,7 +42,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::rewrite::Module;
 use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
-use tribute_ir::arena::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 
 /// Check if a type is `core.ptr`.
 fn is_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {

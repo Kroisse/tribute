@@ -24,7 +24,7 @@ Located in `crates/trunk-ir/src/context.rs` and `crates/trunk-ir/src/refs.rs`:
 Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/arena/dialect/`): Tribute-specific
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
   high-level dialects
 
 ### Infrastructure (trunk-ir)

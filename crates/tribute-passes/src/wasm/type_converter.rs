@@ -22,7 +22,7 @@
 //! a base enum type to a variant type), the converter can insert `wasm.ref_cast`
 //! operations.
 
-use tribute_ir::arena::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
+use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -101,7 +101,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 }
 
 // Re-export marker_adt_type_ref from ability module for backward compatibility
-pub use tribute_ir::arena::dialect::ability::marker_adt_type_ref as marker_adt_type;
+pub use tribute_ir::dialect::ability::marker_adt_type_ref as marker_adt_type;
 
 /// Get the canonical Evidence ADT type for WASM representation (arena version).
 ///
