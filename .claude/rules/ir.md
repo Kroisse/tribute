@@ -96,7 +96,7 @@ let nil_ty = core::nil(ctx).as_type_ref();
 let func_ty = core::func(ctx, return_ty, params, effect).as_type_ref();
 
 // Type has: dialect, name, params, attrs
-let data = ctx.types.get(ty);
+let data = ctx.types.get(nil_ty);
 data.dialect  // Symbol("core")
 data.name     // Symbol("nil")
 data.params   // []
