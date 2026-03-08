@@ -158,14 +158,12 @@ pub(crate) fn integer_lit(input: &mut &str) -> ModalResult<i128> {
         .map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new()))?;
     if negative {
         let max_neg = (i128::MAX as u128) + 1; // 1<<127
-        if magnitude > max_neg {
-            return Err(winnow::error::ErrMode::Backtrack(
+        match magnitude.cmp(&max_neg) {
+            std::cmp::Ordering::Greater => Err(winnow::error::ErrMode::Backtrack(
                 winnow::error::ContextError::new(),
-            ));
-        } else if magnitude == max_neg {
-            Ok(i128::MIN)
-        } else {
-            Ok(-(magnitude as i128))
+            )),
+            std::cmp::Ordering::Equal => Ok(i128::MIN),
+            std::cmp::Ordering::Less => Ok(-(magnitude as i128)),
         }
     } else {
         i128::try_from(magnitude)
