@@ -153,7 +153,7 @@ impl RewritePattern for ArithConstPattern {
                 }
             }
             _ => {
-                if let Attribute::IntBits(v) = value {
+                if let Attribute::Int(v) = value {
                     arena_clif::iconst(ctx, loc, result_ty, v as i64).op_ref()
                 } else {
                     arena_clif::iconst(ctx, loc, result_ty, 0).op_ref()

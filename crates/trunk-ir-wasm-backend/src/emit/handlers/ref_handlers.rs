@@ -187,7 +187,7 @@ fn resolve_placeholder_structref(
     target_ty: TypeRef,
     module_info: &ModuleInfo,
 ) -> CompilationResult<HeapType> {
-    if let Some(Attribute::IntBits(fc)) = attrs.get(&ATTR_FIELD_COUNT()) {
+    if let Some(Attribute::Int(fc)) = attrs.get(&ATTR_FIELD_COUNT()) {
         let field_count = usize::try_from(*fc).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "ref_cast: field_count value {} out of usize range",

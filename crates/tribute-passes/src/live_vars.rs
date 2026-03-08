@@ -278,10 +278,10 @@ mod tests {
             parent_op: None,
         });
 
-        let const_op = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(42));
+        let const_op = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
         let const_val = const_op.result(ctx);
 
-        let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(0));
+        let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::Int(0));
         let tag_val = tag_const.result(ctx);
 
         let shift_op = arena_cont::shift(
@@ -371,7 +371,7 @@ mod tests {
             parent_op: None,
         });
 
-        let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::IntBits(0));
+        let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::Int(0));
         let tag_val = tag_const.result(ctx);
 
         let shift0 = arena_cont::shift(
@@ -388,7 +388,7 @@ mod tests {
         );
         let n = shift0.result(ctx);
 
-        let one = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
+        let one = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
         let one_val = one.result(ctx);
 
         let add_op = arith::add(ctx, loc, n, one_val, i32_ty);

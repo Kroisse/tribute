@@ -144,10 +144,10 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_const(ctx: &mut IrContext, loc: Location, ty: TypeRef, val: u64) -> OpRef {
+    fn make_const(ctx: &mut IrContext, loc: Location, ty: TypeRef, val: i128) -> OpRef {
         let data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
             .result(ty)
-            .attr("value", Attribute::IntBits(val))
+            .attr("value", Attribute::Int(val))
             .build(ctx);
         ctx.create_op(data)
     }

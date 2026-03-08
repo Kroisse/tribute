@@ -49,7 +49,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create i32.const with value attribute
-        let op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
 
         // Verify from_op
         let op2 =
@@ -58,7 +58,7 @@ mod tests {
 
         // Verify accessor
         let val = op.value(&ctx);
-        assert_eq!(val, Attribute::IntBits(42));
+        assert_eq!(val, Attribute::Int(42));
 
         // Verify result
         let result = op.result(&ctx);
@@ -72,8 +72,8 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create two values to use as arguments: use arith.const to produce them
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
-        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(2));
+        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
@@ -105,7 +105,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(99));
+        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
         let v1 = c1.result(&ctx);
 
         // func.return has no result, variadic operands
@@ -163,7 +163,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let cond = cond_op.result(&ctx);
 
         // Create then and else regions
@@ -208,7 +208,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let cond_op = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let cond = cond_op.result(&ctx);
 
         // Create successor blocks
@@ -273,7 +273,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
 
         // Try to match as func.call — should fail
         let err = super::func::Call::from_op(&ctx, c.op_ref());
@@ -290,7 +290,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
 
         assert!(super::arith::Const::matches(&ctx, c.op_ref()));
         assert!(!super::func::Call::matches(&ctx, c.op_ref()));
@@ -333,8 +333,8 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create values for the call
-        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
-        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(2));
+        let c1 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c2 = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
@@ -361,7 +361,7 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx.types);
 
-        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = super::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let result = c.result(&ctx);
 
         match ctx.value_def(result) {

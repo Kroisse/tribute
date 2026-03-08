@@ -697,9 +697,9 @@ fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> Tok
         AttrType::Any => quote!(#val),
         AttrType::Bool => quote!(#crate_path::Attribute::Bool(#val)),
         AttrType::I32 | AttrType::I64 | AttrType::U32 => {
-            quote!(#crate_path::Attribute::IntBits(#val as u64))
+            quote!(#crate_path::Attribute::Int(#val as i128))
         }
-        AttrType::U64 => quote!(#crate_path::Attribute::IntBits(#val)),
+        AttrType::U64 => quote!(#crate_path::Attribute::Int(#val as i128)),
         AttrType::F32 => {
             quote!(#crate_path::Attribute::FloatBits((#val as f64).to_bits()))
         }
@@ -723,26 +723,26 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         },
         AttrType::I32 => quote! {
             match attr {
-                #crate_path::Attribute::IntBits(v) => *v as i32,
-                _ => panic!("expected IntBits attribute"),
+                #crate_path::Attribute::Int(v) => *v as i32,
+                _ => panic!("expected Int attribute"),
             }
         },
         AttrType::I64 => quote! {
             match attr {
-                #crate_path::Attribute::IntBits(v) => *v as i64,
-                _ => panic!("expected IntBits attribute"),
+                #crate_path::Attribute::Int(v) => *v as i64,
+                _ => panic!("expected Int attribute"),
             }
         },
         AttrType::U32 => quote! {
             match attr {
-                #crate_path::Attribute::IntBits(v) => *v as u32,
-                _ => panic!("expected IntBits attribute"),
+                #crate_path::Attribute::Int(v) => *v as u32,
+                _ => panic!("expected Int attribute"),
             }
         },
         AttrType::U64 => quote! {
             match attr {
-                #crate_path::Attribute::IntBits(v) => *v,
-                _ => panic!("expected IntBits attribute"),
+                #crate_path::Attribute::Int(v) => *v as u64,
+                _ => panic!("expected Int attribute"),
             }
         },
         AttrType::F32 => quote! {

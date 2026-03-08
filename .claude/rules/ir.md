@@ -110,7 +110,7 @@ data.params   // []
 let mut ctx = IrContext::new();
 
 // Create operations via typed constructors
-let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
 let call = func::call(&mut ctx, loc, [c.result(&ctx)], i32_ty, Symbol::new("add"));
 
 // Match operations via typed wrappers

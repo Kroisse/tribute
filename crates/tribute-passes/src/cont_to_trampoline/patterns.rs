@@ -323,7 +323,7 @@ impl RewritePattern for LowerPushPromptPattern {
         let step_ty = step_type(ctx);
         let tag_attr = push_prompt.tag(ctx);
         let tag = match tag_attr {
-            Attribute::IntBits(v) => v as u32,
+            Attribute::Int(v) => v as u32,
             _ => panic!("push_prompt tag must be IntBits"),
         };
 
@@ -380,7 +380,7 @@ fn build_yield_then_branch(
     let i32_ty = i32_type(ctx);
     let cont_ty = super::shift_lower::continuation_type(ctx);
 
-    let tag_const = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(tag as u64));
+    let tag_const = arith::r#const(ctx, location, i32_ty, Attribute::Int(tag as i128));
     let tag_val = tag_const.result(ctx);
 
     let get_cont = arena_trampoline::get_yield_continuation(ctx, location, cont_ty);
@@ -443,7 +443,7 @@ fn build_yield_else_branch(
     } else {
         // No body result - create a step_done with zero value
         let i32_ty = i32_type(ctx);
-        let zero = arith::r#const(ctx, location, i32_ty, Attribute::IntBits(0));
+        let zero = arith::r#const(ctx, location, i32_ty, Attribute::Int(0));
         ctx.push_op(block, zero.op_ref());
         let step_done = arena_trampoline::step_done(ctx, location, zero.result(ctx), step_ty);
         ctx.push_op(block, step_done.op_ref());

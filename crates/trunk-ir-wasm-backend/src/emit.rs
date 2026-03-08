@@ -862,7 +862,7 @@ fn assign_locals_in_region(
                             Some(ctx.op_operands(op).len())
                         } else {
                             attrs.get(&Symbol::new("field_count")).and_then(|attr| {
-                                if let Attribute::IntBits(fc) = attr {
+                                if let Attribute::Int(fc) = attr {
                                     usize::try_from(*fc).ok()
                                 } else {
                                     None

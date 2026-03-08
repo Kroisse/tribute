@@ -30,12 +30,7 @@ pub(super) fn lower_expr<'db>(
         ExprKind::NatLit(n) => {
             let value = super::validate_nat_i31(builder.db(), location, n)?;
             let i32_ty = builder.ctx.i32_type(builder.ir);
-            let op = arith::r#const(
-                builder.ir,
-                location,
-                i32_ty,
-                Attribute::IntBits(value as u64),
-            );
+            let op = arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
 
@@ -45,12 +40,7 @@ pub(super) fn lower_expr<'db>(
         ExprKind::IntLit(n) => {
             let value = super::validate_int_i31(builder.db(), location, n)?;
             let i32_ty = builder.ctx.i32_type(builder.ir);
-            let op = arith::r#const(
-                builder.ir,
-                location,
-                i32_ty,
-                Attribute::IntBits(value as u64),
-            );
+            let op = arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);
 
@@ -63,7 +53,7 @@ pub(super) fn lower_expr<'db>(
                 builder.ir,
                 location,
                 i32_ty,
-                Attribute::IntBits(c as i32 as u64),
+                Attribute::Int(c as i32 as i128),
             );
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);

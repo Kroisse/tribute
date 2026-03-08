@@ -321,10 +321,10 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     // Only eliminate struct_get for the prompt_tag field (index 1).
                     let field_attr = ctx.op(op).attributes.get(&Symbol::new("field"));
                     let field_idx = match field_attr {
-                        Some(Attribute::IntBits(bits)) => *bits,
-                        other => panic!(
-                            "expected IntBits field attribute on adt.struct_get, got {other:?}"
-                        ),
+                        Some(Attribute::Int(bits)) => *bits,
+                        other => {
+                            panic!("expected Int field attribute on adt.struct_get, got {other:?}")
+                        }
                     };
                     assert_eq!(
                         field_idx, 1,

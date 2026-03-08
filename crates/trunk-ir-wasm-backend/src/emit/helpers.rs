@@ -251,7 +251,7 @@ pub(crate) fn attr_heap_type(
     key: Symbol,
 ) -> CompilationResult<HeapType> {
     match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => {
+        Some(Attribute::Int(bits)) => {
             let idx = u32::try_from(*bits).map_err(|_| {
                 CompilationError::invalid_attribute(format!(
                     "heap type index {} out of u32 range",
@@ -337,7 +337,7 @@ pub(crate) fn get_type_idx_from_attrs(
 ) -> Option<u32> {
     // First try type_idx attribute
     match attrs.get(&Symbol::new("type_idx")) {
-        Some(Attribute::IntBits(idx)) => {
+        Some(Attribute::Int(idx)) => {
             return Some(u32::try_from(*idx).expect("type_idx attribute value out of u32 range"));
         }
         Some(_) => {
@@ -375,7 +375,7 @@ pub(crate) fn get_type_idx_from_attrs(
 /// - Key present and IntBits → checked u32 conversion
 pub(crate) fn attr_u32(attrs: &BTreeMap<Symbol, Attribute>, key: Symbol) -> CompilationResult<u32> {
     match attrs.get(&key) {
-        Some(Attribute::IntBits(bits)) => u32::try_from(*bits).map_err(|_| {
+        Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",
                 key, bits

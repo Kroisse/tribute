@@ -195,7 +195,7 @@ impl RewritePattern for EvidenceExtendPattern {
 
         // Create: %prompt_tag = wasm.i32_const(prompt_tag)
         let prompt_tag_val = match &prompt_tag_attr {
-            Attribute::IntBits(v) => *v as i32,
+            Attribute::Int(v) => *v as i32,
             _ => 0,
         };
         let prompt_tag_const = wasm_dialect::i32_const(ctx, loc, i32_ty, prompt_tag_val);

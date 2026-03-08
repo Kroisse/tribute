@@ -422,11 +422,11 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(40));
+        let c0 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(40));
         ctx.push_op(entry_block, c0.op_ref());
         let c0_val = c0.result(ctx);
 
-        let c1 = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(2));
+        let c1 = arith::r#const(ctx, loc, i32_ty, Attribute::Int(2));
         ctx.push_op(entry_block, c1.op_ref());
         let c1_val = c1.result(ctx);
 
@@ -485,7 +485,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(99));
+        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
         ctx.push_op(entry_a, const_a.op_ref());
         let stale_value = const_a.result(&ctx);
         let ret_a = func::r#return(&mut ctx, loc, [stale_value]);
@@ -660,7 +660,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
         let sum = arith::add(&mut ctx, loc, param, c1_val, i32_ty);
@@ -681,7 +681,7 @@ mod tests {
         let i1_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::IntBits(1));
+        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(entry, cond.op_ref());
         let cond_val = cond.result(&ctx);
 
@@ -743,7 +743,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry_a, const_a.op_ref());
         let value_from_a = const_a.result(&ctx);
         let ret_a = func::r#return(&mut ctx, loc, [value_from_a]);
@@ -763,7 +763,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let local = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let local = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry_b, local.op_ref());
         let local_val = local.result(&ctx);
         let add_op = arith::add(&mut ctx, loc, value_from_a, local_val, i32_ty);
@@ -818,7 +818,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(99));
+        let const_a = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
         ctx.push_op(entry_a, const_a.op_ref());
         let stale_value = const_a.result(&ctx);
         let ret_a = func::r#return(&mut ctx, loc, [stale_value]);
@@ -903,7 +903,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let inner_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let inner_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(then_block, inner_const.op_ref());
         let inner_val = inner_const.result(&ctx);
         let yield_then = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -924,7 +924,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let else_const = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         ctx.push_op(else_block, else_const.op_ref());
         let else_val = else_const.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -939,7 +939,7 @@ mod tests {
         });
 
         // Condition
-        let cond_op = arith::r#const(&mut ctx, loc, i1_ty, Attribute::IntBits(1));
+        let cond_op = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(entry, cond_op.op_ref());
         let cond = cond_op.result(&ctx);
 
@@ -1011,11 +1011,11 @@ mod tests {
             parent_region: None,
         });
 
-        let c0 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(40));
+        let c0 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(40));
         ctx.push_op(entry, c0.op_ref());
         let c0_val = c0.result(&ctx);
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(2));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
         ctx.push_op(entry, c1.op_ref());
         let c1_val = c1.result(&ctx);
 

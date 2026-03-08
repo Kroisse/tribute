@@ -49,8 +49,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx.types);
 
         // Create an env value via arith.const
-        let env_op =
-            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let env_val = env_op.result(&ctx);
 
         // Create closure.new with func_ref attribute
@@ -80,8 +79,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx.types);
 
         // Create a closure value
-        let env_op =
-            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let env_val = env_op.result(&ctx);
         let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
         let closure_val = closure_op.result(&ctx);
@@ -114,8 +112,7 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx.types);
 
         // Create a closure value
-        let env_op =
-            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let env_val = env_op.result(&ctx);
         let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
         let closure_val = closure_op.result(&ctx);
@@ -147,7 +144,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // Create an arith.const — should not match closure ops
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         assert!(super::New::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Func::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Env::from_op(&ctx, c.op_ref()).is_err());
@@ -160,8 +157,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
         let closure_ty = make_closure_type(&mut ctx.types);
 
-        let env_op =
-            trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));

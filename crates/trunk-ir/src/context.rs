@@ -687,7 +687,7 @@ mod tests {
 
         let data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
             .result(i32_ty)
-            .attr("value", Attribute::IntBits(42))
+            .attr("value", Attribute::Int(42))
             .build(&mut ctx);
 
         let op = ctx.create_op(data);
@@ -697,7 +697,7 @@ mod tests {
         assert_eq!(ctx.op_result_types(op), &[i32_ty]);
         assert_eq!(
             ctx.op(op).attributes.get(&Symbol::new("value")),
-            Some(&Attribute::IntBits(42))
+            Some(&Attribute::Int(42))
         );
     }
 

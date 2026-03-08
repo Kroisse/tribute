@@ -233,11 +233,11 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // dead: result is never used
-            let _dead = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(42));
+            let _dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
             ctx.push_op(entry, _dead.op_ref());
 
             // alive: used by return
-            let alive = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
+            let alive = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
             ctx.push_op(entry, alive.op_ref());
             let ret = func::r#return(ctx, loc, [alive.result(ctx)]);
             ctx.push_op(entry, ret.op_ref());
@@ -282,7 +282,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Chain: a -> b -> c (all unused)
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
+            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
             ctx.push_op(entry, a.op_ref());
 
             let b = arith::add(ctx, loc, a.result(ctx), a.result(ctx), i32_ty);
@@ -309,9 +309,9 @@ mod tests {
         let i32_ty = i32_type(&mut ctx);
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
+            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
             ctx.push_op(entry, a.op_ref());
-            let b = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(2));
+            let b = arith::r#const(ctx, loc, i32_ty, Attribute::Int(2));
             ctx.push_op(entry, b.op_ref());
             let c = arith::add(ctx, loc, a.result(ctx), b.result(ctx), i32_ty);
             ctx.push_op(entry, c.op_ref());
@@ -345,7 +345,7 @@ mod tests {
         // Build a func that contains another region (simulated with a generic op)
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(99));
+            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(99));
             let inner_block = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],
@@ -387,7 +387,7 @@ mod tests {
         // This scenario doesn't actually need multiple iterations since
         // reverse sweep handles cascades. But test the config path.
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
-            let a = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(1));
+            let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
             ctx.push_op(entry, a.op_ref());
             let ret = func::r#return(ctx, loc, std::iter::empty());
             ctx.push_op(entry, ret.op_ref());
@@ -410,7 +410,7 @@ mod tests {
 
         let func_op = build_func(&mut ctx, loc, "main", |ctx, loc, entry| {
             // Inner region with a dead const
-            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(99));
+            let inner_dead = arith::r#const(ctx, loc, i32_ty, Attribute::Int(99));
             let inner_block = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![],

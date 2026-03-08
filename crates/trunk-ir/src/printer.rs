@@ -152,7 +152,7 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
     match attr {
         Attribute::Unit => f.write_str("unit"),
         Attribute::Bool(b) => write!(f, "{b}"),
-        Attribute::IntBits(v) => write!(f, "{v}"),
+        Attribute::Int(v) => write!(f, "{v}"),
         Attribute::FloatBits(bits) => {
             let v = f64::from_bits(*bits);
             let s = format!("{v}");
@@ -626,7 +626,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let output = print_op(&ctx, c.op_ref());
         assert_eq!(output, "%0 = arith.const {value = 42} : core.i32\n");
     }
@@ -637,8 +637,8 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
-        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(2));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
@@ -719,7 +719,7 @@ mod tests {
             parent_region: None,
         });
 
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry, c.op_ref());
 
         let result = c.result(&ctx);
@@ -807,7 +807,7 @@ mod tests {
             ops: Default::default(),
             parent_region: None,
         });
-        let one = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let one = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(outer_entry, one.op_ref());
         let one_val = one.result(&ctx);
         let ret_outer = func::r#return(&mut ctx, loc, [one_val]);
@@ -931,11 +931,11 @@ mod tests {
             parent_region: None,
         });
 
-        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         ctx.push_op(entry, c1.op_ref());
         let v1 = c1.result(&ctx);
 
-        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(99));
+        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(99));
         ctx.push_op(entry, c2.op_ref());
         let v2 = c2.result(&ctx);
 

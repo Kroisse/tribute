@@ -315,7 +315,7 @@ fn build_nested_dispatch(
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build());
 
     if arm_index >= suspend_arms.len() {
-        let dummy = arith::r#const(ctx, loc, result_ty, Attribute::IntBits(0));
+        let dummy = arith::r#const(ctx, loc, result_ty, Attribute::Int(0));
         ctx.push_op(block, dummy.op_ref());
         let unreachable = arena_func::unreachable(ctx, loc);
         ctx.push_op(block, unreachable.op_ref());
@@ -328,7 +328,7 @@ fn build_nested_dispatch(
     let then_region = build_arm_region(ctx, loc, arm.body, k, v, result_ty);
 
     if is_last {
-        let true_const = arith::r#const(ctx, loc, i1_ty, Attribute::IntBits(1));
+        let true_const = arith::r#const(ctx, loc, i1_ty, Attribute::Int(1));
         ctx.push_op(block, true_const.op_ref());
         let else_region = build_arm_region(ctx, loc, arm.body, k, v, result_ty);
         let if_op = arena_scf::r#if(
@@ -351,7 +351,7 @@ fn build_nested_dispatch(
         ctx,
         loc,
         i32_ty,
-        Attribute::IntBits(arm.expected_op_idx as u64),
+        Attribute::Int(arm.expected_op_idx as i128),
     );
     ctx.push_op(block, expected.op_ref());
     let cmp = arith::cmp_eq(ctx, loc, current_op_idx, expected.result(ctx), i1_ty);
@@ -475,7 +475,7 @@ fn build_arm_region(
                 let y = arena_scf::r#yield(ctx, loc, [result_val]);
                 ctx.push_op(new_block, y.op_ref());
             } else {
-                let dummy = arith::r#const(ctx, loc, result_ty, Attribute::IntBits(0));
+                let dummy = arith::r#const(ctx, loc, result_ty, Attribute::Int(0));
                 ctx.push_op(new_block, dummy.op_ref());
                 let y = arena_scf::r#yield(ctx, loc, [dummy.result(ctx)]);
                 ctx.push_op(new_block, y.op_ref());

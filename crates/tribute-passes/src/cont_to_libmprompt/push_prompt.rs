@@ -75,7 +75,7 @@ impl RewritePattern for LowerPushPromptPattern {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
 
         let env_val = if live_ins.is_empty() {
-            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+            let null = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
             rewriter.insert_op(null.op_ref());
             null.result(ctx)
         } else {
@@ -115,12 +115,12 @@ impl RewritePattern for LowerPushPromptPattern {
 
         // %tag_val
         let tag_bits = match tag {
-            Attribute::IntBits(bits) => bits,
+            Attribute::Int(bits) => bits,
             other => {
                 unreachable!("cont.push_prompt expected IntBits tag, got {other:?} at {loc:?}")
             }
         };
-        let c = arith::r#const(ctx, loc, i32_ty, Attribute::IntBits(tag_bits));
+        let c = arith::r#const(ctx, loc, i32_ty, Attribute::Int(tag_bits));
         rewriter.insert_op(c.op_ref());
         let tag_val = c.result(ctx);
 
@@ -362,7 +362,7 @@ fn generate_outlined_body(
             ctx.push_op(entry_block, ret.op_ref());
         }
     } else {
-        let null = arith::r#const(ctx, loc, ptr_ty, Attribute::IntBits(0));
+        let null = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
         ctx.push_op(entry_block, null.op_ref());
         let ret = arena_func::r#return(ctx, loc, [null.result(ctx)]);
         ctx.push_op(entry_block, ret.op_ref());

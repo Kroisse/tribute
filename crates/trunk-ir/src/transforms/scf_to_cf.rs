@@ -589,7 +589,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let then_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let then_v = then_val.result(&ctx);
         ctx.push_op(then_block, then_val.op_ref());
         let then_yield = scf::r#yield(&mut ctx, loc, [then_v]);
@@ -607,7 +607,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let else_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let else_v = else_val.result(&ctx);
         ctx.push_op(else_block, else_val.op_ref());
         let else_yield = scf::r#yield(&mut ctx, loc, [else_v]);
@@ -747,7 +747,7 @@ mod tests {
         });
 
         // init value
-        let init = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let init = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         ctx.push_op(entry, init.op_ref());
 
         // Loop body: loop_arg -> break(loop_arg)
@@ -815,7 +815,7 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry, disc.op_ref());
 
         // Case 0: yield 10
@@ -825,7 +825,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case0_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(10));
+        let case0_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(10));
         let case0_v = case0_val.result(&ctx);
         ctx.push_op(case0_block, case0_val.op_ref());
         let case0_yield = scf::r#yield(&mut ctx, loc, [case0_v]);
@@ -835,7 +835,7 @@ mod tests {
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::case(&mut ctx, loc, Attribute::IntBits(0), case0_region);
+        let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
 
         // Case 1: yield 20
         let case1_block = ctx.create_block(BlockData {
@@ -844,7 +844,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(20));
+        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(20));
         let case1_v = case1_val.result(&ctx);
         ctx.push_op(case1_block, case1_val.op_ref());
         let case1_yield = scf::r#yield(&mut ctx, loc, [case1_v]);
@@ -854,7 +854,7 @@ mod tests {
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::case(&mut ctx, loc, Attribute::IntBits(1), case1_region);
+        let case1_op = scf::case(&mut ctx, loc, Attribute::Int(1), case1_region);
 
         // Default: yield 0
         let default_block = ctx.create_block(BlockData {
@@ -863,7 +863,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let default_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(0));
+        let default_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
         let default_v = default_val.result(&ctx);
         ctx.push_op(default_block, default_val.op_ref());
         let default_yield = scf::r#yield(&mut ctx, loc, [default_v]);
@@ -939,7 +939,7 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry, disc.op_ref());
 
         // Case 0: void yield (no values)
@@ -956,7 +956,7 @@ mod tests {
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::case(&mut ctx, loc, Attribute::IntBits(0), case0_region);
+        let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
 
         // Case 1: yield 42 (values are dropped since switch has no result)
         let case1_block = ctx.create_block(BlockData {
@@ -965,7 +965,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(42));
+        let case1_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
         let case1_v = case1_val.result(&ctx);
         ctx.push_op(case1_block, case1_val.op_ref());
         let case1_yield = scf::r#yield(&mut ctx, loc, [case1_v]);
@@ -975,7 +975,7 @@ mod tests {
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::case(&mut ctx, loc, Attribute::IntBits(1), case1_region);
+        let case1_op = scf::case(&mut ctx, loc, Attribute::Int(1), case1_region);
 
         // Switch body
         let switch_body_block = ctx.create_block(BlockData {
@@ -1039,7 +1039,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let val_v = val.result(&ctx);
         ctx.push_op(entry, val.op_ref());
         let ret = func::r#return(&mut ctx, loc, [val_v]);
@@ -1085,7 +1085,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let t_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(1));
+        let t_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         let t_v = t_val.result(&ctx);
         ctx.push_op(then_block, t_val.op_ref());
         let t_yield = scf::r#yield(&mut ctx, loc, [t_v]);
@@ -1103,7 +1103,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let e_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::IntBits(2));
+        let e_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
         let e_v = e_val.result(&ctx);
         ctx.push_op(else_block, e_val.op_ref());
         let e_yield = scf::r#yield(&mut ctx, loc, [e_v]);
