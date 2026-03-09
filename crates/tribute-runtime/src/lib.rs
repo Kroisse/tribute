@@ -170,7 +170,7 @@ pub extern "C" fn __tribute_print_int(value: i32) {
 
 /// Print an unsigned 32-bit integer to stdout, followed by a newline.
 ///
-/// Matches Tribute's `Nat` type which maps to `core.i32` in TrunkIR.
+/// Matches Tribute's `Nat` type which maps to `core.i32` (unsigned interpretation) in TrunkIR.
 ///
 /// Signature: `(value: u32) -> ()`
 #[unsafe(no_mangle)]
