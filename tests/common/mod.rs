@@ -45,6 +45,33 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
     compile_and_run_native_impl(source_name, source_code, false)
 }
 
+/// Extern declaration for `__tribute_print_nat` to prepend to test source code.
+pub const PRINT_NAT_EXTERN: &str = r#"extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+"#;
+
+/// Run a native test and assert that stdout matches the expected output.
+///
+/// Automatically prepends the `__tribute_print_nat` extern declaration.
+#[allow(dead_code)]
+pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdout: &str) {
+    let full_source = format!("{PRINT_NAT_EXTERN}{source_code}");
+    let output = compile_and_run_native(source_name, &full_source);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(
+        stdout.trim(),
+        expected_stdout,
+        "stdout mismatch for {source_name}"
+    );
+}
+
 /// Compile Tribute source code to a native binary with ASan enabled, link it, and run it.
 ///
 /// Returns the [`Output`] (status, stdout, stderr) of the executed binary.
