@@ -8,6 +8,7 @@ links = "tribute_runtime"
 crate-type = ["lib"]
 
 [dependencies]
+itoa.workspace = true
 smallvec.workspace = true
 zmij.workspace = true
 

@@ -21,6 +21,7 @@ derive_more = { version = "2.0", features = ["display", "error", "from"] }
 fluent-uri = "0.1.4"
 im = "15"
 insta = "1.46.3"
+itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
 lsp-server = "0.7"

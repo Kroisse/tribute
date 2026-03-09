@@ -160,10 +160,11 @@ unsafe extern "C" {
 /// Signature: `(value: i32) -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_print_int(value: i32) {
-    let mut buf = [0u8; 21];
-    let s = format_i64(value as i64, &mut buf);
+    let mut buf = itoa::Buffer::new();
+    let s = buf.format(value);
     unsafe {
         write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
     }
 }
 
@@ -174,10 +175,11 @@ pub extern "C" fn __tribute_print_int(value: i32) {
 /// Signature: `(value: u32) -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_print_nat(value: u32) {
-    let mut buf = [0u8; 21];
-    let s = format_u64(value as u64, &mut buf);
+    let mut buf = itoa::Buffer::new();
+    let s = buf.format(value);
     unsafe {
         write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
     }
 }
 
@@ -194,46 +196,6 @@ pub extern "C" fn __tribute_print_float(value: f64) {
         write(1, s.as_ptr(), s.len());
         write(1, b"\n".as_ptr(), 1);
     }
-}
-
-fn format_i64(value: i64, buf: &mut [u8; 21]) -> &[u8] {
-    if value < 0 {
-        let abs = (value as i128).unsigned_abs() as u64;
-        let digits = format_u64_into(abs, &mut buf[..20]);
-        let start = 20 - digits;
-        // Place '-' just before the digits
-        buf[start - 1] = b'-';
-        buf[20] = b'\n';
-        &buf[(start - 1)..=20]
-    } else {
-        let digits = format_u64_into(value as u64, &mut buf[..20]);
-        let start = 20 - digits;
-        buf[20] = b'\n';
-        &buf[start..=20]
-    }
-}
-
-fn format_u64(value: u64, buf: &mut [u8; 21]) -> &[u8] {
-    let tail = format_u64_into(value, &mut buf[..20]);
-    let start = 20 - tail;
-    buf[20] = b'\n';
-    &buf[start..=20]
-}
-
-/// Write decimal digits of `value` right-aligned into `buf`, return count of digits written.
-fn format_u64_into(mut value: u64, buf: &mut [u8]) -> usize {
-    if value == 0 {
-        let last = buf.len() - 1;
-        buf[last] = b'0';
-        return 1;
-    }
-    let mut pos = buf.len();
-    while value > 0 {
-        pos -= 1;
-        buf[pos] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
-    buf.len() - pos
 }
 
 // =============================================================================

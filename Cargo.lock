@@ -1522,6 +1522,7 @@ name = "tribute-runtime"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "itoa",
  "smallvec",
  "zmij",
 ]
