@@ -184,16 +184,15 @@ pub extern "C" fn __tribute_print_nat(value: u32) {
 /// Print a 64-bit float to stdout, followed by a newline.
 ///
 /// Matches Tribute's `Float` type which maps to `core.f64` in TrunkIR.
-/// Formats with up to 10 fractional digits, trimming trailing zeros
-/// but always keeping at least one digit after the decimal point.
 ///
 /// Signature: `(value: f64) -> ()`
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_print_float(value: f64) {
-    let mut buf = [0u8; 40];
-    let s = format_f64(value, &mut buf);
+    let mut buf = zmij::Buffer::new();
+    let s = buf.format(value);
     unsafe {
         write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
     }
 }
 
@@ -219,72 +218,6 @@ fn format_u64(value: u64, buf: &mut [u8; 21]) -> &[u8] {
     let start = 20 - tail;
     buf[20] = b'\n';
     &buf[start..=20]
-}
-
-fn format_f64(value: f64, buf: &mut [u8; 40]) -> &[u8] {
-    if value.is_nan() {
-        buf[..4].copy_from_slice(b"NaN\n");
-        return &buf[..4];
-    }
-    if value == f64::INFINITY {
-        buf[..4].copy_from_slice(b"Inf\n");
-        return &buf[..4];
-    }
-    if value == f64::NEG_INFINITY {
-        buf[..5].copy_from_slice(b"-Inf\n");
-        return &buf[..5];
-    }
-
-    let mut pos = 0;
-    let neg = value < 0.0;
-    let abs = if neg { -value } else { value };
-
-    if neg {
-        buf[pos] = b'-';
-        pos += 1;
-    }
-
-    let int_part = abs as u64;
-    let frac = abs - int_part as f64;
-
-    // Format integer part
-    if int_part == 0 {
-        buf[pos] = b'0';
-        pos += 1;
-    } else {
-        let mut digits = [0u8; 20];
-        let len = format_u64_into(int_part, &mut digits);
-        let start = 20 - len;
-        buf[pos..pos + len].copy_from_slice(&digits[start..]);
-        pos += len;
-    }
-
-    // Decimal point
-    buf[pos] = b'.';
-    pos += 1;
-
-    // Format fractional part (up to 10 digits, rounding last)
-    let frac_scaled = (frac * 1e10 + 0.5) as u64;
-    let mut frac_buf = [b'0'; 10];
-    let mut f = frac_scaled;
-    for i in (0..10).rev() {
-        frac_buf[i] = b'0' + (f % 10) as u8;
-        f /= 10;
-    }
-
-    // Trim trailing zeros, keeping at least 1 digit
-    let mut last = 9;
-    while last > 0 && frac_buf[last] == b'0' {
-        last -= 1;
-    }
-
-    buf[pos..pos + last + 1].copy_from_slice(&frac_buf[..last + 1]);
-    pos += last + 1;
-
-    buf[pos] = b'\n';
-    pos += 1;
-
-    &buf[..pos]
 }
 
 /// Write decimal digits of `value` right-aligned into `buf`, return count of digits written.

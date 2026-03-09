@@ -57,6 +57,7 @@ trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
 wasm-encoder = "0.245.1"
 winnow = "0.7"
+zmij = "1"
 
 [package]
 name = "tribute"
