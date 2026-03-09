@@ -225,25 +225,17 @@ fn main() {
     );
 }
 
-/// NOTE: tuple destructuring has a known issue where bound variables are not
-/// usable in subsequent expressions (print produces no output). This test
-/// only verifies no crash occurs; value verification is TODO.
 #[test]
 fn test_native_tuple_create_and_match() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "tuple_create_match.trb",
         r#"
 fn main() {
-    let t = (1, 2)
-    let (a, b) = t
-    let _ = a + b
+    let t = #(1, 2)
+    let #(a, b) = t
+    __tribute_print_nat(a + b)
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "exit={:?}, stderr='{}'",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "3",
     );
 }

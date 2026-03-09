@@ -13,6 +13,7 @@ use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{BinOpKind, Expr, ExprKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 
+use super::case::bind_pattern_fields;
 use super::{
     IrBuilder, extract_ctor_id, extract_type_name, get_or_create_tuple_type, qualified_type_name,
     resolve_enum_type_attr,
@@ -599,6 +600,17 @@ fn lower_block<'db>(
                         }
                         crate::ast::PatternKind::Wildcard => {
                             // Value computed for side effects only
+                        }
+                        crate::ast::PatternKind::Tuple(_) => {
+                            let location = builder.ctx.location(pattern.id);
+                            bind_pattern_fields(
+                                builder.ctx,
+                                builder.ir,
+                                builder.block,
+                                location,
+                                val,
+                                &pattern,
+                            );
                         }
                         _ => {
                             let location = builder.ctx.location(pattern.id);

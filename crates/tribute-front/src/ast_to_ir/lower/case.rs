@@ -152,8 +152,14 @@ fn emit_pattern_check<'db>(
                 .unwrap_or(any_ty);
 
             for (i, elem_pat) in elements.iter().enumerate() {
-                let elem_op =
-                    adt::struct_get(builder.ir, location, scrutinee, any_ty, struct_ty, i as u32);
+                let elem_ty = builder
+                    .ctx
+                    .get_node_type(elem_pat.id)
+                    .map(|ty| builder.ctx.convert_type(builder.ir, *ty))
+                    .unwrap_or(any_ty);
+                let elem_op = adt::struct_get(
+                    builder.ir, location, scrutinee, elem_ty, struct_ty, i as u32,
+                );
                 builder.ir.push_op(builder.block, elem_op.op_ref());
                 let elem_val = elem_op.result(builder.ir);
 
@@ -487,7 +493,12 @@ pub(super) fn bind_pattern_fields<'db>(
                 .map(|(_, st)| st)
                 .unwrap_or(any_ty);
             for (i, elem_pat) in elements.iter().enumerate() {
-                let elem_op = adt::struct_get(ir, location, scrutinee, any_ty, struct_ty, i as u32);
+                let elem_ty = ctx
+                    .get_node_type(elem_pat.id)
+                    .map(|ty| ctx.convert_type(ir, *ty))
+                    .unwrap_or(any_ty);
+                let elem_op =
+                    adt::struct_get(ir, location, scrutinee, elem_ty, struct_ty, i as u32);
                 ir.push_op(block, elem_op.op_ref());
                 let elem_val = elem_op.result(ir);
                 bind_pattern_fields(ctx, ir, block, location, elem_val, elem_pat);
