@@ -338,6 +338,14 @@ fn lower_extern_function<'db>(
     });
 
     let func_op = func::func(ir, location, func_name, func_type, body_region);
+
+    // Mark as extern so the backend treats it as Import linkage
+    let abi_str = func_decl.abi.to_string();
+    ir.op_mut(func_op.op_ref()).attributes.insert(
+        Symbol::new("abi"),
+        trunk_ir::types::Attribute::String(abi_str),
+    );
+
     ir.push_op(top, func_op.op_ref());
 }
 
