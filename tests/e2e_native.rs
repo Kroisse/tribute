@@ -12,6 +12,35 @@ mod common;
 use common::compile_and_run_native;
 
 #[test]
+fn test_native_print_int() {
+    let output = compile_and_run_native(
+        "print_int.trb",
+        r#"
+extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+
+fn main() {
+    __tribute_print_nat(42)
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert_eq!(
+        stdout.trim(),
+        "42",
+        "expected '42', got '{}'",
+        stdout.trim()
+    );
+}
+
+#[test]
 fn test_native_simple_literal() {
     let output = compile_and_run_native("simple_literal.trb", "fn main() { }");
     assert!(
