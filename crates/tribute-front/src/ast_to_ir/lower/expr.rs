@@ -101,23 +101,43 @@ pub(super) fn lower_expr<'db>(
         ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
-                let func_name = Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
-                let func_ty = builder.ctx.convert_type(builder.ir, typed_ref.ty);
-                let op = func::constant(builder.ir, location, func_ty, func_name);
-                builder.ir.push_op(builder.block, op.op_ref());
-                let result = op.result(builder.ir);
-
+                let db = builder.db();
+                let func_name = Symbol::from_dynamic(&id.qualified_name(db).to_string());
+                // Extract param/result types from the function type
+                let (param_ir_types, result_ir_ty) = match typed_ref.ty.kind(db) {
+                    TypeKind::Func { params, result, .. } => {
+                        let p: Vec<_> = params
+                            .iter()
+                            .map(|t| builder.ctx.convert_type(builder.ir, *t))
+                            .collect();
+                        let r = builder.ctx.convert_type(builder.ir, *result);
+                        (p, r)
+                    }
+                    _ => {
+                        let any = builder.ctx.any_type(builder.ir);
+                        (vec![], any)
+                    }
+                };
+                let result = super::lambda::wrap_func_as_closure(
+                    builder,
+                    location,
+                    func_name,
+                    &param_ir_types,
+                    result_ir_ty,
+                );
                 Some(result)
             }
             ResolvedRef::Constructor { variant, .. } => {
                 match typed_ref.ty.kind(builder.db()) {
-                    TypeKind::Func { .. } => {
+                    TypeKind::Func { params, result, .. } => {
                         // Constructor with args used as a first-class function value
-                        let func_ty = builder.ctx.convert_type(builder.ir, typed_ref.ty);
-                        let op = func::constant(builder.ir, location, func_ty, *variant);
-                        builder.ir.push_op(builder.block, op.op_ref());
-                        let result = op.result(builder.ir);
-
+                        let p: Vec<_> = params
+                            .iter()
+                            .map(|t| builder.ctx.convert_type(builder.ir, *t))
+                            .collect();
+                        let r = builder.ctx.convert_type(builder.ir, *result);
+                        let result =
+                            super::lambda::wrap_func_as_closure(builder, location, *variant, &p, r);
                         Some(result)
                     }
                     _ => {
@@ -474,19 +494,43 @@ pub(super) fn lower_expr<'db>(
                 node_ty.is_some(),
                 "lambda node type should be populated by typeck"
             );
-            let effect_row = node_ty.and_then(|ty| {
-                if let TypeKind::Func { effect, .. } = ty.kind(db) {
-                    if !effect.is_pure(db) {
-                        Some(*effect)
-                    } else {
+            let (effect_row, param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db)))
+            {
+                Some((
+                    _,
+                    TypeKind::Func {
+                        params: p,
+                        result,
+                        effect,
+                    },
+                )) => {
+                    let pir: Vec<_> = p
+                        .iter()
+                        .map(|t| builder.ctx.convert_type(builder.ir, *t))
+                        .collect();
+                    let rir = builder.ctx.convert_type(builder.ir, *result);
+                    let eff = if effect.is_pure(db) {
                         None
-                    }
-                } else {
-                    None
+                    } else {
+                        Some(*effect)
+                    };
+                    (eff, pir, rir)
                 }
-            });
+                _ => {
+                    let any = builder.ctx.any_type(builder.ir);
+                    (None, vec![any; params.len()], any)
+                }
+            };
             let effect_ty = effect_row.map(|row| builder.ctx.convert_effect_row(builder.ir, row));
-            super::lambda::lower_lambda(builder, location, &params, &body, effect_ty)
+            super::lambda::lower_lambda(
+                builder,
+                location,
+                &params,
+                &body,
+                effect_ty,
+                &param_ir_types,
+                result_ir_ty,
+            )
         }
 
         ExprKind::Handle { body, handlers } => {

@@ -109,7 +109,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "native backend: closure codegen causes linker crash (needs investigation)"]
 fn test_native_closure() {
     assert_native_output(
         "closure.trb",
