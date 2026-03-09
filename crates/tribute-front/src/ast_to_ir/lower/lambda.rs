@@ -7,9 +7,11 @@ use std::collections::HashSet;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, func};
+use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
+
+use crate::ast::TypeKind;
 
 use tribute_ir::dialect::{ability as arena_ability, closure as arena_closure};
 
@@ -399,7 +401,30 @@ pub(super) fn wrap_func_as_closure(
         .collect();
 
     // Forward call: func.call @func_name(params...) — skip evidence and env
-    let call_args: Vec<ValueRef> = arg_values[2..].to_vec();
+    // Coerce arguments to match callee's declared parameter types (handles
+    // polymorphic callees where wrapper params are concrete but callee expects `any`).
+    let mut call_args: Vec<ValueRef> = arg_values[2..].to_vec();
+    if let Some(scheme) = builder.ctx.lookup_function_type(func_name) {
+        let body = scheme.body(builder.ctx.db);
+        if let TypeKind::Func { params, .. } = body.kind(builder.ctx.db) {
+            for (i, param_ty) in params.iter().enumerate() {
+                if i < call_args.len() {
+                    let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
+                    let value_ty = builder.ir.value_ty(call_args[i]);
+                    if value_ty != target_ty {
+                        let cast = core::unrealized_conversion_cast(
+                            builder.ir,
+                            location,
+                            call_args[i],
+                            target_ty,
+                        );
+                        builder.ir.push_op(entry_block, cast.op_ref());
+                        call_args[i] = cast.result(builder.ir);
+                    }
+                }
+            }
+        }
+    }
     let call_op = func::call(builder.ir, location, call_args, result_ir_ty, func_name);
     builder.ir.push_op(entry_block, call_op.op_ref());
     let call_result = call_op.result(builder.ir);
