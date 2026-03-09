@@ -45,16 +45,19 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
     compile_and_run_native_impl(source_name, source_code, false)
 }
 
-/// Extern declaration for `__tribute_print_nat` to prepend to test source code.
-pub const PRINT_NAT_EXTERN: &str = r#"extern "C" fn __tribute_print_nat(value: Nat) -> Nil
-"#;
+/// Extern declarations for print intrinsics, prepended to test source code.
+pub const PRINT_EXTERNS: &str = "\
+extern \"C\" fn __tribute_print_nat(value: Nat) -> Nil
+extern \"C\" fn __tribute_print_int(value: Int) -> Nil
+";
 
 /// Run a native test and assert that stdout matches the expected output.
 ///
-/// Automatically prepends the `__tribute_print_nat` extern declaration.
+/// Automatically prepends extern declarations for `__tribute_print_nat`
+/// and `__tribute_print_int`.
 #[allow(dead_code)]
 pub fn assert_native_output(source_name: &str, source_code: &str, expected_stdout: &str) {
-    let full_source = format!("{PRINT_NAT_EXTERN}{source_code}");
+    let full_source = format!("{PRINT_EXTERNS}\n{source_code}");
     let output = compile_and_run_native(source_name, &full_source);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
