@@ -146,6 +146,59 @@ pub extern "C" fn __tribute_init() {
 }
 
 // =============================================================================
+// Debug I/O (temporary — for e2e test verification)
+// =============================================================================
+
+unsafe extern "C" {
+    fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+}
+
+/// Print a signed 32-bit integer to stdout, followed by a newline.
+///
+/// Matches Tribute's `Int` type which maps to `core.i32` in TrunkIR.
+///
+/// Signature: `(value: i32) -> ()`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_print_int(value: i32) {
+    let mut buf = itoa::Buffer::new();
+    let s = buf.format(value);
+    unsafe {
+        write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
+    }
+}
+
+/// Print an unsigned 32-bit integer to stdout, followed by a newline.
+///
+/// Matches Tribute's `Nat` type which maps to `core.i32` (unsigned interpretation) in TrunkIR.
+///
+/// Signature: `(value: u32) -> ()`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_print_nat(value: u32) {
+    let mut buf = itoa::Buffer::new();
+    let s = buf.format(value);
+    unsafe {
+        write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
+    }
+}
+
+/// Print a 64-bit float to stdout, followed by a newline.
+///
+/// Matches Tribute's `Float` type which maps to `core.f64` in TrunkIR.
+///
+/// Signature: `(value: f64) -> ()`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_print_float(value: f64) {
+    let mut buf = zmij::Buffer::new();
+    let s = buf.format(value);
+    unsafe {
+        write(1, s.as_ptr(), s.len());
+        write(1, b"\n".as_ptr(), 1);
+    }
+}
+
+// =============================================================================
 // Allocator
 // =============================================================================
 

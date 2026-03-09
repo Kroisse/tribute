@@ -354,8 +354,6 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
 
-        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
-
         let op_data = ctx.op(func_op);
         let has_abi = op_data.attributes.contains_key(&Symbol::new("abi"));
         let linkage = if name_sym == "main" {
@@ -364,6 +362,14 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             Linkage::Import
         } else {
             Linkage::Local
+        };
+
+        // Skip imported functions whose types can't be translated to Cranelift
+        // (e.g., prelude extern functions using core.bytes that are never called).
+        let sig = match translate_signature(ctx, func_type_ref, call_conv, ptr_ty) {
+            Ok(sig) => sig,
+            Err(_) if has_abi => continue,
+            Err(e) => return Err(e),
         };
 
         let linker_name = if linkage == Linkage::Local {

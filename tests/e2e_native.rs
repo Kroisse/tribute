@@ -9,7 +9,7 @@
 
 mod common;
 
-use common::compile_and_run_native;
+use common::{assert_native_output, compile_and_run_native};
 
 #[test]
 fn test_native_simple_literal() {
@@ -24,25 +24,20 @@ fn test_native_simple_literal() {
 
 #[test]
 fn test_native_arithmetic() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "arithmetic.trb",
         r#"
 fn main() {
-    let _ = 10 + 20 + 3
+    __tribute_print_nat(10 + 20 + 3)
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "33",
     );
 }
 
 #[test]
 fn test_native_function_call() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "function_call.trb",
         r#"
 fn add(a: Nat, b: Nat) -> Nat {
@@ -50,35 +45,25 @@ fn add(a: Nat, b: Nat) -> Nat {
 }
 
 fn main() {
-    let _ = add(10, 20)
+    __tribute_print_nat(add(10, 20))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "30",
     );
 }
 
 #[test]
 fn test_native_let_binding() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "let_binding.trb",
         r#"
 fn main() {
     let a = 10
     let b = 20
-    let _ = a + b
+    __tribute_print_nat(a + b)
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "30",
     );
 }
 
@@ -88,7 +73,7 @@ fn main() {
 
 #[test]
 fn test_native_case_expression() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "case_expression.trb",
         r#"
 fn classify(n: Nat) -> Nat {
@@ -100,63 +85,48 @@ fn classify(n: Nat) -> Nat {
 }
 
 fn main() {
-    let _ = classify(5)
+    __tribute_print_nat(classify(5))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "2",
     );
 }
 
 #[test]
 fn test_native_struct() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "struct.trb",
         r#"
 struct Point { x: Nat, y: Nat }
 
 fn main() {
     let p = Point { x: 10, y: 20 }
-    let _ = p.x()
+    __tribute_print_nat(p.x())
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "10",
     );
 }
 
 #[test]
 #[ignore = "native backend: closure codegen causes linker crash (needs investigation)"]
 fn test_native_closure() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "closure.trb",
         r#"
 fn main() {
     let a = 10
     let f = fn(x) { x + a }
-    let _ = f(32)
+    __tribute_print_nat(f(32))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "42",
     );
 }
 
 #[test]
 fn test_native_enum_case() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "enum_case.trb",
         r#"
 enum Shape {
@@ -172,22 +142,17 @@ fn area(s: Shape) -> Nat {
 }
 
 fn main() {
-    let _ = area(Circle(5))
+    __tribute_print_nat(area(Circle(5)))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "25",
     );
 }
 
 /// Test enum with empty variants (no fields).
 #[test]
 fn test_native_enum_empty_variants() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "enum_empty.trb",
         r#"
 enum Color {
@@ -205,22 +170,17 @@ fn to_num(c: Color) -> Nat {
 }
 
 fn main() {
-    let _ = to_num(Green)
+    __tribute_print_nat(to_num(Green))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "2",
     );
 }
 
 /// Test enum with mixed variant arities (Option-like).
 #[test]
 fn test_native_enum_option_like() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "enum_option.trb",
         r#"
 enum Maybe {
@@ -236,22 +196,17 @@ fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
 }
 
 fn main() {
-    let _ = maybe_unwrap(Just(42), 0)
-    let _ = maybe_unwrap(Nothing, 99)
+    __tribute_print_nat(maybe_unwrap(Just(42), 0))
+    __tribute_print_nat(maybe_unwrap(Nothing, 99))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "42\n99",
     );
 }
 
 #[test]
 fn test_native_recursion() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "recursion.trb",
         r#"
 fn fibonacci(n: Nat) -> Nat {
@@ -263,34 +218,24 @@ fn fibonacci(n: Nat) -> Nat {
 }
 
 fn main() {
-    let _ = fibonacci(10)
+    __tribute_print_nat(fibonacci(10))
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "55",
     );
 }
 
 #[test]
 fn test_native_tuple_create_and_match() {
-    let output = compile_and_run_native(
+    assert_native_output(
         "tuple_create_match.trb",
         r#"
 fn main() {
-    let t = (1, 2)
-    let (a, b) = t
-    let _ = a + b
+    let t = #(1, 2)
+    let #(a, b) = t
+    __tribute_print_nat(a + b)
 }
 "#,
-    );
-    assert!(
-        output.status.success(),
-        "Native binary exited with non-zero status: {:?}\nstderr: {}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        "3",
     );
 }
