@@ -89,15 +89,22 @@ impl RewritePattern for LowerShiftPattern {
         );
 
         // Cast ptr result back to original type if needed
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
         let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
         let original_result_ty = result_types.first().copied();
         if let Some(result_ty) = original_result_ty
             && result_ty != ptr_ty
         {
             rewriter.insert_op(call.op_ref());
-            let cast =
-                arena_core::unrealized_conversion_cast(ctx, loc, call.result(ctx), result_ty);
-            rewriter.replace_op(cast.op_ref());
+            if result_ty == nil_ty {
+                // Nil return: discard yield result and produce a proper nil constant
+                let nil_const = arith::r#const(ctx, loc, nil_ty, Attribute::Unit);
+                rewriter.replace_op(nil_const.op_ref());
+            } else {
+                let cast =
+                    arena_core::unrealized_conversion_cast(ctx, loc, call.result(ctx), result_ty);
+                rewriter.replace_op(cast.op_ref());
+            }
         } else {
             rewriter.replace_op(call.op_ref());
         }
@@ -163,15 +170,22 @@ impl RewritePattern for LowerResumePattern {
         );
 
         // Cast result back if needed
+        let nil_ty = arena_core::nil(ctx).as_type_ref();
         let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
         let original_result_ty = result_types.first().copied();
         if let Some(result_ty) = original_result_ty
             && result_ty != ptr_ty
         {
             rewriter.insert_op(call.op_ref());
-            let cast =
-                arena_core::unrealized_conversion_cast(ctx, loc, call.result(ctx), result_ty);
-            rewriter.replace_op(cast.op_ref());
+            if result_ty == nil_ty {
+                // Nil return: discard resume result and produce a proper nil constant
+                let nil_const = arith::r#const(ctx, loc, nil_ty, Attribute::Unit);
+                rewriter.replace_op(nil_const.op_ref());
+            } else {
+                let cast =
+                    arena_core::unrealized_conversion_cast(ctx, loc, call.result(ctx), result_ty);
+                rewriter.replace_op(cast.op_ref());
+            }
         } else {
             rewriter.replace_op(call.op_ref());
         }

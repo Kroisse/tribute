@@ -495,7 +495,6 @@ fn test_ability_core_execution() {
 
 /// Test simple State::get handler that returns a constant.
 #[test]
-#[ignore = "native backend: inline handler continuation call not yet supported"]
 fn test_state_get_simple() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -564,7 +563,7 @@ fn main() {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "native backend: effectful helper function return signature mismatch"]
+#[ignore = "native backend: mp_prompt_is_ancestor assertion failure at runtime"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
