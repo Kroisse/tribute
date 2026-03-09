@@ -49,6 +49,7 @@ pub fn compile_and_run_native(source_name: &str, source_code: &str) -> Output {
 pub const PRINT_EXTERNS: &str = "\
 extern \"C\" fn __tribute_print_nat(value: Nat) -> Nil
 extern \"C\" fn __tribute_print_int(value: Int) -> Nil
+extern \"C\" fn __tribute_print_float(value: Float) -> Nil
 ";
 
 /// Run a native test and assert that stdout matches the expected output.
