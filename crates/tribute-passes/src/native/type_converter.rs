@@ -160,6 +160,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if is_array_type(ctx, ty) && ty != r.evidence_ty {
             return Some(r.core_ptr);
         }
+        // cont.continuation → ptr (continuation captured in closure env)
+        if is_continuation_type(ctx, ty) {
+            return Some(r.core_ptr);
+        }
         None
     });
 
@@ -397,6 +401,11 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         return true;
     }
 
+    // cont.continuation (captured in closure env)
+    if data.dialect == Symbol::new("cont") && data.name == Symbol::new("continuation") {
+        return true;
+    }
+
     false
 }
 
@@ -432,6 +441,12 @@ fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("array")
+}
+
+/// Helper: Check if a type is cont.continuation.
+fn is_continuation_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("cont") && data.name == Symbol::new("continuation")
 }
 
 impl NativeTypeRefs {

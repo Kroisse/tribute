@@ -213,6 +213,28 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
         let name = op_data.name;
         let loc = op_data.location;
 
+        // --- adt.ref_null with evidence type → func.call @__tribute_evidence_empty ---
+        // Closure lowering creates `adt.ref_null {type = evidence}` for null evidence.
+        // Without this, the null ptr gets unboxed via `clif.load` which dereferences null.
+        if dialect == Symbol::new("adt") && name == Symbol::new("ref_null") {
+            let result_types = ctx.op_result_types(op).to_vec();
+            if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
+                let old_result = ctx.op_result(op, 0);
+                let call = arena_func::call(
+                    ctx,
+                    loc,
+                    [],
+                    i64_ty,
+                    Symbol::new("__tribute_evidence_empty"),
+                );
+                let new_result = call.result(ctx);
+                ctx.insert_op_before(block, op, call.op_ref());
+                ctx.replace_all_uses(old_result, new_result);
+                ops_to_erase.push(op);
+                continue;
+            }
+        }
+
         // --- adt.array_new with evidence type → func.call @__tribute_evidence_empty ---
         if dialect == Symbol::new("adt") && name == Symbol::new("array_new") {
             let result_types = ctx.op_result_types(op).to_vec();

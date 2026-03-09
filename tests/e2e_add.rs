@@ -219,7 +219,6 @@ fn main() { }
 /// Test function type syntax in parameter annotations.
 /// Higher-order function with explicit function type: `fn(Int) -> Int`
 #[test]
-#[ignore = "native backend: higher-order function execution hangs (needs investigation)"]
 fn test_function_type_parameter() {
     assert_native_output(
         "function_type.trb",
@@ -792,7 +791,6 @@ fn check_for_lowered_closure_ops_in_region(
 
 /// Test simple lambda (no capture) compiles and executes correctly.
 #[test]
-#[ignore = "native backend: closure codegen causes type mismatch in lambda (needs investigation)"]
 fn test_closure_execution_simple() {
     assert_native_output(
         "closure_exec_simple.trb",

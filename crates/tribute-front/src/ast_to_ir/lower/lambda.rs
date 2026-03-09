@@ -113,15 +113,13 @@ fn analyze_captures<'db>(
 
     let param_ids: HashSet<LocalId> = params.iter().filter_map(|p| p.local_id).collect();
 
-    let any_ty = ctx.any_type(ir);
-
     let mut captures = Vec::new();
     for (local_id, name, value) in ctx.all_bindings() {
         if free_vars.contains(&local_id) && !param_ids.contains(&local_id) {
             captures.push(CaptureInfo {
                 name,
                 local_id,
-                ty: any_ty,
+                ty: ir.value_ty(value),
                 value,
             });
         }
@@ -144,6 +142,8 @@ pub(super) fn lower_lambda<'db>(
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
     effect: Option<TypeRef>,
+    param_ir_types: &[TypeRef],
+    result_ir_ty: TypeRef,
 ) -> Option<ValueRef> {
     // Step 1: Analyze captures
     let captures = analyze_captures(builder.ctx, builder.ir, params, body);
@@ -192,9 +192,10 @@ pub(super) fn lower_lambda<'db>(
         );
         block_args.push(arg);
     }
-    for param in params {
+    for (i, param) in params.iter().enumerate() {
+        let ty = param_ir_types.get(i).copied().unwrap_or(any_ty);
         let mut arg = BlockArgData {
-            ty: any_ty,
+            ty,
             attrs: Default::default(),
         };
         arg.attrs
@@ -265,7 +266,7 @@ pub(super) fn lower_lambda<'db>(
     {
         let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
         if let Some(result) = super::expr::lower_expr(&mut inner_builder, body.clone()) {
-            let result = inner_builder.cast_if_needed(location, result, any_ty);
+            let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
             let ret_op = func::r#return(inner_builder.ir, location, [result]);
             inner_builder
                 .ir
@@ -288,14 +289,13 @@ pub(super) fn lower_lambda<'db>(
         parent_op: None,
     });
 
-    // Build function type: (evidence, env, params...) -> any
+    // Build function type: (evidence, env, params...) -> result
     let mut all_param_types = vec![evidence_ty, any_ty];
-    for _ in params {
-        all_param_types.push(any_ty);
-    }
-    let func_ty = builder
-        .ctx
-        .func_type_with_effect(builder.ir, &all_param_types, any_ty, effect);
+    all_param_types.extend_from_slice(param_ir_types);
+    let func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &all_param_types, result_ir_ty, effect);
 
     let func_op = func::func(builder.ir, location, lifted_name, func_ty, body_region);
 
@@ -309,7 +309,11 @@ pub(super) fn lower_lambda<'db>(
     // Step 4: Create env struct with captured values at the call site
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
     let closure_env = if captures.is_empty() {
-        builder.emit_nil(location)
+        // Use a null pointer (any type) instead of nil — core.nil maps to void
+        // in Cranelift and can't be stored in the closure struct.
+        let null_op = adt::ref_null(builder.ir, location, any_ty, any_ty);
+        builder.ir.push_op(builder.block, null_op.op_ref());
+        null_op.result(builder.ir)
     } else {
         let struct_ty = concrete_env_ty.unwrap();
         let struct_op = adt::struct_new(builder.ir, location, capture_values, struct_ty, struct_ty);
@@ -318,13 +322,129 @@ pub(super) fn lower_lambda<'db>(
     };
 
     // Step 5: Create closure.new
-    let closure_func_ty = {
-        let param_tys: Vec<TypeRef> = (0..params.len()).map(|_| any_ty).collect();
-        builder.ctx.func_type(builder.ir, &param_tys, any_ty)
-    };
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, param_ir_types, result_ir_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let closure_op = arena_closure::new(builder.ir, location, closure_env, closure_ty, lifted_name);
     builder.ir.push_op(builder.block, closure_op.op_ref());
     Some(closure_op.result(builder.ir))
+}
+
+/// Wrap a named function reference as a closure value.
+///
+/// Generates a thin wrapper function with `(evidence, env, params...) -> result`
+/// signature that forwards the call to the original function (ignoring env),
+/// then emits `closure.new @wrapper, nil`.
+pub(super) fn wrap_func_as_closure(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    func_name: Symbol,
+    param_ir_types: &[TypeRef],
+    result_ir_ty: TypeRef,
+) -> ValueRef {
+    let any_ty = builder.ctx.any_type(builder.ir);
+    let evidence_ty = arena_ability::evidence_adt_type_ref(builder.ir);
+
+    // Generate unique wrapper name
+    let wrapper_name = builder.ctx.gen_lambda_name();
+
+    // Block args: [evidence, env, param1, param2, ...]
+    let mut block_args = Vec::new();
+    {
+        let mut arg = BlockArgData {
+            ty: evidence_ty,
+            attrs: Default::default(),
+        };
+        arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__evidence")),
+        );
+        block_args.push(arg);
+    }
+    {
+        let mut arg = BlockArgData {
+            ty: any_ty,
+            attrs: Default::default(),
+        };
+        arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__env")),
+        );
+        block_args.push(arg);
+    }
+    for (i, &ty) in param_ir_types.iter().enumerate() {
+        let mut arg = BlockArgData {
+            ty,
+            attrs: Default::default(),
+        };
+        arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::from_dynamic(&format!("__arg_{}", i))),
+        );
+        block_args.push(arg);
+    }
+
+    let total_params = block_args.len();
+
+    let entry_block = builder.ir.create_block(BlockData {
+        location,
+        args: block_args,
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let arg_values: Vec<ValueRef> = (0..total_params)
+        .map(|i| builder.ir.block_arg(entry_block, i as u32))
+        .collect();
+
+    // Forward call: func.call @func_name(params...) — skip evidence and env
+    let call_args: Vec<ValueRef> = arg_values[2..].to_vec();
+    let call_op = func::call(builder.ir, location, call_args, result_ir_ty, func_name);
+    builder.ir.push_op(entry_block, call_op.op_ref());
+    let call_result = call_op.result(builder.ir);
+
+    let ret_op = func::r#return(builder.ir, location, [call_result]);
+    builder.ir.push_op(entry_block, ret_op.op_ref());
+
+    // Create region and wrapper func op
+    let body_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![entry_block],
+        parent_op: None,
+    });
+
+    let mut all_param_types = vec![evidence_ty, any_ty];
+    all_param_types.extend_from_slice(param_ir_types);
+    let wrapper_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &all_param_types, result_ir_ty, None);
+
+    let func_op = func::func(
+        builder.ir,
+        location,
+        wrapper_name,
+        wrapper_func_ty,
+        body_region,
+    );
+
+    let module_block = builder
+        .ctx
+        .module_block()
+        .expect("module block should be set");
+    builder.ir.push_op(module_block, func_op.op_ref());
+
+    // Emit closure.new @wrapper, null_env at the call site
+    let any_ty = builder.ctx.any_type(builder.ir);
+    let null_op = adt::ref_null(builder.ir, location, any_ty, any_ty);
+    builder.ir.push_op(builder.block, null_op.op_ref());
+    let null_env = null_op.result(builder.ir);
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, param_ir_types, result_ir_ty);
+    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+    let closure_op = arena_closure::new(builder.ir, location, null_env, closure_ty, wrapper_name);
+    builder.ir.push_op(builder.block, closure_op.op_ref());
+    closure_op.result(builder.ir)
 }
