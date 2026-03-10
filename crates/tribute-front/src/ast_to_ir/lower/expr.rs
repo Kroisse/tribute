@@ -508,11 +508,24 @@ pub(super) fn lower_expr<'db>(
                         .iter()
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
                         .collect();
-                    let rir = builder.ctx.convert_type(builder.ir, *result);
                     let eff = if effect.is_pure(db) {
                         None
                     } else {
                         Some(*effect)
+                    };
+                    // Effectful lambdas are invoked through handler prompts,
+                    // which use polymorphic (boxed) types. Force the return
+                    // type to `tribute_rt.any` so the closure boxes its result
+                    // before returning, matching the `call_indirect` in
+                    // `__prompt_body_N`.
+                    //
+                    // Only apply this when the lambda has concrete abilities
+                    // (not just a tail variable from polymorphic inference).
+                    let has_concrete_abilities = !effect.effects(db).is_empty();
+                    let rir = if has_concrete_abilities {
+                        builder.ctx.any_type(builder.ir)
+                    } else {
+                        builder.ctx.convert_type(builder.ir, *result)
                     };
                     (eff, pir, rir)
                 }

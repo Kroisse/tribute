@@ -489,13 +489,68 @@ fn validate_no_unresolved_shifts_in_region(ctx: &IrContext, region: RegionRef) {
 // ============================================================================
 
 /// Transform handler-root functions (contain push_prompt but no evidence param).
+///
+/// For effect-polymorphic handler roots (with tail_var_id), an evidence parameter
+/// is added so that outer handler evidence is propagated through nested handlers.
 fn transform_handler_roots(
     ctx: &mut IrContext,
     module: Module,
     handler_root_fns: &HashSet<Symbol>,
-    fns_with_evidence: &HashSet<Symbol>,
+    fns_with_evidence: &mut HashSet<Symbol>,
     registry: &mut OpTableRegistry,
-) {
+) -> HashSet<Symbol> {
+    let func_ops: Vec<OpRef> = module.ops(ctx);
+
+    // Phase 1: Add evidence params to effect-polymorphic handler roots.
+    // Must be done before transforming blocks, so that recursive calls
+    // see the updated signature.
+    let mut polymorphic_roots: HashSet<Symbol> = HashSet::new();
+    for &func_op_ref in &func_ops {
+        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+            continue;
+        };
+        let func_name = func_op.sym_name(ctx);
+        if !handler_root_fns.contains(&func_name) {
+            continue;
+        }
+
+        let func_ty = func_op.r#type(ctx);
+        if !crate::evidence::has_tail_effect_variable(ctx, func_ty) {
+            continue;
+        }
+
+        polymorphic_roots.insert(func_name);
+
+        // Add evidence param to function signature
+        let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+        let new_func_ty = crate::evidence::build_func_type_with_evidence(ctx, func_ty, evidence_ty);
+
+        let body = func_op.body(ctx);
+        let blocks = &ctx.region(body).blocks;
+        if blocks.is_empty() {
+            continue;
+        }
+        let entry_block = blocks[0];
+        let loc = ctx.op(func_op_ref).location;
+
+        ctx.prepend_block_arg(
+            entry_block,
+            trunk_ir::context::BlockArgData {
+                ty: evidence_ty,
+                attrs: Default::default(),
+            },
+        );
+        ctx.detach_region(body);
+        let new_op = arena_func::func(ctx, loc, func_name, new_func_ty, body).op_ref();
+        // Replace old func op in module block
+        let module_block = ctx.region(ctx.op(module.op()).regions[0]).blocks[0];
+        ctx.insert_op_before(module_block, func_op_ref, new_op);
+        ctx.remove_op_from_block(module_block, func_op_ref);
+
+        fns_with_evidence.insert(func_name);
+    }
+
+    // Phase 2: Transform all handler root functions.
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
         let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
@@ -516,28 +571,33 @@ fn transform_handler_roots(
         let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
         let i32_ty = i32_type_ref(ctx);
 
-        // Create empty evidence: arith.const 0 + adt.array_new
-        let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
-        let empty_evidence = arena_adt::array_new(
-            ctx,
-            loc,
-            vec![ctx.op_result(zero_const.op_ref(), 0)],
-            evidence_ty,
-            evidence_ty,
-        );
-        let ev_value = ctx.op_result(empty_evidence.op_ref(), 0);
-
-        // Insert at start of entry block
-        let first_op = ctx.block(entry_block).ops.first().copied();
-        if let Some(first) = first_op {
-            ctx.insert_op_before(entry_block, first, zero_const.op_ref());
-            ctx.insert_op_before(entry_block, first, empty_evidence.op_ref());
+        let (ev_value, prepend_evidence) = if polymorphic_roots.contains(&func_name) {
+            // Use evidence parameter from caller (first block arg)
+            let ev = ctx.block_args(entry_block)[0];
+            (ev, true) // evidence param exists but calls haven't been updated yet
         } else {
-            ctx.push_op(entry_block, zero_const.op_ref());
-            ctx.push_op(entry_block, empty_evidence.op_ref());
-        }
+            // Create empty evidence for non-polymorphic handler roots
+            let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+            let empty_evidence = arena_adt::array_new(
+                ctx,
+                loc,
+                vec![ctx.op_result(zero_const.op_ref(), 0)],
+                evidence_ty,
+                evidence_ty,
+            );
+            let ev = ctx.op_result(empty_evidence.op_ref(), 0);
 
-        // Transform the entry block (prepend_evidence=true: handler roots have no evidence param)
+            let first_op = ctx.block(entry_block).ops.first().copied();
+            if let Some(first) = first_op {
+                ctx.insert_op_before(entry_block, first, zero_const.op_ref());
+                ctx.insert_op_before(entry_block, first, empty_evidence.op_ref());
+            } else {
+                ctx.push_op(entry_block, zero_const.op_ref());
+                ctx.push_op(entry_block, empty_evidence.op_ref());
+            }
+            (ev, true) // prepend evidence to calls
+        };
+
         let handled_by_tag = collect_handled_abilities_by_tag(ctx, entry_block);
         transform_shifts_in_block(
             ctx,
@@ -547,10 +607,9 @@ fn transform_handler_roots(
             registry,
             fns_with_evidence,
             None,
-            true, // prepend evidence to calls (no evidence param yet)
+            prepend_evidence,
         );
 
-        // Also transform remaining blocks
         for &block in blocks.iter().skip(1) {
             let handled_by_tag = collect_handled_abilities_by_tag(ctx, block);
             transform_shifts_in_block(
@@ -561,8 +620,116 @@ fn transform_handler_roots(
                 registry,
                 fns_with_evidence,
                 None,
-                true,
+                prepend_evidence,
             );
+        }
+    }
+
+    polymorphic_roots
+}
+
+/// Update call sites across the module to pass evidence to newly-evidenced
+/// handler root functions.
+///
+/// For callers with evidence (first block arg), uses that evidence.
+/// For callers without evidence (pure functions), creates empty evidence.
+fn update_calls_to_newly_evidenced(
+    ctx: &mut IrContext,
+    module: Module,
+    newly_evidenced: &HashSet<Symbol>,
+    handler_root_fns: &HashSet<Symbol>,
+) {
+    let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+    let i32_ty = i32_type_ref(ctx);
+
+    let func_ops: Vec<OpRef> = module.ops(ctx);
+    for func_op_ref in func_ops {
+        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+            continue;
+        };
+        let func_name = func_op.sym_name(ctx);
+        // Handler roots already handle their own calls via transform_handler_roots.
+        if handler_root_fns.contains(&func_name) {
+            continue;
+        }
+
+        let body = func_op.body(ctx);
+        update_calls_in_region(ctx, body, newly_evidenced, evidence_ty, i32_ty);
+    }
+}
+
+fn update_calls_in_region(
+    ctx: &mut IrContext,
+    region: RegionRef,
+    newly_evidenced: &HashSet<Symbol>,
+    evidence_ty: TypeRef,
+    i32_ty: TypeRef,
+) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    for block in blocks {
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        for op in ops {
+            // Recurse into nested regions first
+            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            for r in regions {
+                update_calls_in_region(ctx, r, newly_evidenced, evidence_ty, i32_ty);
+            }
+
+            let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+                continue;
+            };
+            let callee = call_op.callee(ctx);
+            if !newly_evidenced.contains(&callee) {
+                continue;
+            }
+
+            // Check if evidence is already the first argument
+            let operands = ctx.op_operands(op).to_vec();
+            if !operands.is_empty()
+                && arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(operands[0]))
+            {
+                continue;
+            }
+
+            let loc = ctx.op(op).location;
+
+            // Use enclosing evidence if available, otherwise create empty
+            let ev = if let Some(enclosing) = crate::evidence::find_enclosing_evidence(ctx, op) {
+                enclosing
+            } else {
+                let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+                let empty = arena_adt::array_new(
+                    ctx,
+                    loc,
+                    vec![ctx.op_result(zero.op_ref(), 0)],
+                    evidence_ty,
+                    evidence_ty,
+                );
+                ctx.insert_op_before(block, op, zero.op_ref());
+                ctx.insert_op_before(block, op, empty.op_ref());
+                ctx.op_result(empty.op_ref(), 0)
+            };
+
+            // Build new call with evidence prepended
+            let mut new_args = vec![ev];
+            new_args.extend(operands.iter().copied());
+
+            let result_ty = ctx
+                .op_result_types(op)
+                .first()
+                .copied()
+                .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+
+            let new_call = arena_func::call(ctx, loc, new_args, result_ty, callee);
+
+            if !ctx.op_results(op).is_empty() {
+                let old_result = ctx.op_result(op, 0);
+                let new_result = ctx.op_result(new_call.op_ref(), 0);
+                ctx.replace_all_uses(old_result, new_result);
+            }
+
+            ctx.insert_op_before(block, op, new_call.op_ref());
+            ctx.remove_op_from_block(block, op);
         }
     }
 }
@@ -981,23 +1148,39 @@ pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
     validate_ability_id_uniqueness(ctx, module);
 
     // Collect functions with evidence
-    let fns_with_evidence = collect_functions_with_evidence(ctx, module);
+    let mut fns_with_evidence = collect_functions_with_evidence(ctx, module);
 
     // Transform handler-root functions first
     let handler_root_fns = collect_handler_root_functions(ctx, module, &fns_with_evidence);
-    if !handler_root_fns.is_empty() {
+    let newly_evidenced = if !handler_root_fns.is_empty() {
         transform_handler_roots(
             ctx,
             module,
             &handler_root_fns,
-            &fns_with_evidence,
+            &mut fns_with_evidence,
             &mut registry,
-        );
+        )
+    } else {
+        HashSet::new()
+    };
+
+    // For newly-evidenced handler roots, update call sites across the module
+    // (e.g., main calling run_reader, lambda_3 calling run_state).
+    if !newly_evidenced.is_empty() {
+        update_calls_to_newly_evidenced(ctx, module, &newly_evidenced, &handler_root_fns);
     }
 
-    // Transform shifts in functions with evidence
+    // Transform shifts in functions with evidence (excluding handler roots
+    // which were already transformed above).
     if !fns_with_evidence.is_empty() {
-        transform_shifts_in_module(ctx, module, &fns_with_evidence, &mut registry);
+        let non_root_evidence_fns: HashSet<Symbol> = fns_with_evidence
+            .iter()
+            .filter(|name| !handler_root_fns.contains(name))
+            .copied()
+            .collect();
+        if !non_root_evidence_fns.is_empty() {
+            transform_shifts_in_module(ctx, module, &non_root_evidence_fns, &mut registry);
+        }
     }
 
     // Validate no unresolved shifts remain

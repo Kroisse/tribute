@@ -20,6 +20,17 @@ fn main() {
         .args(["--crate-type", "staticlib"])
         .args(["--target-dir", runtime_target_dir.to_str().unwrap()])
         .current_dir(&manifest_dir)
+        // Strip coverage/instrumentation flags from the environment so that
+        // the runtime staticlib is built without instrumentation.
+        //
+        // `cargo-llvm-cov` injects `-C instrument-coverage` via RUSTC_WRAPPER
+        // (and possibly RUSTFLAGS).  When the instrumented runtime is linked
+        // into a native binary that uses libmprompt's setjmp/longjmp-based
+        // stack switching, the profiling counters corrupt heap metadata across
+        // stack-switch boundaries (`munmap_chunk(): invalid pointer`).
+        .env_remove("RUSTC_WRAPPER")
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .status()
         .expect("failed to invoke cargo to build tribute-runtime");
 
@@ -41,4 +52,10 @@ fn main() {
     println!("cargo:rerun-if-changed=crates/tribute-runtime/libmprompt/src");
     println!("cargo:rerun-if-changed=crates/tribute-runtime/libmprompt/include");
     println!("cargo:rerun-if-changed=crates/tribute-runtime/Cargo.toml");
+
+    // Rerun when instrumentation-related env vars change (e.g., switching
+    // between coverage and normal builds) so the cached staticlib doesn't go stale.
+    println!("cargo:rerun-if-env-changed=RUSTC_WRAPPER");
+    println!("cargo:rerun-if-env-changed=RUSTFLAGS");
+    println!("cargo:rerun-if-env-changed=CARGO_ENCODED_RUSTFLAGS");
 }

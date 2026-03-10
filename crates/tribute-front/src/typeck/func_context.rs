@@ -441,19 +441,23 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                     merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e1));
             }
-            (Some(e1), Some(e2)) => {
-                // Both open with different rest variables: generate constraints
+            (Some(_e1), Some(_e2)) => {
+                // Both open with different rest variables.
+                //
+                // We accumulate the concrete effects into the current row with
+                // a fresh tail variable. We intentionally do NOT add constraints
+                // like `e1 = {incoming_effects | e3}` here, because the row
+                // variable tails may have semantic constraints from other parts
+                // of the type checker (e.g., a handler's return effect that
+                // excludes handled abilities). Forcing concrete effects into
+                // those tail variables would create conflicts.
+                //
+                // The sub-expression row variables (e1, e2) are independently
+                // constrained through callee type unification and ability
+                // operation typing. The overall function effect will be checked
+                // against the declared effect annotation at the end.
                 let e3 = self.fresh_row_var();
 
-                // e1 = {effect's effects | e3}
-                let row_for_e1 = EffectRow::new(db, effect.effects(db).clone(), Some(e3));
-                self.constrain_row_eq(EffectRow::open(db, e1), row_for_e1);
-
-                // e2 = {current's effects | e3}
-                let row_for_e2 = EffectRow::new(db, current.effects(db).clone(), Some(e3));
-                self.constrain_row_eq(EffectRow::open(db, e2), row_for_e2);
-
-                // Result: {current effects ∪ effect effects | e3} with unification
                 let effects =
                     merge_effects_with_unification(self, current.effects(db), effect.effects(db));
                 self.current_effect = EffectRow::new(db, effects, Some(e3));
@@ -783,7 +787,6 @@ mod tests {
 mod merge_effect_tests {
     use super::*;
     use crate::ast::AbilityId;
-    use crate::typeck::constraint::Constraint;
     use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
     use trunk_ir::SymbolVec;
@@ -868,23 +871,10 @@ mod merge_effect_tests {
         assert_ne!(e3, e1);
         assert_ne!(e3, e2);
 
-        // Should have generated 2 constraints
+        // No row constraints are generated — the sub-expression row variables
+        // (e1, e2) are independently constrained through callee type unification.
         let constraints = ctx.take_constraints();
-        assert_eq!(constraints.len(), 2);
-
-        // Verify constraint structure
-        for constraint in constraints.constraints() {
-            match constraint {
-                Constraint::RowEq(lhs, rhs) => {
-                    // LHS should be an open row with e1 or e2
-                    let lhs_rest = lhs.rest(db);
-                    assert!(lhs_rest == Some(e1) || lhs_rest == Some(e2));
-                    // RHS should contain the other effect with e3 as rest
-                    assert_eq!(rhs.rest(db), Some(e3));
-                }
-                _ => panic!("Expected RowEq constraint"),
-            }
-        }
+        assert!(constraints.is_empty());
     }
 
     #[salsa_test]

@@ -14,7 +14,6 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::ffi::c_void;
 use core::ptr::NonNull;
 
 use smallvec::SmallVec;
@@ -117,7 +116,7 @@ type MpStartFun = unsafe extern "C" fn(*mut MpPrompt, *mut u8) -> *mut u8;
 type MpYieldFun = unsafe extern "C" fn(*mut MpResume, *mut u8) -> *mut u8;
 
 unsafe extern "C" {
-    fn mp_init(config: *const c_void);
+    fn mp_init(config: *const core::ffi::c_void);
     fn mp_prompt(fun: MpStartFun, arg: *mut u8) -> *mut u8;
     fn mp_yield(p: *mut MpPrompt, fun: MpYieldFun, arg: *mut u8) -> *mut u8;
     fn mp_resume(r: *mut MpResume, result: *mut u8) -> *mut u8;
@@ -135,8 +134,7 @@ use tls::{thread_state, tls_init};
 
 /// Initialize the Tribute runtime (must be called once before any ability use).
 ///
-/// Calls `mp_init(NULL)` to set up libmprompt's internal state (signal handlers,
-/// thread-local storage, gstack pools, etc.).
+/// Calls `mp_init` to set up libmprompt's internal state.
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_init() {
     unsafe {
@@ -654,11 +652,20 @@ impl Evidence {
 
     fn extend(&self, marker: Marker) -> Self {
         let mut new = self.clone();
-        let pos = new
+        match new
             .markers
             .binary_search_by_key(&marker.ability_id, |m| m.ability_id)
-            .unwrap_or_else(|pos| pos);
-        new.markers.insert(pos, marker);
+        {
+            Ok(pos) => {
+                // Same ability_id already exists (nested same-ability handler).
+                // Replace with the new (inner) marker so lookup returns the
+                // closest handler.
+                new.markers[pos] = marker;
+            }
+            Err(pos) => {
+                new.markers.insert(pos, marker);
+            }
+        }
         new
     }
 }
