@@ -556,6 +556,10 @@ fn main() {
 
 /// Test nested handler calls.
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "flaky munmap_chunk crash in libmprompt (#509)"
+)]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -600,6 +604,10 @@ fn main() {
 /// Stresses the runtime tag uniqueness mechanism more than
 /// `test_nested_state_calls` (5 yields × 3 increments = 15+ prompt frames).
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "flaky munmap_chunk crash in libmprompt (#509)"
+)]
 fn test_nested_state_triple_increment() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -995,6 +1003,10 @@ fn main() {
 /// with a Bool initial value, then get() → 7. Verifies each handler dispatches to
 /// the correct prompt with distinct type parameters.
 #[test]
+#[cfg_attr(
+    target_os = "linux",
+    ignore = "flaky munmap_chunk crash in libmprompt (#509)"
+)]
 fn test_same_ability_different_type_params_nested() {
     let code = r#"ability State(s) {
     fn get() -> s
