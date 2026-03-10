@@ -78,6 +78,26 @@ pub fn is_effectful_type(ctx: &IrContext, ty: TypeRef) -> bool {
     !effect_data.params.is_empty()
 }
 
+/// Check if a `core.func` type has a tail effect variable (effect-polymorphic).
+pub fn has_tail_effect_variable(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        return false;
+    }
+
+    let effect_ty = match data.attrs.get(&Symbol::new("effect")) {
+        Some(Attribute::Type(ty)) => *ty,
+        _ => return false,
+    };
+
+    let effect_data = ctx.types.get(effect_ty);
+    if effect_data.dialect != Symbol::new("core") || effect_data.name != Symbol::new("effect_row") {
+        return false;
+    }
+
+    effect_data.attrs.contains_key(&Symbol::new("tail_var_id"))
+}
+
 /// Check if a `core.func` type has evidence as its first parameter.
 fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
     let data = ctx.types.get(func_ty);
@@ -120,7 +140,7 @@ fn collect_functions_with_evidence_param(ctx: &IrContext, module: Module) -> Has
 }
 
 /// Build a new `core.func` TypeRef with evidence prepended to params.
-fn build_func_type_with_evidence(
+pub fn build_func_type_with_evidence(
     ctx: &mut IrContext,
     old_func_ty: TypeRef,
     ev_ty: TypeRef,
@@ -260,6 +280,8 @@ impl RewritePattern for TransformEvidenceCallPattern {
             return false;
         }
 
+        let loc = ctx.op(op).location;
+
         let Some(ev_value) = find_enclosing_evidence(ctx, op) else {
             return false;
         };
@@ -272,7 +294,6 @@ impl RewritePattern for TransformEvidenceCallPattern {
 
         let old_args: Vec<ValueRef> = operands.to_vec();
         let result_types: Vec<TypeRef> = ctx.op_result_types(op).to_vec();
-        let loc = ctx.op(op).location;
 
         let mut new_args = vec![ev_value];
         new_args.extend(old_args.iter().copied());

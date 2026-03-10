@@ -654,11 +654,20 @@ impl Evidence {
 
     fn extend(&self, marker: Marker) -> Self {
         let mut new = self.clone();
-        let pos = new
+        match new
             .markers
             .binary_search_by_key(&marker.ability_id, |m| m.ability_id)
-            .unwrap_or_else(|pos| pos);
-        new.markers.insert(pos, marker);
+        {
+            Ok(pos) => {
+                // Same ability_id already exists (nested same-ability handler).
+                // Replace with the new (inner) marker so lookup returns the
+                // closest handler.
+                new.markers[pos] = marker;
+            }
+            Err(pos) => {
+                new.markers.insert(pos, marker);
+            }
+        }
         new
     }
 }
