@@ -27,7 +27,7 @@
 
 mod common;
 
-use common::compile_and_run_native;
+use common::{assert_native_output, compile_and_run_native};
 
 use ropey::Rope;
 use salsa::Database;
@@ -948,4 +948,130 @@ fn main() { }
         "Ability op should substitute type params into signature, got {} diagnostics",
         diagnostics.len()
     );
+}
+
+// =============================================================================
+// Multi-Ability Execution Tests (#499)
+// =============================================================================
+
+/// Test two different abilities (State + Reader) with nested handlers.
+///
+/// `use_both()` performs Reader::ask() then State::set/get.
+/// Outer handler provides Reader(42), inner handler runs State starting at 0.
+/// Expected: Reader::ask() returns 42, State::set(42), State::get() returns 42.
+#[test]
+#[ignore = "Runtime hangs with nested handlers for two different abilities — see #499"]
+fn test_two_abilities_nested_handlers() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+ability Reader(r) {
+    fn ask() -> r
+}
+
+fn use_both() ->{State(Nat), Reader(Nat)} Nat {
+    let config = Reader::ask()
+    State::set(config)
+    State::get()
+}
+
+fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { Reader::ask() -> k } -> run_reader(fn() { k(value) }, value)
+    }
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("two_abilities_nested.trb", code, "42");
+}
+
+/// Test same ability with different instances nested (State inside State).
+///
+/// `inner()` uses its own State starting at 100: get(100), set(101), get() → 101.
+/// `outer()` uses outer State starting at 0: get(0), run inner → 101, set(0+101), get() → 101.
+#[test]
+#[ignore = "RowMismatch: same ability nested causes effect row duplication — see #499"]
+fn test_same_ability_different_type_params_nested() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn inner() ->{State(Nat)} Nat {
+    let n = State::get()
+    State::set(n + 1)
+    State::get()
+}
+
+fn outer() ->{State(Nat)} Nat {
+    let a = State::get()
+    let b = run_state(fn() { inner() }, 100)
+    State::set(a + b)
+    State::get()
+}
+
+fn main() {
+    let result = run_state(fn() { outer() }, 0)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("same_ability_nested.trb", code, "101");
+}
+
+/// Test a single handle expression that handles multiple abilities at once.
+///
+/// `use_both()` calls Reader::ask() → 10, State::set(10) (discarded by stateless handler),
+/// State::get() → 0 (stateless handler returns +0), returns 0+1=1.
+#[test]
+fn test_multiple_abilities_single_handler() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+ability Reader(r) {
+    fn ask() -> r
+}
+
+fn use_both() ->{State(Nat), Reader(Nat)} Nat {
+    let base = Reader::ask()
+    State::set(base)
+    let n = State::get()
+    n + 1
+}
+
+fn main() {
+    let result = handle use_both() {
+        { result } -> result
+        { State::get() -> k } -> k(+0)
+        { State::set(v) -> k } -> k(Nil)
+        { Reader::ask() -> k } -> k(10)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("multi_ability_single_handler.trb", code, "1");
 }
