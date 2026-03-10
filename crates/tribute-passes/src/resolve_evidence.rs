@@ -87,6 +87,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
 
     let mut has_lookup = false;
     let mut has_extend = false;
+    let mut has_next_tag = false;
 
     for op in &ops {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, *op) {
@@ -95,11 +96,13 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
                 has_lookup = true;
             } else if name == Symbol::new("__tribute_evidence_extend") {
                 has_extend = true;
+            } else if name == Symbol::new("__tribute_next_tag") {
+                has_next_tag = true;
             }
         }
     }
 
-    if has_lookup && has_extend {
+    if has_lookup && has_extend && has_next_tag {
         return;
     }
 
@@ -193,6 +196,38 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             body,
         );
         // Insert at the beginning of the module
+        let first_op = ctx.block(module_block).ops.first().copied();
+        if let Some(first) = first_op {
+            ctx.insert_op_before(module_block, first, func_op.op_ref());
+        } else {
+            ctx.push_op(module_block, func_op.op_ref());
+        }
+    }
+
+    if !has_next_tag {
+        let i32_ty = i32_type_ref(ctx);
+
+        // fn __tribute_next_tag() -> i32
+        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty(), None).as_type_ref();
+
+        let body_block = ctx.create_block(trunk_ir::context::BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let unreachable_op = arena_func::unreachable(ctx, loc);
+        ctx.push_op(body_block, unreachable_op.op_ref());
+        let body = ctx.create_region(trunk_ir::context::RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![body_block],
+            parent_op: None,
+        });
+        let func_op = arena_func::func(ctx, loc, Symbol::new("__tribute_next_tag"), func_ty, body);
+        // Mark as C ABI extern function
+        ctx.op_mut(func_op.op_ref())
+            .attributes
+            .insert(Symbol::new("abi"), Attribute::String("C".to_string()));
         let first_op = ctx.block(module_block).ops.first().copied();
         if let Some(first) = first_op {
             ctx.insert_op_before(module_block, first, func_op.op_ref());
@@ -645,7 +680,6 @@ fn transform_shifts_in_block(
 
             // Generate evidence_extend calls for each ability
             let i32_ty = i32_type_ref(ctx);
-            let prompt_tag_ty = arena_cont::prompt_tag(ctx).as_type_ref();
             let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
             let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
@@ -653,10 +687,17 @@ fn transform_shifts_in_block(
             let operations = collect_operations_for_tag(ctx, dispatch_blk, tag);
             let op_table_idx = registry.register(abilities.clone(), operations, loc);
 
-            // Create tag constant
-            let tag_const = arith::r#const(ctx, loc, prompt_tag_ty, Attribute::Int(tag as i128));
-            let tag_val = ctx.op_result(tag_const.op_ref(), 0);
-            ctx.insert_op_before(block, op, tag_const.op_ref());
+            // Generate a unique prompt tag at runtime (prevents TLS registry
+            // collisions when the same handler is invoked recursively).
+            let tag_call = arena_func::call(
+                ctx,
+                loc,
+                std::iter::empty::<trunk_ir::refs::ValueRef>(),
+                i32_ty,
+                Symbol::new("__tribute_next_tag"),
+            );
+            let tag_val = ctx.op_result(tag_call.op_ref(), 0);
+            ctx.insert_op_before(block, op, tag_call.op_ref());
 
             // Create op_table_index constant
             let op_table_idx_const =
@@ -696,6 +737,10 @@ fn transform_shifts_in_block(
                 current_ev = ctx.op_result(extend_call.op_ref(), 0);
                 ctx.insert_op_before(block, op, extend_call.op_ref());
             }
+
+            // Store the runtime tag as the first operand of cont.push_prompt
+            // so the downstream cont_to_libmprompt pass can use it.
+            ctx.push_op_operand(op, tag_val);
 
             // Transform body/handlers with extended evidence.
             // Pass current_ev as the evidence value so inner transforms use it.

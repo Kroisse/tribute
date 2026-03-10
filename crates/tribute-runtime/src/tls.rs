@@ -85,6 +85,7 @@ pub(crate) struct ThreadState {
     pub(crate) yield_shift_value: Cell<*mut u8>,
     pub(crate) yield_rc_roots: Cell<(*mut u8, usize)>,
     pub(crate) prompt_registry: RefCell<PromptRegistry>,
+    tag_counter: Cell<i32>,
 }
 
 impl ThreadState {
@@ -96,7 +97,14 @@ impl ThreadState {
             yield_shift_value: Cell::new(core::ptr::null_mut()),
             yield_rc_roots: Cell::new((core::ptr::null_mut(), 0)),
             prompt_registry: RefCell::new(PromptRegistry::new()),
+            tag_counter: Cell::new(0),
         }
+    }
+
+    pub(crate) fn next_tag(&self) -> i32 {
+        let tag = self.tag_counter.get();
+        self.tag_counter.set(tag.wrapping_add(1));
+        tag
     }
 }
 

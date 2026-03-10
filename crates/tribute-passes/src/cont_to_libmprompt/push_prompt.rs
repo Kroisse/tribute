@@ -113,16 +113,22 @@ impl RewritePattern for LowerPushPromptPattern {
         let body_fn = arena_func::constant(ctx, loc, ptr_ty, Symbol::from_dynamic(&body_name));
         rewriter.insert_op(body_fn.op_ref());
 
-        // %tag_val
-        let tag_bits = match tag {
-            Attribute::Int(bits) => bits,
-            other => {
-                unreachable!("cont.push_prompt expected Int tag, got {other:?} at {loc:?}")
-            }
+        // %tag_val: use the runtime tag operand if present (set by resolve_evidence),
+        // otherwise fall back to the static tag attribute.
+        let tag_val = if !ctx.op_operands(op).is_empty() {
+            // Runtime tag from resolve_evidence (first operand)
+            ctx.op_operands(op)[0]
+        } else {
+            let tag_bits = match tag {
+                Attribute::Int(bits) => bits,
+                other => {
+                    unreachable!("cont.push_prompt expected Int tag, got {other:?} at {loc:?}")
+                }
+            };
+            let c = arith::r#const(ctx, loc, i32_ty, Attribute::Int(tag_bits));
+            rewriter.insert_op(c.op_ref());
+            c.result(ctx)
         };
-        let c = arith::r#const(ctx, loc, i32_ty, Attribute::Int(tag_bits));
-        rewriter.insert_op(c.op_ref());
-        let tag_val = c.result(ctx);
 
         // %result = func.call @__tribute_prompt(%tag_val, %body_fn, %env)
         let prompt_call = arena_func::call(

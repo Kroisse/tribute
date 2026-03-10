@@ -53,6 +53,8 @@ pub(super) fn ensure_libmprompt_ffi(ctx: &mut IrContext, module: Module) {
         new_ops.push(op);
     };
 
+    // __tribute_next_tag() -> i32
+    declare(ctx, "__tribute_next_tag", &[], i32_ty);
     // __tribute_prompt(tag: i32, body_fn: ptr, env: ptr) -> ptr
     declare(ctx, "__tribute_prompt", &[i32_ty, ptr_ty, ptr_ty], ptr_ty);
     // __tribute_yield(tag: i32, op_idx: i32, shift_value: ptr) -> ptr

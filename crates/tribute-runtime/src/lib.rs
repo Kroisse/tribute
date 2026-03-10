@@ -146,6 +146,23 @@ pub extern "C" fn __tribute_init() {
 }
 
 // =============================================================================
+// Prompt tag generation
+// =============================================================================
+
+/// Generate a unique prompt tag for this thread.
+///
+/// Each call returns a distinct i32, ensuring that recursive/nested handlers
+/// for the same ability get different tags. This prevents TLS registry
+/// collisions when `mp_resume` restores a continuation across prompt
+/// boundaries.
+///
+/// Signature: `() -> i32`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_next_tag() -> i32 {
+    unsafe { thread_state() }.next_tag()
+}
+
+// =============================================================================
 // Debug I/O (temporary — for e2e test verification)
 // =============================================================================
 
@@ -738,6 +755,17 @@ mod tests {
         __tribute_reset_yield_state();
         assert_eq!(__tribute_yield_active(), 0);
         assert_eq!(__tribute_get_yield_op_idx(), 0);
+    }
+
+    #[test]
+    fn test_next_tag_sequential() {
+        __tribute_init();
+        let a = __tribute_next_tag();
+        let b = __tribute_next_tag();
+        let c = __tribute_next_tag();
+        // Tags must be strictly sequential (unique per thread).
+        assert_eq!(b, a + 1);
+        assert_eq!(c, a + 2);
     }
 
     #[test]

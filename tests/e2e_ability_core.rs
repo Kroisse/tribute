@@ -563,7 +563,6 @@ fn main() {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "native backend: mp_prompt_is_ancestor assertion failure at runtime"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -594,6 +593,51 @@ fn main() {
 }
 "#;
     let output = compile_and_run_native("nested_state_calls.trb", code);
+    assert!(
+        output.status.success(),
+        "Native binary exited with non-zero status: {:?}\nstderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Test deeply nested recursive handler invocations.
+///
+/// Performs three increments starting from 10, resulting in state 13.
+/// Stresses the runtime tag uniqueness mechanism more than
+/// `test_nested_state_calls` (5 yields × 3 increments = 15+ prompt frames).
+#[test]
+fn test_nested_state_triple_increment() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn increment() ->{State(Nat)} Nil {
+    let n = State::get()
+    State::set(n + 1)
+}
+
+fn triple_increment() ->{State(Nat)} Nat {
+    increment()
+    increment()
+    increment()
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let _ = run_state(fn() { triple_increment() }, 10)
+}
+"#;
+    let output = compile_and_run_native("nested_state_triple.trb", code);
     assert!(
         output.status.success(),
         "Native binary exited with non-zero status: {:?}\nstderr: {}",

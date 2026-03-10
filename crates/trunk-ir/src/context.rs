@@ -227,6 +227,16 @@ impl IrContext {
         });
     }
 
+    /// Append an operand to an operation's operand list.
+    pub fn push_op_operand(&mut self, op: OpRef, val: ValueRef) {
+        let index = self.ops[op].operands.len(&self.value_pool) as u32;
+        self.ops[op].operands.push(val, &mut self.value_pool);
+        self.uses[val].push(Use {
+            user: op,
+            operand_index: index,
+        });
+    }
+
     /// Get the i-th result value of an operation.
     pub fn op_result(&self, op: OpRef, index: u32) -> ValueRef {
         self.result_values[op].as_slice(&self.value_pool)[index as usize]

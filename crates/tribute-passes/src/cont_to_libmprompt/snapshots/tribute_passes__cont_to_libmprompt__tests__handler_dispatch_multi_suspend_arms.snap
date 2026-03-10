@@ -1,9 +1,11 @@
 ---
 source: crates/tribute-passes/src/cont_to_libmprompt/tests.rs
-assertion_line: 350
 expression: result
 ---
 core.module @test {
+  func.func @__tribute_next_tag() -> core.i32 {
+      func.unreachable
+  }
   func.func @__tribute_prompt(%0: core.i32, %1: core.ptr, %2: core.ptr) -> core.ptr {
     ^bb0:
       func.unreachable
