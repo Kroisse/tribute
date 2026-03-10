@@ -20,6 +20,15 @@ fn main() {
         .args(["--crate-type", "staticlib"])
         .args(["--target-dir", runtime_target_dir.to_str().unwrap()])
         .current_dir(&manifest_dir)
+        // Strip coverage/sanitizer flags from the environment so that the
+        // runtime staticlib is built without instrumentation.  Under
+        // `cargo-llvm-cov`, RUSTFLAGS contains `-C instrument-coverage` which
+        // would inject profiling counters into the runtime.  When linked into
+        // a native binary that uses libmprompt's setjmp/longjmp-based stack
+        // switching, the instrumented stack frames cause heap corruption
+        // (`munmap_chunk(): invalid pointer`).
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .status()
         .expect("failed to invoke cargo to build tribute-runtime");
 
