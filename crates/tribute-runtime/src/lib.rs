@@ -14,7 +14,6 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::ffi::c_void;
 use core::ptr::NonNull;
 
 use smallvec::SmallVec;
@@ -117,11 +116,26 @@ type MpStartFun = unsafe extern "C" fn(*mut MpPrompt, *mut u8) -> *mut u8;
 type MpYieldFun = unsafe extern "C" fn(*mut MpResume, *mut u8) -> *mut u8;
 
 unsafe extern "C" {
-    fn mp_init(config: *const c_void);
+    fn mp_init(config: *const MpConfig);
     fn mp_prompt(fun: MpStartFun, arg: *mut u8) -> *mut u8;
     fn mp_yield(p: *mut MpPrompt, fun: MpYieldFun, arg: *mut u8) -> *mut u8;
     fn mp_resume(r: *mut MpResume, result: *mut u8) -> *mut u8;
     fn mp_resume_drop(r: *mut MpResume);
+}
+
+/// Configuration for libmprompt, matches `mp_config_t` in mprompt.h.
+#[repr(C)]
+struct MpConfig {
+    gpool_enable: bool,
+    stack_grow_fast: bool,
+    stack_use_overcommit: bool,
+    stack_reset_decommits: bool,
+    gpool_max_size: isize,
+    stack_max_size: isize,
+    stack_exn_guaranteed: isize,
+    stack_initial_commit: isize,
+    stack_gap_size: isize,
+    stack_cache_count: isize,
 }
 
 mod asan;
@@ -135,13 +149,39 @@ use tls::{thread_state, tls_init};
 
 /// Initialize the Tribute runtime (must be called once before any ability use).
 ///
-/// Calls `mp_init(NULL)` to set up libmprompt's internal state (signal handlers,
-/// thread-local storage, gstack pools, etc.).
+/// Calls `mp_init` to set up libmprompt's internal state.
+///
+/// On Linux, we force overcommit mode (disabling gpools and on-demand signal
+/// handlers) to work around a `munmap_chunk(): invalid pointer` crash that
+/// occurs with nested handlers under the default gpool configuration.
+/// Overcommit mode commits the full stack upfront via `mprotect`, avoiding
+/// the SIGSEGV-based demand-paging path entirely.
 #[unsafe(no_mangle)]
 pub extern "C" fn __tribute_init() {
     unsafe {
         tls_init();
-        mp_init(core::ptr::null());
+
+        #[cfg(target_os = "linux")]
+        {
+            let config = MpConfig {
+                gpool_enable: false,
+                stack_grow_fast: false,
+                stack_use_overcommit: true,
+                stack_reset_decommits: false,
+                gpool_max_size: 0,
+                stack_max_size: 0,
+                stack_exn_guaranteed: 0,
+                stack_initial_commit: 0,
+                stack_gap_size: 0,
+                stack_cache_count: 4,
+            };
+            mp_init(&config);
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            mp_init(core::ptr::null());
+        }
     }
 }
 
