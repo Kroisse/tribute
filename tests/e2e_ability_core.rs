@@ -999,11 +999,12 @@ fn main() {
     assert_native_output("two_abilities_nested.trb", code, "42");
 }
 
-/// Test same ability with different instances nested (State inside State).
+/// Test same ability with different type parameter instances nested (State inside State).
 ///
-/// `inner()` uses its own State starting at 100: get(100), set(101), get() → 101.
-/// `outer()` delegates to a nested `run_state` for inner, verifying each handler
-/// dispatches to the correct prompt.
+/// `inner()` uses `State(Bool)`: get() → True, set(False), get() → False.
+/// `outer()` uses `State(Nat)`: set(7), delegates to a nested `run_state` for inner
+/// with a Bool initial value, then get() → 7. Verifies each handler dispatches to
+/// the correct prompt with distinct type parameters.
 #[test]
 fn test_same_ability_different_type_params_nested() {
     let code = r#"ability State(s) {
@@ -1019,15 +1020,15 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn inner() ->{State(Nat)} Nat {
-    let n = State::get()
-    State::set(n + 1)
+fn inner() ->{State(Bool)} Bool {
+    let b = State::get()
+    State::set(False)
     State::get()
 }
 
 fn outer() ->{State(Nat)} Nat {
     State::set(7)
-    let _ = run_state(fn() { inner() }, 100)
+    let _ = run_state(fn() { inner() }, True)
     State::get()
 }
 
@@ -1036,7 +1037,7 @@ fn main() {
     __tribute_print_nat(result)
 }
 "#;
-    // outer: set(7), run inner (doesn't affect outer State), get() → 7
+    // outer: set(7), run inner with State(Bool) (doesn't affect outer State(Nat)), get() → 7
     assert_native_output("same_ability_nested.trb", code, "7");
 }
 
