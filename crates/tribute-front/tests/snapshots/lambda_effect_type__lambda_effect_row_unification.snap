@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 309
 expression: ir_text
 ---
 core.module @test {
@@ -19,7 +20,7 @@ core.module @test {
       %5 = cont.resume %3, %4 : tribute_rt.any
       func.return %5
   }
-  func.func @with_state(%0: core.func(tribute_rt.any) {effect = core.effect_row(core.ability_ref(tribute_rt.any) {name = @State}) {tail_var_id = 1013}}, %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 1013} {
+  func.func @with_state(%0: core.func(tribute_rt.any) {effect = core.effect_row(core.ability_ref(tribute_rt.any) {name = @State}) {tail_var_id = 1010}}, %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 1010} {
     ^bb0:
       %2 = cont.push_prompt {tag = 0} : tribute_rt.any {
           %3 = func.call_indirect %0 : tribute_rt.any
@@ -48,7 +49,7 @@ core.module @test {
       }
       func.return %4
   }
-  func.func @"test::__lambda_2"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(tribute_rt.any) {name = @State}) {tail_var_id = 1004} {
+  func.func @"test::__lambda_2"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(tribute_rt.any) {name = @State}) {tail_var_id = 6} {
     ^bb0:
       %2 = arith.const {value = 4294967295} : cont.prompt_tag
       %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.any {

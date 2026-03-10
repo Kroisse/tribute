@@ -31,17 +31,16 @@ core.module @test {
       %13 = core.unrealized_conversion_cast %3 : core.i32
       func.return %13
   }
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
     ^bb0:
       %2 = arith.const {value = 4294967295} : cont.prompt_tag
       %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.any {
       }
-      %4 = core.unrealized_conversion_cast %3 : core.i32
-      func.return %4
+      func.return %3
   }
   func.func @main() -> core.i32 {
       %0 = adt.ref_null {type = tribute_rt.any} : tribute_rt.any
-      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(core.i32))
+      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.any))
       %2 = func.call %1 {callee = @run_with_state} : core.i32
       func.return %2
   }
