@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr }
 //! ```
 //!
 //! ## Implementation Strategy

@@ -232,6 +232,7 @@ pub fn lower_cont_to_trampoline(
     conversion_target.add_legal_op("cont", "drop");
     conversion_target.add_legal_op("cont", "done");
     conversion_target.add_legal_op("cont", "suspend");
+    conversion_target.add_legal_op("cont", "yield");
 
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();

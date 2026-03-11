@@ -21,6 +21,8 @@ pub mod evidence;
 pub mod live_vars;
 pub mod native;
 pub mod resolve_evidence;
+pub mod tail_resumptive;
+pub mod tr_dispatch;
 pub mod type_converter;
 pub mod wasm;
 

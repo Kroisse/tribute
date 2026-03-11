@@ -75,6 +75,7 @@ pub fn lower_cont_to_libmprompt(ctx: &mut IrContext, module: Module) {
     target.add_legal_op("cont", "drop");
     target.add_legal_op("cont", "done");
     target.add_legal_op("cont", "suspend");
+    target.add_legal_op("cont", "yield");
 
     if let Some(body) = module.body(ctx) {
         let illegal = target.verify(ctx, body);

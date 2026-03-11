@@ -608,12 +608,16 @@ pub unsafe extern "C" fn __tribute_cont_wrap_from_tls(resume: *mut u8) -> *mut u
 /// Marker for a single ability handler in the evidence.
 ///
 /// `#[repr(C)]` so Cranelift can access individual fields by offset.
+///
+/// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
+/// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
+/// not fully tail-resumptive.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Marker {
     pub ability_id: i32,
     pub prompt_tag: i32,
-    pub op_table_index: i32,
+    pub tr_dispatch_fn: *const u8,
 }
 
 /// Opaque evidence structure — a sorted array of `Marker`s keyed by `ability_id`.
@@ -697,7 +701,7 @@ pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_
 
 /// Extend evidence with a new marker (persistent — returns a new evidence).
 ///
-/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> ptr`
+/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr) -> ptr`
 ///
 /// # Safety
 ///
@@ -708,15 +712,35 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
     ev: *const Evidence,
     ability_id: i32,
     prompt_tag: i32,
-    op_table_index: i32,
+    tr_dispatch_fn: *const u8,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
     let marker = Marker {
         ability_id,
         prompt_tag,
-        op_table_index,
+        tr_dispatch_fn,
     };
     Box::into_raw(Box::new(ev.extend(marker)))
+}
+
+/// Look up the tail-resumptive dispatch function pointer for an ability.
+///
+/// Returns the `tr_dispatch_fn` pointer from the marker, or null if
+/// the handler is not tail-resumptive.
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
+/// `__tribute_evidence_extend`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_lookup_tr(
+    ev: *const Evidence,
+    ability_id: i32,
+) -> *const u8 {
+    let ev = unsafe { &*ev };
+    ev.lookup(ability_id).tr_dispatch_fn
 }
 
 // =============================================================================
@@ -888,13 +912,13 @@ mod tests {
     fn test_evidence_extend_single() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev2 = __tribute_evidence_extend(ev, 10, 1, 0);
+            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
 
             let ev2_ref = &*ev2;
             assert_eq!(ev2_ref.markers.len(), 1);
             assert_eq!(ev2_ref.markers[0].ability_id, 10);
             assert_eq!(ev2_ref.markers[0].prompt_tag, 1);
-            assert_eq!(ev2_ref.markers[0].op_table_index, 0);
+            assert!(ev2_ref.markers[0].tr_dispatch_fn.is_null());
 
             // Original evidence is unchanged (persistent)
             let ev_ref = &*ev;
@@ -910,9 +934,9 @@ mod tests {
         unsafe {
             let ev = __tribute_evidence_empty();
             // Insert in reverse order: 30, 10, 20
-            let ev = __tribute_evidence_extend(ev, 30, 3, 0);
-            let ev = __tribute_evidence_extend(ev, 10, 1, 0);
-            let ev = __tribute_evidence_extend(ev, 20, 2, 0);
+            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
 
             let ev_ref = &*ev;
             assert_eq!(ev_ref.markers.len(), 3);
@@ -930,8 +954,8 @@ mod tests {
     fn test_evidence_lookup_found() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(ev, 10, 1, 0);
-            let ev = __tribute_evidence_extend(ev, 20, 2, 5);
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
 
             let prompt_tag = __tribute_evidence_lookup(ev, 20);
             assert_eq!(prompt_tag, 2);

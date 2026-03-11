@@ -74,6 +74,8 @@ pub struct SuspendArm {
     pub expected_op_idx: u32,
     /// The body region containing the handler arm code
     pub body: RegionRef,
+    /// Whether this arm is tail-resumptive (handler just does `k(value)`)
+    pub tail_resumptive: bool,
 }
 
 /// Collect suspend arms from handler_dispatch's body region (arena version).
@@ -90,21 +92,34 @@ pub fn collect_suspend_arms(ctx: &IrContext, body: RegionRef) -> Vec<SuspendArm>
     };
 
     for &op in &ctx.block(first_block).ops {
-        let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, op) else {
-            continue;
-        };
+        // Try cont.yield first (tail-resumptive), then cont.suspend
+        let (ability_ref_ty, op_name, body, is_tr) =
+            if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, op) {
+                (
+                    yield_op.ability_ref(ctx),
+                    yield_op.op_name(ctx),
+                    yield_op.body(ctx),
+                    true,
+                )
+            } else if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, op) {
+                (
+                    suspend_op.ability_ref(ctx),
+                    suspend_op.op_name(ctx),
+                    suspend_op.body(ctx),
+                    false,
+                )
+            } else {
+                continue;
+            };
 
-        let ability_ref_ty = suspend_op.ability_ref(ctx);
         let ability_data = ctx.types.get(ability_ref_ty);
         let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
             Some(trunk_ir::types::Attribute::Symbol(s)) => Some(*s),
             _ => panic!(
-                "collect_suspend_arms: cont.suspend has invalid ability_ref type: {:?}",
+                "collect_suspend_arms: cont.suspend/yield has invalid ability_ref type: {:?}",
                 ability_data,
             ),
         };
-
-        let op_name = suspend_op.op_name(ctx);
 
         let expected_op_idx = compute_op_idx(ability_name, Some(op_name));
         assert!(
@@ -118,7 +133,8 @@ pub fn collect_suspend_arms(ctx: &IrContext, body: RegionRef) -> Vec<SuspendArm>
         );
         arms.push(SuspendArm {
             expected_op_idx,
-            body: suspend_op.body(ctx),
+            body,
+            tail_resumptive: is_tr,
         });
     }
 

@@ -319,6 +319,14 @@ pub(crate) fn calls_effectful_function(
                             }
                         }
                     }
+                    if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, child_op) {
+                        let yield_body = yield_op.body(ctx);
+                        for &block in &ctx.region(yield_body).blocks {
+                            if block_calls_effectful_inner(ctx, block, effectful) {
+                                return ControlFlow::Break(());
+                            }
+                        }
+                    }
                 }
             }
             return ControlFlow::Continue(walk::WalkAction::Skip);

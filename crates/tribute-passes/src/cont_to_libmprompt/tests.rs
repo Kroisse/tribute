@@ -14,6 +14,18 @@ fn run_pass(ir: &str) -> String {
     print_module(&ctx, module.op())
 }
 
+/// Run with tail-resumptive conversion (suspend→yield) before lowering.
+/// Note: this does NOT run the full TRO pipeline (resolve_evidence_dispatch,
+/// insert_tr_dispatch); it only tests that cont.yield is handled correctly
+/// by cont_to_libmprompt.
+fn run_pass_with_tr_conversion(ir: &str) -> String {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(&mut ctx, ir);
+    crate::tail_resumptive::convert_tail_resumptive(&mut ctx, module);
+    super::lower_cont_to_libmprompt(&mut ctx, module);
+    print_module(&ctx, module.op())
+}
+
 // ============================================================================
 // Test 1: FFI declarations
 // ============================================================================
@@ -349,6 +361,108 @@ fn test_handler_dispatch_multi_suspend_arms() {
     func.return %1
   }
 }"#,
+    );
+    insta::assert_snapshot!(result);
+}
+
+// ============================================================================
+// Test 10: Verify TRO annotation works with collect_suspend_arms
+// ============================================================================
+
+#[test]
+fn test_tro_annotation_propagates_to_suspend_arms() {
+    let mut ctx = IrContext::new();
+    let module = parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  func.func @test_tr() -> core.ptr {
+    %0 = cont.push_prompt {tag = 1} : core.ptr {
+      %c0 = arith.const {value = 0} : core.i32
+      scf.yield %c0
+    } {
+    }
+    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+      cont.done {
+        ^bb0(%v: core.ptr):
+          scf.yield %v
+      }
+      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+        ^bb0(%k: core.ptr, %sv: core.ptr):
+          %r = cont.resume %k, %sv : core.ptr
+          scf.yield %r
+      }
+    }
+    func.return %1
+  }
+}"#,
+    );
+
+    // Annotate
+    crate::tail_resumptive::convert_tail_resumptive(&mut ctx, module);
+
+    // Find handler_dispatch body and collect suspend arms
+    let body = module.body(&ctx).unwrap();
+    let first_block = ctx.region(body).blocks[0];
+    for &op in &ctx.block(first_block).ops.clone() {
+        if let Ok(func_op) = arena_func::Func::from_op(&ctx, op) {
+            let func_body = func_op.body(&ctx);
+            let func_block = ctx.region(func_body).blocks[0];
+            for &inner_op in &ctx.block(func_block).ops.clone() {
+                if let Ok(dispatch) =
+                    trunk_ir::dialect::cont::HandlerDispatch::from_op(&ctx, inner_op)
+                {
+                    let dispatch_body = dispatch.body(&ctx);
+                    let arms = crate::cont_util::collect_suspend_arms(&ctx, dispatch_body);
+                    assert_eq!(arms.len(), 1, "Should have 1 suspend arm");
+                    assert!(
+                        arms[0].tail_resumptive,
+                        "Arm should be marked as tail-resumptive"
+                    );
+                    return;
+                }
+            }
+        }
+    }
+    panic!("Should have found handler_dispatch");
+}
+
+// ============================================================================
+// Test 11: Tail-resumptive annotation does not affect handler dispatch codegen
+// ============================================================================
+
+#[test]
+fn test_handler_dispatch_with_tr_annotation() {
+    // TR arm: cont.resume %k, %sv in tail position.
+    // Phase 1 only annotates — handler dispatch codegen is unchanged.
+    // The resume call should still be present.
+    let result = run_pass_with_tr_conversion(
+        r#"core.module @test {
+  func.func @test_tr() -> core.i32 {
+    %0 = cont.push_prompt {tag = 1} : core.ptr {
+      %c = arith.const {value = 10} : core.i32
+      scf.yield %c
+    } {
+    }
+    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.i32} : core.i32 {
+      cont.done {
+        ^bb0(%v: core.i32):
+          scf.yield %v
+      }
+      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+        ^bb0(%k: core.ptr, %sv: core.ptr):
+          %r = cont.resume %k, %sv : core.ptr
+          scf.yield %r
+      }
+    }
+    func.return %1
+  }
+}"#,
+    );
+    // Phase 1: resume call is still present even for TR arms
+    assert!(
+        result.contains("callee = @__tribute_resume"),
+        "TR annotation alone should not remove __tribute_resume.\nOutput:\n{}",
+        result
     );
     insta::assert_snapshot!(result);
 }

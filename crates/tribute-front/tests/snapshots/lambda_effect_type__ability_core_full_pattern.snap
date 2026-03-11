@@ -14,7 +14,7 @@ core.module @test {
       }
       func.return %1
   }
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 8} {
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 8} {
     ^bb0:
       %2 = adt.ref_cast %1 {type = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}
       %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)], [@_1, tribute_rt.any]], name = @"test::__lambda_0::env"}} : cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)
@@ -22,7 +22,7 @@ core.module @test {
       %5 = cont.resume %3, %4 : tribute_rt.any
       func.return %5
   }
-  func.func @"test::__lambda_1"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 17} {
+  func.func @"test::__lambda_1"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row() {tail_var_id = 17} {
     ^bb0:
       %2 = adt.ref_cast %1 {type = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)]], name = @"test::__lambda_1::env"}} : adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)]], name = @"test::__lambda_1::env"}
       %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)]], name = @"test::__lambda_1::env"}} : cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any)
@@ -59,7 +59,7 @@ core.module @test {
       }
       func.return %4
   }
-  func.func @"test::__lambda_2"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@op_table_index, core.i32]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3} {
+  func.func @"test::__lambda_2"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3} {
     ^bb0:
       %2 = func.call {callee = @counter} : core.i32
       %3 = func.call {callee = @counter} : core.i32
