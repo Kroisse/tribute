@@ -453,7 +453,6 @@ fn build_arm_region(
             }
             continue;
         }
-
         clone_op_into_block_with_remap(ctx, new_block, op, &value_remap);
 
         // Map old results -> new results
