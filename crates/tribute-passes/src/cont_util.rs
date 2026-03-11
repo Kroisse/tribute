@@ -74,6 +74,8 @@ pub struct SuspendArm {
     pub expected_op_idx: u32,
     /// The body region containing the handler arm code
     pub body: RegionRef,
+    /// Whether this arm is tail-resumptive (handler just does `k(value)`)
+    pub tail_resumptive: bool,
 }
 
 /// Collect suspend arms from handler_dispatch's body region (arena version).
@@ -116,9 +118,11 @@ pub fn collect_suspend_arms(ctx: &IrContext, body: RegionRef) -> Vec<SuspendArm>
             ability_name,
             op_name,
         );
+        let is_tr = crate::tail_resumptive::is_marked_tail_resumptive(ctx, op);
         arms.push(SuspendArm {
             expected_op_idx,
             body: suspend_op.body(ctx),
+            tail_resumptive: is_tr,
         });
     }
 

@@ -434,6 +434,7 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
     tribute_passes::resolve_evidence::resolve_evidence_dispatch(&mut ctx, m);
+    tribute_passes::tail_resumptive::annotate_tail_resumptive(&mut ctx, m);
 
     Some((ctx, m))
 }
