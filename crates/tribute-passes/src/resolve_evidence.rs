@@ -542,7 +542,6 @@ fn transform_handler_roots(
             ev_value,
             &handled_by_tag,
             fns_with_evidence,
-            None,
             prepend_evidence,
         );
 
@@ -554,7 +553,6 @@ fn transform_handler_roots(
                 ev_value,
                 &handled_by_tag,
                 fns_with_evidence,
-                None,
                 prepend_evidence,
             );
         }
@@ -711,7 +709,6 @@ fn transform_shifts_in_module(
                 ev_value,
                 &handled_by_tag,
                 fns_with_evidence,
-                None,
                 false, // replace evidence (already present as first arg)
             );
         }
@@ -736,7 +733,6 @@ fn transform_shifts_in_block(
     ev_value: ValueRef,
     handled_by_tag: &HashMap<u32, Vec<TypeRef>>,
     fns_with_evidence: &HashSet<Symbol>,
-    _dispatch_block: Option<BlockRef>,
     prepend_evidence: bool,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
@@ -1037,7 +1033,6 @@ fn transform_shifts_in_region(
             ev_value,
             &handled_by_tag,
             fns_with_evidence,
-            None,
             prepend_evidence,
         );
     }
