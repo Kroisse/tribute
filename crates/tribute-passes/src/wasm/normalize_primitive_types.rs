@@ -13,7 +13,7 @@
 //! | `tribute_rt.nat`     | `core.i32`    |
 //! | `tribute_rt.bool`    | `core.i32`    |
 //! | `tribute_rt.float`   | `core.f64`    |
-//! | `tribute_rt.any`     | `wasm.anyref` |
+//! | `tribute_rt.anyref`     | `wasm.anyref` |
 //! | `tribute_rt.intref`  | `wasm.i31ref` |
 //!
 //! ## What this pass normalizes
@@ -79,8 +79,8 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         return Some(f64_ty);
     }
 
-    // tribute_rt.any -> wasm.anyref
-    if is_type(ctx, ty, "tribute_rt", "any") {
+    // tribute_rt.anyrefref -> wasm.anyref
+    if is_type(ctx, ty, "tribute_rt", "anyref") {
         let anyref_ty = ctx.types.intern(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref"))
                 .build(),

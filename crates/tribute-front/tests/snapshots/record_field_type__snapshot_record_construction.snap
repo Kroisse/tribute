@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 135
 expression: ir_text
 ---
 core.module @test {
@@ -16,7 +15,7 @@ core.module @test {
         func.return %1
     }
   }
-  func.func @make_point() -> tribute_rt.any {
+  func.func @make_point() -> tribute_rt.anyref {
       %0 = arith.const {value = 10} : core.i32
       %1 = arith.const {value = 20} : core.i32
       %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : adt.typeref() {name = @Point}

@@ -16,7 +16,7 @@ core.module @test {
   }
   func.func @__resume_0(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: trampoline.resume_wrapper) -> core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}) {
     ^bb0:
-      %2 = trampoline.resume_wrapper_get %1 {field = 1} : tribute_rt.any
+      %2 = trampoline.resume_wrapper_get %1 {field = 1} : tribute_rt.anyref
       %3 = core.unrealized_conversion_cast %2 : core.ptr
       %4 = trampoline.step_done %? : trampoline.step
       func.return %4

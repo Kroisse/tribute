@@ -15,10 +15,10 @@ core.module @test {
         func.return %1
     }
   }
-  func.func @update_x(%0: tribute_rt.any) -> tribute_rt.any {
+  func.func @update_x(%0: tribute_rt.anyref) -> tribute_rt.anyref {
     ^bb0:
       %1 = arith.const {value = 100} : core.i32
-      %2 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : tribute_rt.any
+      %2 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : tribute_rt.anyref
       %3 = adt.struct_new %1, %2 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : adt.typeref() {name = @Point}
       func.return %3
   }

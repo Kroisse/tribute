@@ -5,42 +5,42 @@ expression: ir_text
 core.module @test {
   func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
     ^bb0:
-      %1 = cont.push_prompt {tag = 0} : tribute_rt.any {
+      %1 = cont.push_prompt {tag = 0} : tribute_rt.anyref {
           %2 = func.call_indirect %0 : core.i32
           scf.yield %2
       } {
       }
-      %3 = cont.handler_dispatch %1 {result_type = tribute_rt.any, tag = 0} : tribute_rt.any {
+      %3 = cont.handler_dispatch %1 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           cont.done {
-            ^bb3(%4: tribute_rt.any):
+            ^bb3(%4: tribute_rt.anyref):
               scf.yield %4
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb4(%5: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %6: tribute_rt.any):
+            ^bb4(%5: cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref), %6: tribute_rt.anyref):
               %7 = arith.const {value = 42} : core.i32
-              %8 = cont.resume %5, %7 : tribute_rt.any
+              %8 = cont.resume %5, %7 : tribute_rt.anyref
               scf.yield %8
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
-            ^bb5(%9: cont.continuation(tribute_rt.any, tribute_rt.any, tribute_rt.any), %10: tribute_rt.any):
+            ^bb5(%9: cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref), %10: tribute_rt.anyref):
               %11 = arith.const {value = unit} : core.nil
-              %12 = cont.resume %9, %11 : tribute_rt.any
+              %12 = cont.resume %9, %11 : tribute_rt.anyref
               scf.yield %12
           }
       }
       %13 = core.unrealized_conversion_cast %3 : core.i32
       func.return %13
   }
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.any) -> tribute_rt.any effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
     ^bb0:
       %2 = arith.const {value = 4294967295} : cont.prompt_tag
-      %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.any {
+      %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref {
       }
       func.return %3
   }
   func.func @main() -> core.i32 {
-      %0 = adt.ref_null {type = tribute_rt.any} : tribute_rt.any
-      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.any))
+      %0 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.anyref))
       %2 = func.call %1 {callee = @run_with_state} : core.i32
       func.return %2
   }

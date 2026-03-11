@@ -146,7 +146,7 @@ fn emit_pattern_check<'db>(
         PatternKind::Tuple(elements) => {
             // Tuple patterns: recursively check all element patterns
             let mut conditions = Vec::new();
-            let any_ty = builder.ctx.any_type(builder.ir);
+            let any_ty = builder.ctx.anyref_type(builder.ir);
             let struct_ty = get_or_create_tuple_type(builder.ctx, builder.ir, pattern.id)
                 .map(|(_, st)| st)
                 .unwrap_or(any_ty);
@@ -457,7 +457,7 @@ pub(super) fn bind_pattern_fields<'db>(
             let cast_val = cast_op.result(ir);
 
             // Extract each field and recursively bind
-            let any_ty = ctx.any_type(ir);
+            let any_ty = ctx.anyref_type(ir);
             for (i, field_pat) in fields.iter().enumerate() {
                 let field_op = adt::variant_get(
                     ir,
@@ -480,7 +480,7 @@ pub(super) fn bind_pattern_fields<'db>(
             // Bind pattern without local_id — no binding
         }
         PatternKind::Tuple(elements) => {
-            let any_ty = ctx.any_type(ir);
+            let any_ty = ctx.anyref_type(ir);
             let struct_ty = get_or_create_tuple_type(ctx, ir, pattern.id)
                 .map(|(_, st)| st)
                 .unwrap_or(any_ty);
