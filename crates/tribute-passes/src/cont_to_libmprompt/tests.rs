@@ -14,8 +14,11 @@ fn run_pass(ir: &str) -> String {
     print_module(&ctx, module.op())
 }
 
-/// Run with TRO annotation before lowering (simulates the real pipeline).
-fn run_pass_with_tro(ir: &str) -> String {
+/// Run with tail-resumptive conversion (suspend→yield) before lowering.
+/// Note: this does NOT run the full TRO pipeline (resolve_evidence_dispatch,
+/// insert_tr_dispatch); it only tests that cont.yield is handled correctly
+/// by cont_to_libmprompt.
+fn run_pass_with_tr_conversion(ir: &str) -> String {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
     crate::tail_resumptive::convert_tail_resumptive(&mut ctx, module);
@@ -432,7 +435,7 @@ fn test_handler_dispatch_with_tr_annotation() {
     // TR arm: cont.resume %k, %sv in tail position.
     // Phase 1 only annotates — handler dispatch codegen is unchanged.
     // The resume call should still be present.
-    let result = run_pass_with_tro(
+    let result = run_pass_with_tr_conversion(
         r#"core.module @test {
   func.func @test_tr() -> core.i32 {
     %0 = cont.push_prompt {tag = 1} : core.ptr {

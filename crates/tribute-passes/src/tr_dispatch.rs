@@ -117,8 +117,7 @@ fn find_push_prompt_pairs(ctx: &IrContext, block: BlockRef) -> Vec<PushPromptPai
 
     // Second pass: match push_prompt ops with their dispatchers
     for &op in &ops {
-        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
-            let push_prompt_op = arena_cont::PushPrompt::from_op(ctx, op).unwrap();
+        if let Ok(push_prompt_op) = arena_cont::PushPrompt::from_op(ctx, op) {
             let tag_attr = push_prompt_op.tag(ctx);
             let tag = match &tag_attr {
                 Attribute::Int(v) => u32::try_from(*v).unwrap_or(0),
@@ -355,7 +354,11 @@ fn build_dispatch_chain(
     let i32_ty = i32_type_ref(ctx);
     let i1_ty = i1_type_ref(ctx);
 
-    assert!(!arms.is_empty(), "TR dispatch must have at least one arm");
+    assert!(
+        !arms.is_empty(),
+        "TR dispatch must have at least one arm (arm_idx={arm_idx}, total arms={})",
+        arms.len()
+    );
 
     // Last arm: no condition check needed, just emit the value computation
     if arm_idx == arms.len() - 1 {
