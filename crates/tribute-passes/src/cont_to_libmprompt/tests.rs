@@ -375,7 +375,7 @@ fn test_tro_annotation_propagates_to_suspend_arms() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  func.func @test_tr() -> core.i32 {
+  func.func @test_tr() -> core.ptr {
     %0 = cont.push_prompt {tag = 1} : core.ptr {
       %c0 = arith.const {value = 0} : core.i32
       scf.yield %c0

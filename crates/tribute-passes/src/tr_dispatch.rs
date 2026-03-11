@@ -100,59 +100,57 @@ struct PushPromptPair {
 
 /// Find push_prompt + handler_dispatch pairs in a block.
 /// Returns info about whether the handler is fully TR-eligible.
+///
+/// Uses the use-def chain from each push_prompt's result to locate the
+/// specific handler_dispatch that consumes it, rather than relying on
+/// tag-based matching (which could collapse distinct handlers sharing the
+/// same numeric tag).
 fn find_push_prompt_pairs(ctx: &IrContext, block: BlockRef) -> Vec<PushPromptPair> {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let mut pairs = Vec::new();
 
-    // First pass: collect handler_dispatch info by tag
-    let mut dispatch_by_tag: HashMap<u32, (OpRef, Vec<SuspendArm>)> = HashMap::new();
     for &op in &ops {
-        if let Ok(dispatch_op) = arena_cont::HandlerDispatch::from_op(ctx, op) {
-            let tag = dispatch_op.tag(ctx);
-            let body = dispatch_op.body(ctx);
+        if arena_cont::PushPrompt::from_op(ctx, op).is_err() {
+            continue;
+        }
+
+        // Follow the use-def chain from push_prompt's result to find
+        // the handler_dispatch that consumes it.
+        let pp_result = ctx.op_result(op, 0);
+        let tr_handler = find_handler_dispatch_for(ctx, pp_result).and_then(|dispatch_op| {
+            let dispatch = arena_cont::HandlerDispatch::from_op(ctx, dispatch_op).ok()?;
+            let body = dispatch.body(ctx);
             let arms = collect_suspend_arms(ctx, body);
-            dispatch_by_tag.insert(tag, (op, arms));
-        }
-    }
+            if arms.is_empty() {
+                return None;
+            }
+            let all_eligible = arms
+                .iter()
+                .all(|arm| arm.tail_resumptive && is_arm_self_contained(ctx, arm.body));
+            if all_eligible {
+                Some(TrHandlerInfo { arms })
+            } else {
+                None
+            }
+        });
 
-    // Second pass: match push_prompt ops with their dispatchers
-    for &op in &ops {
-        if let Ok(push_prompt_op) = arena_cont::PushPrompt::from_op(ctx, op) {
-            let tag_attr = push_prompt_op.tag(ctx);
-            let tag = match &tag_attr {
-                Attribute::Int(v) => u32::try_from(*v).unwrap_or(0),
-                _ => 0,
-            };
-
-            let tr_handler = dispatch_by_tag.get(&tag).and_then(|(dispatch_op, arms)| {
-                // All arms must be tail-resumptive AND self-contained for eligibility
-                if arms.is_empty() {
-                    return None;
-                }
-                let all_eligible = arms
-                    .iter()
-                    .all(|arm| arm.tail_resumptive && is_arm_self_contained(ctx, arm.body));
-                if all_eligible {
-                    Some(TrHandlerInfo {
-                        arms: collect_suspend_arms(ctx, {
-                            let d =
-                                arena_cont::HandlerDispatch::from_op(ctx, *dispatch_op).unwrap();
-                            d.body(ctx)
-                        }),
-                    })
-                } else {
-                    None
-                }
-            });
-
-            pairs.push(PushPromptPair {
-                push_prompt_op: op,
-                tr_handler,
-            });
-        }
+        pairs.push(PushPromptPair {
+            push_prompt_op: op,
+            tr_handler,
+        });
     }
 
     pairs
+}
+
+/// Walk uses of a push_prompt result to find the unique handler_dispatch op.
+fn find_handler_dispatch_for(ctx: &IrContext, pp_result: ValueRef) -> Option<OpRef> {
+    for u in ctx.uses(pp_result) {
+        if arena_cont::HandlerDispatch::matches(ctx, u.user) {
+            return Some(u.user);
+        }
+    }
+    None
 }
 
 // ============================================================================
@@ -163,22 +161,29 @@ fn find_push_prompt_pairs(ctx: &IrContext, block: BlockRef) -> Vec<PushPromptPai
 ///
 /// For the dispatch function to work, all values used in the computation
 /// must be either:
-/// - Block args of the suspend body (remapped to dispatch function args)
+/// - The shift-value block arg (%sv, remapped to dispatch function arg)
 /// - Results of ops within the body (cloned into dispatch function)
 ///
-/// If any op uses a value from an outer scope (e.g., a captured variable),
-/// the arm is NOT eligible for TR dispatch.
+/// If any op uses a value from an outer scope (e.g., a captured variable)
+/// or uses %k (the continuation), the arm is NOT eligible for TR dispatch.
 fn is_arm_self_contained(ctx: &IrContext, body: RegionRef) -> bool {
     let blocks = &ctx.region(body).blocks;
     let Some(&first_block) = blocks.first() else {
         return false;
     };
 
-    let block_args: std::collections::HashSet<ValueRef> =
-        ctx.block_args(first_block).iter().copied().collect();
+    let block_args = ctx.block_args(first_block);
+    // Only the shift-value arg (%sv, block_args[1]) is available in the
+    // dispatch function. %k (block_args[0]) is NOT remapped, so any use
+    // of it by non-resume/yield ops should disqualify the arm.
+    if block_args.len() < 2 {
+        return false;
+    }
+    let shift_value_arg = block_args[1];
 
-    // Collect all values defined by ops in the body
-    let mut defined_values: std::collections::HashSet<ValueRef> = block_args.clone();
+    // Collect all values defined within the body, starting with %sv only
+    let mut defined_values: std::collections::HashSet<ValueRef> =
+        [shift_value_arg].into_iter().collect();
     let block_ops = &ctx.block(first_block).ops;
 
     for &op in block_ops.iter() {
@@ -191,7 +196,8 @@ fn is_arm_self_contained(ctx: &IrContext, body: RegionRef) -> bool {
     // Check that all operands of non-resume/yield ops reference defined values,
     // and reject any region-bearing ops (clone_op_with_remap cannot handle them)
     for &op in block_ops.iter() {
-        // Skip cont.resume and scf.yield — they use %k which is a block arg
+        // Skip cont.resume and scf.yield — they use %k which is handled
+        // specially and not cloned into the dispatch function
         if arena_cont::Resume::matches(ctx, op) || arena_scf::Yield::matches(ctx, op) {
             continue;
         }
