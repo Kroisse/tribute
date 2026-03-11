@@ -31,42 +31,12 @@ use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Sentinel value used for unresolved cont.shift tags.
 /// When a shift is generated without an enclosing handler, this value is used
 /// as a placeholder. The evidence pass should transform all such shifts.
 pub const UNRESOLVED_SHIFT_TAG: u32 = u32::MAX;
-
-// ============================================================================
-// OpTable Registry
-// ============================================================================
-
-/// Registry for managing op_table_index assignments.
-///
-/// Only tracks handler count for index assignment; entry data is not retained
-/// because the pipeline does not need to look up entries after registration.
-#[derive(Debug, Default)]
-struct OpTableRegistry {
-    next_index: u32,
-}
-
-impl OpTableRegistry {
-    fn new() -> Self {
-        Self { next_index: 0 }
-    }
-
-    fn register(
-        &mut self,
-        _abilities: Vec<TypeRef>,
-        _operations: Vec<(TypeRef, Symbol)>,
-        _location: Location,
-    ) -> u32 {
-        let index = self.next_index;
-        self.next_index += 1;
-        index
-    }
-}
 
 // ============================================================================
 // Helper type constructors
@@ -329,38 +299,6 @@ fn collect_handled_abilities_by_tag(
     map
 }
 
-/// Collect operations for a tag from handler_dispatch.
-fn collect_operations_for_tag(
-    ctx: &IrContext,
-    block: BlockRef,
-    target_tag: u32,
-) -> Vec<(TypeRef, Symbol)> {
-    let mut operations = Vec::new();
-    for &op in ctx.block(block).ops.iter() {
-        if let Ok(dispatch_op) = arena_cont::HandlerDispatch::from_op(ctx, op) {
-            let tag = dispatch_op.tag(ctx);
-            if tag != target_tag {
-                continue;
-            }
-            let body = dispatch_op.body(ctx);
-            let blocks = &ctx.region(body).blocks;
-            if let Some(&first_block) = blocks.first() {
-                for &child_op in ctx.block(first_block).ops.iter() {
-                    if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
-                        let ability = suspend_op.ability_ref(ctx);
-                        let name = suspend_op.op_name(ctx);
-                        if !operations.contains(&(ability, name)) {
-                            operations.push((ability, name));
-                        }
-                    }
-                }
-            }
-            break;
-        }
-    }
-    operations
-}
-
 /// Compute ability ID from a TypeRef.
 fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
     let data = ctx.types.get(ability_ref);
@@ -497,7 +435,6 @@ fn transform_handler_roots(
     module: Module,
     handler_root_fns: &HashSet<Symbol>,
     fns_with_evidence: &mut HashSet<Symbol>,
-    registry: &mut OpTableRegistry,
 ) -> HashSet<Symbol> {
     let func_ops: Vec<OpRef> = module.ops(ctx);
 
@@ -604,7 +541,6 @@ fn transform_handler_roots(
             entry_block,
             ev_value,
             &handled_by_tag,
-            registry,
             fns_with_evidence,
             None,
             prepend_evidence,
@@ -617,7 +553,6 @@ fn transform_handler_roots(
                 block,
                 ev_value,
                 &handled_by_tag,
-                registry,
                 fns_with_evidence,
                 None,
                 prepend_evidence,
@@ -739,7 +674,6 @@ fn transform_shifts_in_module(
     ctx: &mut IrContext,
     module: Module,
     fns_with_evidence: &HashSet<Symbol>,
-    registry: &mut OpTableRegistry,
 ) {
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
@@ -776,7 +710,6 @@ fn transform_shifts_in_module(
                 block,
                 ev_value,
                 &handled_by_tag,
-                registry,
                 fns_with_evidence,
                 None,
                 false, // replace evidence (already present as first arg)
@@ -802,9 +735,8 @@ fn transform_shifts_in_block(
     block: BlockRef,
     ev_value: ValueRef,
     handled_by_tag: &HashMap<u32, Vec<TypeRef>>,
-    registry: &mut OpTableRegistry,
     fns_with_evidence: &HashSet<Symbol>,
-    dispatch_block: Option<BlockRef>,
+    _dispatch_block: Option<BlockRef>,
     prepend_evidence: bool,
 ) {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
@@ -830,7 +762,6 @@ fn transform_shifts_in_block(
                     ctx,
                     body_region,
                     ev_value,
-                    registry,
                     fns_with_evidence,
                     prepend_evidence,
                 );
@@ -838,7 +769,6 @@ fn transform_shifts_in_block(
                     ctx,
                     handlers_region,
                     ev_value,
-                    registry,
                     fns_with_evidence,
                     prepend_evidence,
                 );
@@ -849,10 +779,6 @@ fn transform_shifts_in_block(
             let i32_ty = i32_type_ref(ctx);
             let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
             let marker_ty = arena_ability::marker_adt_type_ref(ctx);
-
-            let dispatch_blk = dispatch_block.unwrap_or(block);
-            let operations = collect_operations_for_tag(ctx, dispatch_blk, tag);
-            let op_table_idx = registry.register(abilities.clone(), operations, loc);
 
             // Generate a unique prompt tag at runtime (prevents TLS registry
             // collisions when the same handler is invoked recursively).
@@ -866,11 +792,11 @@ fn transform_shifts_in_block(
             let tag_val = ctx.op_result(tag_call.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_call.op_ref());
 
-            // Create op_table_index constant
-            let op_table_idx_const =
-                arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_table_idx as i128));
-            let op_table_idx_val = ctx.op_result(op_table_idx_const.op_ref(), 0);
-            ctx.insert_op_before(block, op, op_table_idx_const.op_ref());
+            // Create null tr_dispatch_fn (TR dispatch pass will update this later)
+            let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+            let null_ptr = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
+            let tr_dispatch_fn_val = null_ptr.result(ctx);
+            ctx.insert_op_before(block, op, null_ptr.op_ref());
 
             // Extend evidence for each ability
             let mut current_ev = ev_value;
@@ -882,11 +808,11 @@ fn transform_shifts_in_block(
                 let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                 ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
-                // Create Marker struct: { ability_id, prompt_tag, op_table_index }
+                // Create Marker struct: { ability_id, prompt_tag, tr_dispatch_fn }
                 let marker_struct = arena_adt::struct_new(
                     ctx,
                     loc,
-                    vec![ability_id_val, tag_val, op_table_idx_val],
+                    vec![ability_id_val, tag_val, tr_dispatch_fn_val],
                     marker_ty,
                     marker_ty,
                 );
@@ -917,7 +843,6 @@ fn transform_shifts_in_block(
                 ctx,
                 body_region,
                 current_ev,
-                registry,
                 fns_with_evidence,
                 prepend_evidence,
             );
@@ -925,7 +850,6 @@ fn transform_shifts_in_block(
                 ctx,
                 handlers_region,
                 current_ev,
-                registry,
                 fns_with_evidence,
                 prepend_evidence,
             );
@@ -978,7 +902,6 @@ fn transform_shifts_in_block(
                 ctx,
                 handler_region,
                 ev_value,
-                registry,
                 fns_with_evidence,
                 prepend_evidence,
             );
@@ -1092,14 +1015,7 @@ fn transform_shifts_in_block(
         // Recursively transform nested regions
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
-            transform_shifts_in_region(
-                ctx,
-                region,
-                ev_value,
-                registry,
-                fns_with_evidence,
-                prepend_evidence,
-            );
+            transform_shifts_in_region(ctx, region, ev_value, fns_with_evidence, prepend_evidence);
         }
     }
 }
@@ -1109,7 +1025,6 @@ fn transform_shifts_in_region(
     ctx: &mut IrContext,
     region: RegionRef,
     ev_value: ValueRef,
-    registry: &mut OpTableRegistry,
     fns_with_evidence: &HashSet<Symbol>,
     prepend_evidence: bool,
 ) {
@@ -1121,7 +1036,6 @@ fn transform_shifts_in_region(
             block,
             ev_value,
             &handled_by_tag,
-            registry,
             fns_with_evidence,
             None,
             prepend_evidence,
@@ -1139,8 +1053,6 @@ fn transform_shifts_in_region(
 /// dynamically resolved tags via evidence lookup. This enables proper
 /// handler dispatch at runtime.
 pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
-    let mut registry = OpTableRegistry::new();
-
     // Ensure runtime helpers exist
     ensure_runtime_functions(ctx, module);
 
@@ -1153,13 +1065,7 @@ pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
     // Transform handler-root functions first
     let handler_root_fns = collect_handler_root_functions(ctx, module, &fns_with_evidence);
     let newly_evidenced = if !handler_root_fns.is_empty() {
-        transform_handler_roots(
-            ctx,
-            module,
-            &handler_root_fns,
-            &mut fns_with_evidence,
-            &mut registry,
-        )
+        transform_handler_roots(ctx, module, &handler_root_fns, &mut fns_with_evidence)
     } else {
         HashSet::new()
     };
@@ -1179,7 +1085,7 @@ pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
             .copied()
             .collect();
         if !non_root_evidence_fns.is_empty() {
-            transform_shifts_in_module(ctx, module, &non_root_evidence_fns, &mut registry);
+            transform_shifts_in_module(ctx, module, &non_root_evidence_fns);
         }
     }
 
@@ -1253,25 +1159,5 @@ mod tests {
 
         // Same ability name but different type params should produce different IDs
         assert_ne!(id_with_params, id_no_params);
-    }
-
-    fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.paths.intern("test".to_owned());
-        Location::new(path, trunk_ir::Span::new(0, 0))
-    }
-
-    #[test]
-    fn test_op_table_registry_sequential_indices() {
-        let mut ctx = IrContext::new();
-        let mut registry = OpTableRegistry::new();
-        let loc = test_location(&mut ctx);
-
-        let idx0 = registry.register(vec![], vec![], loc);
-        let idx1 = registry.register(vec![], vec![], loc);
-        let idx2 = registry.register(vec![], vec![], loc);
-
-        assert_eq!(idx0, 0);
-        assert_eq!(idx1, 1);
-        assert_eq!(idx2, 2);
     }
 }

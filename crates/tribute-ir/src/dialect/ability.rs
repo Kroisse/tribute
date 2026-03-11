@@ -45,13 +45,20 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 /// struct _Marker {
 ///     ability_id: i32,
 ///     prompt_tag: i32,
-///     op_table_index: i32,
+///     tr_dispatch_fn: ptr,
 /// }
 /// ```
+///
+/// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
+/// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
+/// not fully tail-resumptive.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+    let ptr_ty = ctx
+        .types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
 
     let fields_attr = Attribute::List(vec![
         Attribute::List(vec![
@@ -63,8 +70,8 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
             Attribute::Type(i32_ty),
         ]),
         Attribute::List(vec![
-            Attribute::Symbol(Symbol::new("op_table_index")),
-            Attribute::Type(i32_ty),
+            Attribute::Symbol(Symbol::new("tr_dispatch_fn")),
+            Attribute::Type(ptr_ty),
         ]),
     ]);
 

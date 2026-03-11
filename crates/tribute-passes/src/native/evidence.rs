@@ -16,11 +16,14 @@
 //!
 //! 3. **Extend call-site rewrite** — the 2-arg call
 //!    `func.call @__tribute_evidence_extend(ev, marker)` where `marker` is
-//!    produced by `adt.struct_new(ability_id, prompt_tag, op_table_index)` is
+//!    produced by `adt.struct_new(ability_id, prompt_tag, tr_dispatch_fn)` is
 //!    rewritten to a 4-arg call passing the fields directly, and the now-dead
 //!    `adt.struct_new` is removed.
+//!
+//! 4. **TR dispatch field** — `adt.struct_get(marker, 2)` on evidence_lookup
+//!    results is rewritten to `func.call @__tribute_evidence_lookup_tr(ev, ability_id)`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -53,11 +56,13 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
 
     let mut has_evidence_empty = false;
+    let mut has_lookup_tr = false;
     let mut stubs_to_replace: Vec<(OpRef, &'static str)> = Vec::new();
 
     let lookup_sym = Symbol::new("__tribute_evidence_lookup");
     let extend_sym = Symbol::new("__tribute_evidence_extend");
     let empty_sym = Symbol::new("__tribute_evidence_empty");
+    let lookup_tr_sym = Symbol::new("__tribute_evidence_lookup_tr");
 
     for &op in &ops {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -68,6 +73,8 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
                 stubs_to_replace.push((op, "__tribute_evidence_extend"));
             } else if name == empty_sym {
                 has_evidence_empty = true;
+            } else if name == lookup_tr_sym {
+                has_lookup_tr = true;
             }
         }
     }
@@ -104,6 +111,18 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
             ctx.insert_op_before(first_block, first_op, empty_op);
         }
     }
+
+    // Add __tribute_evidence_lookup_tr if missing
+    if !has_lookup_tr {
+        let lookup_tr_op = make_evidence_lookup_tr_extern(ctx, loc, i64_ty, i32_ty);
+        let block_ops = &ctx.block(first_block).ops;
+        if block_ops.is_empty() {
+            ctx.push_op(first_block, lookup_tr_op);
+        } else {
+            let first_op = block_ops[0];
+            ctx.insert_op_before(first_block, first_op, lookup_tr_op);
+        }
+    }
 }
 
 /// Build extern `fn __tribute_evidence_empty() -> i64`
@@ -127,7 +146,7 @@ fn make_evidence_lookup_extern(
     )
 }
 
-/// Build extern `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, op_table_index: i32) -> i64`
+/// Build extern `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i64) -> i64`
 fn make_evidence_extend_extern(
     ctx: &mut IrContext,
     loc: Location,
@@ -138,7 +157,23 @@ fn make_evidence_extend_extern(
         ctx,
         loc,
         "__tribute_evidence_extend",
-        &[i64_ty, i32_ty, i32_ty, i32_ty],
+        &[i64_ty, i32_ty, i32_ty, i64_ty],
+        i64_ty,
+    )
+}
+
+/// Build extern `fn __tribute_evidence_lookup_tr(ev: i64, ability_id: i32) -> i64`
+fn make_evidence_lookup_tr_extern(
+    ctx: &mut IrContext,
+    loc: Location,
+    i64_ty: TypeRef,
+    i32_ty: TypeRef,
+) -> OpRef {
+    super::build_extern_func(
+        ctx,
+        loc,
+        "__tribute_evidence_lookup_tr",
+        &[i64_ty, i32_ty],
         i64_ty,
     )
 }
@@ -151,6 +186,7 @@ fn is_evidence_runtime_fn(name: Symbol) -> bool {
     name == Symbol::new("__tribute_evidence_lookup")
         || name == Symbol::new("__tribute_evidence_extend")
         || name == Symbol::new("__tribute_evidence_empty")
+        || name == Symbol::new("__tribute_evidence_lookup_tr")
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
@@ -200,8 +236,9 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
 
     // Track Marker struct_new results → their operands
     let mut marker_struct_operands: HashMap<ValueRef, Vec<ValueRef>> = HashMap::new();
-    // Track evidence_lookup results for struct_get elimination
-    let mut evidence_lookup_results: HashSet<ValueRef> = HashSet::new();
+    // Track evidence_lookup results for struct_get elimination.
+    // Maps result value → (ev, ability_id) operands for __tribute_evidence_lookup_tr calls.
+    let mut evidence_lookup_results: HashMap<ValueRef, (ValueRef, ValueRef)> = HashMap::new();
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
 
@@ -285,6 +322,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
 
             if callee == Symbol::new("__tribute_evidence_lookup") {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+                let ev_val = operands[0];
+                let ability_id_val = operands[1];
                 let old_result = ctx.op_result(op, 0);
                 let new_call = arena_func::call(
                     ctx,
@@ -295,7 +334,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                 );
                 let new_result = new_call.result(ctx);
                 ctx.insert_op_before(block, op, new_call.op_ref());
-                evidence_lookup_results.insert(new_result);
+                evidence_lookup_results.insert(new_result, (ev_val, ability_id_val));
                 ctx.replace_all_uses(old_result, new_result);
                 ops_to_erase.push(op);
                 continue;
@@ -339,8 +378,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
             let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
             if !operands.is_empty() {
                 let base_val = operands[0];
-                if evidence_lookup_results.contains(&base_val) {
-                    // Only eliminate struct_get for the prompt_tag field (index 1).
+                if let Some(&(ev_val, ability_id_val)) = evidence_lookup_results.get(&base_val) {
                     let field_attr = ctx.op(op).attributes.get(&Symbol::new("field"));
                     let field_idx = match field_attr {
                         Some(Attribute::Int(bits)) => *bits,
@@ -348,14 +386,33 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                             panic!("expected Int field attribute on adt.struct_get, got {other:?}")
                         }
                     };
-                    assert_eq!(
-                        field_idx, 1,
-                        "expected struct_get on evidence_lookup result to access prompt_tag (field 1), got field {field_idx}"
-                    );
-                    let old_result = ctx.op_result(op, 0);
-                    ctx.replace_all_uses(old_result, base_val);
-                    evidence_lookup_results.insert(old_result);
-                    ops_to_erase.push(op);
+                    match field_idx {
+                        1 => {
+                            // Field 1: prompt_tag (i32) — __tribute_evidence_lookup already returns this
+                            let old_result = ctx.op_result(op, 0);
+                            ctx.replace_all_uses(old_result, base_val);
+                            evidence_lookup_results.insert(old_result, (ev_val, ability_id_val));
+                            ops_to_erase.push(op);
+                        }
+                        2 => {
+                            // Field 2: tr_dispatch_fn (ptr/i64) — call __tribute_evidence_lookup_tr
+                            let old_result = ctx.op_result(op, 0);
+                            let tr_call = arena_func::call(
+                                ctx,
+                                loc,
+                                [ev_val, ability_id_val],
+                                i64_ty,
+                                Symbol::new("__tribute_evidence_lookup_tr"),
+                            );
+                            let new_result = tr_call.result(ctx);
+                            ctx.insert_op_before(block, op, tr_call.op_ref());
+                            ctx.replace_all_uses(old_result, new_result);
+                            ops_to_erase.push(op);
+                        }
+                        _ => panic!(
+                            "unexpected struct_get field {field_idx} on evidence_lookup result"
+                        ),
+                    }
                     continue;
                 }
             }
