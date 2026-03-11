@@ -623,15 +623,22 @@ fn patch_marker_struct_new(
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
     let marker_ty = arena_ability::marker_adt_type_ref(ctx);
 
-    // Find the adt.struct_new ops that precede this push_prompt and create Markers.
-    // The Marker struct_new has 3 fields and its type is the marker_ty.
+    // Use the use-def chain to find only markers that belong to this push_prompt.
+    // push_prompt.operands[0] is `tag_val`, and the marker struct_new has
+    // operands [ability_id, tag_val, tr_dispatch_fn]. We match on tag_val identity.
+    let pp_operands = ctx.op_operands(push_prompt_op).to_vec();
+    let pp_tag_val = match pp_operands.first() {
+        Some(&v) => v,
+        None => return,
+    };
+
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
     let push_prompt_idx = ops.iter().position(|&op| op == push_prompt_op);
     let Some(pp_idx) = push_prompt_idx else {
         return;
     };
 
-    // Scan backwards from push_prompt to find adt.struct_new with marker_ty
+    // Scan backwards from push_prompt to find adt.struct_new with matching tag_val
     for &op in ops[..pp_idx].iter().rev() {
         if let Ok(struct_new_op) = arena_adt::StructNew::from_op(ctx, op) {
             let sn_ty = struct_new_op.r#type(ctx);
@@ -639,9 +646,13 @@ fn patch_marker_struct_new(
                 continue;
             }
 
-            // This is a Marker struct_new. The 3rd operand (index 2) is tr_dispatch_fn.
             let operands = ctx.op_operands(op).to_vec();
             if operands.len() != 3 {
+                continue;
+            }
+
+            // Only patch markers whose tag_val matches this push_prompt's tag_val
+            if operands[1] != pp_tag_val {
                 continue;
             }
 
