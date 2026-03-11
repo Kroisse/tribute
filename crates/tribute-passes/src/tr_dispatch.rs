@@ -188,11 +188,17 @@ fn is_arm_self_contained(ctx: &IrContext, body: RegionRef) -> bool {
         }
     }
 
-    // Check that all operands of non-resume/yield ops reference defined values
+    // Check that all operands of non-resume/yield ops reference defined values,
+    // and reject any region-bearing ops (clone_op_with_remap cannot handle them)
     for &op in block_ops.iter() {
         // Skip cont.resume and scf.yield — they use %k which is a block arg
         if arena_cont::Resume::matches(ctx, op) || arena_scf::Yield::matches(ctx, op) {
             continue;
+        }
+
+        // Reject region-bearing ops (e.g., scf.if, loops)
+        if !ctx.op(op).regions.is_empty() {
+            return false;
         }
 
         for &operand in ctx.op_operands(op).iter() {
@@ -360,11 +366,61 @@ fn build_dispatch_chain(
         arms.len()
     );
 
-    // Last arm: no condition check needed, just emit the value computation
+    // Last arm: still check equality, emit func.unreachable for miss case
     if arm_idx == arms.len() - 1 {
         let arm = &arms[arm_idx];
-        let result = emit_arm_value_computation(ctx, loc, parent_block, arm, shift_value_arg);
-        return result;
+
+        // %hash = arith.const <expected_op_idx>
+        let hash_const = arith::r#const(
+            ctx,
+            loc,
+            i32_ty,
+            Attribute::Int(arm.expected_op_idx as i128),
+        );
+        let hash_val = hash_const.result(ctx);
+        ctx.push_op(parent_block, hash_const.op_ref());
+
+        // %is_match = arith.cmp_eq %op_idx, %hash
+        let cmp = arith::cmp_eq(ctx, loc, op_idx_arg, hash_val, i1_ty);
+        let cmp_val = cmp.result(ctx);
+        ctx.push_op(parent_block, cmp.op_ref());
+
+        // Then branch: emit the value computation
+        let then_block = ctx.create_block(trunk_ir::context::BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let then_result = emit_arm_value_computation(ctx, loc, then_block, arm, shift_value_arg);
+        let then_yield = arena_scf::r#yield(ctx, loc, [then_result]);
+        ctx.push_op(then_block, then_yield.op_ref());
+        let then_region = ctx.create_region(trunk_ir::context::RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![then_block],
+            parent_op: None,
+        });
+
+        // Else branch: unreachable
+        let else_block = ctx.create_block(trunk_ir::context::BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let unreachable_op = arena_func::unreachable(ctx, loc);
+        ctx.push_op(else_block, unreachable_op.op_ref());
+        let else_region = ctx.create_region(trunk_ir::context::RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![else_block],
+            parent_op: None,
+        });
+
+        let if_op = arena_scf::r#if(ctx, loc, cmp_val, ptr_ty, then_region, else_region);
+        let if_result = if_op.result(ctx);
+        ctx.push_op(parent_block, if_op.op_ref());
+
+        return if_result;
     }
 
     let arm = &arms[arm_idx];
@@ -493,6 +549,12 @@ fn emit_arm_value_computation(
 
 /// Clone an operation with operand remapping.
 /// Updates remap with the new result values.
+///
+/// # Panics
+///
+/// Panics if the source operation has nested regions (e.g., `scf.if`, loops).
+/// Region-bearing ops are not supported in TR dispatch extraction; they should
+/// be filtered out by `is_arm_self_contained`.
 fn clone_op_with_remap(
     ctx: &mut IrContext,
     src_op: OpRef,
@@ -502,6 +564,13 @@ fn clone_op_with_remap(
     let loc = op_data.location;
     let dialect = op_data.dialect;
     let name = op_data.name;
+
+    // Reject region-bearing ops — they cannot be shallow-cloned safely
+    assert!(
+        op_data.regions.is_empty(),
+        "clone_op_with_remap: cannot clone region-bearing op {dialect}.{name}; \
+         TR dispatch extraction does not support nested regions"
+    );
 
     // Remap operands
     let operands: Vec<ValueRef> = ctx
@@ -856,6 +925,64 @@ fn find_marker_from_tag(ctx: &IrContext, tag_val: ValueRef) -> Option<ValueRef> 
 }
 
 // ============================================================================
+// Recursive handler discovery
+// ============================================================================
+
+/// Recursively walk all blocks in a region (and nested sub-regions) to find
+/// push_prompt + handler_dispatch pairs and generate TR dispatch functions.
+fn discover_and_patch_handlers(
+    ctx: &mut IrContext,
+    loc: Location,
+    region: RegionRef,
+    module_block: BlockRef,
+    dispatch_counter: &mut u32,
+) {
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+
+    for block in blocks {
+        // Recurse into nested regions of all ops in this block
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        for op in &ops {
+            let regions: Vec<RegionRef> = ctx.op(*op).regions.to_vec();
+            for nested_region in regions {
+                discover_and_patch_handlers(
+                    ctx,
+                    loc,
+                    nested_region,
+                    module_block,
+                    dispatch_counter,
+                );
+            }
+        }
+
+        // Find and patch handlers in this block
+        let pairs = find_push_prompt_pairs(ctx, block);
+
+        for pair in pairs {
+            let Some(tr_handler) = pair.tr_handler else {
+                continue;
+            };
+
+            let dispatch_name =
+                Symbol::from_dynamic(&format!("__tr_dispatch_{}", dispatch_counter));
+            *dispatch_counter += 1;
+
+            let dispatch_func_op =
+                generate_tr_dispatch_func(ctx, loc, dispatch_name, &tr_handler.arms);
+
+            let first_op = ctx.block(module_block).ops.first().copied();
+            if let Some(first) = first_op {
+                ctx.insert_op_before(module_block, first, dispatch_func_op);
+            } else {
+                ctx.push_op(module_block, dispatch_func_op);
+            }
+
+            patch_marker_struct_new(ctx, block, pair.push_prompt_op, dispatch_name);
+        }
+    }
+}
+
+// ============================================================================
 // Entry point
 // ============================================================================
 
@@ -878,7 +1005,7 @@ pub fn insert_tr_dispatch(ctx: &mut IrContext, module: Module) {
 
     let loc = ctx.op(module.op()).location;
 
-    // Step 1: Find all func ops and analyze their handlers
+    // Step 1: Find all func ops and analyze their handlers (recursively)
     let func_ops: Vec<OpRef> = module.ops(ctx);
     let mut dispatch_counter = 0u32;
 
@@ -887,37 +1014,7 @@ pub fn insert_tr_dispatch(ctx: &mut IrContext, module: Module) {
             continue;
         };
         let body = func_op.body(ctx);
-        let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
-
-        for block in blocks {
-            let pairs = find_push_prompt_pairs(ctx, block);
-
-            for pair in pairs {
-                let Some(tr_handler) = pair.tr_handler else {
-                    continue;
-                };
-
-                // Generate a unique dispatch function name
-                let dispatch_name =
-                    Symbol::from_dynamic(&format!("__tr_dispatch_{}", dispatch_counter));
-                dispatch_counter += 1;
-
-                // Generate the dispatch function
-                let dispatch_func_op =
-                    generate_tr_dispatch_func(ctx, loc, dispatch_name, &tr_handler.arms);
-
-                // Add dispatch function to module
-                let first_op = ctx.block(module_block).ops.first().copied();
-                if let Some(first) = first_op {
-                    ctx.insert_op_before(module_block, first, dispatch_func_op);
-                } else {
-                    ctx.push_op(module_block, dispatch_func_op);
-                }
-
-                // Patch the Marker struct_new ops for this push_prompt
-                patch_marker_struct_new(ctx, block, pair.push_prompt_op, dispatch_name);
-            }
-        }
+        discover_and_patch_handlers(ctx, loc, body, module_block, &mut dispatch_counter);
     }
 
     // Step 2: Add TR branching at all shift sites
