@@ -18,7 +18,7 @@ fn run_pass(ir: &str) -> String {
 fn run_pass_with_tro(ir: &str) -> String {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    crate::tail_resumptive::annotate_tail_resumptive(&mut ctx, module);
+    crate::tail_resumptive::convert_tail_resumptive(&mut ctx, module);
     super::lower_cont_to_libmprompt(&mut ctx, module);
     print_module(&ctx, module.op())
 }
@@ -395,7 +395,7 @@ fn test_tro_annotation_propagates_to_suspend_arms() {
     );
 
     // Annotate
-    crate::tail_resumptive::annotate_tail_resumptive(&mut ctx, module);
+    crate::tail_resumptive::convert_tail_resumptive(&mut ctx, module);
 
     // Find handler_dispatch body and collect suspend arms
     let body = module.body(&ctx).unwrap();

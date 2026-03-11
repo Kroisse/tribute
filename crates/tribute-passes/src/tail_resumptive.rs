@@ -1,22 +1,24 @@
-//! Tail-Resumptive Optimization (TRO) analysis and annotation.
+//! Tail-Resumptive Optimization (TRO) analysis and conversion.
 //!
 //! Most practical abilities (State, Reader, Writer, Console) are **tail-resumptive**:
 //! the handler immediately resumes with `k(value)`, making continuation capture
-//! unnecessary. This module detects such patterns and annotates `cont.suspend` ops
-//! so that downstream lowering passes can skip the resume/shift overhead.
+//! unnecessary. This module detects such patterns and converts `cont.suspend` ops
+//! to `cont.yield` so that downstream lowering passes can skip the resume/shift
+//! overhead based on the operation type rather than an attribute.
 //!
 //! A `cont.suspend` body is tail-resumptive when:
 //! 1. `%k` (block arg 0) is used exactly once
 //! 2. That single use is a `cont.resume %k, %value` operation
 //! 3. The result of `cont.resume` flows directly to `scf.yield` (tail position)
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::scf as arena_scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
-use trunk_ir::types::Attribute;
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
 
 /// Information about a tail-resumptive suspend body.
 pub struct TailResumptiveInfo {
@@ -25,9 +27,6 @@ pub struct TailResumptiveInfo {
     /// The value passed to `cont.resume` (i.e., the value to yield directly).
     pub resume_value: ValueRef,
 }
-
-/// Attribute key used to mark tail-resumptive `cont.suspend` ops.
-pub const TAIL_RESUMPTIVE_ATTR: &str = "tail_resumptive";
 
 /// Analyze whether a `cont.suspend` body is tail-resumptive.
 ///
@@ -100,60 +99,46 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
     })
 }
 
-/// Annotate all tail-resumptive `cont.suspend` ops in the module.
-///
-/// Walks all operations recursively, finds `cont.suspend` ops, and sets a
-/// `tail_resumptive` attribute on those that match the tail-resumptive pattern.
-pub fn annotate_tail_resumptive(ctx: &mut IrContext, module: trunk_ir::Module) {
-    let body = match module.body(ctx) {
-        Some(body) => body,
-        None => return,
-    };
+/// Pattern that converts `cont.suspend` to `cont.yield` when the body is tail-resumptive.
+struct SuspendToYieldPattern;
 
-    // Collect all cont.suspend ops from the module
-    let suspend_ops = collect_all_suspend_ops(ctx, body);
-
-    for suspend_op in suspend_ops {
-        let suspend = match arena_cont::Suspend::from_op(ctx, suspend_op) {
-            Ok(s) => s,
-            Err(_) => continue,
+impl RewritePattern for SuspendToYieldPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(suspend) = arena_cont::Suspend::from_op(ctx, op) else {
+            return false;
         };
+        if is_tail_resumptive(ctx, suspend.body(ctx)).is_none() {
+            return false;
+        }
+
+        let loc = ctx.op(op).location;
+        let ability_ref = suspend.ability_ref(ctx);
+        let op_name = suspend.op_name(ctx);
         let body = suspend.body(ctx);
-        if is_tail_resumptive(ctx, body).is_some() {
-            ctx.op_mut(suspend_op)
-                .attributes
-                .insert(Symbol::new(TAIL_RESUMPTIVE_ATTR), Attribute::Int(1));
-        }
+
+        // Detach the body region from the old suspend op
+        ctx.detach_region(body);
+
+        // Create a new cont.yield op with the same attributes and body
+        let new_op = arena_cont::r#yield(ctx, loc, ability_ref, op_name, body);
+        rewriter.replace_op(new_op.op_ref());
+        true
     }
 }
 
-/// Collect all `cont.suspend` ops in the module by walking the IR tree.
-fn collect_all_suspend_ops(ctx: &IrContext, module_body: RegionRef) -> Vec<OpRef> {
-    let mut result = Vec::new();
-    collect_suspend_ops_from_region(ctx, module_body, &mut result);
-    result
-}
-
-fn collect_suspend_ops_from_region(ctx: &IrContext, region: RegionRef, out: &mut Vec<OpRef>) {
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops.clone() {
-            if arena_cont::Suspend::matches(ctx, op) {
-                out.push(op);
-            }
-            // Recurse into nested regions
-            for &nested_region in &ctx.op(op).regions.clone() {
-                collect_suspend_ops_from_region(ctx, nested_region, out);
-            }
-        }
-    }
-}
-
-/// Check if a `cont.suspend` op is marked as tail-resumptive.
-pub fn is_marked_tail_resumptive(ctx: &IrContext, suspend_op: OpRef) -> bool {
-    ctx.op(suspend_op)
-        .attributes
-        .get(&Symbol::new(TAIL_RESUMPTIVE_ATTR))
-        .is_some()
+/// Convert tail-resumptive `cont.suspend` ops to `cont.yield` in the module.
+///
+/// Uses `PatternApplicator` to walk all operations and replace eligible
+/// `cont.suspend` ops with `cont.yield`.
+pub fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern(SuspendToYieldPattern);
+    applicator.apply_partial(ctx, module);
 }
 
 #[cfg(test)]
@@ -163,11 +148,31 @@ mod tests {
     use trunk_ir::dialect::cont as arena_cont;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::refs::OpRef;
+    use trunk_ir::walk;
 
     /// Find all cont.suspend ops in the module.
-    fn find_suspend_ops(ctx: &IrContext, module: trunk_ir::Module) -> Vec<OpRef> {
+    fn find_suspend_ops(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Vec<OpRef> {
         let body = module.body(ctx).unwrap();
-        collect_all_suspend_ops(ctx, body)
+        collect_ops_by_type::<arena_cont::Suspend>(ctx, body)
+    }
+
+    /// Find all cont.yield ops in the module.
+    fn find_yield_ops(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Vec<OpRef> {
+        let body = module.body(ctx).unwrap();
+        collect_ops_by_type::<arena_cont::Yield>(ctx, body)
+    }
+
+    /// Collect ops matching a dialect op type from a region (recursive).
+    fn collect_ops_by_type<T: DialectOp>(ctx: &IrContext, region: RegionRef) -> Vec<OpRef> {
+        let mut result = Vec::new();
+        let _ = walk::walk_region::<()>(ctx, region, &mut |op| {
+            if T::matches(ctx, op) {
+                result.push(op);
+            }
+            std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+        });
+        result
     }
 
     // ====================================================================
@@ -375,11 +380,11 @@ mod tests {
     }
 
     // ====================================================================
-    // annotate_tail_resumptive tests
+    // convert_tail_resumptive tests
     // ====================================================================
 
     #[test]
-    fn annotate_marks_tr_suspend() {
+    fn convert_marks_tr_suspend() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -406,20 +411,28 @@ mod tests {
 }"#,
         );
 
-        let suspends = find_suspend_ops(&ctx, module);
-        assert_eq!(suspends.len(), 1);
-        assert!(!is_marked_tail_resumptive(&ctx, suspends[0]));
+        // Before conversion: 1 suspend, 0 yields
+        assert_eq!(find_suspend_ops(&ctx, module).len(), 1);
+        assert_eq!(find_yield_ops(&ctx, module).len(), 0);
 
-        annotate_tail_resumptive(&mut ctx, module);
+        convert_tail_resumptive(&mut ctx, module);
 
+        // After conversion: 0 suspends, 1 yield
+        assert_eq!(
+            find_suspend_ops(&ctx, module).len(),
+            0,
+            "TR suspend should be converted to yield"
+        );
+        let yields = find_yield_ops(&ctx, module);
+        assert_eq!(yields.len(), 1, "Should have 1 cont.yield");
         assert!(
-            is_marked_tail_resumptive(&ctx, suspends[0]),
-            "TR suspend should be marked"
+            arena_cont::Yield::matches(&ctx, yields[0]),
+            "Should be cont.yield"
         );
     }
 
     #[test]
-    fn annotate_does_not_mark_non_tr_suspend() {
+    fn convert_does_not_mark_non_tr_suspend() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -447,19 +460,23 @@ mod tests {
 }"#,
         );
 
-        let suspends = find_suspend_ops(&ctx, module);
-        assert_eq!(suspends.len(), 1);
+        convert_tail_resumptive(&mut ctx, module);
 
-        annotate_tail_resumptive(&mut ctx, module);
-
-        assert!(
-            !is_marked_tail_resumptive(&ctx, suspends[0]),
-            "non-TR suspend should NOT be marked"
+        // Non-TR suspend should remain as cont.suspend
+        assert_eq!(
+            find_suspend_ops(&ctx, module).len(),
+            1,
+            "non-TR suspend should NOT be converted"
+        );
+        assert_eq!(
+            find_yield_ops(&ctx, module).len(),
+            0,
+            "Should have no cont.yield"
         );
     }
 
     #[test]
-    fn annotate_mixed_arms_marks_only_tr() {
+    fn convert_mixed_arms_converts_only_tr() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -492,25 +509,18 @@ mod tests {
 }"#,
         );
 
+        convert_tail_resumptive(&mut ctx, module);
+
+        // First suspend (get) should be converted to yield
+        let yields = find_yield_ops(&ctx, module);
+        assert_eq!(yields.len(), 1, "get arm should be converted to yield");
+        let yield_op = arena_cont::Yield::from_op(&ctx, yields[0]).unwrap();
+        assert_eq!(yield_op.op_name(&ctx), trunk_ir::Symbol::new("get"));
+
+        // Second suspend (set) should remain as suspend
         let suspends = find_suspend_ops(&ctx, module);
-        assert_eq!(suspends.len(), 2);
-
-        annotate_tail_resumptive(&mut ctx, module);
-
-        // First suspend (get) is TR
-        let get_suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
-        assert_eq!(get_suspend.op_name(&ctx), Symbol::new("get"));
-        assert!(
-            is_marked_tail_resumptive(&ctx, suspends[0]),
-            "get arm should be TR"
-        );
-
-        // Second suspend (set) is NOT TR
-        let set_suspend = arena_cont::Suspend::from_op(&ctx, suspends[1]).unwrap();
-        assert_eq!(set_suspend.op_name(&ctx), Symbol::new("set"));
-        assert!(
-            !is_marked_tail_resumptive(&ctx, suspends[1]),
-            "set arm should NOT be TR"
-        );
+        assert_eq!(suspends.len(), 1, "set arm should remain as suspend");
+        let suspend_op = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        assert_eq!(suspend_op.op_name(&ctx), trunk_ir::Symbol::new("set"));
     }
 }

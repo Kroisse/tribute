@@ -285,11 +285,18 @@ fn collect_handled_abilities_by_tag(
             let blocks = &ctx.region(body).blocks;
             if let Some(&first_block) = blocks.first() {
                 for &child_op in ctx.block(first_block).ops.iter() {
-                    if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
-                        let ability_ref = suspend_op.ability_ref(ctx);
-                        if !abilities.contains(&ability_ref) {
-                            abilities.push(ability_ref);
-                        }
+                    let ability_ref =
+                        if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, child_op) {
+                            Some(yield_op.ability_ref(ctx))
+                        } else if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
+                            Some(suspend_op.ability_ref(ctx))
+                        } else {
+                            None
+                        };
+                    if let Some(ability_ref) = ability_ref
+                        && !abilities.contains(&ability_ref)
+                    {
+                        abilities.push(ability_ref);
                     }
                 }
             }

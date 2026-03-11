@@ -204,10 +204,10 @@ fn is_arm_self_contained(ctx: &IrContext, body: RegionRef) -> bool {
     }
 
     // Also check the resume_value itself
-    if let Some(info) = tail_resumptive::is_tail_resumptive(ctx, body) {
-        if !defined_values.contains(&info.resume_value) {
-            return false;
-        }
+    if let Some(info) = tail_resumptive::is_tail_resumptive(ctx, body)
+        && !defined_values.contains(&info.resume_value)
+    {
+        return false;
     }
 
     true
