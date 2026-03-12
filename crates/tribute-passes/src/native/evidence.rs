@@ -229,7 +229,7 @@ fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
     let ptr_ty = ctx
         .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());

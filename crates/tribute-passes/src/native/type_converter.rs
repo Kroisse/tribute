@@ -140,9 +140,9 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if ty == r.cont_prompt_tag {
             return Some(r.core_i32);
         }
-        // Evidence type → i64
+        // Evidence type → ptr
         if ty == r.evidence_ty {
-            return Some(r.core_i64);
+            return Some(r.core_ptr);
         }
         // ADT struct/enum/variant_instance/typeref → ptr
         if is_adt_ptr_type(ctx, ty) {
@@ -198,10 +198,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if from_ty == r.core_ptr && to_ty == r.tribute_rt_anyref {
             return Some(arena_materialize_result_noop(value));
         }
-        if from_ty == r.evidence_ty && to_ty == r.core_i64 {
+        if from_ty == r.evidence_ty && to_ty == r.core_ptr {
             return Some(arena_materialize_result_noop(value));
         }
-        if from_ty == r.core_i64 && to_ty == r.evidence_ty {
+        if from_ty == r.core_ptr && to_ty == r.evidence_ty {
             return Some(arena_materialize_result_noop(value));
         }
         if from_ty == r.cont_prompt_tag && to_ty == r.core_i32 {

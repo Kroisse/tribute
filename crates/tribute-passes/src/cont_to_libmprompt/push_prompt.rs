@@ -70,10 +70,6 @@ impl RewritePattern for LowerPushPromptPattern {
         rewriter.add_module_op(outlined_func);
 
         // Build the call site
-        let i64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-
         let env_val = if live_ins.is_empty() {
             let null = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
             rewriter.insert_op(null.op_ref());
@@ -83,10 +79,10 @@ impl RewritePattern for LowerPushPromptPattern {
             let mut field_types = Vec::new();
             for &(value, ty) in &live_ins {
                 if arena_ability::is_evidence_type_ref(ctx, ty) {
-                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, value, i64_ty);
+                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, value, ptr_ty);
                     rewriter.insert_op(cast.op_ref());
                     field_vals.push(cast.result(ctx));
-                    field_types.push(i64_ty);
+                    field_types.push(ptr_ty);
                 } else if ty != ptr_ty {
                     let cast = arena_core::unrealized_conversion_cast(ctx, loc, value, ptr_ty);
                     rewriter.insert_op(cast.op_ref());
@@ -260,9 +256,6 @@ fn generate_outlined_body(
     use std::collections::HashMap;
 
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
-    let i64_ty = ctx
-        .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
 
     // Create entry block with ptr parameter (the env struct)
     let entry_block = ctx.create_block(BlockData {
@@ -284,7 +277,7 @@ fn generate_outlined_body(
             .iter()
             .map(|&(_, ty)| {
                 if arena_ability::is_evidence_type_ref(ctx, ty) {
-                    i64_ty
+                    ptr_ty
                 } else {
                     ptr_ty
                 }
