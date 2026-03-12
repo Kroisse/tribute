@@ -130,13 +130,31 @@ impl<'a> ArenaIrBuilder<'a> {
         self.value_map.get(name).copied()
     }
 
-    fn save_scopes(&self) -> (HashMap<String, ValueRef>, HashMap<String, BlockRef>) {
-        (self.value_map.clone(), self.block_map.clone())
+    fn save_scopes(
+        &self,
+    ) -> (
+        HashMap<String, ValueRef>,
+        HashMap<String, BlockRef>,
+        HashMap<String, TypeRef>,
+    ) {
+        (
+            self.value_map.clone(),
+            self.block_map.clone(),
+            self.type_alias_map.clone(),
+        )
     }
 
-    fn restore_scopes(&mut self, saved: (HashMap<String, ValueRef>, HashMap<String, BlockRef>)) {
+    fn restore_scopes(
+        &mut self,
+        saved: (
+            HashMap<String, ValueRef>,
+            HashMap<String, BlockRef>,
+            HashMap<String, TypeRef>,
+        ),
+    ) {
         self.value_map = saved.0;
         self.block_map = saved.1;
+        self.type_alias_map = saved.2;
     }
 
     // ----------------------------------------------------------------
@@ -147,14 +165,16 @@ impl<'a> ArenaIrBuilder<'a> {
     ///
     /// `extra_entry_args` are injected as the entry block's arguments
     /// (e.g. from a func-style signature).
+    /// `is_module_region` controls whether type alias definitions are allowed.
     fn build_region(
         &mut self,
         raw: &RawRegion<'_>,
         extra_entry_args: &[(&str, RawType<'_>)],
+        is_module_region: bool,
     ) -> Result<RegionRef, ParseError> {
         let saved = self.save_scopes();
         self.block_map.clear(); // isolate block scope per region
-        let result = self.build_region_inner(raw, extra_entry_args);
+        let result = self.build_region_inner(raw, extra_entry_args, is_module_region);
         self.restore_scopes(saved);
         result
     }
@@ -163,8 +183,15 @@ impl<'a> ArenaIrBuilder<'a> {
         &mut self,
         raw: &RawRegion<'_>,
         extra_entry_args: &[(&str, RawType<'_>)],
+        is_module_region: bool,
     ) -> Result<RegionRef, ParseError> {
         // --- Process type alias definitions ---
+        if !raw.type_aliases.is_empty() && !is_module_region {
+            return Err(ParseError {
+                message: "type aliases are only allowed in module regions".to_string(),
+                offset: 0,
+            });
+        }
         for (name, raw_ty) in &raw.type_aliases {
             let ty = self.build_type(raw_ty)?;
             self.type_alias_map.insert(name.to_string(), ty);
@@ -407,6 +434,7 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect::<Result<_, _>>()?;
 
         // Build regions (inject func_params as entry block args for the first region)
+        let is_module = dialect == Symbol::new("core") && op_name == Symbol::new("module");
         let mut regions = Vec::with_capacity(raw.regions.len());
         for (i, r) in raw.regions.iter().enumerate() {
             let extra_args = if i == 0 && !raw.func_params.is_empty() {
@@ -414,7 +442,7 @@ impl<'a> ArenaIrBuilder<'a> {
             } else {
                 &[]
             };
-            let region = self.build_region(r, extra_args)?;
+            let region = self.build_region(r, extra_args, is_module)?;
             regions.push(region);
         }
 
@@ -1200,5 +1228,24 @@ mod tests {
         let mut ctx = IrContext::new();
         let module_op = parse_module(&mut ctx, input).unwrap();
         assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
+    fn test_type_alias_rejected_in_non_module_region() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    !bad = core.i32
+    %0 = arith.const {value = 42} : !bad
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let err = parse_module(&mut ctx, input).unwrap_err();
+        assert!(
+            err.message
+                .contains("type aliases are only allowed in module regions"),
+            "Expected module-only error, got: {}",
+            err.message,
+        );
     }
 }
