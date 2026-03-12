@@ -1,125 +1,51 @@
 # Crate Structure
 
-The Tribute compiler is organized as a Rust Cargo workspace with clearly
-separated responsibilities.
+The Tribute compiler is organized as a Rust Cargo workspace.
 
-## tribute-core
+## Design Principles
 
-**Role**: Shared compiler utilities (target info, future utilities)
+- **trunk-ir** is language-agnostic and must NOT depend on any tribute crate.
+- **tribute-ir** contains Tribute-specific dialects and depends only on trunk-ir.
+- **Backend crates** (trunk-ir-wasm-backend, trunk-ir-cranelift-backend)
+  depend only on trunk-ir, keeping them language-agnostic.
+- **tribute-passes** contains both shared and target-specific passes
+  (native/, wasm/ subdirectories).
 
-**Key Types**:
+## Crates
 
-- `TargetInfo` - Platform info (triple, pointer size, endianness)
-- `Endianness` - Target byte order
-
-**Location**: `crates/tribute-core/`
-
-## tribute-passes
-
-**Role**: TrunkIR transformation passes (boxing, closures, effects, continuations)
-
-**Key Modules**:
-
-- `boxing.rs` - Insert explicit box/unbox operations for polymorphism
-- `closure_lower.rs` - Lower closure operations to function calls
-- `evidence.rs` - Evidence parameter insertion for effect handling
-- `resolve_evidence.rs` - Resolve evidence dispatch and lower `ability.*` to `cont.*`
-- `cont_to_trampoline.rs` - Lower continuations to trampoline implementation
-
-**Location**: `crates/tribute-passes/`
-
-## tribute-front
-
-**Role**: Front-end utilities (CST parsing, AST lowering, and text helpers)
-
-**Key Modules**:
-
-- `astgen/` - CST to AST lowering
-- `ast/` - Salsa-tracked AST types with phase-parameterized name resolution
-- `resolve.rs` - Name resolution (AST → AST)
-- `typeck/` - Type checking (AST → AST)
-- `tdnr.rs` - Type-directed name resolution (AST → AST)
-- `ast_to_ir/` - AST to TrunkIR lowering
-- `query.rs` - Salsa-tracked query functions (including CST parsing)
-- `source_file.rs` - `SourceCst` input and URI helpers
-
-**Location**: `crates/tribute-front/`
-
-## trunk-ir
-
-**Role**: Multi-level dialect IR system (central IR representation)
-
-**Key Modules**:
-
-- `context.rs` - `IrContext` arena and core data structures
-- `refs.rs` - Reference types (OpRef, ValueRef, BlockRef, etc.)
-- `ops.rs` - `DialectOp`/`DialectType` traits, `ConversionError`
-- `types.rs` - Type system (interned types with attributes)
-- `printer.rs` - IR pretty-printing utilities
-- `validation.rs` - IR validation routines
-- `walk.rs` - IR traversal helpers
-- `dialect/` - All dialect definitions (defined via `#[dialect]` macro)
-- `rewrite/` - Pattern-based rewriting infrastructure (PatternRewriter, PatternApplicator)
-- `transforms/` - IR transformation passes (DCE, scf_to_cf)
-- `parser/` - IR text format parser (raw winnow + builder)
-
-**Location**: `crates/trunk-ir/`
-
-## tribute-cranelift
-
-**Role**: Native code generation backend (work in progress)
-
-**Status**: Pending TrunkIR → Cranelift IR lowering
-
-**Location**: `crates/tribute-cranelift/`
-
-## trunk-ir-cranelift-backend
-
-**Role**: Native code generation via Cranelift (language-agnostic)
-
-**Key Modules**:
-
-- `lib.rs` - Public API: `emit_module_to_native`
-- `translate.rs` - Module-level orchestration (ObjectModule → object file)
-- `function.rs` - `clif.*` → Cranelift FunctionBuilder emit
-- `validation.rs` - Pre-emit validation (all ops must be `clif.*`)
-- `passes/` - Lowering passes (`func_to_clif`, `arith_to_clif`, etc.)
-
-**Location**: `crates/trunk-ir-cranelift-backend/`
-
-## tribute (main crate)
-
-**Role**: CLI entry point, LSP server, and pipeline orchestration
-
-**Key Modules**:
-
-- `cli.rs` - Command-line argument parsing (serve command)
-- `database.rs` - `TributeDatabaseImpl` and file loading cache
-- `lsp/` - LSP server (hover, diagnostics, document sync)
-- `pipeline.rs` - Compilation pipeline orchestration
-
-**Location**: `src/`
+| Crate | Role |
+| ----- | ---- |
+| `tribute` (src/) | CLI, LSP server, pipeline orchestration |
+| `tribute-front` | Frontend: CST → AST → resolve → typecheck → TDNR → TrunkIR |
+| `tribute-passes` | TrunkIR transformation passes (boxing, closures, effects, continuations, target-specific lowering) |
+| `trunk-ir` | Language-agnostic multi-level dialect IR system |
+| `tribute-ir` | Tribute-specific high-level dialects (ability, closure, tribute_rt) |
+| `tribute-core` | Shared compiler utilities (TargetInfo, diagnostics) |
+| `trunk-ir-wasm-backend` | WASM code generation via TrunkIR |
+| `trunk-ir-cranelift-backend` | Native code generation via Cranelift |
+| `tribute-runtime` | Runtime library for abilities/effects (static lib) |
+| `trunk-ir-macros` | Proc macro for `#[dialect]` definitions |
+| `tree-sitter-tribute` | Tree-sitter parser (external git dependency) |
 
 ## Dependency Graph
 
 ```text
 tribute (main)
 ├── tribute-front
+│   ├── trunk-ir
+│   ├── tribute-ir
+│   └── tree-sitter-tribute
 ├── tribute-passes
 │   ├── trunk-ir
+│   ├── tribute-ir
+│   └── trunk-ir-wasm-backend
 ├── trunk-ir
 ├── trunk-ir-wasm-backend
 │   └── trunk-ir
 ├── trunk-ir-cranelift-backend
 │   └── trunk-ir
-└── tree-sitter-tribute
-
-tribute-front
-├── trunk-ir
-└── tree-sitter-tribute
+└── tribute-ir
+    └── trunk-ir
 ```
 
-Note: `trunk-ir` is now fully independent with no dependencies on other
-tribute crates (not even as dev-dependencies). It's a standalone IR system.
-Both `trunk-ir-wasm-backend` and `trunk-ir-cranelift-backend` depend only
-on `trunk-ir`, keeping them language-agnostic.
+Pipeline structure is documented in `src/pipeline.rs` (see top-of-file doc comment).

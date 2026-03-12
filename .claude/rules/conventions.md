@@ -45,42 +45,20 @@ Function types include effect information:
 let func_ty = func::Fn::new(db, params, return_ty, effect_row);
 ```
 
-Effect rows are managed in `crates/tribute-front/src/typeck/effect_row.rs`.
-
 ### Bidirectional Type Checking
 
-Two modes in `crates/tribute-front/src/typeck/checker.rs`:
+Two modes:
 
 - **Infer mode**: Synthesize type from expression
 - **Check mode**: Verify expression against expected type
 
-```rust
-fn infer_expr(&mut self, expr: ...) -> Type { ... }
-fn check_expr(&mut self, expr: ..., expected: Type) { ... }
-```
-
-### Type Variables and Unification
-
-- Fresh type variables for unknowns
-- Union-find-based constraint solver in `crates/tribute-front/src/typeck/solver.rs`
-- Substitution applied after solving
-
-## Name Resolution
-
-Name resolution is performed at the AST level in `tribute-front`.
+### Name Resolution
 
 Two-phase resolution:
 
-1. **Basic resolution** (`crates/tribute-front/src/resolve.rs`):
-   Resolves names and paths
-   - Builds `ModuleEnv` with bindings from definitions
-   - Resolves variable references to their definitions
-   - Handles qualified paths (e.g., `Foo::bar`)
-
-2. **Type-directed (TDNR)** (`crates/tribute-front/src/tdnr.rs`):
-   Resolves UFCS after type inference
-   - `expr.method(args)` → `Type::method(expr, args)`
-   - Requires inferred type information from typecheck phase
+1. **Basic resolution**: Resolves names and paths, builds `ModuleEnv`
+2. **Type-directed (TDNR)**: Resolves UFCS after type inference
+   (`expr.method(args)` → `Type::method(expr, args)`)
 
 ## Dialect Operations
 
@@ -117,12 +95,6 @@ if dialect == func::DIALECT_NAME() && op_name == func::CALL() {
 }
 ```
 
-Benefits of typed helpers and wrappers:
-
-- Type-safe access to operation attributes and operands
-- Compile-time verification of operation structure
-- Cleaner, more readable code
-
 ## Rewrite Patterns
 
 ### Pattern Interface
@@ -151,68 +123,3 @@ never `op.operands(db)` (original, possibly stale).
 ### Return Value
 
 Return `true` if the pattern matched and recorded mutations, `false` otherwise.
-
-## Bindings
-
-Three kinds of bindings in `crates/tribute-front/src/resolve/env.rs`:
-
-```rust
-pub enum Binding<'db> {
-    Function {
-        name: Symbol<'db>,
-        ty: Type<'db>,
-    },
-    Constructor {
-        type_name: Symbol<'db>,
-        ty: Type<'db>,
-        tag: Option<Symbol<'db>>,
-        params: IdVec<Type<'db>>,
-    },
-    TypeDef {
-        name: Symbol<'db>,
-        ty: Type<'db>,
-    },
-}
-```
-
-## Testing
-
-- Use `cargo nextest run` for running tests (preferred over `cargo test`)
-- Use `insta` for snapshot testing
-- Run `cargo insta review` when snapshots fail
-- Package-specific tests: `cargo nextest run -p <crate-name>`
-
-## Development Workflow
-
-### Starting a New Task
-
-1. **Always start from latest origin/main**:
-
-   ```bash
-   git fetch origin
-   git checkout -b <branch-name> origin/main
-   ```
-
-2. **Branch naming**: Use conventional prefixes
-   - `feature/` - New features
-   - `fix/` - Bug fixes
-   - `refactor/` - Code restructuring
-   - `docs/` - Documentation only
-
-### During Development
-
-- Make atomic commits with clear messages (Conventional Commits format)
-- Run tests frequently: `cargo nextest run --workspace`
-- Use `cargo clippy` and `cargo fmt` before committing
-
-### Completing Work
-
-1. **Create a Pull Request** when work is ready for review
-2. **Address review comments** before merging
-3. **Squash or rebase** if commit history is messy
-
-### Issue Workflow
-
-- Reference issues in commits: `fix: resolve type inference (#123)`
-- Create follow-up issues for out-of-scope discoveries
-- Close issues via PR merge, not manually

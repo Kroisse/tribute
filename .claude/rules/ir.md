@@ -4,121 +4,62 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
 
 ## Core Structures
 
-Located in `crates/trunk-ir/src/context.rs` and `crates/trunk-ir/src/refs.rs`:
-
-- **`IrContext`** - Arena-based IR context holding all operations, blocks,
+- **`IrContext`** — Arena-based context holding all operations, blocks,
   regions, and types
-- **`OpRef`** - Reference to an operation in the arena
-- **`ValueRef`** - Reference to an SSA value
-- **`ValueDef`** - Either operation result or block argument
-- **`BlockRef`** - Reference to a basic block
-- **`RegionRef`** - Reference to a control flow region
-- **`TypeRef`** - Reference to an interned type
-- **`Attribute`** - Value attributes (bool, int, float, string, type, symbol, span)
-- **`Symbol`** - Interned identifier (4 bytes, O(1) comparison)
-  - Can hold simple names or qualified paths (e.g., `"map"` or `"std::List::map"`)
-  - Path operations available via `ModulePathExt` trait in `tribute-ir`
+- **`OpRef`**, **`ValueRef`**, **`BlockRef`**, **`RegionRef`**, **`TypeRef`**
+  — Arena references to IR entities
+- **`Symbol`** — Interned identifier (4 bytes, O(1) comparison).
+  Qualified paths via `ModulePathExt` trait in `tribute-ir`.
 
-## Dialects
+## Dialect Organization
 
 Dialects are split across two crates:
 
-- **trunk-ir** (`crates/trunk-ir/src/dialect/`): Target-independent dialects
-- **tribute-ir** (`crates/tribute-ir/src/dialect/`): Tribute-specific
-  high-level dialects
+- **trunk-ir** (`crates/trunk-ir/src/dialect/`):
+  Language-agnostic dialects (core, func, cont, scf, arith, mem, cf, clif,
+  trampoline, wasm, adt)
+- **tribute-ir** (`crates/tribute-ir/src/dialect/`):
+  Tribute-specific dialects (ability, closure, tribute_rt)
 
-### Infrastructure (trunk-ir)
+Dialect levels (high → low):
 
-| Dialect | File | Purpose |
-| ------- | ---- | ------- |
-| `core` | `core.rs` | Core types: i32, f64, nil, tuple, string, ptr, array, ref_ |
-
-### High-level Tribute (tribute-ir)
-
-| Dialect | File | Purpose |
-| ------- | ---- | ------- |
-| `ability` | `ability.rs` | Evidence-based handler dispatch: evidence_lookup, evidence_extend, handler_table, handler_entry |
-| `adt` | `adt.rs` | ADT ops: struct_new, variant_new, array_get, field_get |
-| `closure` | `closure.rs` | Closures and captures |
-| `tribute_rt` | `tribute_rt.rs` | Runtime boxing/unboxing (box_int, unbox_int, etc.) and RC ops (retain, release) |
-
-### Mid-level (trunk-ir)
-
-| Dialect | File | Purpose |
-| ------- | ---- | ------- |
-| `func` | `func.rs` | Function ops: func, call, call_indirect, return, constant |
-| `cont` | `cont.rs` | Continuation-based control flow |
-| `scf` | `scf.rs` | Structured control flow: if, while, for |
-| `arith` | `arith.rs` | Arithmetic: add, mul, div, cmp, etc. |
-| `mem` | `mem.rs` | Memory operations |
-
-### Low-level (trunk-ir)
-
-| Dialect | File | Purpose |
-| ------- | ---- | ------- |
-| `wasm` | `wasm.rs` | WebAssembly target ops |
+- **High-level**: ability, closure, tribute_rt — Tribute language concepts
+- **Mid-level**: func, cont, scf, arith, mem, adt — structured operations
+- **Low-level**: cf, wasm, clif, trampoline — target-specific
 
 ## `#[dialect]` Macro
 
-Operations are defined using the `#[dialect]` attribute macro:
-
-```rust
-#[trunk_ir::dialect]
-mod func {
-    // Function definition with body region
-    #[attr(sym_name: Symbol, r#type: Type)]
-    fn func() {
-        #[region(body)] {}
-    }
-
-    // Function call with callee attribute
-    #[attr(callee: Symbol)]
-    fn call(#[rest] args: ()) -> result {}
-
-    // Return with optional value
-    fn r#return(#[rest] values: ()) {}
-}
-```
+Operations and types are defined using the `#[dialect]` attribute macro.
+Within trunk-ir: `#[crate::dialect(crate = crate)]`.
+From external crates: `#[trunk_ir::dialect]`.
 
 **Annotations**:
 
-- `#[attr(...)]` - Attributes (metadata stored on operation)
-- `#[region(...)]` - Regions (nested control flow)
-- `#[rest]` - Variadic operands
-- `-> result` - Operation produces a result value
-
-## Type System
-
-Types are defined per-dialect and interned:
-
-```rust
-// Creating types via typed constructors
-let nil_ty = core::nil(ctx).as_type_ref();
-let func_ty = core::func(ctx, return_ty, params, effect).as_type_ref();
-
-// Type has: dialect, name, params, attrs
-let data = ctx.types.get(nil_ty);
-data.dialect  // Symbol("core")
-data.name     // Symbol("nil")
-data.params   // []
-```
+- `#[attr(...)]` — Attributes (metadata stored on operation)
+- `#[region(...)]` — Regions (nested control flow)
+- `#[rest]` — Variadic operands
+- `-> result` — Operation produces a result value
+- `struct` definitions — Generate typed type wrappers
 
 ## Working with IR
 
+Types are created via module-level constructors and converted with
+`.as_type_ref()`:
+
 ```rust
-// Create an IR context
-let mut ctx = IrContext::new();
+let nil_ty = core::nil(ctx).as_type_ref();
+let func_ty = core::func(ctx, return_ty, params, effect).as_type_ref();
+```
 
-// Create operations via typed constructors
+Operations use the same pattern:
+
+```rust
 let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
-let call = func::call(&mut ctx, loc, [c.result(&ctx)], i32_ty, Symbol::new("add"));
+```
 
-// Match operations via typed wrappers
-if let Ok(func) = func::Func::from_op(&ctx, op) {
-    let name = func.sym_name(&ctx);
-    let body = func.body(&ctx);
-}
+Matching uses typed wrappers (see conventions.md for ✅/❌ patterns):
 
-// Check operation type
+```rust
+if let Ok(func) = func::Func::from_op(&ctx, op) { ... }
 if func::Call::matches(&ctx, op) { ... }
 ```
