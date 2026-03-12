@@ -413,7 +413,7 @@ fn generate_auto_aliases(
         if crate::op_interface::suggest_type_alias_name(ctx, ty).is_none() {
             continue;
         }
-        let complexity = ctx.types.print_len(ty);
+        let complexity = ctx.types.complexity(ty);
         if count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY {
             candidates.push((ty, count, complexity));
         }
