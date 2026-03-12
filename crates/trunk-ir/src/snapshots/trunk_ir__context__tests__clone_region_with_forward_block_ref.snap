@@ -1,5 +1,6 @@
 ---
 source: crates/trunk-ir/src/context.rs
+assertion_line: 1618
 expression: output
 ---
 core.module @test {

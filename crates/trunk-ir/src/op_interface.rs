@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use crate::Symbol;
-use crate::{IrContext, OpRef};
+use crate::{IrContext, OpRef, TypeRef};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -230,6 +230,38 @@ macro_rules! register_isolated_op {
             }
         }
     };
+}
+
+// =============================================================================
+// TypeAliasHint — dialect-provided alias name suggestions for printer
+// =============================================================================
+
+/// Dialect-provided hint for suggesting type alias names during printing.
+///
+/// Each dialect can register a hint that maps its types to suggested alias names.
+/// The printer uses these hints when auto-generating type aliases.
+pub struct TypeAliasHint {
+    /// Dialect name this hint applies to (e.g., "adt").
+    pub dialect: &'static str,
+    /// Given a type belonging to this dialect, suggest an alias name.
+    /// Returns `None` if no name can be suggested.
+    pub suggest: fn(&IrContext, TypeRef) -> Option<Symbol>,
+}
+
+inventory::collect!(TypeAliasHint);
+
+/// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
+pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
+    let data = ctx.types.get(ty);
+    let dialect = data.dialect;
+    for hint in inventory::iter::<TypeAliasHint> {
+        if dialect.with_str(|s| s == hint.dialect)
+            && let Some(name) = (hint.suggest)(ctx, ty)
+        {
+            return Some(name);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

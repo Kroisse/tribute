@@ -1,5 +1,17 @@
 //! Arena-based adt dialect.
 
+// === Type alias hint registration ===
+inventory::submit!(crate::op_interface::TypeAliasHint {
+    dialect: "adt",
+    suggest: |ctx, ty| {
+        ctx.types
+            .get(ty)
+            .attrs
+            .get(&crate::Symbol::new("name"))
+            .and_then(crate::Attribute::as_symbol)
+    },
+});
+
 // === Pure operation registrations ===
 crate::register_pure_op!(adt.struct_new);
 crate::register_pure_op!(adt.struct_get);

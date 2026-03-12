@@ -1,19 +1,22 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
+assertion_line: 148
 expression: ir_text
 ---
 core.module @test {
+  !__tuple_i32_i32 = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}
+
   func.func @make_pair(%0: core.i32, %1: core.i32) -> tribute_rt.anyref {
     ^bb0:
-      %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}} : adt.typeref() {name = @__tuple_i32_i32}
+      %2 = adt.struct_new %0, %1 {type = !__tuple_i32_i32} : adt.typeref() {name = @__tuple_i32_i32}
       func.return %2
   }
   func.func @test() -> core.i32 {
       %0 = arith.const {value = 10} : core.i32
       %1 = arith.const {value = 20} : core.i32
       %2 = func.call %0, %1 {callee = @make_pair} : tribute_rt.anyref
-      %3 = adt.struct_get %2 {field = 0, type = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}} : core.i32
-      %4 = adt.struct_get %2 {field = 1, type = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}} : core.i32
+      %3 = adt.struct_get %2 {field = 0, type = !__tuple_i32_i32} : core.i32
+      %4 = adt.struct_get %2 {field = 1, type = !__tuple_i32_i32} : core.i32
       %5 = arith.add %3, %4 : core.i32
       func.return %5
   }

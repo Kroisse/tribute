@@ -1,13 +1,16 @@
 ---
 source: crates/tribute-passes/src/cont_to_trampoline/tests.rs
+assertion_line: 33
 expression: result
 ---
 core.module @test {
+  !__State_2d8a666717f4 = adt.struct() {fields = [], name = @__State_2d8a666717f4}
+
   func.func @effectful_fn() -> core.ptr effects core.effect_row(core.ability_ref() {name = @State}) {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = 1} : core.i32
       %2 = core.unrealized_conversion_cast %1 : core.ptr
-      %3 = trampoline.build_state {state_type = adt.struct() {fields = [], name = @__State_2d8a666717f4}} : adt.struct() {fields = [], name = @__State_2d8a666717f4}
+      %3 = trampoline.build_state {state_type = !__State_2d8a666717f4} : !__State_2d8a666717f4
       %4 = func.constant {func_ref = @__resume_0} : core.i32
       %5 = trampoline.build_continuation %0, %4, %3, %2 {op_idx = 364656421} : trampoline.continuation
       trampoline.set_yield_state %0, %5 {op_idx = 364656421}

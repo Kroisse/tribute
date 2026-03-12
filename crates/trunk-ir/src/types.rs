@@ -52,6 +52,73 @@ pub enum Attribute {
     Location(Location),
 }
 
+impl Attribute {
+    /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
+    pub fn as_symbol(&self) -> Option<Symbol> {
+        match self {
+            Attribute::Symbol(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner `TypeRef` if this is `Attribute::Type`.
+    pub fn as_type(&self) -> Option<TypeRef> {
+        match self {
+            Attribute::Type(t) => Some(*t),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner integer if this is `Attribute::Int`.
+    pub fn as_int(&self) -> Option<i128> {
+        match self {
+            Attribute::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner bool if this is `Attribute::Bool`.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Attribute::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner string slice if this is `Attribute::String`.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Attribute::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Estimate the complexity of this attribute for alias generation heuristics.
+    pub fn complexity(&self) -> usize {
+        match self {
+            Attribute::Unit => 4,
+            Attribute::Bool(_) => 5,
+            Attribute::Int(v) => {
+                // Approximate digit count without allocating
+                if *v == 0 {
+                    1
+                } else {
+                    ((*v as f64).abs().log10() as usize) + 1 + usize::from(*v < 0)
+                }
+            }
+            Attribute::FloatBits(_) => 8,
+            Attribute::String(s) => s.len() + 2,
+            Attribute::Bytes(b) => b.len() * 4 + 7,
+            Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
+            Attribute::Type(_) => 10, // rough estimate; actual depends on type
+            Attribute::List(list) => {
+                list.iter().map(Attribute::complexity).sum::<usize>() + list.len() * 2
+            }
+            Attribute::Location(_) => 20,
+        }
+    }
+}
+
 impl From<i32> for Attribute {
     fn from(value: i32) -> Self {
         Attribute::Int(value as i128)
@@ -218,6 +285,20 @@ impl TypeInterner {
     /// Returns `None` if no type with the given data exists.
     pub fn lookup(&self, data: &TypeData) -> Option<TypeRef> {
         self.dedup.get(data).copied()
+    }
+
+    /// Estimate the complexity of a type for alias generation heuristics.
+    pub fn complexity(&self, ty: TypeRef) -> usize {
+        let data = &self.types[ty];
+        let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
+        for &param in &data.params {
+            size += self.complexity(param) + 2; // ", " separator
+        }
+        for (key, val) in &data.attrs {
+            size += key.with_str(|s| s.len()) + 3; // "key = "
+            size += val.complexity();
+        }
+        size
     }
 }
 

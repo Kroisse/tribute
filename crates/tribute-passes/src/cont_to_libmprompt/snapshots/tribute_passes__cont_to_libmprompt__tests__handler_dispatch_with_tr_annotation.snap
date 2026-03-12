@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-passes/src/cont_to_libmprompt/tests.rs
-assertion_line: 464
+assertion_line: 467
 expression: result
 ---
 core.module @test {

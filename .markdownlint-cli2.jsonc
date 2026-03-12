@@ -13,6 +13,7 @@
   "ignores": [
     "node_modules/",
     "target/",
-    "crates/tribute-runtime/libmprompt/"
+    "crates/tribute-runtime/libmprompt/",
+    ".claude/worktrees/"
   ]
 }
