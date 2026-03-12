@@ -45,10 +45,7 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
-
 use tribute_ir::dialect::ability as arena_ability;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;
 use trunk_ir::dialect::arith;
@@ -60,6 +57,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location};
+use trunk_ir::{IrMapping, Symbol};
 
 use crate::cont_util::{SuspendArm, collect_suspend_arms, compute_op_idx};
 use crate::tail_resumptive;
@@ -516,22 +514,25 @@ fn emit_arm_value_computation(
     };
 
     // Build value remapping: original shift_value -> dispatch function's shift_value
-    let mut remap: HashMap<ValueRef, ValueRef> = HashMap::new();
-    remap.insert(extraction.shift_value_arg, shift_value_arg);
+    let mut mapping = IrMapping::from_values([(extraction.shift_value_arg, shift_value_arg)]);
 
     // Clone each op, remapping operands
     for &src_op in &extraction.ops_to_clone {
-        let new_op = clone_op_with_remap(ctx, src_op, &mut remap);
-        ctx.push_op(target_block, new_op);
+        // TR dispatch only handles flat ops (no nested regions)
+        assert!(
+            ctx.op(src_op).regions.is_empty(),
+            "clone in TR dispatch: cannot clone region-bearing op {}.{}; \
+             TR dispatch extraction does not support nested regions",
+            ctx.op(src_op).dialect,
+            ctx.op(src_op).name,
+        );
+        ctx.clone_op_into_block(target_block, src_op, &mut mapping);
     }
 
     // Get the remapped resume_value
-    let result_val = if let Some(&remapped) = remap.get(&extraction.resume_value) {
-        remapped
-    } else {
-        // resume_value is the shift_value itself (not produced by any cloned op)
-        shift_value_arg
-    };
+    let result_val = mapping
+        .lookup_value(extraction.resume_value)
+        .unwrap_or(shift_value_arg);
 
     // Cast result to ptr if needed (dispatch function returns ptr)
     let result_ty = ctx.value_ty(result_val);
@@ -551,66 +552,6 @@ fn emit_arm_value_computation(
     } else {
         result_val
     }
-}
-
-/// Clone an operation with operand remapping.
-/// Updates remap with the new result values.
-///
-/// # Panics
-///
-/// Panics if the source operation has nested regions (e.g., `scf.if`, loops).
-/// Region-bearing ops are not supported in TR dispatch extraction; they should
-/// be filtered out by `is_arm_self_contained`.
-fn clone_op_with_remap(
-    ctx: &mut IrContext,
-    src_op: OpRef,
-    remap: &mut HashMap<ValueRef, ValueRef>,
-) -> OpRef {
-    let op_data = ctx.op(src_op);
-    let loc = op_data.location;
-    let dialect = op_data.dialect;
-    let name = op_data.name;
-
-    // Reject region-bearing ops — they cannot be shallow-cloned safely
-    assert!(
-        op_data.regions.is_empty(),
-        "clone_op_with_remap: cannot clone region-bearing op {dialect}.{name}; \
-         TR dispatch extraction does not support nested regions"
-    );
-
-    // Remap operands
-    let operands: Vec<ValueRef> = ctx
-        .op_operands(src_op)
-        .iter()
-        .map(|&v| remap.get(&v).copied().unwrap_or(v))
-        .collect();
-
-    // Get result types
-    let result_types: Vec<TypeRef> = ctx.op_result_types(src_op).to_vec();
-
-    // Clone attributes
-    let attributes = op_data.attributes.clone();
-
-    // Build new op
-    let mut builder = trunk_ir::context::OperationDataBuilder::new(loc, dialect, name);
-    for operand in &operands {
-        builder = builder.operand(*operand);
-    }
-    for result_ty in &result_types {
-        builder = builder.result(*result_ty);
-    }
-    let mut op_data = builder.build(ctx);
-    op_data.attributes = attributes;
-    let new_op = ctx.create_op(op_data);
-
-    // Update remap for results
-    let old_results = ctx.op_results(src_op);
-    let new_results = ctx.op_results(new_op);
-    for (old_r, new_r) in old_results.iter().zip(new_results.iter()) {
-        remap.insert(*old_r, *new_r);
-    }
-
-    new_op
 }
 
 // ============================================================================

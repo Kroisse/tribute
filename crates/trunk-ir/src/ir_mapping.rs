@@ -24,6 +24,17 @@ impl IrMapping {
         Self::default()
     }
 
+    /// Create a mapping pre-populated with value correspondences.
+    ///
+    /// Useful for converting existing `HashMap<ValueRef, ValueRef>` into
+    /// an `IrMapping`.
+    pub fn from_values(iter: impl IntoIterator<Item = (ValueRef, ValueRef)>) -> Self {
+        Self {
+            values: iter.into_iter().collect(),
+            blocks: HashMap::new(),
+        }
+    }
+
     /// Map an old value to a new value.
     pub fn map_value(&mut self, from: ValueRef, to: ValueRef) {
         self.values.insert(from, to);

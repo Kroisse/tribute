@@ -28,8 +28,7 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
-
+use trunk_ir::IrMapping;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{
@@ -186,10 +185,10 @@ fn build_done_branch(
     let done_value = cast_if_needed(ctx, new_block, loc, current, ptr_ty, done_arg_ty);
 
     // Build value remap: done block args -> done_value
-    let mut value_remap: HashMap<ValueRef, ValueRef> = HashMap::new();
+    let mut mapping = IrMapping::new();
     let done_block_args = ctx.block_args(done_block).to_vec();
     if !done_block_args.is_empty() {
-        value_remap.insert(done_block_args[0], done_value);
+        mapping.map_value(done_block_args[0], done_value);
     }
 
     // Copy done block operations, replacing scf.yield with scf.break
@@ -198,24 +197,13 @@ fn build_done_branch(
         if arena_scf::Yield::matches(ctx, done_op) {
             let yielded_operands: Vec<ValueRef> = ctx.op_operands(done_op).to_vec();
             if let Some(&result) = yielded_operands.first() {
-                let remapped = value_remap.get(&result).copied().unwrap_or(result);
+                let remapped = mapping.lookup_value_or_default(result);
                 let brk = arena_scf::r#break(ctx, loc, remapped);
                 ctx.push_op(new_block, brk.op_ref());
             }
             continue;
         }
-        // Clone op into the new block with remapping
-        clone_op_into_block_with_remap(ctx, new_block, done_op, &value_remap);
-
-        // Map old results -> new results
-        let new_ops = ctx.block(new_block).ops.clone();
-        if let Some(&new_op) = new_ops.last() {
-            let old_results: Vec<ValueRef> = ctx.op_results(done_op).to_vec();
-            let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
-            for (old_r, new_r) in old_results.into_iter().zip(new_results) {
-                value_remap.insert(old_r, new_r);
-            }
-        }
+        ctx.clone_op_into_block(new_block, done_op, &mut mapping);
     }
 
     ctx.create_region(RegionData {
@@ -422,13 +410,13 @@ fn build_arm_region(
     };
 
     // Build value remap: block args -> FFI getter values
-    let mut value_remap: HashMap<ValueRef, ValueRef> = HashMap::new();
+    let mut mapping = IrMapping::new();
     let block_args = ctx.block_args(arm_block).to_vec();
     if !block_args.is_empty() {
-        value_remap.insert(block_args[0], k);
+        mapping.map_value(block_args[0], k);
     }
     if block_args.len() >= 2 {
-        value_remap.insert(block_args[1], v);
+        mapping.map_value(block_args[1], v);
     }
 
     // Clone arm block ops into new block, replacing scf.yield
@@ -446,24 +434,14 @@ fn build_arm_region(
         if arena_scf::Yield::matches(ctx, op) {
             let yielded_operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
             if let Some(&result) = yielded_operands.first() {
-                let remapped = value_remap.get(&result).copied().unwrap_or(result);
+                let remapped = mapping.lookup_value_or_default(result);
                 let y = arena_scf::r#yield(ctx, loc, [remapped]);
                 ctx.push_op(new_block, y.op_ref());
                 has_yield = true;
             }
             continue;
         }
-        clone_op_into_block_with_remap(ctx, new_block, op, &value_remap);
-
-        // Map old results -> new results
-        let new_ops = ctx.block(new_block).ops.clone();
-        if let Some(&new_op) = new_ops.last() {
-            let old_results: Vec<ValueRef> = ctx.op_results(op).to_vec();
-            let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
-            for (old_r, new_r) in old_results.into_iter().zip(new_results) {
-                value_remap.insert(old_r, new_r);
-            }
-        }
+        ctx.clone_op_into_block(new_block, op, &mut mapping);
     }
 
     if !has_yield {
@@ -506,118 +484,4 @@ fn cast_if_needed(
         ctx.push_op(block, cast.op_ref());
         cast.result(ctx)
     }
-}
-
-/// Clone an operation into a new block, applying a value remap to operands.
-///
-/// Results of the cloned operation are added to the remap so that subsequent
-/// cloned ops pick them up automatically.
-///
-/// Nested regions are deep-cloned so that captured values inside them
-/// are remapped correctly.
-pub(crate) fn clone_op_into_block_with_remap(
-    ctx: &mut IrContext,
-    dest_block: trunk_ir::refs::BlockRef,
-    src_op: OpRef,
-    value_remap: &HashMap<ValueRef, ValueRef>,
-) {
-    use trunk_ir::context::OperationDataBuilder;
-
-    let data = ctx.op(src_op);
-    let loc = data.location;
-    let dialect = data.dialect;
-    let name = data.name;
-    let attrs = data.attributes.clone();
-    let regions: Vec<_> = data.regions.to_vec();
-    let successors: Vec<_> = data.successors.to_vec();
-    let operands: Vec<_> = ctx.op_operands(src_op).to_vec();
-    let result_types: Vec<_> = ctx.op_result_types(src_op).to_vec();
-
-    let mut builder = OperationDataBuilder::new(loc, dialect, name);
-    for &v in &operands {
-        let remapped = value_remap.get(&v).copied().unwrap_or(v);
-        builder = builder.operand(remapped);
-    }
-    for &ty in &result_types {
-        builder = builder.result(ty);
-    }
-    for (k, v) in attrs {
-        builder = builder.attr(k, v);
-    }
-    for r in regions {
-        let cloned_region = deep_clone_region(ctx, r, value_remap);
-        builder = builder.region(cloned_region);
-    }
-    for s in successors {
-        builder = builder.successor(s);
-    }
-
-    let data = builder.build(ctx);
-    let new_op = ctx.create_op(data);
-    ctx.push_op(dest_block, new_op);
-}
-
-/// Deep-clone a region, recursively remapping values in all nested ops.
-fn deep_clone_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    parent_remap: &HashMap<ValueRef, ValueRef>,
-) -> RegionRef {
-    let region_data = ctx.region(region);
-    let loc = region_data.location;
-    let src_blocks: Vec<_> = region_data.blocks.to_vec();
-
-    let mut remap = parent_remap.clone();
-    let mut new_blocks = Vec::with_capacity(src_blocks.len());
-
-    for &src_block in &src_blocks {
-        let src_args = ctx.block_args(src_block).to_vec();
-        let arg_data: Vec<BlockArgData> = src_args
-            .iter()
-            .map(|&v| BlockArgData {
-                ty: ctx.value_ty(v),
-                attrs: Default::default(),
-            })
-            .collect();
-
-        let new_block = ctx.create_block(BlockData {
-            location: ctx.block(src_block).location,
-            args: arg_data,
-            ops: smallvec![],
-            parent_region: None,
-        });
-
-        // Map old block args -> new block args
-        let new_args = ctx.block_args(new_block).to_vec();
-        for (old_arg, new_arg) in src_args.into_iter().zip(new_args) {
-            remap.insert(old_arg, new_arg);
-        }
-
-        new_blocks.push((src_block, new_block));
-    }
-
-    // Clone ops in each block
-    for &(src_block, new_block) in &new_blocks {
-        let src_ops: Vec<OpRef> = ctx.block(src_block).ops.clone().to_vec();
-        for &op in &src_ops {
-            clone_op_into_block_with_remap(ctx, new_block, op, &remap);
-
-            // Map old results -> new results
-            let new_ops_list = ctx.block(new_block).ops.clone();
-            if let Some(&new_op) = new_ops_list.last() {
-                let old_results: Vec<ValueRef> = ctx.op_results(op).to_vec();
-                let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
-                for (old_r, new_r) in old_results.into_iter().zip(new_results) {
-                    remap.insert(old_r, new_r);
-                }
-            }
-        }
-    }
-
-    let block_refs: Vec<_> = new_blocks.into_iter().map(|(_, b)| b).collect();
-    ctx.create_region(RegionData {
-        location: loc,
-        blocks: block_refs.into(),
-        parent_op: None,
-    })
 }
