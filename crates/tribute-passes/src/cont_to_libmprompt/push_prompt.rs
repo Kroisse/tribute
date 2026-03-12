@@ -11,7 +11,6 @@
 use std::cell::Cell;
 use std::collections::HashSet;
 
-use tribute_ir::dialect::ability as arena_ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{
@@ -76,25 +75,17 @@ impl RewritePattern for LowerPushPromptPattern {
             null.result(ctx)
         } else {
             let mut field_vals = Vec::new();
-            let mut field_types = Vec::new();
             for &(value, ty) in &live_ins {
-                if arena_ability::is_evidence_type_ref(ctx, ty) {
+                if ty != ptr_ty {
                     let cast = arena_core::unrealized_conversion_cast(ctx, loc, value, ptr_ty);
                     rewriter.insert_op(cast.op_ref());
                     field_vals.push(cast.result(ctx));
-                    field_types.push(ptr_ty);
-                } else if ty != ptr_ty {
-                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, value, ptr_ty);
-                    rewriter.insert_op(cast.op_ref());
-                    field_vals.push(cast.result(ctx));
-                    field_types.push(ptr_ty);
                 } else {
                     field_vals.push(value);
-                    field_types.push(ptr_ty);
                 }
             }
 
-            let env_struct_ty = build_env_struct_type(ctx, &field_types);
+            let env_struct_ty = build_env_struct_type(ctx, live_ins.len(), ptr_ty);
             let struct_new =
                 arena_adt::struct_new(ctx, loc, field_vals, env_struct_ty, env_struct_ty);
             rewriter.insert_op(struct_new.op_ref());
@@ -273,17 +264,7 @@ fn generate_outlined_body(
     let mut value_remap: HashMap<ValueRef, ValueRef> = HashMap::new();
 
     if !live_ins.is_empty() {
-        let field_types: Vec<TypeRef> = live_ins
-            .iter()
-            .map(|&(_, ty)| {
-                if arena_ability::is_evidence_type_ref(ctx, ty) {
-                    ptr_ty
-                } else {
-                    ptr_ty
-                }
-            })
-            .collect();
-        let env_struct_ty = build_env_struct_type(ctx, &field_types);
+        let env_struct_ty = build_env_struct_type(ctx, live_ins.len(), ptr_ty);
 
         // Cast ptr -> struct type
         let env_cast = arena_core::unrealized_conversion_cast(ctx, loc, env_value, env_struct_ty);
@@ -291,11 +272,10 @@ fn generate_outlined_body(
         let env_ref = env_cast.result(ctx);
 
         for (i, &(orig_value, orig_ty)) in live_ins.iter().enumerate() {
-            let field_ty = field_types[i];
-            let field = arena_adt::struct_get(ctx, loc, env_ref, field_ty, env_struct_ty, i as u32);
+            let field = arena_adt::struct_get(ctx, loc, env_ref, ptr_ty, env_struct_ty, i as u32);
             ctx.push_op(entry_block, field.op_ref());
 
-            let extracted = if orig_ty != field_ty {
+            let extracted = if orig_ty != ptr_ty {
                 let cast =
                     arena_core::unrealized_conversion_cast(ctx, loc, field.result(ctx), orig_ty);
                 ctx.push_op(entry_block, cast.op_ref());
@@ -385,15 +365,12 @@ fn generate_outlined_body(
 /// - `name` attribute: struct name
 /// - `fields` attribute: list of [name, type] pairs
 /// - params: field types
-fn build_env_struct_type(ctx: &mut IrContext, field_types: &[TypeRef]) -> TypeRef {
-    // Build fields attribute: list of [Symbol(f0), Type(ty0)], [Symbol(f1), Type(ty1)], ...
-    let fields_attr: Vec<Attribute> = field_types
-        .iter()
-        .enumerate()
-        .map(|(i, &ty)| {
+fn build_env_struct_type(ctx: &mut IrContext, field_count: usize, field_ty: TypeRef) -> TypeRef {
+    let fields_attr: Vec<Attribute> = (0..field_count)
+        .map(|i| {
             Attribute::List(vec![
                 Attribute::Symbol(Symbol::from_dynamic(&format!("f{i}"))),
-                Attribute::Type(ty),
+                Attribute::Type(field_ty),
             ])
         })
         .collect();
@@ -401,8 +378,8 @@ fn build_env_struct_type(ctx: &mut IrContext, field_types: &[TypeRef]) -> TypeRe
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
         .attr("name", Attribute::Symbol(Symbol::new("__prompt_env")))
         .attr("fields", Attribute::List(fields_attr));
-    for &ty in field_types {
-        builder = builder.param(ty);
+    for _ in 0..field_count {
+        builder = builder.param(field_ty);
     }
     ctx.types.intern(builder.build())
 }
