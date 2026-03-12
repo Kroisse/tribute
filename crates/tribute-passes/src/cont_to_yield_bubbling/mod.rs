@@ -13,6 +13,7 @@
 //! can process the lowered IR through their existing `adt_to_*` passes.
 
 pub(crate) mod analysis;
+pub(crate) mod call_lower;
 pub(crate) mod handler_dispatch;
 pub(crate) mod patterns;
 pub(crate) mod shift_lower;
@@ -190,7 +191,7 @@ pub fn lower_cont_to_yield_bubbling(
             _types: types_for_yield,
         })
         .add_pattern(patterns::LowerPushPromptPattern {
-            _types: types_for_push,
+            types: types_for_push,
         })
         .add_pattern(handler_dispatch::LowerHandlerDispatchPattern {
             types: types_for_dispatch,
@@ -200,7 +201,21 @@ pub fn lower_cont_to_yield_bubbling(
 
     applicator.apply_partial(ctx, module);
 
-    // Step 3.5: Truncate effectful function bodies after first effect point
+    // Step 3.5: Expand effectful calls into Done/Shift branches with chaining (#336)
+    let chain_specs: call_lower::ChainSpecs = Rc::new(RefCell::new(Vec::new()));
+    let chain_counter: ResumeCounter = Rc::new(RefCell::new(1000)); // offset to avoid name collisions
+    let types_for_chain = YieldBubblingTypes::new(ctx);
+    call_lower::lower_effectful_calls(
+        ctx,
+        module,
+        &effectful_funcs,
+        &types_for_chain,
+        &chain_specs,
+        &chain_counter,
+        module_name,
+    );
+
+    // Step 3.6: Truncate effectful function bodies after first effect point
     truncate::truncate_after_shift(ctx, module, &effectful_funcs, &types);
 
     // Step 4: Wrap returns in effectful functions with YieldResult::Done
@@ -223,7 +238,8 @@ pub fn lower_cont_to_yield_bubbling(
 
     // Generate resume functions from collected specs
     let specs = resume_specs.borrow();
-    if specs.is_empty() {
+    let chain_specs_ref = chain_specs.borrow();
+    if specs.is_empty() && chain_specs_ref.is_empty() {
         let illegal = conversion_target.verify(ctx, module_body);
         if illegal.is_empty() {
             return Ok(());
@@ -248,11 +264,19 @@ pub fn lower_cont_to_yield_bubbling(
         .map(|spec| shift_lower::create_resume_function(ctx, spec, &types))
         .collect();
 
-    // Add resume functions to module body
+    let chain_funcs: Vec<OpRef> = chain_specs_ref
+        .iter()
+        .map(|spec| call_lower::create_chain_function(ctx, spec, &types))
+        .collect();
+
+    // Add resume and chain functions to module body
     let module_block = module
         .first_block(ctx)
         .expect("expected module first_block for inserting resume funcs");
     for func_op in resume_funcs {
+        ctx.push_op(module_block, func_op);
+    }
+    for func_op in chain_funcs {
         ctx.push_op(module_block, func_op);
     }
 

@@ -253,7 +253,7 @@ impl RewritePattern for UpdateScfYieldToYieldResultPattern {
 // ============================================================================
 
 pub(crate) struct LowerPushPromptPattern {
-    pub(crate) _types: YieldBubblingTypes,
+    pub(crate) types: YieldBubblingTypes,
 }
 
 impl RewritePattern for LowerPushPromptPattern {
@@ -261,18 +261,105 @@ impl RewritePattern for LowerPushPromptPattern {
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        _rewriter: &mut PatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
+        let Ok(push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
             return false;
         };
 
-        // For now, push_prompt lowering is handled by handler_dispatch.
-        // The push_prompt body is called, producing a YieldResult,
-        // which is then fed into the handler_dispatch loop.
-        //
-        // TODO: In Step 4, implement full push_prompt lowering as
-        // body thunk call + handler dispatch loop composition.
-        false
+        let location = ctx.op(op).location;
+        let t = &self.types;
+
+        // Get the body region and inline its operations
+        let body = push_prompt.body(ctx);
+        let body_result = crate::cont_util::get_region_result_value(ctx, body);
+
+        let mut all_ops = Vec::new();
+
+        // Inline body operations (skip trailing scf.yield — we handle the result ourselves)
+        let blocks = &ctx.region(body).blocks;
+        if let Some(&body_block) = blocks.first() {
+            let ops = ctx.block(body_block).ops.to_vec();
+            for body_op in ops {
+                // Skip scf.yield — we'll use body_result directly
+                if arena_scf::Yield::from_op(ctx, body_op).is_ok() {
+                    continue;
+                }
+                all_ops.push(body_op);
+            }
+        }
+
+        // Determine if body result is already a YieldResult
+        let yr_value = if let Some(result) = body_result {
+            let result_ty = ctx.value_ty(result);
+            if is_yield_result_type(ctx, result_ty) {
+                // Already a YieldResult — pass through
+                result
+            } else {
+                // Wrap in YieldResult::Done
+                let anyref_val =
+                    arena_core::unrealized_conversion_cast(ctx, location, result, t.anyref);
+                all_ops.push(anyref_val.op_ref());
+
+                let done_op = arena_adt::variant_new(
+                    ctx,
+                    location,
+                    [anyref_val.result(ctx)],
+                    t.yield_result,
+                    t.yield_result,
+                    Symbol::new("Done"),
+                );
+                all_ops.push(done_op.op_ref());
+                done_op.result(ctx)
+            }
+        } else {
+            // No body result — create a YieldResult::Done with null
+            let null_op = arena_adt::ref_null(ctx, location, t.anyref, t.anyref);
+            all_ops.push(null_op.op_ref());
+
+            let done_op = arena_adt::variant_new(
+                ctx,
+                location,
+                [null_op.result(ctx)],
+                t.yield_result,
+                t.yield_result,
+                Symbol::new("Done"),
+            );
+            all_ops.push(done_op.op_ref());
+            done_op.result(ctx)
+        };
+
+        // Now inline the handlers region operations
+        let handlers = push_prompt.handlers(ctx);
+        let handler_blocks = &ctx.region(handlers).blocks;
+        if let Some(&handler_block) = handler_blocks.first() {
+            let handler_ops = ctx.block(handler_block).ops.to_vec();
+            for handler_op in handler_ops {
+                // Wire the YieldResult into handler_dispatch's operand
+                if arena_cont::HandlerDispatch::from_op(ctx, handler_op).is_ok() {
+                    let operands = ctx.op_operands(handler_op).to_vec();
+                    if !operands.is_empty() {
+                        ctx.set_op_operand(handler_op, 0, yr_value);
+                    }
+                }
+
+                // Skip scf.yield in handlers region
+                if arena_scf::Yield::from_op(ctx, handler_op).is_ok() {
+                    continue;
+                }
+                all_ops.push(handler_op);
+            }
+        }
+
+        if all_ops.is_empty() {
+            return false;
+        }
+
+        let last = all_ops.pop().unwrap();
+        for o in all_ops {
+            rewriter.insert_op(o);
+        }
+        rewriter.replace_op(last);
+        true
     }
 }
