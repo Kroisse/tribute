@@ -5,9 +5,10 @@ expression: ir_text
 ---
 core.module @test {
   !Point = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}
-  !Point_1 = adt.typeref() {name = @Point}
 
   core.module @Point {
+    !Point_1 = adt.typeref() {name = @Point}
+
     func.func @"test::Point::x"(%0: !Point_1) -> core.i32 {
       ^bb0:
         %1 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
@@ -22,7 +23,7 @@ core.module @test {
   func.func @make_point() -> tribute_rt.anyref {
       %0 = arith.const {value = 10} : core.i32
       %1 = arith.const {value = 20} : core.i32
-      %2 = adt.struct_new %0, %1 {type = !Point} : !Point_1
+      %2 = adt.struct_new %0, %1 {type = !Point} : adt.typeref() {name = @Point}
       func.return %2
   }
 }

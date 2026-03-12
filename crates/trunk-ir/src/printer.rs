@@ -356,16 +356,27 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
     let mut counts: HashMap<TypeRef, usize> = HashMap::new();
 
     let _ = walk_region::<()>(ctx, region, &mut |op| {
+        let data = ctx.op(op);
+
+        // Skip nested modules — they collect their own aliases.
+        if data.dialect == crate::Symbol::new("core") && data.name == crate::Symbol::new("module") {
+            return ControlFlow::Continue(WalkAction::Skip);
+        }
+
         // Result types
         for &ty in ctx.op_result_types(op) {
             *counts.entry(ty).or_default() += 1;
         }
 
-        let data = ctx.op(op);
-
-        // Attributes containing types
-        for attr in data.attributes.values() {
-            count_attr_types(&mut counts, attr);
+        // Attributes containing types.
+        // Skip func.func — its `type` attribute holds the function signature
+        // (core.func), which would otherwise dominate alias candidates.
+        let is_func_decl =
+            data.dialect == crate::Symbol::new("func") && data.name == crate::Symbol::new("func");
+        if !is_func_decl {
+            for attr in data.attributes.values() {
+                count_attr_types(&mut counts, attr);
+            }
         }
 
         // Block args in regions
@@ -408,13 +419,17 @@ fn generate_auto_aliases(
         if existing.contains_key(&ty) {
             continue;
         }
-        // Only auto-alias types that have a dialect-provided name hint.
-        // Generic fallback names (t0, t1, ...) don't improve readability.
-        if crate::op_interface::suggest_type_alias_name(ctx, ty).is_none() {
-            continue;
-        }
         let complexity = ctx.types.complexity(ty);
-        if count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY {
+        let has_hint = crate::op_interface::suggest_type_alias_name(ctx, ty).is_some();
+        // Types with a dialect-provided name hint (e.g. named structs) are
+        // alias-eligible when used often enough. Types without a hint need
+        // sufficient complexity to justify a fallback name like t0, t1.
+        let eligible = if has_hint {
+            count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY
+        } else {
+            count >= MIN_ALIAS_USES && complexity >= MIN_ALIAS_COMPLEXITY
+        };
+        if eligible {
             candidates.push((ty, count, complexity));
         }
     }
@@ -764,6 +779,9 @@ fn print_module_op(
 
         let inner_indent = format!("{}  ", indent_str);
 
+        // Snapshot alias state so auto aliases are module-local.
+        let saved_aliases = state.type_alias_names.clone();
+
         // 1. Emit manual type alias definitions
         let manual_aliases: Vec<_> = state.ctx.type_aliases().to_vec();
         for (name, ty) in &manual_aliases {
@@ -810,6 +828,9 @@ fn print_module_op(
                 state.restore_counters(saved);
             }
         }
+
+        // Restore alias state — auto aliases are scoped to this module.
+        state.type_alias_names = saved_aliases;
 
         writeln!(f, "{indent_str}}}")?;
     } else {
@@ -1509,6 +1530,36 @@ mod tests {
             outer_line.contains("!Inner"),
             "Outer should reference !Inner:\n{outer_line}"
         );
+    }
+
+    #[test]
+    fn test_auto_alias_nested_module_isolation() {
+        let input = "\
+core.module @test {
+  core.module @inner {
+    func.func @f1(%0: adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}) -> adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly} {
+    ^bb0:
+      func.return %0
+    }
+    func.func @f2(%0: adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}) -> adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly} {
+    ^bb0:
+      func.return %0
+    }
+  }
+  func.func @g1(%0: adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}) -> adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly} {
+  ^bb0:
+    func.return %0
+  }
+  func.func @g2(%0: adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}) -> adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly} {
+  ^bb0:
+    func.return %0
+  }
+}
+";
+        let mut ctx = IrContext::new();
+        let root = crate::parser::parse_module(&mut ctx, input).expect("parse failed");
+        let output = print_module(&ctx, root);
+        insta::assert_snapshot!(output);
     }
 
     #[test]

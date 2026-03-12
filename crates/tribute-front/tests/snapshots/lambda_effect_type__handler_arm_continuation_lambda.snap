@@ -4,21 +4,24 @@ assertion_line: 197
 expression: ir_text
 ---
 core.module @test {
-  !"test::__lambda_0::env" = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)], [@_1, tribute_rt.anyref]], name = @"test::__lambda_0::env"}
-  !"test::__lambda_1::env" = adt.struct() {fields = [[@_0, cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)]], name = @"test::__lambda_1::env"}
+  !t0 = cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
+  !"test::__lambda_0::env" = adt.struct() {fields = [[@_0, !t0], [@_1, tribute_rt.anyref]], name = @"test::__lambda_0::env"}
+  !"test::__lambda_1::env" = adt.struct() {fields = [[@_0, !t0]], name = @"test::__lambda_1::env"}
+  !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker})
+  !t2 = closure.closure(core.func(tribute_rt.anyref))
 
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 8} {
+  func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 8} {
     ^bb0:
       %2 = adt.ref_cast %1 {type = !"test::__lambda_0::env"} : !"test::__lambda_0::env"
-      %3 = adt.struct_get %2 {field = 0, type = !"test::__lambda_0::env"} : cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
+      %3 = adt.struct_get %2 {field = 0, type = !"test::__lambda_0::env"} : !t0
       %4 = adt.struct_get %2 {field = 1, type = !"test::__lambda_0::env"} : tribute_rt.anyref
       %5 = cont.resume %3, %4 : tribute_rt.anyref
       func.return %5
   }
-  func.func @"test::__lambda_1"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 17} {
+  func.func @"test::__lambda_1"(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 17} {
     ^bb0:
       %2 = adt.ref_cast %1 {type = !"test::__lambda_1::env"} : !"test::__lambda_1::env"
-      %3 = adt.struct_get %2 {field = 0, type = !"test::__lambda_1::env"} : cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
+      %3 = adt.struct_get %2 {field = 0, type = !"test::__lambda_1::env"} : !t0
       %4 = arith.const {value = unit} : core.nil
       %5 = cont.resume %3, %4 : tribute_rt.anyref
       func.return %5
@@ -36,16 +39,16 @@ core.module @test {
               scf.yield %5
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb4(%6: cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref), %7: tribute_rt.anyref):
+            ^bb4(%6: !t0, %7: tribute_rt.anyref):
               %8 = adt.struct_new %6, %1 {type = !"test::__lambda_0::env"} : !"test::__lambda_0::env"
-              %9 = closure.new %8 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.anyref))
+              %9 = closure.new %8 {func_ref = @"test::__lambda_0"} : !t2
               %10 = func.call %9, %1 {callee = @run_state} : tribute_rt.anyref
               scf.yield %10
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
-            ^bb5(%11: cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref), %12: tribute_rt.anyref):
+            ^bb5(%11: !t0, %12: tribute_rt.anyref):
               %13 = adt.struct_new %11 {type = !"test::__lambda_1::env"} : !"test::__lambda_1::env"
-              %14 = closure.new %13 {func_ref = @"test::__lambda_1"} : closure.closure(core.func(tribute_rt.anyref))
+              %14 = closure.new %13 {func_ref = @"test::__lambda_1"} : !t2
               %15 = func.call %14, %12 {callee = @run_state} : tribute_rt.anyref
               scf.yield %15
           }
