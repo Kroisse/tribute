@@ -14,7 +14,7 @@
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //!
 //! Backend-specific type conversions (e.g., `core.i1 → core.i32`,
-//! `tribute_rt.any` → `wasm.anyref`) are handled by backend-specific
+//! `tribute_rt.anyref` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
@@ -52,7 +52,7 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let tribute_rt_nat = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("nat"));
     let tribute_rt_bool = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("bool"));
     let tribute_rt_float = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("float"));
-    let tribute_rt_any = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("any"));
+    let tribute_rt_anyref = intern_type(ctx, Symbol::new("tribute_rt"), Symbol::new("anyref"));
     let core_i32 = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let core_i1 = intern_type(ctx, Symbol::new("core"), Symbol::new("i1"));
     let core_f64 = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
@@ -124,12 +124,12 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // -----------------------------------------------------------------
-        // Boxing: primitive types → tribute_rt.any
+        // Boxing: primitive types → tribute_rt.anyref
         // -----------------------------------------------------------------
-        if to_ty == tribute_rt_any {
+        if to_ty == tribute_rt_anyref {
             // Int/Nat/I32 → any: use tribute_rt.box_int
             if from_ty == tribute_rt_int || from_ty == tribute_rt_nat || from_ty == core_i32 {
-                let box_op = arena_tribute_rt::box_int(ctx, location, value, tribute_rt_any);
+                let box_op = arena_tribute_rt::box_int(ctx, location, value, tribute_rt_anyref);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -138,7 +138,7 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // Bool/I1 → any: use tribute_rt.box_bool
             if from_ty == tribute_rt_bool || from_ty == core_i1 {
-                let box_op = arena_tribute_rt::box_bool(ctx, location, value, tribute_rt_any);
+                let box_op = arena_tribute_rt::box_bool(ctx, location, value, tribute_rt_anyref);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -147,7 +147,7 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
             // Float/F64 → any: use tribute_rt.box_float
             if from_ty == tribute_rt_float || from_ty == core_f64 {
-                let box_op = arena_tribute_rt::box_float(ctx, location, value, tribute_rt_any);
+                let box_op = arena_tribute_rt::box_float(ctx, location, value, tribute_rt_anyref);
                 return Some(MaterializeResult {
                     value: box_op.result(ctx),
                     ops: vec![box_op.op_ref()],
@@ -161,9 +161,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // -----------------------------------------------------------------
-        // Unboxing: tribute_rt.any → primitive types
+        // Unboxing: tribute_rt.anyref → primitive types
         // -----------------------------------------------------------------
-        if from_ty == tribute_rt_any {
+        if from_ty == tribute_rt_anyref {
             // any → Int/I32: use tribute_rt.unbox_int
             if to_ty == tribute_rt_int || to_ty == core_i32 {
                 let unbox_op = arena_tribute_rt::unbox_int(ctx, location, value, to_ty);

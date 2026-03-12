@@ -152,7 +152,7 @@ pub(super) fn resolve_enum_type_attr<'db>(
         _ => ctor_ty,
     };
     ctx.resolve_adt_type(result_ty)
-        .unwrap_or_else(|| ctx.any_type(ir))
+        .unwrap_or_else(|| ctx.anyref_type(ir))
 }
 
 /// Extract the type name from a ResolvedRef.
@@ -238,12 +238,12 @@ pub(super) fn convert_annotation_to_ir_type<'db>(
             } else if *name == "Nil" {
                 ctx.nil_type(ir)
             } else {
-                ctx.any_type(ir)
+                ctx.anyref_type(ir)
             }
         }
-        TypeAnnotationKind::Path(_) => ctx.any_type(ir),
+        TypeAnnotationKind::Path(_) => ctx.anyref_type(ir),
         TypeAnnotationKind::App { ctor, .. } => convert_annotation_to_ir_type(ctx, ir, Some(ctor)),
-        _ => ctx.any_type(ir),
+        _ => ctx.anyref_type(ir),
     }
 }
 

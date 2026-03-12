@@ -34,7 +34,7 @@ pub(super) fn lower_ability_op_call<'db>(
 
     // Pack multiple arguments into a tuple if needed
     let shift_args = if args.len() > 1 {
-        let any_ty = builder.ctx.any_type(builder.ir);
+        let any_ty = builder.ctx.anyref_type(builder.ir);
         let tuple_op = adt::struct_new(builder.ir, location, args, any_ty, any_ty);
         builder.ir.push_op(builder.block, tuple_op.op_ref());
         vec![tuple_op.result(builder.ir)]
@@ -93,8 +93,8 @@ pub(super) fn lower_handle<'db>(
     // Generate a fresh prompt tag
     let tag = builder.ctx.push_prompt_tag();
 
-    let result_ty = builder.ctx.any_type(builder.ir);
-    let step_ty = builder.ctx.any_type(builder.ir);
+    let result_ty = builder.ctx.anyref_type(builder.ir);
+    let step_ty = builder.ctx.anyref_type(builder.ir);
 
     // 1. Build the push_prompt body region
     let push_prompt_body = {
@@ -328,7 +328,7 @@ fn build_suspend_handler_region<'db>(
         unreachable!("build_suspend_handler_region called with non-effect handler");
     };
 
-    let any_ty = ctx.any_type(ir);
+    let any_ty = ctx.anyref_type(ir);
     let cont_ty = ctx.continuation_type(ir, any_ty, any_ty, any_ty);
 
     let block = ir.create_block(BlockData {

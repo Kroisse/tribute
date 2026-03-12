@@ -154,7 +154,7 @@ pub(super) fn lower_lambda<'db>(
     let lifted_name = builder.ctx.gen_lambda_name();
 
     // Step 3: Build the lifted function
-    let any_ty = builder.ctx.any_type(builder.ir);
+    let any_ty = builder.ctx.anyref_type(builder.ir);
     let evidence_ty = arena_ability::evidence_adt_type_ref(builder.ir);
 
     // Build env struct type if captures exist
@@ -346,7 +346,7 @@ pub(super) fn wrap_func_as_closure(
     param_ir_types: &[TypeRef],
     result_ir_ty: TypeRef,
 ) -> ValueRef {
-    let any_ty = builder.ctx.any_type(builder.ir);
+    let any_ty = builder.ctx.anyref_type(builder.ir);
     let evidence_ty = arena_ability::evidence_adt_type_ref(builder.ir);
 
     // Generate unique wrapper name
@@ -461,7 +461,7 @@ pub(super) fn wrap_func_as_closure(
     builder.ir.push_op(module_block, func_op.op_ref());
 
     // Emit closure.new @wrapper, null_env at the call site
-    let any_ty = builder.ctx.any_type(builder.ir);
+    let any_ty = builder.ctx.anyref_type(builder.ir);
     let null_op = adt::ref_null(builder.ir, location, any_ty, any_ty);
     builder.ir.push_op(builder.block, null_op.op_ref());
     let null_env = null_op.result(builder.ir);

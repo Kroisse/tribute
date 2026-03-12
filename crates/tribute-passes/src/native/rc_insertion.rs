@@ -1,14 +1,16 @@
 //! Reference counting insertion pass.
 //!
 //! Automatically inserts `tribute_rt.retain` and `tribute_rt.release` operations
-//! for pointer-typed (`core.ptr`) values in the native backend pipeline.
+//! for `tribute_rt.anyref`-typed values in the native backend pipeline.
+//!
+//! Only `tribute_rt.anyref` values are RC-managed. Plain `core.ptr` values
+//! (function pointers, continuations, null sentinels) are not affected.
 //!
 //! ## Pipeline Position
 //!
 //! Runs after Phase 2.7 (`tribute_rt_to_clif` boxing lowering), where:
 //! - All allocations are `clif.call @__tribute_alloc`
-//! - Boxing ops are already lowered to clif
-//! - Pointer types are all `core.ptr`
+//! - Boxing ops are already lowered to clif with `tribute_rt.anyref` result type
 //! - `tribute_rt.retain`/`release` are preserved as legal ops
 //!
 //! ## RC Rules
@@ -17,11 +19,11 @@
 //!
 //! | Situation | Action |
 //! |-----------|--------|
-//! | Function parameter (ptr) | `retain` at entry |
+//! | Function parameter (anyref) | `retain` at entry |
 //! | `clif.call @__tribute_alloc` result | No retain (starts with refcount=1) |
-//! | Other `clif.call` result (ptr) | No retain (ownership transfer) |
-//! | `clif.store` with ptr value | `retain` before store |
-//! | `clif.load` with ptr result | `retain` after load |
+//! | Other `clif.call` result (anyref) | No retain (ownership transfer) |
+//! | `clif.store` with anyref value | `retain` before store |
+//! | `clif.load` with anyref result | `retain` after load |
 //!
 //! ### Release (reference drop)
 //!
@@ -44,15 +46,15 @@ use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 
-/// Check if a type is `core.ptr`.
-fn is_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
+/// Check if a type is `tribute_rt.anyref` (RC-managed reference type).
+fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+    data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
 }
 
-/// Check if a value is a pointer type.
-fn is_ptr_value(ctx: &IrContext, value: ValueRef) -> bool {
-    is_ptr_type(ctx, ctx.value_ty(value))
+/// Check if a value is an anyref type (RC-managed).
+fn is_anyref_value(ctx: &IrContext, value: ValueRef) -> bool {
+    is_anyref_type(ctx, ctx.value_ty(value))
 }
 
 /// Check if an op is a block terminator.
@@ -73,8 +75,14 @@ fn is_static_ptr(ctx: &IrContext, value: ValueRef) -> bool {
     if arena_clif::SymbolAddr::matches(ctx, def_op) {
         return true;
     }
-    if arena_clif::Iconst::matches(ctx, def_op) && is_ptr_type(ctx, ctx.value_ty(value)) {
-        return true;
+    if arena_clif::Iconst::matches(ctx, def_op) && is_anyref_type(ctx, ctx.value_ty(value)) {
+        // Only treat null (zero) constants as unmanaged
+        if let Ok(iconst) = arena_clif::Iconst::from_op(ctx, def_op)
+            && iconst.value(ctx) == 0
+        {
+            return true;
+        }
+        return false;
     }
     false
 }
@@ -150,14 +158,15 @@ fn collect_ptr_values(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
     for &block in &blocks {
         // Block arguments
         for &arg_val in ctx.block_args(block) {
-            if is_ptr_type(ctx, ctx.value_ty(arg_val)) {
+            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
                 ptr_values.insert(arg_val);
             }
         }
         // Operation results
         for &op in &ctx.block(block).ops.to_vec() {
             for &result_val in ctx.op_results(op) {
-                if is_ptr_type(ctx, ctx.value_ty(result_val)) && !is_static_ptr(ctx, result_val) {
+                if is_anyref_type(ctx, ctx.value_ty(result_val)) && !is_static_ptr(ctx, result_val)
+                {
                     ptr_values.insert(result_val);
                 }
             }
@@ -168,7 +177,7 @@ fn collect_ptr_values(ctx: &IrContext, body: RegionRef) -> HashSet<ValueRef> {
     for &block in &blocks {
         for &op in &ctx.block(block).ops.to_vec() {
             for &operand in ctx.op_operands(op) {
-                if is_ptr_value(ctx, operand) && !is_static_ptr(ctx, operand) {
+                if is_anyref_value(ctx, operand) && !is_static_ptr(ctx, operand) {
                     ptr_values.insert(operand);
                 }
             }
@@ -253,7 +262,7 @@ fn compute_use_def_sets(
         let mut defs = HashSet::new();
 
         for &arg_val in ctx.block_args(block) {
-            if is_ptr_type(ctx, ctx.value_ty(arg_val)) {
+            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
                 defs.insert(arg_val);
             }
         }
@@ -270,7 +279,7 @@ fn compute_use_def_sets(
                 }
             }
             for &result_val in ctx.op_results(op) {
-                if is_ptr_type(ctx, ctx.value_ty(result_val))
+                if is_anyref_type(ctx, ctx.value_ty(result_val))
                     && !is_static_ptr(ctx, result_val)
                     && ptr_values.contains(&result_val)
                 {
@@ -407,15 +416,16 @@ fn is_yield_call(ctx: &IrContext, op: OpRef) -> bool {
     }
 }
 
-/// Insert reference counting operations for all pointer-typed values.
+/// Insert reference counting operations for all `tribute_rt.anyref`-typed values,
+/// then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
 pub fn insert_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
     let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
 
-    for op in module_ops {
-        if let Ok(func_op) = arena_clif::Func::from_op(ctx, op) {
+    for op in &module_ops {
+        if let Ok(func_op) = arena_clif::Func::from_op(ctx, *op) {
             let sym = func_op.sym_name(ctx);
             if sym.with_str(|s| s.starts_with(super::rtti::RELEASE_FN_PREFIX)) {
                 continue;
@@ -424,6 +434,160 @@ pub fn insert_rc(ctx: &mut IrContext, module: Module) {
             insert_rc_in_function(ctx, body);
         }
     }
+
+    // After RC insertion, lower all remaining `tribute_rt.anyref` types to `core.ptr`.
+    // This ensures anyref doesn't survive past RC insertion into the Cranelift emit phase.
+    lower_anyref_to_ptr(ctx, module);
+}
+
+/// Rewrite all `tribute_rt.anyref` types to `core.ptr` in the module.
+///
+/// After RC insertion has used anyref to identify RC-managed values, the type
+/// distinction is no longer needed. All anyref types are lowered to core.ptr
+/// so that subsequent passes (resolve_casts, Cranelift emit) see only core types.
+fn lower_anyref_to_ptr(ctx: &mut IrContext, module: Module) {
+    let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+    let anyref_ty = ctx.types.intern(
+        trunk_ir::TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
+    );
+    let Some(first_block) = module.first_block(ctx) else {
+        return;
+    };
+    let module_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+
+    for op in module_ops {
+        if let Ok(func_op) = arena_clif::Func::from_op(ctx, op) {
+            // Rewrite function type attribute (anyref → ptr in params/return)
+            let func_type = func_op.r#type(ctx);
+            let new_func_type = rewrite_func_type(ctx, func_type, anyref_ty, ptr_ty);
+            if new_func_type != func_type {
+                ctx.op_mut(op).attributes.insert(
+                    Symbol::new("type"),
+                    trunk_ir::Attribute::Type(new_func_type),
+                );
+            }
+
+            let body = func_op.body(ctx);
+            lower_anyref_in_region(ctx, body, ptr_ty);
+        }
+    }
+}
+
+/// Rewrite anyref types to ptr in a core.func type.
+fn rewrite_func_type(
+    ctx: &mut IrContext,
+    func_ty: TypeRef,
+    anyref_ty: TypeRef,
+    ptr_ty: TypeRef,
+) -> TypeRef {
+    rewrite_type_anyref(ctx, func_ty, anyref_ty, ptr_ty)
+}
+
+/// Rewrite anyref types to ptr in a region (function body).
+fn lower_anyref_in_region(ctx: &mut IrContext, region: RegionRef, ptr_ty: TypeRef) {
+    let anyref_ty = ctx.types.intern(
+        trunk_ir::TypeDataBuilder::new(Symbol::new("tribute_rt"), Symbol::new("anyref")).build(),
+    );
+
+    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    for block in blocks {
+        // Rewrite block argument types
+        let arg_count = ctx.block_args(block).len();
+        for idx in 0..arg_count {
+            let arg_val = ctx.block_args(block)[idx];
+            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
+                ctx.set_block_arg_type(block, idx as u32, ptr_ty);
+            }
+        }
+
+        // Rewrite operation result types and type attributes
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        for op in ops {
+            let result_count = ctx.op_results(op).len();
+            for idx in 0..result_count {
+                let result_val = ctx.op_results(op)[idx];
+                if is_anyref_type(ctx, ctx.value_ty(result_val)) {
+                    ctx.set_op_result_type(op, idx as u32, ptr_ty);
+                }
+            }
+
+            // Rewrite type attributes (e.g., clif.call_indirect's sig attribute)
+            rewrite_op_type_attrs(ctx, op, anyref_ty, ptr_ty);
+
+            // Recurse into nested regions
+            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            for r in regions {
+                lower_anyref_in_region(ctx, r, ptr_ty);
+            }
+        }
+    }
+}
+
+/// Rewrite anyref types in operation type attributes.
+fn rewrite_op_type_attrs(ctx: &mut IrContext, op: OpRef, anyref_ty: TypeRef, ptr_ty: TypeRef) {
+    let attrs: Vec<(Symbol, trunk_ir::Attribute)> = ctx
+        .op(op)
+        .attributes
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+
+    for (key, attr) in attrs {
+        if let trunk_ir::Attribute::Type(ty) = attr {
+            let new_ty = rewrite_type_anyref(ctx, ty, anyref_ty, ptr_ty);
+            if new_ty != ty {
+                ctx.op_mut(op)
+                    .attributes
+                    .insert(key, trunk_ir::Attribute::Type(new_ty));
+            }
+        }
+    }
+}
+
+/// Recursively rewrite anyref in a type (handles core.func params).
+fn rewrite_type_anyref(
+    ctx: &mut IrContext,
+    ty: TypeRef,
+    anyref_ty: TypeRef,
+    ptr_ty: TypeRef,
+) -> TypeRef {
+    if ty == anyref_ty {
+        return ptr_ty;
+    }
+    let data = ctx.types.get(ty);
+    // Only recurse into core.func types (which have params that may contain anyref)
+    if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
+        return ty;
+    }
+    // Collect params and attrs before mutating ctx
+    let params: Vec<TypeRef> = data.params.to_vec();
+    let dialect = data.dialect;
+    let name = data.name;
+    let attrs: Vec<(Symbol, trunk_ir::Attribute)> =
+        data.attrs.iter().map(|(k, v)| (*k, v.clone())).collect();
+
+    let mut changed = false;
+    let new_params: Vec<TypeRef> = params
+        .iter()
+        .map(|&p| {
+            let new_p = rewrite_type_anyref(ctx, p, anyref_ty, ptr_ty);
+            if new_p != p {
+                changed = true;
+            }
+            new_p
+        })
+        .collect();
+    if !changed {
+        return ty;
+    }
+    let mut builder = trunk_ir::TypeDataBuilder::new(dialect, name);
+    for &p in &new_params {
+        builder = builder.param(p);
+    }
+    for (key, attr) in attrs {
+        builder = builder.attr(key, attr);
+    }
+    ctx.types.intern(builder.build())
 }
 
 /// Insert RC in a function body.
@@ -502,7 +666,7 @@ fn insert_rc_in_block(
     if is_entry {
         let args: Vec<ValueRef> = ctx.block_args(block).to_vec();
         for arg_val in args {
-            if is_ptr_type(ctx, ctx.value_ty(arg_val)) {
+            if is_anyref_type(ctx, ctx.value_ty(arg_val)) {
                 let retain_op = arena_tribute_rt::retain(ctx, loc, arg_val, ptr_ty);
                 plan.at_start.push(retain_op.op_ref());
             }
@@ -514,7 +678,7 @@ fn insert_rc_in_block(
         if let Ok(_store_op) = arena_clif::Store::from_op(ctx, op) {
             let operands = ctx.op_operands(op).to_vec();
             if let Some(&stored_val) = operands.first()
-                && is_ptr_value(ctx, stored_val)
+                && is_anyref_value(ctx, stored_val)
                 && !is_static_ptr(ctx, stored_val)
             {
                 let op_loc = ctx.op(op).location;
@@ -528,7 +692,7 @@ fn insert_rc_in_block(
 
         if arena_clif::Load::matches(ctx, op) {
             let result_ty = ctx.op_result_types(op).first().copied();
-            if result_ty.is_some_and(|ty| is_ptr_type(ctx, ty)) {
+            if result_ty.is_some_and(|ty| is_anyref_type(ctx, ty)) {
                 let load_result = ctx.op_result(op, 0);
                 let op_loc = ctx.op(op).location;
                 let retain_op = arena_tribute_rt::retain(ctx, op_loc, load_result, ptr_ty);
@@ -774,10 +938,10 @@ mod tests {
 
     #[test]
     fn test_snapshot_simple_param() {
-        // ptr parameter → load → return: retain at entry, release after last non-return use
+        // anyref parameter → load → return: retain at entry, release after last non-return use
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr) -> core.i32 {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
     %1 = clif.load %0 {offset = 0} : core.i32
     clif.return %1
   }
@@ -788,14 +952,14 @@ mod tests {
 
     #[test]
     fn test_snapshot_alloc_store_return() {
-        // alloc → store → return ptr: no RC for returned alloc (ownership transfer)
+        // alloc → store → return anyref: no RC for returned alloc (ownership transfer)
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.i32) -> core.ptr {
+  clif.func @f(%0: core.i32) -> tribute_rt.anyref {
     %1 = clif.iconst {value = 16} : core.i64
     %2 = clif.call %1 {callee = @__tribute_alloc} : core.ptr
     %3 = clif.iconst {value = 8} : core.i64
-    %4 = clif.iadd %2, %3 : core.ptr
+    %4 = clif.iadd %2, %3 : tribute_rt.anyref
     clif.store %0, %4 {offset = 0}
     clif.return %4
   }
@@ -806,10 +970,10 @@ mod tests {
 
     #[test]
     fn test_snapshot_multiple_uses() {
-        // ptr param used in two loads — release after last use
+        // anyref param used in two loads — release after last use
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr) -> core.i32 {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
     %1 = clif.load %0 {offset = 0} : core.i32
     %2 = clif.load %0 {offset = 4} : core.i32
     clif.return %1
@@ -821,10 +985,10 @@ mod tests {
 
     #[test]
     fn test_snapshot_yield_with_live_ptr() {
-        // ptr param + yield: RC root setup around yield
+        // anyref param + yield: RC root setup around yield
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
     %2 = clif.call %1 {callee = @__tribute_yield} : core.nil
     %3 = clif.load %0 {offset = 0} : core.i32
     clif.return %2
@@ -840,7 +1004,7 @@ mod tests {
 
     #[test]
     fn test_symbol_addr_no_rc() {
-        // clif.symbol_addr produces static pointer — no retain/release
+        // clif.symbol_addr produces core.ptr (static pointer) — no retain/release
         let output = run_pass(
             r#"core.module @test {
   clif.func @f() -> core.ptr {
@@ -898,11 +1062,11 @@ mod tests {
     }
 
     #[test]
-    fn test_store_ptr_retains() {
-        // store ptr into ptr: retain before store
+    fn test_store_anyref_retains() {
+        // store anyref into ptr: retain before store
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr, %1: core.ptr) -> core.nil {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
     clif.store %0, %1 {offset = 0}
     %2 = clif.iconst {value = 0} : core.nil
     clif.return %2
@@ -911,35 +1075,35 @@ mod tests {
         );
         assert!(
             output.contains("tribute_rt.retain"),
-            "store of ptr should insert retain"
+            "store of anyref should insert retain"
         );
     }
 
     #[test]
-    fn test_load_ptr_retains() {
-        // load ptr from ptr: retain after load
+    fn test_load_anyref_retains() {
+        // load anyref from ptr: retain after load
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = clif.load %0 {offset = 0} : core.ptr
+  clif.func @f(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+    %1 = clif.load %0 {offset = 0} : tribute_rt.anyref
     clif.return %1
   }
 }"#,
         );
-        // Should retain the loaded ptr and the parameter
+        // Should retain the loaded anyref and the parameter
         let retain_count = output.matches("tribute_rt.retain").count();
         assert!(
             retain_count >= 2,
-            "should retain param and loaded ptr, got {retain_count}"
+            "should retain param and loaded anyref, got {retain_count}"
         );
     }
 
     #[test]
-    fn test_unused_ptr_param_released() {
-        // unused ptr param: retain + release both present
+    fn test_unused_anyref_param_released() {
+        // unused anyref param: retain + release both present
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f(%0: core.ptr) -> core.i32 {
+  clif.func @f(%0: tribute_rt.anyref) -> core.i32 {
     %1 = clif.iconst {value = 0} : core.i32
     clif.return %1
   }
@@ -947,24 +1111,24 @@ mod tests {
         );
         assert!(
             output.contains("tribute_rt.retain"),
-            "unused ptr param should still be retained"
+            "unused anyref param should still be retained"
         );
         assert!(
             output.contains("tribute_rt.release"),
-            "unused ptr param should be released"
+            "unused anyref param should be released"
         );
     }
 
     #[test]
     fn test_alloc_return_no_release() {
-        // alloc and return: no release (ownership transfer)
+        // alloc and return anyref: no release (ownership transfer)
         let output = run_pass(
             r#"core.module @test {
-  clif.func @f() -> core.ptr {
+  clif.func @f() -> tribute_rt.anyref {
     %0 = clif.iconst {value = 16} : core.i64
     %1 = clif.call %0 {callee = @__tribute_alloc} : core.ptr
     %2 = clif.iconst {value = 8} : core.i64
-    %3 = clif.iadd %1, %2 : core.ptr
+    %3 = clif.iadd %1, %2 : tribute_rt.anyref
     clif.return %3
   }
 }"#,
@@ -972,6 +1136,47 @@ mod tests {
         assert!(
             !output.contains("tribute_rt.release"),
             "returned alloc should not be released"
+        );
+    }
+
+    #[test]
+    fn test_core_ptr_no_rc() {
+        // core.ptr parameters are NOT RC-managed — no retain/release
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: core.ptr) -> core.i32 {
+    %1 = clif.load %0 {offset = 0} : core.i32
+    clif.return %1
+  }
+}"#,
+        );
+        assert!(
+            !output.contains("tribute_rt.retain"),
+            "core.ptr param should not be retained"
+        );
+        assert!(
+            !output.contains("tribute_rt.release"),
+            "core.ptr param should not be released"
+        );
+    }
+
+    #[test]
+    fn test_mixed_anyref_and_ptr() {
+        // anyref + core.ptr params: only anyref gets RC
+        let output = run_pass(
+            r#"core.module @test {
+  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.i32 {
+    %2 = clif.load %0 {offset = 0} : core.i32
+    %3 = clif.load %1 {offset = 0} : core.i32
+    clif.return %2
+  }
+}"#,
+        );
+        // Only 1 retain for the anyref param, none for core.ptr
+        let retain_count = output.matches("tribute_rt.retain").count();
+        assert_eq!(
+            retain_count, 1,
+            "should retain only anyref param, got {retain_count}"
         );
     }
 }

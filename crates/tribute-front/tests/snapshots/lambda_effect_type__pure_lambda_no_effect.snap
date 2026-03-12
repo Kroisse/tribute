@@ -8,14 +8,14 @@ core.module @test {
       %2 = func.call_indirect %0, %1 : core.i32
       func.return %2
   }
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.any, %2: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 1000} {
+  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref, %2: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 1000} {
     ^bb0:
       %3 = arith.const {value = 1} : core.i32
       %4 = arith.add %2, %3 : core.i32
       func.return %4
   }
   func.func @main() -> core.i32 {
-      %0 = adt.ref_null {type = tribute_rt.any} : tribute_rt.any
+      %0 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(core.i32, core.i32))
       %2 = arith.const {value = 41} : core.i32
       %3 = func.call %1, %2 {callee = @apply} : core.i32

@@ -114,7 +114,7 @@ pub(super) fn lower_expr<'db>(
                         (p, r)
                     }
                     _ => {
-                        let any = builder.ctx.any_type(builder.ir);
+                        let any = builder.ctx.anyref_type(builder.ir);
                         (vec![], any)
                     }
                 };
@@ -315,7 +315,11 @@ pub(super) fn lower_expr<'db>(
                 _ => {
                     // General expression callee -> indirect call
                     let callee_val = lower_expr(builder, callee)?;
-                    let result_ty = builder.ctx.any_type(builder.ir);
+                    let result_ty = builder
+                        .ctx
+                        .get_node_type(expr_node_id)
+                        .map(|t| builder.ctx.convert_type(builder.ir, *t))
+                        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
                     let op = func::call_indirect(
                         builder.ir, location, callee_val, arg_values, result_ty,
                     );
@@ -351,7 +355,7 @@ pub(super) fn lower_expr<'db>(
                 .iter()
                 .map(|elem| lower_expr(builder, elem.clone()))
                 .collect::<Option<Vec<_>>>()?;
-            let any_ty = builder.ctx.any_type(builder.ir);
+            let any_ty = builder.ctx.anyref_type(builder.ir);
             let (result_ty, type_attr) =
                 match get_or_create_tuple_type(builder.ctx, builder.ir, expr_node_id) {
                     Some((name, struct_ty)) => {
@@ -427,9 +431,9 @@ pub(super) fn lower_expr<'db>(
             let qualified = qualified_type_name(db, &ctor_id);
             let type_attr = match builder.ctx.get_type(qualified) {
                 Some(ty) => ty,
-                None => builder.ctx.any_type(builder.ir),
+                None => builder.ctx.anyref_type(builder.ir),
             };
-            let any_ty = builder.ctx.any_type(builder.ir);
+            let any_ty = builder.ctx.anyref_type(builder.ir);
 
             let mut ordered_values: Vec<ValueRef> = Vec::with_capacity(field_order.len());
             for (i, field_name) in field_order.iter().enumerate() {
@@ -465,7 +469,7 @@ pub(super) fn lower_expr<'db>(
 
         ExprKind::Case { scrutinee, arms } => {
             let scrutinee_val = lower_expr(builder, scrutinee)?;
-            let any_ty = builder.ctx.any_type(builder.ir);
+            let any_ty = builder.ctx.anyref_type(builder.ir);
             let mut result_ty = builder
                 .ctx
                 .get_node_type(expr_node_id)
@@ -515,22 +519,22 @@ pub(super) fn lower_expr<'db>(
                     };
                     // Effectful lambdas are invoked through handler prompts,
                     // which use polymorphic (boxed) types. Force the return
-                    // type to `tribute_rt.any` so the closure boxes its result
-                    // before returning, matching the `call_indirect` in
-                    // `__prompt_body_N`.
+                    // type to `tribute_rt.anyref` so the closure boxes its
+                    // result before returning, matching the `call_indirect`
+                    // in `__prompt_body_N`.
                     //
                     // Only apply this when the lambda has concrete abilities
                     // (not just a tail variable from polymorphic inference).
                     let has_concrete_abilities = !effect.effects(db).is_empty();
                     let rir = if has_concrete_abilities {
-                        builder.ctx.any_type(builder.ir)
+                        builder.ctx.anyref_type(builder.ir)
                     } else {
                         builder.ctx.convert_type(builder.ir, *result)
                     };
                     (eff, pir, rir)
                 }
                 _ => {
-                    let any = builder.ctx.any_type(builder.ir);
+                    let any = builder.ctx.anyref_type(builder.ir);
                     (None, vec![any; params.len()], any)
                 }
             };
@@ -551,7 +555,7 @@ pub(super) fn lower_expr<'db>(
             let node_ty = builder.ctx.get_node_type(expr_node_id).copied();
             if let Some(ty) = node_ty {
                 let ir_ty = builder.ctx.convert_type(builder.ir, ty);
-                let any_ty = builder.ctx.any_type(builder.ir);
+                let any_ty = builder.ctx.anyref_type(builder.ir);
                 if ir_ty != any_ty {
                     let cast_op =
                         core::unrealized_conversion_cast(builder.ir, location, handle_val, ir_ty);

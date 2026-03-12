@@ -8,7 +8,7 @@ mod tribute_rt {
     struct Float;
     struct Bool;
     struct Intref;
-    struct Any;
+    struct Anyref;
 
     fn box_int(value: ()) -> result {}
     fn unbox_int(value: ()) -> result {}

@@ -295,7 +295,7 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::BoundVar { .. } => {
                 // Quantified type variable in TypeScheme body → type-erased any
-                self.any_type(ir)
+                self.anyref_type(ir)
             }
             TypeKind::UniVar { id } => {
                 // UniVar surviving substitution indicates incomplete constraint solving.
@@ -303,11 +303,11 @@ impl<'db> IrLoweringCtx<'db> {
                     "UniVar({:?}) survived substitution — type-erasing to any",
                     id
                 );
-                self.any_type(ir)
+                self.anyref_type(ir)
             }
             TypeKind::Named { .. } => {
                 // Type erasure: struct/enum → tribute_rt.any
-                self.any_type(ir)
+                self.anyref_type(ir)
             }
             TypeKind::Func {
                 params,
@@ -326,13 +326,13 @@ impl<'db> IrLoweringCtx<'db> {
             }
             TypeKind::Tuple(_) => {
                 // Type erasure: tuple → tribute_rt.any
-                self.any_type(ir)
+                self.anyref_type(ir)
             }
             TypeKind::App { ctor, .. } => self.convert_type(ir, *ctor),
             TypeKind::Continuation { arg, result, .. } => {
                 let ir_arg = self.convert_type(ir, *arg);
                 let ir_result = self.convert_type(ir, *result);
-                let effect = self.any_type(ir);
+                let effect = self.anyref_type(ir);
                 self.continuation_type(ir, ir_arg, ir_result, effect)
             }
         }
@@ -407,9 +407,9 @@ impl<'db> IrLoweringCtx<'db> {
         arena_core::bytes(ir).as_type_ref()
     }
 
-    /// Get the `tribute_rt.any` type.
-    pub fn any_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_tribute_rt::any(ir).as_type_ref()
+    /// Get the `tribute_rt.anyref` type.
+    pub fn anyref_type(&self, ir: &mut IrContext) -> TypeRef {
+        arena_tribute_rt::anyref(ir).as_type_ref()
     }
 
     /// Get the `cont.prompt_tag` type.
@@ -593,7 +593,7 @@ mod tests {
 
         let ty = AstType::new(&db, TypeKind::BoundVar { index: 0 });
         let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.any_type(&mut ir);
+        let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
     }
 
@@ -620,7 +620,7 @@ mod tests {
             },
         );
         let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.any_type(&mut ir);
+        let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
     }
 
@@ -642,7 +642,7 @@ mod tests {
         let bool_ty = AstType::new(&db, TypeKind::Bool);
         let ty = AstType::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
         let ir_ty = ctx.convert_type(&mut ir, ty);
-        let expected = ctx.any_type(&mut ir);
+        let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);
     }
 
@@ -673,7 +673,7 @@ mod tests {
         let ir_ty = ctx.convert_type(&mut ir, ty);
 
         // BoundVar params/result → tribute_rt.any, wrapped in core.func
-        let any_ty = ctx.any_type(&mut ir);
+        let any_ty = ctx.anyref_type(&mut ir);
         let expected = ctx.func_type(&mut ir, &[any_ty], any_ty);
         assert_eq!(ir_ty, expected);
     }

@@ -15,7 +15,7 @@ core.module @test {
         func.return %1
     }
   }
-  func.func @replace_all(%0: tribute_rt.any) -> tribute_rt.any {
+  func.func @replace_all(%0: tribute_rt.anyref) -> tribute_rt.anyref {
     ^bb0:
       %1 = arith.const {value = 1} : core.i32
       %2 = arith.const {value = 2} : core.i32

@@ -79,9 +79,9 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
         }
     }
 
-    let i64_ty = ctx
+    let ptr_ty = ctx
         .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
@@ -89,8 +89,8 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     // Replace stubs with extern declarations
     for (old_op, name) in stubs_to_replace {
         let new_op = match name {
-            "__tribute_evidence_lookup" => make_evidence_lookup_extern(ctx, loc, i64_ty, i32_ty),
-            "__tribute_evidence_extend" => make_evidence_extend_extern(ctx, loc, i64_ty, i32_ty),
+            "__tribute_evidence_lookup" => make_evidence_lookup_extern(ctx, loc, ptr_ty, i32_ty),
+            "__tribute_evidence_extend" => make_evidence_extend_extern(ctx, loc, ptr_ty, i32_ty),
             _ => unreachable!(),
         };
         // Insert new before old, then remove old
@@ -101,7 +101,7 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
 
     // Add __tribute_evidence_empty if missing
     if !has_evidence_empty {
-        let empty_op = make_evidence_empty_extern(ctx, loc, i64_ty);
+        let empty_op = make_evidence_empty_extern(ctx, loc, ptr_ty);
         // Insert at front of module block
         let block_ops = &ctx.block(first_block).ops;
         if block_ops.is_empty() {
@@ -114,7 +114,7 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
 
     // Add __tribute_evidence_lookup_tr if missing
     if !has_lookup_tr {
-        let lookup_tr_op = make_evidence_lookup_tr_extern(ctx, loc, i64_ty, i32_ty);
+        let lookup_tr_op = make_evidence_lookup_tr_extern(ctx, loc, ptr_ty, i32_ty);
         let block_ops = &ctx.block(first_block).ops;
         if block_ops.is_empty() {
             ctx.push_op(first_block, lookup_tr_op);
@@ -125,56 +125,56 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// Build extern `fn __tribute_evidence_empty() -> i64`
-fn make_evidence_empty_extern(ctx: &mut IrContext, loc: Location, i64_ty: TypeRef) -> OpRef {
-    super::build_extern_func(ctx, loc, "__tribute_evidence_empty", &[], i64_ty)
+/// Build extern `fn __tribute_evidence_empty() -> ptr`
+fn make_evidence_empty_extern(ctx: &mut IrContext, loc: Location, ptr_ty: TypeRef) -> OpRef {
+    super::build_extern_func(ctx, loc, "__tribute_evidence_empty", &[], ptr_ty)
 }
 
-/// Build extern `fn __tribute_evidence_lookup(ev: i64, ability_id: i32) -> i32`
+/// Build extern `fn __tribute_evidence_lookup(ev: ptr, ability_id: i32) -> i32`
 fn make_evidence_lookup_extern(
     ctx: &mut IrContext,
     loc: Location,
-    i64_ty: TypeRef,
+    ptr_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
     super::build_extern_func(
         ctx,
         loc,
         "__tribute_evidence_lookup",
-        &[i64_ty, i32_ty],
+        &[ptr_ty, i32_ty],
         i32_ty,
     )
 }
 
-/// Build extern `fn __tribute_evidence_extend(ev: i64, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: i64) -> i64`
+/// Build extern `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr) -> ptr`
 fn make_evidence_extend_extern(
     ctx: &mut IrContext,
     loc: Location,
-    i64_ty: TypeRef,
+    ptr_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
     super::build_extern_func(
         ctx,
         loc,
         "__tribute_evidence_extend",
-        &[i64_ty, i32_ty, i32_ty, i64_ty],
-        i64_ty,
+        &[ptr_ty, i32_ty, i32_ty, ptr_ty],
+        ptr_ty,
     )
 }
 
-/// Build extern `fn __tribute_evidence_lookup_tr(ev: i64, ability_id: i32) -> i64`
+/// Build extern `fn __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr`
 fn make_evidence_lookup_tr_extern(
     ctx: &mut IrContext,
     loc: Location,
-    i64_ty: TypeRef,
+    ptr_ty: TypeRef,
     i32_ty: TypeRef,
 ) -> OpRef {
     super::build_extern_func(
         ctx,
         loc,
         "__tribute_evidence_lookup_tr",
-        &[i64_ty, i32_ty],
-        i64_ty,
+        &[ptr_ty, i32_ty],
+        ptr_ty,
     )
 }
 
@@ -227,9 +227,9 @@ fn is_marker_type(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
-    let i64_ty = ctx
+    let ptr_ty = ctx
         .types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build());
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
@@ -261,7 +261,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     ctx,
                     loc,
                     [],
-                    i64_ty,
+                    ptr_ty,
                     Symbol::new("__tribute_evidence_empty"),
                 );
                 let new_result = call.result(ctx);
@@ -290,7 +290,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                     ctx,
                     loc,
                     [],
-                    i64_ty,
+                    ptr_ty,
                     Symbol::new("__tribute_evidence_empty"),
                 );
                 let new_result = call.result(ctx);
@@ -361,7 +361,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                         ctx,
                         loc,
                         args,
-                        i64_ty,
+                        ptr_ty,
                         Symbol::new("__tribute_evidence_extend"),
                     );
                     let new_result = new_call.result(ctx);
@@ -395,13 +395,13 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                             ops_to_erase.push(op);
                         }
                         2 => {
-                            // Field 2: tr_dispatch_fn (ptr/i64) — call __tribute_evidence_lookup_tr
+                            // Field 2: tr_dispatch_fn (ptr) — call __tribute_evidence_lookup_tr
                             let old_result = ctx.op_result(op, 0);
                             let tr_call = arena_func::call(
                                 ctx,
                                 loc,
                                 [ev_val, ability_id_val],
-                                i64_ty,
+                                ptr_ty,
                                 Symbol::new("__tribute_evidence_lookup_tr"),
                             );
                             let new_result = tr_call.result(ctx);

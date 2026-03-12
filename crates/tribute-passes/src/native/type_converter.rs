@@ -14,7 +14,7 @@
 //! | `core.i1`           | `core.i32`  | Native uses i32 for booleans       |
 //! | `tribute_rt.float`  | `core.f64`  | Float as f64                       |
 //! | `tribute_rt.intref` | `core.ptr`  | Boxed integer as heap pointer      |
-//! | `tribute_rt.any`    | `core.ptr`  | Uniform representation as pointer  |
+//! | `tribute_rt.anyref` | `core.ptr`  | Uniform representation as pointer  |
 //! | `adt.struct`        | `core.ptr`  | Struct as heap pointer             |
 //! | `adt.variant_inst`  | `core.ptr`  | Variant instance as heap pointer   |
 //! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
@@ -57,7 +57,7 @@ pub struct NativeTypeRefs {
     pub tribute_rt_bool: TypeRef,
     pub tribute_rt_float: TypeRef,
     pub tribute_rt_intref: TypeRef,
-    pub tribute_rt_any: TypeRef,
+    pub tribute_rt_anyref: TypeRef,
     pub core_i1: TypeRef,
     pub cont_prompt_tag: TypeRef,
 
@@ -84,7 +84,7 @@ impl NativeTypeRefs {
             tribute_rt_bool: arena_tribute_rt::bool(ctx).as_type_ref(),
             tribute_rt_float: arena_tribute_rt::float(ctx).as_type_ref(),
             tribute_rt_intref: arena_tribute_rt::intref(ctx).as_type_ref(),
-            tribute_rt_any: arena_tribute_rt::any(ctx).as_type_ref(),
+            tribute_rt_anyref: arena_tribute_rt::anyref(ctx).as_type_ref(),
             core_i1: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
@@ -134,15 +134,15 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if ty == r.tribute_rt_float {
             return Some(r.core_f64);
         }
-        if ty == r.tribute_rt_intref || ty == r.tribute_rt_any {
+        if ty == r.tribute_rt_intref {
             return Some(r.core_ptr);
         }
         if ty == r.cont_prompt_tag {
             return Some(r.core_i32);
         }
-        // Evidence type → i64
+        // Evidence type → ptr
         if ty == r.evidence_ty {
-            return Some(r.core_i64);
+            return Some(r.core_ptr);
         }
         // ADT struct/enum/variant_instance/typeref → ptr
         if is_adt_ptr_type(ctx, ty) {
@@ -187,24 +187,32 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if from_ty == r.tribute_rt_float && to_ty == r.core_f64 {
             return Some(arena_materialize_result_noop(value));
         }
-        if (from_ty == r.tribute_rt_intref || from_ty == r.tribute_rt_any) && to_ty == r.core_ptr {
+        if from_ty == r.tribute_rt_intref && to_ty == r.core_ptr {
             return Some(arena_materialize_result_noop(value));
         }
-        if from_ty == r.evidence_ty && to_ty == r.core_i64 {
+        // anyref → ptr: no-op (same representation)
+        if from_ty == r.tribute_rt_anyref && to_ty == r.core_ptr {
             return Some(arena_materialize_result_noop(value));
         }
-        if from_ty == r.core_i64 && to_ty == r.evidence_ty {
+        // ptr → anyref: no-op (same representation)
+        if from_ty == r.core_ptr && to_ty == r.tribute_rt_anyref {
+            return Some(arena_materialize_result_noop(value));
+        }
+        if from_ty == r.evidence_ty && to_ty == r.core_ptr {
+            return Some(arena_materialize_result_noop(value));
+        }
+        if from_ty == r.core_ptr && to_ty == r.evidence_ty {
             return Some(arena_materialize_result_noop(value));
         }
         if from_ty == r.cont_prompt_tag && to_ty == r.core_i32 {
             return Some(arena_materialize_result_noop(value));
         }
 
-        // Pointer equivalences: ptr-like ↔ ptr
+        // Pointer equivalences: ptr-like ↔ ptr ↔ anyref
         let from_ptr_like = is_ptr_like(ctx, from_ty, r.evidence_ty, r.core_ptr);
         let to_ptr_like = is_ptr_like(ctx, to_ty, r.evidence_ty, r.core_ptr);
-        let from_is_ptr = from_ty == r.core_ptr;
-        let to_is_ptr = to_ty == r.core_ptr;
+        let from_is_ptr = from_ty == r.core_ptr || from_ty == r.tribute_rt_anyref;
+        let to_is_ptr = to_ty == r.core_ptr || to_ty == r.tribute_rt_anyref;
 
         if (from_ptr_like && to_is_ptr)
             || (from_is_ptr && to_ptr_like)
@@ -213,25 +221,30 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(arena_materialize_result_noop(value));
         }
 
-        // Boxing: primitive → ptr
+        // Boxing: primitive → ptr/anyref
         if to_is_ptr {
+            let ptr_ty = if to_ty == r.tribute_rt_anyref {
+                r.tribute_rt_anyref
+            } else {
+                r.core_ptr
+            };
             if from_ty == r.core_i32 {
                 return Some(box_primitive(
-                    ctx, location, value, 4, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 4, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_i64 {
                 return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_f64 {
                 return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_nil {
-                let null_op = arena_clif::iconst(ctx, location, r.core_ptr, 0);
+                let null_op = arena_clif::iconst(ctx, location, ptr_ty, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: null_op.result(ctx),
                     ops: vec![null_op.op_ref()],
@@ -240,7 +253,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         }
 
         // Unboxing: ptr → primitive
-        let from_is_ptr_or_any = from_ty == r.core_ptr || from_ty == r.tribute_rt_any;
+        let from_is_ptr_or_any = from_ty == r.core_ptr || from_ty == r.tribute_rt_anyref;
         if from_is_ptr_or_any {
             if to_ty == r.core_i32 || to_ty == r.tribute_rt_int {
                 let load = arena_clif::load(ctx, location, value, r.core_i32, 0);
@@ -384,10 +397,8 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         return true;
     }
 
-    // tribute_rt.any / tribute_rt.intref
-    if data.dialect == Symbol::new("tribute_rt")
-        && (data.name == Symbol::new("any") || data.name == Symbol::new("intref"))
-    {
+    // tribute_rt.intref (anyref is NOT ptr-like; it has distinct RC semantics)
+    if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("intref") {
         return true;
     }
 
@@ -459,7 +470,7 @@ impl NativeTypeRefs {
             tribute_rt_bool: self.tribute_rt_bool,
             tribute_rt_float: self.tribute_rt_float,
             tribute_rt_intref: self.tribute_rt_intref,
-            tribute_rt_any: self.tribute_rt_any,
+            tribute_rt_anyref: self.tribute_rt_anyref,
             core_i1: self.core_i1,
             cont_prompt_tag: self.cont_prompt_tag,
             core_i32: self.core_i32,
@@ -483,7 +494,7 @@ struct NativeTypeRefsCopy {
     tribute_rt_bool: TypeRef,
     tribute_rt_float: TypeRef,
     tribute_rt_intref: TypeRef,
-    tribute_rt_any: TypeRef,
+    tribute_rt_anyref: TypeRef,
     core_i1: TypeRef,
     cont_prompt_tag: TypeRef,
     core_i32: TypeRef,

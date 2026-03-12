@@ -42,7 +42,7 @@ fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-    let anyref_ty = tribute_rt::any(ctx).as_type_ref();
+    let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .param(i32_ty)
@@ -317,7 +317,7 @@ impl RewritePattern for LowerClosureCallArena {
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let anyref_ty = tribute_rt::any(ctx).as_type_ref();
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
 
         // Generate: %table_idx = closure.func %closure
         let table_idx_op = arena_closure::func(ctx, loc, callee, i32_ty);

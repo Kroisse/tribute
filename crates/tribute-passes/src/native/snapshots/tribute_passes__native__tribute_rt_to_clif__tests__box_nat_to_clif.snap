@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/native/tribute_rt_to_clif.rs
-assertion_line: 513
 expression: result
 ---
 core.module @test {
@@ -16,7 +15,7 @@ core.module @test {
       %6 = clif.iadd %2, %5 : core.ptr
       clif.store %0, %6 {offset = 0}
       %7 = clif.iconst {value = 0} : core.ptr
-      %8 = clif.iadd %6, %7 : core.ptr
+      %8 = clif.iadd %6, %7 : tribute_rt.anyref
       func.return %8
   }
 }

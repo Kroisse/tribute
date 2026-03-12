@@ -17,7 +17,7 @@
 //! - `tribute_rt.float` -> `core.f64`
 //! - `tribute_rt.bool` -> `core.i32`
 //! - `tribute_rt.intref` -> `wasm.i31ref`
-//! - `tribute_rt.any` -> `wasm.anyref`
+//! - `tribute_rt.anyref` -> `wasm.anyref`
 
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
