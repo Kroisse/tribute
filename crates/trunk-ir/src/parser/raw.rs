@@ -54,7 +54,7 @@ pub(crate) struct RawOperation<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawRegion<'a> {
-    pub type_aliases: Vec<(&'a str, RawType<'a>)>,
+    pub type_aliases: Vec<(String, RawType<'a>)>,
     pub blocks: Vec<RawBlock<'a>>,
 }
 
@@ -73,8 +73,8 @@ pub(crate) enum RawType<'a> {
         params: Vec<RawType<'a>>,
         attrs: Vec<(&'a str, RawAttribute<'a>)>,
     },
-    /// Type alias reference: `!name`
-    Alias(&'a str),
+    /// Type alias reference: `!name` or `!"quoted name"`
+    Alias(String),
 }
 
 #[derive(Debug, Clone)]
@@ -249,10 +249,19 @@ pub(crate) fn string_lit(input: &mut &str) -> ModalResult<String> {
 /// `effect` attribute on function types).  Type attributes are only parsed
 /// when explicit parentheses `()` are present to avoid ambiguity with the
 /// opening `{` of operation body regions.
-/// Parse a type alias reference: `!name`
+/// Parse a type alias name: bare `ident` or quoted `"string"`.
+fn type_alias_name(input: &mut &str) -> ModalResult<String> {
+    if input.starts_with('"') {
+        string_lit.parse_next(input)
+    } else {
+        ident.map(|s: &str| s.to_owned()).parse_next(input)
+    }
+}
+
+/// Parse a type alias reference: `!name` or `!"quoted name"`
 pub(crate) fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '!'.parse_next(input)?;
-    let name = ident.parse_next(input)?;
+    let name = type_alias_name.parse_next(input)?;
     Ok(RawType::Alias(name))
 }
 
@@ -553,29 +562,38 @@ pub(crate) fn raw_block<'a>(input: &mut &'a str) -> ModalResult<RawBlock<'a>> {
     Ok(RawBlock { label, args, ops })
 }
 
-/// Parse a type alias definition: `!name = type`
-fn type_alias_def<'a>(input: &mut &'a str) -> ModalResult<(&'a str, RawType<'a>)> {
+/// Parse a type alias definition: `!name = type` or `!"quoted" = type`
+fn type_alias_def<'a>(input: &mut &'a str) -> ModalResult<(String, RawType<'a>)> {
     '!'.parse_next(input)?;
-    let name = ident.parse_next(input)?;
+    let name = type_alias_name.parse_next(input)?;
     (ws, '=', ws).parse_next(input)?;
     let ty = raw_type.parse_next(input)?;
     Ok((name, ty))
 }
 
-/// Check if input starts with a type alias definition (`!name =`).
+/// Check if input starts with a type alias definition (`!name =` or `!"quoted" =`).
 fn is_type_alias_def(input: &str) -> bool {
     if !input.starts_with('!') {
         return false;
     }
     let rest = &input[1..];
-    // Skip identifier chars
-    let after_ident = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
-    // Must have at least one ident char
-    if after_ident.len() == rest.len() {
-        return false;
-    }
+    let after_name = if rest.starts_with('"') {
+        // Quoted: skip to closing quote (simplified — no escape handling needed for lookahead)
+        match rest[1..].find('"') {
+            Some(end) => &rest[end + 2..],
+            None => return false,
+        }
+    } else {
+        // Bare ident
+        let after_ident = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        // Must have at least one ident char
+        if after_ident.len() == rest.len() {
+            return false;
+        }
+        after_ident
+    };
     // Skip whitespace then check for '='
-    let after_ws = after_ident.trim_start();
+    let after_ws = after_name.trim_start();
     after_ws.starts_with('=')
 }
 
@@ -880,7 +898,16 @@ mod tests {
     fn test_parse_type_alias_ref() {
         let mut input = "!marker";
         let raw = raw_type.parse_next(&mut input).expect("should parse alias");
-        assert!(matches!(raw, RawType::Alias("marker")));
+        assert!(matches!(raw, RawType::Alias(ref s) if s == "marker"));
+    }
+
+    #[test]
+    fn test_parse_type_alias_ref_quoted() {
+        let mut input = r#"!"test::MyStruct""#;
+        let raw = raw_type
+            .parse_next(&mut input)
+            .expect("should parse quoted alias");
+        assert!(matches!(raw, RawType::Alias(ref s) if s == "test::MyStruct"));
     }
 
     #[test]

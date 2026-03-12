@@ -97,7 +97,7 @@ impl<'a> PrintState<'a> {
     fn write_type(&self, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
         // Check alias map first
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
-            return write!(f, "!{alias_name}");
+            return write_type_alias_name(f, alias_name);
         }
         let data = self.ctx.types.get(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
@@ -308,6 +308,18 @@ fn write_escaped_string(f: &mut impl Write, s: &str) -> fmt::Result {
         }
     }
     Ok(())
+}
+
+/// Write a type alias name with `!` prefix. Quotes if name contains non-ident chars.
+fn write_type_alias_name(f: &mut impl Write, name: &str) -> fmt::Result {
+    let needs_quoting = name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_');
+    if needs_quoting {
+        f.write_str("!\"")?;
+        write_escaped_string(f, name)?;
+        f.write_char('"')
+    } else {
+        write!(f, "!{name}")
+    }
 }
 
 fn write_symbol(f: &mut impl Write, sym: crate::symbol::Symbol) -> fmt::Result {
@@ -533,7 +545,9 @@ fn print_module_op(
         if !aliases.is_empty() {
             let inner_indent = format!("{}  ", indent_str);
             for (name, ty) in &aliases {
-                write!(f, "{inner_indent}!{name} = ")?;
+                write!(f, "{inner_indent}")?;
+                write_type_alias_name(f, &name.to_string())?;
+                f.write_str(" = ")?;
                 // Temporarily remove this alias from the map so we print the
                 // full type definition, while earlier aliases can still be used.
                 state.type_alias_names.remove(ty);

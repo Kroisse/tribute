@@ -61,16 +61,15 @@ impl<'a> ArenaIrBuilder<'a> {
 
     fn build_type(&mut self, raw: &RawType<'_>) -> Result<TypeRef, ParseError> {
         match raw {
-            RawType::Alias(name) => {
-                self.scope
-                    .type_alias_map
-                    .get(*name)
-                    .copied()
-                    .ok_or_else(|| ParseError {
-                        message: format!("undefined type alias '!{name}'"),
-                        offset: 0,
-                    })
-            }
+            RawType::Alias(name) => self
+                .scope
+                .type_alias_map
+                .get(name.as_str())
+                .copied()
+                .ok_or_else(|| ParseError {
+                    message: format!("undefined type alias '!{name}'"),
+                    offset: 0,
+                }),
             RawType::Concrete {
                 dialect,
                 name,
@@ -1214,6 +1213,25 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module_op = parse_module(&mut ctx, input).unwrap();
+        assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
+    fn test_quoted_type_alias_roundtrip() {
+        let input = r#"core.module @test {
+  !"test::MyStruct" = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @"test::MyStruct"}
+
+  func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap_or_else(|e| {
+            panic!(
+                "Parse failed at offset {}: {}\n\nInput:\n{}",
+                e.offset, e.message, input
+            );
+        });
         assert_roundtrip(&ctx, module_op);
     }
 
