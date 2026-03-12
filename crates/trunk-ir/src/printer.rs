@@ -26,16 +26,24 @@ struct PrintState<'a> {
     block_labels: HashMap<BlockRef, String>,
     next_value_num: usize,
     next_block_num: usize,
+    /// Reverse map: TypeRef → alias name for substitution during printing.
+    type_alias_names: HashMap<TypeRef, String>,
 }
 
 impl<'a> PrintState<'a> {
     fn new(ctx: &'a IrContext) -> Self {
+        let type_alias_names = ctx
+            .type_aliases()
+            .iter()
+            .map(|(name, ty)| (*ty, name.to_string()))
+            .collect();
         Self {
             ctx,
             value_names: HashMap::new(),
             block_labels: HashMap::new(),
             next_value_num: 0,
             next_block_num: 0,
+            type_alias_names,
         }
     }
 
@@ -80,6 +88,93 @@ impl<'a> PrintState<'a> {
     fn restore_counters(&mut self, state: (usize, usize)) {
         self.next_value_num = state.0;
         self.next_block_num = state.1;
+    }
+
+    // ====================================================================
+    // Type / Attribute writing (with alias support)
+    // ====================================================================
+
+    fn write_type(&self, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
+        // Check alias map first
+        if let Some(alias_name) = self.type_alias_names.get(&ty) {
+            return write!(f, "!{alias_name}");
+        }
+        let data = self.ctx.types.get(ty);
+        write!(f, "{}.{}", data.dialect, data.name)?;
+        if !data.params.is_empty() {
+            f.write_char('(')?;
+            for (i, &param) in data.params.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                self.write_type(f, param)?;
+            }
+            f.write_char(')')?;
+        } else if !data.attrs.is_empty() {
+            f.write_str("()")?;
+        }
+        if !data.attrs.is_empty() {
+            f.write_str(" {")?;
+            for (i, (key, val)) in data.attrs.iter().enumerate() {
+                if i > 0 {
+                    f.write_str(", ")?;
+                }
+                write!(f, "{} = ", key)?;
+                self.write_attribute(f, val)?;
+            }
+            f.write_char('}')?;
+        }
+        Ok(())
+    }
+
+    fn write_attribute(&self, f: &mut impl Write, attr: &Attribute) -> fmt::Result {
+        match attr {
+            Attribute::Unit => f.write_str("unit"),
+            Attribute::Bool(b) => write!(f, "{b}"),
+            Attribute::Int(v) => write!(f, "{v}"),
+            Attribute::FloatBits(bits) => {
+                let v = f64::from_bits(*bits);
+                let s = format!("{v}");
+                f.write_str(&s)?;
+                if v.is_finite() && !s.contains('.') && !s.contains('e') && !s.contains('E') {
+                    f.write_str(".0")?;
+                }
+                Ok(())
+            }
+            Attribute::String(s) => {
+                f.write_char('"')?;
+                write_escaped_string(f, s)?;
+                f.write_char('"')
+            }
+            Attribute::Bytes(bytes) => {
+                f.write_str("bytes(")?;
+                for (i, b) in bytes.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{b}")?;
+                }
+                f.write_char(')')
+            }
+            Attribute::Symbol(sym) => write_symbol(f, *sym),
+            Attribute::Type(ty) => self.write_type(f, *ty),
+            Attribute::List(list) => {
+                f.write_char('[')?;
+                for (i, item) in list.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    self.write_attribute(f, item)?;
+                }
+                f.write_char(']')
+            }
+            Attribute::Location(loc) => {
+                let path_str = self.ctx.paths.get(loc.path);
+                f.write_str("loc(\"")?;
+                write_escaped_string(f, path_str)?;
+                write!(f, "\" {}:{})", loc.span.start, loc.span.end)
+            }
+        }
     }
 }
 
@@ -319,7 +414,7 @@ fn print_generic_op(
                 f.write_str(", ")?;
             }
             write!(f, "{key} = ")?;
-            write_attribute(state.ctx, f, val)?;
+            state.write_attribute(f, val)?;
         }
         f.write_char('}')?;
     }
@@ -332,7 +427,7 @@ fn print_generic_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write_type(state.ctx, f, ty)?;
+            state.write_type(f, ty)?;
         }
     }
 
@@ -382,7 +477,7 @@ fn print_region(
                     let arg_name = state.assign_value_name(arg);
                     let ty = state.ctx.value_ty(arg);
                     write!(f, "{arg_name}: ")?;
-                    write_type(state.ctx, f, ty)?;
+                    state.write_type(f, ty)?;
                 }
                 f.write_char(')')?;
             }
@@ -432,6 +527,23 @@ fn print_module_op(
     );
     if let Some(&region) = regions.first() {
         f.write_str(" {\n")?;
+
+        // Emit type alias definitions
+        let aliases: Vec<_> = state.ctx.type_aliases().to_vec();
+        if !aliases.is_empty() {
+            let inner_indent = format!("{}  ", indent_str);
+            for (name, ty) in &aliases {
+                write!(f, "{inner_indent}!{name} = ")?;
+                // Temporarily remove this alias from the map so we print the
+                // full type definition, while earlier aliases can still be used.
+                state.type_alias_names.remove(ty);
+                state.write_type(f, *ty)?;
+                // Re-insert so subsequent aliases and ops can reference it
+                state.type_alias_names.insert(*ty, name.to_string());
+                f.write_char('\n')?;
+            }
+            f.write_char('\n')?;
+        }
 
         // Print each top-level op with reset numbering
         let region_data = state.ctx.region(region);
@@ -497,7 +609,7 @@ fn print_func_op(
                 let name = state.assign_value_name(arg);
                 let ty = state.ctx.value_ty(arg);
                 write!(f, "{name}: ")?;
-                write_type(state.ctx, f, ty)?;
+                state.write_type(f, ty)?;
             }
             f.write_char(')')?;
         }
@@ -518,14 +630,14 @@ fn print_func_op(
                         _ => None,
                     });
                 f.write_str(" -> ")?;
-                write_type(state.ctx, f, result_ty)?;
+                state.write_type(f, result_ty)?;
                 if let Some(eff) = effect_ty {
                     f.write_str(" effects ")?;
-                    write_type(state.ctx, f, eff)?;
+                    state.write_type(f, eff)?;
                 }
             } else {
                 f.write_str(" -> ")?;
-                write_type(state.ctx, f, *func_ty)?;
+                state.write_type(f, *func_ty)?;
             }
         }
 
@@ -558,7 +670,7 @@ fn print_func_op(
                             let name = state.assign_value_name(arg);
                             let ty = state.ctx.value_ty(arg);
                             write!(f, "{name}: ")?;
-                            write_type(state.ctx, f, ty)?;
+                            state.write_type(f, ty)?;
                         }
                         f.write_char(')')?;
                     }

@@ -4,7 +4,7 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
@@ -103,6 +103,13 @@ pub struct IrContext {
     result_values: SecondaryMap<OpRef, EntityList<ValueRef>>,
     /// Mapping from block to its argument ValueRefs.
     block_arg_values: SecondaryMap<BlockRef, EntityList<ValueRef>>,
+
+    /// Type aliases: ordered list of `(name, type)` for stable output.
+    type_aliases: Vec<(Symbol, TypeRef)>,
+    /// Lookup alias by name.
+    type_alias_by_name: HashMap<Symbol, TypeRef>,
+    /// Reverse lookup: type → alias name (for printer).
+    type_alias_by_type: HashMap<TypeRef, Symbol>,
 }
 
 impl IrContext {
@@ -120,7 +127,44 @@ impl IrContext {
             type_pool: ListPool::new(),
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
+            type_aliases: Vec::new(),
+            type_alias_by_name: HashMap::new(),
+            type_alias_by_type: HashMap::new(),
         }
+    }
+
+    // ========================================================================
+    // Type aliases
+    // ========================================================================
+
+    /// Register a type alias. If a name is already registered, it is replaced.
+    pub fn register_type_alias(&mut self, name: Symbol, ty: TypeRef) {
+        if let Some(old_ty) = self.type_alias_by_name.insert(name, ty) {
+            // Remove old reverse mapping
+            self.type_alias_by_type.remove(&old_ty);
+            // Update ordered list in-place
+            if let Some(entry) = self.type_aliases.iter_mut().find(|(n, _)| *n == name) {
+                entry.1 = ty;
+            }
+        } else {
+            self.type_aliases.push((name, ty));
+        }
+        self.type_alias_by_type.insert(ty, name);
+    }
+
+    /// Look up a type alias by name.
+    pub fn type_alias_by_name(&self, name: Symbol) -> Option<TypeRef> {
+        self.type_alias_by_name.get(&name).copied()
+    }
+
+    /// Look up an alias name for a given type (reverse lookup for printer).
+    pub fn type_alias_by_type(&self, ty: TypeRef) -> Option<Symbol> {
+        self.type_alias_by_type.get(&ty).copied()
+    }
+
+    /// Get the ordered list of type aliases.
+    pub fn type_aliases(&self) -> &[(Symbol, TypeRef)] {
+        &self.type_aliases
     }
 
     // ========================================================================

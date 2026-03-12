@@ -54,6 +54,7 @@ pub(crate) struct RawOperation<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawRegion<'a> {
+    pub type_aliases: Vec<(&'a str, RawType<'a>)>,
     pub blocks: Vec<RawBlock<'a>>,
 }
 
@@ -65,11 +66,15 @@ pub(crate) struct RawBlock<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RawType<'a> {
-    pub dialect: &'a str,
-    pub name: &'a str,
-    pub params: Vec<RawType<'a>>,
-    pub attrs: Vec<(&'a str, RawAttribute<'a>)>,
+pub(crate) enum RawType<'a> {
+    Concrete {
+        dialect: &'a str,
+        name: &'a str,
+        params: Vec<RawType<'a>>,
+        attrs: Vec<(&'a str, RawAttribute<'a>)>,
+    },
+    /// Type alias reference: `!name`
+    Alias(&'a str),
 }
 
 #[derive(Debug, Clone)]
@@ -244,7 +249,19 @@ pub(crate) fn string_lit(input: &mut &str) -> ModalResult<String> {
 /// `effect` attribute on function types).  Type attributes are only parsed
 /// when explicit parentheses `()` are present to avoid ambiguity with the
 /// opening `{` of operation body regions.
+/// Parse a type alias reference: `!name`
+pub(crate) fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+    '!'.parse_next(input)?;
+    let name = ident.parse_next(input)?;
+    Ok(RawType::Alias(name))
+}
+
 pub(crate) fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+    // Check for alias reference first
+    if input.starts_with('!') {
+        return type_alias_ref.parse_next(input);
+    }
+
     let (dialect, name) = qualified_name.parse_next(input)?;
 
     // Optional type parameters
@@ -268,7 +285,7 @@ pub(crate) fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         vec![]
     };
 
-    Ok(RawType {
+    Ok(RawType::Concrete {
         dialect,
         name,
         params,
@@ -536,10 +553,44 @@ pub(crate) fn raw_block<'a>(input: &mut &'a str) -> ModalResult<RawBlock<'a>> {
     Ok(RawBlock { label, args, ops })
 }
 
+/// Parse a type alias definition: `!name = type`
+fn type_alias_def<'a>(input: &mut &'a str) -> ModalResult<(&'a str, RawType<'a>)> {
+    '!'.parse_next(input)?;
+    let name = ident.parse_next(input)?;
+    (ws, '=', ws).parse_next(input)?;
+    let ty = raw_type.parse_next(input)?;
+    Ok((name, ty))
+}
+
+/// Check if input starts with a type alias definition (`!name =`).
+fn is_type_alias_def(input: &str) -> bool {
+    if !input.starts_with('!') {
+        return false;
+    }
+    let rest = &input[1..];
+    // Skip identifier chars
+    let after_ident = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    // Must have at least one ident char
+    if after_ident.len() == rest.len() {
+        return false;
+    }
+    // Skip whitespace then check for '='
+    let after_ws = after_ident.trim_start();
+    after_ws.starts_with('=')
+}
+
 /// Parse a region: { blocks... } or { ops... } (single implicit block)
 pub(crate) fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> {
     '{'.parse_next(input)?;
     ws.parse_next(input)?;
+
+    // Parse type alias definitions at the start of the region
+    let mut type_aliases = Vec::new();
+    while is_type_alias_def(input) {
+        let alias = type_alias_def.parse_next(input)?;
+        type_aliases.push(alias);
+        ws.parse_next(input)?;
+    }
 
     let mut blocks = Vec::new();
 
@@ -575,7 +626,10 @@ pub(crate) fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> 
     ws.parse_next(input)?;
     '}'.parse_next(input)?;
 
-    Ok(RawRegion { blocks })
+    Ok(RawRegion {
+        type_aliases,
+        blocks,
+    })
 }
 
 // ============================================================================
@@ -586,22 +640,37 @@ pub(crate) fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> 
 mod tests {
     use super::*;
 
+    /// Helper to unwrap a concrete RawType.
+    fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'a str, &'b [RawType<'a>]) {
+        match ty {
+            RawType::Concrete {
+                dialect,
+                name,
+                params,
+                ..
+            } => (dialect, name, params),
+            RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
+        }
+    }
+
     #[test]
     fn test_parse_type() {
         let mut input = "core.i32";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        assert_eq!(raw.dialect, "core");
-        assert_eq!(raw.name, "i32");
-        assert!(raw.params.is_empty());
+        let (dialect, name, params) = unwrap_concrete(&raw);
+        assert_eq!(dialect, "core");
+        assert_eq!(name, "i32");
+        assert!(params.is_empty());
     }
 
     #[test]
     fn test_parse_parameterized_type() {
         let mut input = "core.func(core.nil, core.i32, core.i32)";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
-        assert_eq!(raw.dialect, "core");
-        assert_eq!(raw.name, "func");
-        assert_eq!(raw.params.len(), 3);
+        let (dialect, name, params) = unwrap_concrete(&raw);
+        assert_eq!(dialect, "core");
+        assert_eq!(name, "func");
+        assert_eq!(params.len(), 3);
     }
 
     #[test]
@@ -790,11 +859,28 @@ mod tests {
     fn test_parse_type_with_attrs() {
         let mut input = "core.func(core.nil, core.i32) {effect = core.nil}";
         let result = raw_type.parse_next(&mut input).expect("should parse");
-        assert_eq!(result.dialect, "core");
-        assert_eq!(result.name, "func");
-        assert_eq!(result.params.len(), 2);
-        assert_eq!(result.attrs.len(), 1);
-        assert_eq!(result.attrs[0].0, "effect");
+        match &result {
+            RawType::Concrete {
+                dialect,
+                name,
+                params,
+                attrs,
+            } => {
+                assert_eq!(*dialect, "core");
+                assert_eq!(*name, "func");
+                assert_eq!(params.len(), 2);
+                assert_eq!(attrs.len(), 1);
+                assert_eq!(attrs[0].0, "effect");
+            }
+            RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
+        }
+    }
+
+    #[test]
+    fn test_parse_type_alias_ref() {
+        let mut input = "!marker";
+        let raw = raw_type.parse_next(&mut input).expect("should parse alias");
+        assert!(matches!(raw, RawType::Alias("marker")));
     }
 
     #[test]

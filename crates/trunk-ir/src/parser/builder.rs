@@ -34,6 +34,8 @@ struct ArenaIrBuilder<'a> {
     value_map: HashMap<String, ValueRef>,
     /// Maps block label (without ^) -> BlockRef
     block_map: HashMap<String, BlockRef>,
+    /// Maps type alias name -> TypeRef
+    type_alias_map: HashMap<String, TypeRef>,
 }
 
 impl<'a> ArenaIrBuilder<'a> {
@@ -45,6 +47,7 @@ impl<'a> ArenaIrBuilder<'a> {
             location,
             value_map: HashMap::new(),
             block_map: HashMap::new(),
+            type_alias_map: HashMap::new(),
         }
     }
 
@@ -52,36 +55,59 @@ impl<'a> ArenaIrBuilder<'a> {
     // Type / Attribute conversion
     // ----------------------------------------------------------------
 
-    fn build_type(&mut self, raw: &RawType<'_>) -> TypeRef {
-        let dialect = Symbol::from_dynamic(raw.dialect);
-        let name = Symbol::from_dynamic(raw.name);
-        let params: Vec<TypeRef> = raw.params.iter().map(|p| self.build_type(p)).collect();
-        let attrs: BTreeMap<Symbol, Attribute> = raw
-            .attrs
-            .iter()
-            .map(|(k, v)| (Symbol::from_dynamic(k), self.build_attribute(v)))
-            .collect();
+    fn build_type(&mut self, raw: &RawType<'_>) -> Result<TypeRef, ParseError> {
+        match raw {
+            RawType::Alias(name) => {
+                self.type_alias_map
+                    .get(*name)
+                    .copied()
+                    .ok_or_else(|| ParseError {
+                        message: format!("undefined type alias '!{name}'"),
+                        offset: 0,
+                    })
+            }
+            RawType::Concrete {
+                dialect,
+                name,
+                params,
+                attrs,
+            } => {
+                let dialect = Symbol::from_dynamic(dialect);
+                let name = Symbol::from_dynamic(name);
+                let params: Vec<TypeRef> = params
+                    .iter()
+                    .map(|p| self.build_type(p))
+                    .collect::<Result<_, _>>()?;
+                let attrs: BTreeMap<Symbol, Attribute> = attrs
+                    .iter()
+                    .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
+                    .collect::<Result<_, ParseError>>()?;
 
-        let mut builder = TypeDataBuilder::new(dialect, name);
-        for p in params {
-            builder = builder.param(p);
+                let mut builder = TypeDataBuilder::new(dialect, name);
+                for p in params {
+                    builder = builder.param(p);
+                }
+                for (k, v) in attrs {
+                    builder = builder.attr(k, v);
+                }
+                Ok(self.ctx.types.intern(builder.build()))
+            }
         }
-        for (k, v) in attrs {
-            builder = builder.attr(k, v);
-        }
-        self.ctx.types.intern(builder.build())
     }
 
-    fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Attribute {
-        match raw {
+    fn build_attribute(&mut self, raw: &RawAttribute<'_>) -> Result<Attribute, ParseError> {
+        Ok(match raw {
             RawAttribute::Bool(b) => Attribute::Bool(*b),
             RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => Attribute::String(s.clone()),
             RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
-            RawAttribute::Type(t) => Attribute::Type(self.build_type(t)),
+            RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {
-                let list: Vec<Attribute> = items.iter().map(|a| self.build_attribute(a)).collect();
+                let list: Vec<Attribute> = items
+                    .iter()
+                    .map(|a| self.build_attribute(a))
+                    .collect::<Result<_, _>>()?;
                 Attribute::List(list)
             }
             RawAttribute::Unit => Attribute::Unit,
@@ -93,7 +119,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 ))
             }
             RawAttribute::Bytes(bytes) => Attribute::Bytes(bytes.iter().copied().collect()),
-        }
+        })
     }
 
     // ----------------------------------------------------------------
@@ -138,6 +164,13 @@ impl<'a> ArenaIrBuilder<'a> {
         raw: &RawRegion<'_>,
         extra_entry_args: &[(&str, RawType<'_>)],
     ) -> Result<RegionRef, ParseError> {
+        // --- Process type alias definitions ---
+        for (name, raw_ty) in &raw.type_aliases {
+            let ty = self.build_type(raw_ty)?;
+            self.type_alias_map.insert(name.to_string(), ty);
+            self.ctx.register_type_alias(Symbol::from_dynamic(name), ty);
+        }
+
         // --- Pass 1: Pre-create all blocks (with args) to get BlockRefs ---
         let mut seen_labels = std::collections::HashSet::new();
         let mut block_refs = Vec::with_capacity(raw.blocks.len());
@@ -167,7 +200,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     });
                 }
 
-                let ty = self.build_type(raw_ty);
+                let ty = self.build_type(raw_ty)?;
                 let is_default_name = name
                     .strip_prefix("arg")
                     .and_then(|rest| rest.parse::<usize>().ok())
@@ -261,8 +294,8 @@ impl<'a> ArenaIrBuilder<'a> {
             .zip(extra_entry_args.iter())
             .enumerate()
         {
-            let bt = self.build_type(block_ty);
-            let pt = self.build_type(param_ty);
+            let bt = self.build_type(block_ty)?;
+            let pt = self.build_type(param_ty)?;
             if bt != pt {
                 let (bd, bn) = {
                     let d = self.ctx.types.get(bt);
@@ -313,14 +346,14 @@ impl<'a> ArenaIrBuilder<'a> {
             .result_types
             .iter()
             .map(|t| self.build_type(t))
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         // Build attributes from explicit attr dict
         let mut attributes: BTreeMap<Symbol, Attribute> = raw
             .attributes
             .iter()
-            .map(|(k, v)| (Symbol::from_dynamic(k), self.build_attribute(v)))
-            .collect();
+            .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
+            .collect::<Result<_, ParseError>>()?;
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
@@ -334,21 +367,21 @@ impl<'a> ArenaIrBuilder<'a> {
         let has_func_signature =
             raw.return_type.is_some() || !raw.func_params.is_empty() || raw.effect_type.is_some();
         if has_func_signature {
-            let return_ty = raw
-                .return_type
-                .as_ref()
-                .map(|t| self.build_type(t))
-                .unwrap_or_else(|| crate::dialect::core::nil(self.ctx).as_type_ref());
+            let return_ty = match raw.return_type.as_ref() {
+                Some(t) => self.build_type(t)?,
+                None => crate::dialect::core::nil(self.ctx).as_type_ref(),
+            };
 
             let param_types: Vec<TypeRef> = raw
                 .func_params
                 .iter()
                 .map(|(_, raw_ty)| self.build_type(raw_ty))
-                .collect();
+                .collect::<Result<_, _>>()?;
             let effect_ty = raw
                 .effect_type
                 .as_ref()
-                .map(|effect_raw| self.build_type(effect_raw));
+                .map(|effect_raw| self.build_type(effect_raw))
+                .transpose()?;
 
             let func_ty = crate::dialect::core::func(self.ctx, return_ty, param_types, effect_ty)
                 .as_type_ref();
@@ -1051,5 +1084,121 @@ mod tests {
             "Expected undefined block error for outer label in nested region, got: {}",
             err.message
         );
+    }
+
+    // ================================================================
+    // Type alias tests
+    // ================================================================
+
+    #[test]
+    fn test_roundtrip_type_alias() {
+        let input = r#"core.module @test {
+  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32]], name = @_Marker}
+
+  func.func @foo(%0: core.array(!marker)) -> core.array(!marker) {
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap_or_else(|e| {
+            panic!(
+                "Parse failed at offset {}: {}\n\nInput:\n{}",
+                e.offset, e.message, input
+            );
+        });
+        assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
+    fn test_programmatic_type_alias() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+        let tuple_ty = core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
+
+        // Register alias
+        ctx.register_type_alias(Symbol::new("point"), tuple_ty);
+
+        // Build a function using that type
+        let func_ty = make_func_type(&mut ctx, &[tuple_ty], tuple_ty);
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: tuple_ty,
+                attrs: Default::default(),
+            }],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let x = ctx.block_arg(entry, 0);
+        let ret = func::r#return(&mut ctx, loc, [x]);
+        ctx.push_op(entry, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let f = func::func(&mut ctx, loc, Symbol::new("identity"), func_ty, body);
+        let module_op = wrap_in_module(&mut ctx, loc, vec![f.op_ref()]);
+
+        let printed = print_module(&ctx, module_op);
+        // Alias should appear in output
+        assert!(
+            printed.contains("!point = core.tuple(core.i32, core.i32)"),
+            "Expected alias definition in output:\n{printed}",
+        );
+        assert!(
+            printed.contains("!point)"),
+            "Expected alias usage in output:\n{printed}",
+        );
+    }
+
+    #[test]
+    fn test_nested_type_alias() {
+        let input = r#"core.module @test {
+  !inner = core.tuple(core.i32, core.i32)
+  !outer = core.func(!inner) {effect = core.nil}
+
+  func.func @foo(%0: !inner) -> !inner effects core.nil {
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap_or_else(|e| {
+            panic!(
+                "Parse failed at offset {}: {}\n\nInput:\n{}",
+                e.offset, e.message, input
+            );
+        });
+        assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
+    fn test_undefined_type_alias_error() {
+        let input = r#"core.module @test {
+  func.func @f(%0: !unknown) -> core.i32 {
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let err = parse_module(&mut ctx, input).unwrap_err();
+        assert!(
+            err.message.contains("undefined type alias '!unknown'"),
+            "Expected undefined type alias error, got: {}",
+            err.message,
+        );
+    }
+
+    #[test]
+    fn test_type_alias_no_alias_backward_compat() {
+        // Existing IR without aliases should still round-trip
+        let input = r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap();
+        assert_roundtrip(&ctx, module_op);
     }
 }
