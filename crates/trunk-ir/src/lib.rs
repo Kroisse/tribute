@@ -28,6 +28,9 @@ pub mod types;
 // === Dialect definitions ===
 pub mod dialect;
 
+// === IR mapping for clone/transform ===
+pub mod ir_mapping;
+
 // === IR infrastructure ===
 pub mod printer;
 pub mod rewrite;
@@ -65,6 +68,7 @@ pub use context::{
     BlockArgData, BlockData, IrContext, OperationData, OperationDataBuilder, RegionData, Use,
     ValueData,
 };
+pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};
 pub use rewrite::Module;
 pub use types::{Attribute, Location, PathInterner, TypeData, TypeDataBuilder, TypeInterner};

@@ -243,9 +243,6 @@ fn generate_outlined_body(
     body_region: RegionRef,
     loc: trunk_ir::types::Location,
 ) -> OpRef {
-    use super::handler_dispatch::clone_op_into_block_with_remap;
-    use std::collections::HashMap;
-
     let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
     // Create entry block with ptr parameter (the env struct)
@@ -261,7 +258,7 @@ fn generate_outlined_body(
     let env_value = ctx.block_args(entry_block)[0];
 
     // Build value remap: live-in values -> extracted values from env struct
-    let mut value_remap: HashMap<ValueRef, ValueRef> = HashMap::new();
+    let mut mapping = trunk_ir::IrMapping::new();
 
     if !live_ins.is_empty() {
         let env_struct_ty = build_env_struct_type(ctx, live_ins.len(), ptr_ty);
@@ -284,7 +281,7 @@ fn generate_outlined_body(
                 field.result(ctx)
             };
 
-            value_remap.insert(orig_value, extracted);
+            mapping.map_value(orig_value, extracted);
         }
     }
 
@@ -299,32 +296,22 @@ fn generate_outlined_body(
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
                 last_result = operands
                     .first()
-                    .map(|&v| value_remap.get(&v).copied().unwrap_or(v));
+                    .map(|&v| mapping.lookup_value_or_default(v));
                 continue;
             }
             if arena_func::Return::matches(ctx, op) {
                 let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
                 last_result = operands
                     .first()
-                    .map(|&v| value_remap.get(&v).copied().unwrap_or(v));
+                    .map(|&v| mapping.lookup_value_or_default(v));
                 continue;
             }
 
             // Clone op into entry block with value remapping
-            clone_op_into_block_with_remap(ctx, entry_block, op, &value_remap);
+            let new_op = ctx.clone_op_into_block(entry_block, op, &mut mapping);
 
-            // Map old results -> new results for subsequent ops
-            let new_ops = ctx.block(entry_block).ops.clone();
-            if let Some(&new_op) = new_ops.last() {
-                let old_results: Vec<ValueRef> = ctx.op_results(op).to_vec();
-                let new_results: Vec<ValueRef> = ctx.op_results(new_op).to_vec();
-                for (old_r, new_r) in old_results.into_iter().zip(new_results) {
-                    value_remap.insert(old_r, new_r);
-                }
-
-                if !ctx.op_results(new_op).is_empty() {
-                    last_result = Some(ctx.op_results(new_op)[0]);
-                }
+            if !ctx.op_results(new_op).is_empty() {
+                last_result = Some(ctx.op_results(new_op)[0]);
             }
         }
     }

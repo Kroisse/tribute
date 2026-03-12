@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 
 use super::refs::*;
 use super::types::*;
+use crate::ir_mapping::IrMapping;
 use crate::symbol::Symbol;
 
 // ============================================================================
@@ -528,6 +529,145 @@ impl IrContext {
     // ========================================================================
     // RAUW (Replace All Uses With)
     // ========================================================================
+
+    // ========================================================================
+    // Deep Clone
+    // ========================================================================
+
+    /// Clone an operation, remapping operands, successors, and nested regions.
+    ///
+    /// - Operands are remapped via `mapping.lookup_value_or_default()`.
+    /// - Successors are remapped via `mapping.lookup_block_or_default()`.
+    /// - Nested regions are recursively deep-cloned via [`clone_region`].
+    /// - Result values are automatically registered in the mapping
+    ///   (old results → new results).
+    ///
+    /// The cloned operation is **not** attached to any block. Use
+    /// [`push_op`] or [`clone_op_into_block`] to insert it.
+    pub fn clone_op(&mut self, src_op: OpRef, mapping: &mut IrMapping) -> OpRef {
+        // Copy all data from src_op into locals to avoid borrow conflicts.
+        let data = &self.ops[src_op];
+        let loc = data.location;
+        let dialect = data.dialect;
+        let name = data.name;
+        let attrs = data.attributes.clone();
+        let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
+        let successors: SmallVec<[BlockRef; 4]> = data.successors.clone();
+        let operands: SmallVec<[ValueRef; 8]> = data.operands.as_slice(&self.value_pool).into();
+        let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
+
+        // Build new operation with remapped operands and successors.
+        let mut builder = OperationDataBuilder::new(loc, dialect, name);
+        for &v in &operands {
+            builder = builder.operand(mapping.lookup_value_or_default(v));
+        }
+        for ty in &result_types {
+            builder = builder.result(*ty);
+        }
+        for (k, v) in attrs {
+            builder = builder.attr(k, v);
+        }
+        for &r in &regions {
+            let cloned_region = self.clone_region(r, mapping);
+            builder = builder.region(cloned_region);
+        }
+        for &s in &successors {
+            builder = builder.successor(mapping.lookup_block_or_default(s));
+        }
+
+        let op_data = builder.build(self);
+        let new_op = self.create_op(op_data);
+
+        // Register result value mappings: old results → new results.
+        let old_results: SmallVec<[ValueRef; 4]> =
+            self.result_values[src_op].as_slice(&self.value_pool).into();
+        let new_results: SmallVec<[ValueRef; 4]> =
+            self.result_values[new_op].as_slice(&self.value_pool).into();
+        for (old_r, new_r) in old_results.into_iter().zip(new_results) {
+            mapping.map_value(old_r, new_r);
+        }
+
+        new_op
+    }
+
+    /// Deep-clone a region, recursively remapping all values and blocks.
+    ///
+    /// Uses a 2-pass approach to handle forward block references:
+    /// 1. Create all block headers (with arguments), register block/arg
+    ///    mappings.
+    /// 2. Clone operations in each block using [`clone_op`].
+    ///
+    /// Values not in the mapping (external references) pass through
+    /// unchanged.
+    pub fn clone_region(&mut self, src_region: RegionRef, mapping: &mut IrMapping) -> RegionRef {
+        let loc = self.regions[src_region].location;
+        let src_blocks: SmallVec<[BlockRef; 4]> = self.regions[src_region].blocks.clone();
+
+        let mut new_blocks = Vec::with_capacity(src_blocks.len());
+
+        // Pass 1: create block headers and register block/arg mappings.
+        for &src_block in &src_blocks {
+            let src_args: SmallVec<[ValueRef; 4]> = self.block_arg_values[src_block]
+                .as_slice(&self.value_pool)
+                .into();
+            let arg_data: Vec<BlockArgData> = self.blocks[src_block]
+                .args
+                .iter()
+                .map(|a| BlockArgData {
+                    ty: a.ty,
+                    attrs: a.attrs.clone(),
+                })
+                .collect();
+            let block_loc = self.blocks[src_block].location;
+
+            let new_block = self.create_block(BlockData {
+                location: block_loc,
+                args: arg_data,
+                ops: SmallVec::new(),
+                parent_region: None,
+            });
+
+            mapping.map_block(src_block, new_block);
+
+            let new_args: SmallVec<[ValueRef; 4]> = self.block_arg_values[new_block]
+                .as_slice(&self.value_pool)
+                .into();
+            for (old_arg, new_arg) in src_args.into_iter().zip(new_args) {
+                mapping.map_value(old_arg, new_arg);
+            }
+
+            new_blocks.push(new_block);
+        }
+
+        // Pass 2: clone operations in each block.
+        for (&src_block, &new_block) in src_blocks.iter().zip(new_blocks.iter()) {
+            let src_ops: SmallVec<[OpRef; 4]> = self.blocks[src_block].ops.clone();
+            for &op in &src_ops {
+                let new_op = self.clone_op(op, mapping);
+                self.push_op(new_block, new_op);
+            }
+        }
+
+        self.create_region(RegionData {
+            location: loc,
+            blocks: new_blocks.into(),
+            parent_op: None,
+        })
+    }
+
+    /// Clone an operation and append it to a destination block.
+    ///
+    /// Convenience wrapper around [`clone_op`] + [`push_op`].
+    pub fn clone_op_into_block(
+        &mut self,
+        dest: BlockRef,
+        src_op: OpRef,
+        mapping: &mut IrMapping,
+    ) -> OpRef {
+        let new_op = self.clone_op(src_op, mapping);
+        self.push_op(dest, new_op);
+        new_op
+    }
 
     /// Replace all uses of `old` with `new` in all operations.
     ///
@@ -1323,5 +1463,173 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
+    }
+
+    // ====================================================================
+    // Deep clone tests
+    // ====================================================================
+
+    /// Helper: parse IR, clone the first func's body region, add the
+    /// clone as a new func, and print the whole module.
+    fn clone_first_func_region(input: &str, new_name: &'static str) -> String {
+        use crate::parser::parse_test_module;
+        use crate::printer::print_module;
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        // Find the first func.func in the module's top-level block
+        let module_region = ctx.op(module.op()).regions[0];
+        let module_block = ctx.region(module_region).blocks[0];
+        let func_op = ctx
+            .block(module_block)
+            .ops
+            .iter()
+            .copied()
+            .find(|&op| {
+                ctx.op(op).dialect == Symbol::new("func") && ctx.op(op).name == Symbol::new("func")
+            })
+            .expect("no func.func found");
+
+        // Clone the body region
+        let body_region = ctx.op(func_op).regions[0];
+        let mut mapping = IrMapping::new();
+        let cloned_region = ctx.clone_region(body_region, &mut mapping);
+
+        // Build a new func.func with the cloned region
+        let func_ty = ctx
+            .op(func_op)
+            .attributes
+            .get(&Symbol::new("type"))
+            .cloned()
+            .unwrap();
+        let new_func = OperationDataBuilder::new(
+            ctx.op(func_op).location,
+            Symbol::new("func"),
+            Symbol::new("func"),
+        )
+        .attr("sym_name", Attribute::Symbol(Symbol::new(new_name)))
+        .attr("type", func_ty)
+        .region(cloned_region)
+        .build(&mut ctx);
+        let new_func_op = ctx.create_op(new_func);
+
+        // Add to module
+        let module_region = ctx.op(module.op()).regions[0];
+        let module_block = ctx.region(module_region).blocks[0];
+        ctx.push_op(module_block, new_func_op);
+
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn clone_flat_ops() {
+        let output = clone_first_func_region(
+            r#"core.module @test {
+  func.func @original() -> core.i32 {
+    %0 = arith.const {value = 7} : core.i32
+    %1 = arith.neg %0 : core.i32
+    func.return %1
+  }
+}"#,
+            "cloned",
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn clone_op_with_nested_region() {
+        let output = clone_first_func_region(
+            r#"core.module @test {
+  func.func @original(%0: core.i1) -> core.i32 {
+    %1 = scf.if %0 : core.i32 {
+      %2 = arith.const {value = 1} : core.i32
+      scf.yield %2
+    } {
+      %3 = arith.const {value = 2} : core.i32
+      scf.yield %3
+    }
+    func.return %1
+  }
+}"#,
+            "cloned",
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn clone_region_with_forward_block_ref() {
+        let output = clone_first_func_region(
+            r#"core.module @test {
+  func.func @original() -> core.i32 {
+  ^bb0:
+    %0 = arith.const {value = 1} : core.i32
+    cf.br %0 [^bb1]
+  ^bb1(%1: core.i32):
+    func.return %1
+  }
+}"#,
+            "cloned",
+        );
+        insta::assert_snapshot!(output);
+    }
+
+    #[test]
+    fn clone_external_values_passthrough() {
+        // External values (defined outside the cloned region) pass through
+        // unchanged. We test this by cloning a flat op directly.
+        use crate::printer::print_op;
+
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let ext_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let ext_op = ctx.create_op(ext_data);
+        let ext_val = ctx.op_result(ext_op, 0);
+
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+            .operand(ext_val)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+
+        let mut mapping = IrMapping::new();
+        let cloned = ctx.clone_op(op, &mut mapping);
+
+        // Cloned op should reference the same external value
+        assert_eq!(ctx.op_operands(cloned), &[ext_val]);
+
+        // Both original and clone should print the same textual form
+        assert_eq!(print_op(&ctx, op), print_op(&ctx, cloned));
+    }
+
+    #[test]
+    fn clone_op_result_mapping() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("multi"))
+            .result(i32_ty)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let op = ctx.create_op(data);
+        let r0 = ctx.op_result(op, 0);
+        let r1 = ctx.op_result(op, 1);
+
+        let mut mapping = IrMapping::new();
+        let cloned = ctx.clone_op(op, &mut mapping);
+
+        let cr0 = ctx.op_result(cloned, 0);
+        let cr1 = ctx.op_result(cloned, 1);
+
+        // Old results should map to new results
+        assert_eq!(mapping.lookup_value(r0), Some(cr0));
+        assert_eq!(mapping.lookup_value(r1), Some(cr1));
+        assert_ne!(r0, cr0);
+        assert_ne!(r1, cr1);
     }
 }
