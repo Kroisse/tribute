@@ -82,23 +82,15 @@ gh issue list --label wasm           # Wasm backend work
 ## Common Commands
 
 ```bash
-# Build / Test
+# Build
 cargo build
-cargo nextest run --workspace  # Test all workspace members (preferred)
 
 # Enable debug logging (use --log instead of RUST_LOG)
 cargo run -- --log=debug compile file.trb
 cargo run -- --log=tribute_front::typeck=trace compile file.trb
-
-# If snapshot tests fail (insta)
-cargo insta review
-
-# Package-specific tests
-cargo nextest run -p tribute
-cargo nextest run -p tree-sitter-tribute
-cargo nextest run -p tribute-passes
-cargo nextest run -p trunk-ir
 ```
+
+For test commands and patterns, see the `tribute-testing` skill.
 
 ## Tree-sitter Grammar Development
 

@@ -1,12 +1,14 @@
 ---
 name: tribute-testing
 description: |
-  Tribute project testing guide covering Salsa incremental computation framework test patterns,
-  nextest usage, and insta snapshot testing. Use when:
-  (1) Writing tests for Salsa tracked functions or accumulate()
-  (2) Using the #[salsa_test] macro
-  (3) Resolving "cannot accumulate values outside of an active tracked function" errors
-  (4) Following Tribute project test conventions
+  Tribute project testing guide covering test commands, Salsa incremental
+  computation framework test patterns, nextest usage, and insta snapshot
+  testing. Use when:
+  (1) Running or writing tests
+  (2) Writing tests for Salsa tracked functions or accumulate()
+  (3) Using the #[salsa_test] macro
+  (4) Resolving "cannot accumulate values outside of an active tracked function" errors
+  (5) Following Tribute project test conventions
 ---
 
 # Tribute Testing Guide
@@ -14,8 +16,11 @@ description: |
 ## Running Tests
 
 ```bash
-cargo nextest run --workspace           # All tests
-cargo nextest run -p tribute-front      # Specific crate
+cargo nextest run --workspace           # All tests (preferred)
+cargo nextest run -p tribute            # Specific crate
+cargo nextest run -p tree-sitter-tribute
+cargo nextest run -p tribute-passes
+cargo nextest run -p trunk-ir
 cargo insta review                      # Review snapshot test failures
 ```
 
@@ -85,20 +90,6 @@ fn test_diagnostics(db: &salsa::DatabaseImpl) {
 | ----- | ----------- | ------------- |
 | Unit tests | Pure logic (bindings, scopes) | ❌ |
 | Integration tests | Tracked queries + diagnostics | ✅ |
-
-## SourceCst Helper
-
-```rust
-use tree_sitter::Parser;
-use ropey::Rope;
-
-fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_tribute::LANGUAGE.into()).unwrap();
-    let tree = parser.parse(text, None);
-    SourceCst::new(db, path_to_uri(Path::new("test.trb")), Rope::from_str(text), tree)
-}
-```
 
 ## Snapshot Testing (insta)
 
