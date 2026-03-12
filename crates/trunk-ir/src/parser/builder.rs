@@ -27,15 +27,21 @@ use crate::{BlockArgData, BlockData, RegionData};
 // ArenaIrBuilder (Raw -> Arena IR)
 // ============================================================================
 
-struct ArenaIrBuilder<'a> {
-    ctx: &'a mut IrContext,
-    location: Location,
+/// Scoped name resolution state, saved/restored per region.
+#[derive(Clone, Default)]
+struct BuilderScope {
     /// Maps value name (without %) -> ValueRef
     value_map: HashMap<String, ValueRef>,
     /// Maps block label (without ^) -> BlockRef
     block_map: HashMap<String, BlockRef>,
     /// Maps type alias name -> TypeRef
     type_alias_map: HashMap<String, TypeRef>,
+}
+
+struct ArenaIrBuilder<'a> {
+    ctx: &'a mut IrContext,
+    location: Location,
+    scope: BuilderScope,
 }
 
 impl<'a> ArenaIrBuilder<'a> {
@@ -45,9 +51,7 @@ impl<'a> ArenaIrBuilder<'a> {
         Self {
             ctx,
             location,
-            value_map: HashMap::new(),
-            block_map: HashMap::new(),
-            type_alias_map: HashMap::new(),
+            scope: BuilderScope::default(),
         }
     }
 
@@ -58,7 +62,8 @@ impl<'a> ArenaIrBuilder<'a> {
     fn build_type(&mut self, raw: &RawType<'_>) -> Result<TypeRef, ParseError> {
         match raw {
             RawType::Alias(name) => {
-                self.type_alias_map
+                self.scope
+                    .type_alias_map
                     .get(*name)
                     .copied()
                     .ok_or_else(|| ParseError {
@@ -127,34 +132,15 @@ impl<'a> ArenaIrBuilder<'a> {
     // ----------------------------------------------------------------
 
     fn resolve_value(&self, name: &str) -> Option<ValueRef> {
-        self.value_map.get(name).copied()
+        self.scope.value_map.get(name).copied()
     }
 
-    fn save_scopes(
-        &self,
-    ) -> (
-        HashMap<String, ValueRef>,
-        HashMap<String, BlockRef>,
-        HashMap<String, TypeRef>,
-    ) {
-        (
-            self.value_map.clone(),
-            self.block_map.clone(),
-            self.type_alias_map.clone(),
-        )
+    fn save_scope(&self) -> BuilderScope {
+        self.scope.clone()
     }
 
-    fn restore_scopes(
-        &mut self,
-        saved: (
-            HashMap<String, ValueRef>,
-            HashMap<String, BlockRef>,
-            HashMap<String, TypeRef>,
-        ),
-    ) {
-        self.value_map = saved.0;
-        self.block_map = saved.1;
-        self.type_alias_map = saved.2;
+    fn restore_scope(&mut self, saved: BuilderScope) {
+        self.scope = saved;
     }
 
     // ----------------------------------------------------------------
@@ -172,10 +158,10 @@ impl<'a> ArenaIrBuilder<'a> {
         extra_entry_args: &[(&str, RawType<'_>)],
         is_module_region: bool,
     ) -> Result<RegionRef, ParseError> {
-        let saved = self.save_scopes();
-        self.block_map.clear(); // isolate block scope per region
+        let saved = self.save_scope();
+        self.scope.block_map.clear(); // isolate block scope per region
         let result = self.build_region_inner(raw, extra_entry_args, is_module_region);
-        self.restore_scopes(saved);
+        self.restore_scope(saved);
         result
     }
 
@@ -194,7 +180,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         for (name, raw_ty) in &raw.type_aliases {
             let ty = self.build_type(raw_ty)?;
-            self.type_alias_map.insert(name.to_string(), ty);
+            self.scope.type_alias_map.insert(name.to_string(), ty);
             self.ctx.register_type_alias(Symbol::from_dynamic(name), ty);
         }
 
@@ -251,18 +237,18 @@ impl<'a> ArenaIrBuilder<'a> {
                 parent_region: None,
             });
 
-            self.block_map.insert(label, block_ref);
+            self.scope.block_map.insert(label, block_ref);
 
             // Register arg values, rejecting cross-block duplicates
             for (j, name) in arg_names.iter().enumerate() {
-                if self.value_map.contains_key(name) {
+                if self.scope.value_map.contains_key(name) {
                     return Err(ParseError {
                         message: format!("duplicate SSA name '%{}' in block argument", name),
                         offset: 0,
                     });
                 }
                 let value = self.ctx.block_arg(block_ref, j as u32);
-                self.value_map.insert(name.clone(), value);
+                self.scope.value_map.insert(name.clone(), value);
             }
 
             block_refs.push(block_ref);
@@ -420,7 +406,8 @@ impl<'a> ArenaIrBuilder<'a> {
             .successors
             .iter()
             .map(|label| {
-                self.block_map
+                self.scope
+                    .block_map
                     .get(*label)
                     .copied()
                     .ok_or_else(|| ParseError {
@@ -482,7 +469,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
         // Register result values, rejecting duplicates
         for (i, name) in raw.results.iter().enumerate() {
-            if self.value_map.contains_key(*name) {
+            if self.scope.value_map.contains_key(*name) {
                 return Err(ParseError {
                     message: format!(
                         "duplicate SSA name '{}' in operation '{}.{}' result index {}",
@@ -492,7 +479,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 });
             }
             let value = self.ctx.op_result(op_ref, i as u32);
-            self.value_map.insert(name.to_string(), value);
+            self.scope.value_map.insert(name.to_string(), value);
         }
 
         Ok(op_ref)
