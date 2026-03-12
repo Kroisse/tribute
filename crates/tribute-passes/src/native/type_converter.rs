@@ -221,25 +221,30 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(arena_materialize_result_noop(value));
         }
 
-        // Boxing: primitive → ptr
+        // Boxing: primitive → ptr/anyref
         if to_is_ptr {
+            let ptr_ty = if to_ty == r.tribute_rt_anyref {
+                r.tribute_rt_anyref
+            } else {
+                r.core_ptr
+            };
             if from_ty == r.core_i32 {
                 return Some(box_primitive(
-                    ctx, location, value, 4, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 4, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_i64 {
                 return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_f64 {
                 return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, r.core_ptr,
+                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
                 ));
             }
             if from_ty == r.core_nil {
-                let null_op = arena_clif::iconst(ctx, location, r.core_ptr, 0);
+                let null_op = arena_clif::iconst(ctx, location, ptr_ty, 0);
                 return Some(trunk_ir::rewrite::type_converter::MaterializeResult {
                     value: null_op.result(ctx),
                     ops: vec![null_op.op_ref()],

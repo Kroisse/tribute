@@ -315,7 +315,11 @@ pub(super) fn lower_expr<'db>(
                 _ => {
                     // General expression callee -> indirect call
                     let callee_val = lower_expr(builder, callee)?;
-                    let result_ty = builder.ctx.anyref_type(builder.ir);
+                    let result_ty = builder
+                        .ctx
+                        .get_node_type(expr_node_id)
+                        .map(|t| builder.ctx.convert_type(builder.ir, *t))
+                        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
                     let op = func::call_indirect(
                         builder.ir, location, callee_val, arg_values, result_ty,
                     );
@@ -515,9 +519,9 @@ pub(super) fn lower_expr<'db>(
                     };
                     // Effectful lambdas are invoked through handler prompts,
                     // which use polymorphic (boxed) types. Force the return
-                    // type to `tribute_rt.any` so the closure boxes its result
-                    // before returning, matching the `call_indirect` in
-                    // `__prompt_body_N`.
+                    // type to `tribute_rt.anyref` so the closure boxes its
+                    // result before returning, matching the `call_indirect`
+                    // in `__prompt_body_N`.
                     //
                     // Only apply this when the lambda has concrete abilities
                     // (not just a tail variable from polymorphic inference).

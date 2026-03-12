@@ -79,7 +79,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         return Some(f64_ty);
     }
 
-    // tribute_rt.anyrefref -> wasm.anyref
+    // tribute_rt.anyref -> wasm.anyref
     if is_type(ctx, ty, "tribute_rt", "anyref") {
         let anyref_ty = ctx.types.intern(
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("wasm"), Symbol::new("anyref"))

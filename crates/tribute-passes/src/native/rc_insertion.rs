@@ -76,7 +76,13 @@ fn is_static_ptr(ctx: &IrContext, value: ValueRef) -> bool {
         return true;
     }
     if arena_clif::Iconst::matches(ctx, def_op) && is_anyref_type(ctx, ctx.value_ty(value)) {
-        return true;
+        // Only treat null (zero) constants as unmanaged
+        if let Ok(iconst) = arena_clif::Iconst::from_op(ctx, def_op)
+            && iconst.value(ctx) == 0
+        {
+            return true;
+        }
+        return false;
     }
     false
 }

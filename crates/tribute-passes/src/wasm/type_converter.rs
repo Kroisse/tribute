@@ -13,7 +13,7 @@
 //! | `core.i1`           | `core.i32`      | WASM doesn't have i1                |
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //! | `tribute_rt.intref` | `wasm.i31ref`   | Boxed integer reference             |
-//! | `tribute_rt.anyrefref` | `wasm.anyref`   | Any reference type                  |
+//! | `tribute_rt.anyref` | `wasm.anyref`   | Any reference type                  |
 //! | `adt.typeref<T>`    | `wasm.structref`| Generic struct reference            |
 //!
 //! ## Materializations

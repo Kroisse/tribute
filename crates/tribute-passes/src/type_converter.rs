@@ -14,7 +14,7 @@
 //! | `tribute_rt.float`  | `core.f64`      | Float as f64                        |
 //!
 //! Backend-specific type conversions (e.g., `core.i1 → core.i32`,
-//! `tribute_rt.anyrefref` → `wasm.anyref`) are handled by backend-specific
+//! `tribute_rt.anyref` → `wasm.anyref`) are handled by backend-specific
 //! type converters.
 
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
