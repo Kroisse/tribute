@@ -1,18 +1,23 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
+assertion_line: 109
 expression: ir_text
 ---
 core.module @test {
+  !__tuple_i32_anyref = adt.struct() {fields = [[@0, core.i32], [@1, tribute_rt.anyref]], name = @__tuple_i32_anyref}
+  !__tuple_anyref_anyref = adt.struct() {fields = [[@0, tribute_rt.anyref], [@1, tribute_rt.anyref]], name = @__tuple_anyref_anyref}
+  !__tuple_i32_i32 = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}
+
   func.func @test() -> core.i32 {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = arith.const {value = 3} : core.i32
-      %3 = adt.struct_new %1, %2 {type = adt.struct() {fields = [[@0, core.i32], [@1, core.i32]], name = @__tuple_i32_i32}} : adt.typeref() {name = @__tuple_i32_i32}
-      %4 = adt.struct_new %0, %3 {type = adt.struct() {fields = [[@0, core.i32], [@1, tribute_rt.anyref]], name = @__tuple_i32_anyref}} : adt.typeref() {name = @__tuple_i32_anyref}
-      %5 = adt.struct_get %4 {field = 0, type = adt.struct() {fields = [[@0, core.i32], [@1, tribute_rt.anyref]], name = @__tuple_i32_anyref}} : core.i32
-      %6 = adt.struct_get %4 {field = 1, type = adt.struct() {fields = [[@0, core.i32], [@1, tribute_rt.anyref]], name = @__tuple_i32_anyref}} : tribute_rt.anyref
-      %7 = adt.struct_get %6 {field = 0, type = adt.struct() {fields = [[@0, tribute_rt.anyref], [@1, tribute_rt.anyref]], name = @__tuple_anyref_anyref}} : tribute_rt.anyref
-      %8 = adt.struct_get %6 {field = 1, type = adt.struct() {fields = [[@0, tribute_rt.anyref], [@1, tribute_rt.anyref]], name = @__tuple_anyref_anyref}} : tribute_rt.anyref
+      %3 = adt.struct_new %1, %2 {type = !__tuple_i32_i32} : adt.typeref() {name = @__tuple_i32_i32}
+      %4 = adt.struct_new %0, %3 {type = !__tuple_i32_anyref} : adt.typeref() {name = @__tuple_i32_anyref}
+      %5 = adt.struct_get %4 {field = 0, type = !__tuple_i32_anyref} : core.i32
+      %6 = adt.struct_get %4 {field = 1, type = !__tuple_i32_anyref} : tribute_rt.anyref
+      %7 = adt.struct_get %6 {field = 0, type = !__tuple_anyref_anyref} : tribute_rt.anyref
+      %8 = adt.struct_get %6 {field = 1, type = !__tuple_anyref_anyref} : tribute_rt.anyref
       %9 = arith.add %5, %7 : core.i32
       %10 = arith.add %9, %8 : core.i32
       func.return %10

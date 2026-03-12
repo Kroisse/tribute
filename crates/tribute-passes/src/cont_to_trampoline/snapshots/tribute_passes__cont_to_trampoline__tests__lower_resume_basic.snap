@@ -1,15 +1,18 @@
 ---
 source: crates/tribute-passes/src/cont_to_trampoline/tests.rs
+assertion_line: 50
 expression: result
 ---
 core.module @test {
+  !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker})
+
   func.func @test_resume(%0: core.ptr, %1: core.ptr) -> core.ptr {
     ^bb0:
       trampoline.reset_yield_state
       %2 = trampoline.continuation_get %0 {field = 0} : core.i32
       %3 = trampoline.continuation_get %0 {field = 1} : tribute_rt.anyref
       %4 = trampoline.build_resume_wrapper %3, %1 : trampoline.resume_wrapper
-      %5 = adt.ref_null {type = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker})} : core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker})
+      %5 = adt.ref_null {type = !t0} : !t0
       %6 = func.call_indirect %2, %5, %4 : trampoline.step
       func.return %6
   }

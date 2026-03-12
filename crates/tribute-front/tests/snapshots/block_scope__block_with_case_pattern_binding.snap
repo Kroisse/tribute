@@ -1,18 +1,21 @@
 ---
 source: crates/tribute-front/tests/block_scope.rs
+assertion_line: 122
 expression: ir_text
 ---
 core.module @test {
+  !Option = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
+
   func.func @example(%0: tribute_rt.anyref) -> core.i32 {
     ^bb0:
-      %1 = adt.variant_is %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}} : core.i1
+      %1 = adt.variant_is %0 {tag = @Some, type = !Option} : core.i1
       %2 = scf.if %1 : core.i32 {
-          %3 = adt.variant_cast %0 {tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
-          %4 = adt.variant_get %3 {field = 0, tag = @Some, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}} : tribute_rt.anyref
+          %3 = adt.variant_cast %0 {tag = @Some, type = !Option} : !Option
+          %4 = adt.variant_get %3 {field = 0, tag = @Some, type = !Option} : tribute_rt.anyref
           %5 = core.unrealized_conversion_cast %4 : core.i32
           scf.yield %5
       } {
-          %6 = adt.variant_cast %0 {tag = @None, type = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}} : adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
+          %6 = adt.variant_cast %0 {tag = @None, type = !Option} : !Option
           %7 = arith.const {value = 0} : core.i32
           scf.yield %7
       }

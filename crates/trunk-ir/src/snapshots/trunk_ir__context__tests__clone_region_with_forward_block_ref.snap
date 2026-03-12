@@ -1,8 +1,11 @@
 ---
 source: crates/trunk-ir/src/context.rs
+assertion_line: 1618
 expression: output
 ---
 core.module @test {
+  !t0 = core.func(core.i32)
+
   func.func @original() -> core.i32 {
     ^bb0:
       %0 = arith.const {value = 1} : core.i32

@@ -1,25 +1,31 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 191
 expression: ir_text
 ---
 core.module @test {
+  !Config = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}
+  !Config_1 = adt.typeref() {name = @Config}
+  !t0 = core.func(core.i1, !Config_1)
+  !t1 = core.func(tribute_rt.anyref, tribute_rt.anyref)
+
   core.module @Config {
-    func.func @"test::Config::debug"(%0: adt.typeref() {name = @Config}) -> core.i1 {
+    func.func @"test::Config::debug"(%0: !Config_1) -> core.i1 {
       ^bb0:
-        %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}} : core.i1
+        %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
         func.return %1
     }
-    func.func @"test::Config::verbose"(%0: adt.typeref() {name = @Config}) -> core.i1 {
+    func.func @"test::Config::verbose"(%0: !Config_1) -> core.i1 {
       ^bb0:
-        %1 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}} : core.i1
+        %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
         func.return %1
     }
   }
   func.func @copy_config(%0: tribute_rt.anyref) -> tribute_rt.anyref {
     ^bb0:
-      %1 = adt.struct_get %0 {field = 0, type = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}} : tribute_rt.anyref
-      %2 = adt.struct_get %0 {field = 1, type = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}} : tribute_rt.anyref
-      %3 = adt.struct_new %1, %2 {type = adt.struct() {fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}} : adt.typeref() {name = @Config}
+      %1 = adt.struct_get %0 {field = 0, type = !Config} : tribute_rt.anyref
+      %2 = adt.struct_get %0 {field = 1, type = !Config} : tribute_rt.anyref
+      %3 = adt.struct_new %1, %2 {type = !Config} : !Config_1
       func.return %3
   }
 }

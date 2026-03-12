@@ -1,8 +1,14 @@
 ---
 source: crates/tribute-passes/src/cont_to_libmprompt/tests.rs
+assertion_line: 104
 expression: result
 ---
 core.module @test {
+  !t0 = core.func(core.ptr)
+  !t1 = core.func(core.i32)
+  !t2 = core.func(core.ptr, core.i32, core.ptr, core.ptr)
+  !t3 = core.func(core.ptr, core.i32, core.i32, core.ptr)
+
   func.func @__tribute_next_tag() -> core.i32 {
       func.unreachable
   }

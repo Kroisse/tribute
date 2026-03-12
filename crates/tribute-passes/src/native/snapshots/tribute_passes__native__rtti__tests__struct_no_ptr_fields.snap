@@ -1,12 +1,15 @@
 ---
 source: crates/tribute-passes/src/native/rtti.rs
-assertion_line: 827
+assertion_line: 813
 expression: output
 ---
 core.module @test {
-  func.func @create_struct(%0: core.i32, %1: core.i32) -> adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]} {
+  !t0 = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]}
+  !t1 = core.func(!t0, core.i32, core.i32)
+
+  func.func @create_struct(%0: core.i32, %1: core.i32) -> !t0 {
     ^bb0:
-      %2 = adt.struct_new %0, %1 {type = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]}} : adt.struct() {fields = [[@x, core.i32], [@y, core.i32]]}
+      %2 = adt.struct_new %0, %1 {type = !t0} : !t0
       func.return %2
   }
   clif.func {sym_name = @__tribute_release_32, type = core.func(core.nil, core.ptr)} {

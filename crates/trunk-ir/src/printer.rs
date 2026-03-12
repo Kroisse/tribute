@@ -11,13 +11,15 @@
 //! }
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::Write;
+use std::ops::ControlFlow;
 
 use super::context::IrContext;
 use super::refs::*;
 use super::types::*;
+use super::walk::{WalkAction, walk_region};
 
 /// Print state for value numbering and block labeling.
 struct PrintState<'a> {
@@ -336,6 +338,256 @@ fn write_symbol(f: &mut impl Write, sym: crate::symbol::Symbol) -> fmt::Result {
 }
 
 // ============================================================================
+// Auto alias generation
+// ============================================================================
+
+/// Minimum character complexity for a type to be alias-eligible.
+const MIN_ALIAS_COMPLEXITY: usize = 40;
+
+/// Minimum use count for a type to be alias-eligible.
+const MIN_ALIAS_USES: usize = 2;
+
+/// Collect all TypeRefs used in a module region and count occurrences.
+///
+/// Only counts direct usage sites (result types, block args, attributes).
+/// Does not recurse into type params — nested types become aliased naturally
+/// when their parent is aliased.
+fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, usize> {
+    let mut counts: HashMap<TypeRef, usize> = HashMap::new();
+
+    let _ = walk_region::<()>(ctx, region, &mut |op| {
+        // Result types
+        for &ty in ctx.op_result_types(op) {
+            *counts.entry(ty).or_default() += 1;
+        }
+
+        let data = ctx.op(op);
+
+        // Attributes containing types
+        for attr in data.attributes.values() {
+            count_attr_types(&mut counts, attr);
+        }
+
+        // Block args in regions
+        for &region in &data.regions {
+            for &block in &ctx.region(region).blocks {
+                for arg in &ctx.block(block).args {
+                    *counts.entry(arg.ty).or_default() += 1;
+                }
+            }
+        }
+
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+
+    counts
+}
+
+fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
+    match attr {
+        Attribute::Type(ty) => *counts.entry(*ty).or_default() += 1,
+        Attribute::List(list) => {
+            for item in list {
+                count_attr_types(counts, item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Estimate the printed character length of a type.
+fn type_complexity(ctx: &IrContext, ty: TypeRef) -> usize {
+    let data = ctx.types.get(ty);
+    let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
+    for &param in &data.params {
+        size += type_complexity(ctx, param) + 2; // ", " separator
+    }
+    for (key, val) in &data.attrs {
+        size += key.with_str(|s| s.len()) + 3; // "key = "
+        size += attr_complexity(val);
+    }
+    size
+}
+
+/// Estimate the printed character length of an attribute.
+fn attr_complexity(attr: &Attribute) -> usize {
+    match attr {
+        Attribute::Unit => 4,
+        Attribute::Bool(_) => 5,
+        Attribute::Int(v) => format!("{v}").len(),
+        Attribute::FloatBits(_) => 8,
+        Attribute::String(s) => s.len() + 2,
+        Attribute::Bytes(b) => b.len() * 4 + 7,
+        Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
+        Attribute::Type(_) => 10, // rough estimate; actual depends on type
+        Attribute::List(list) => list.iter().map(attr_complexity).sum::<usize>() + list.len() * 2,
+        Attribute::Location(_) => 20,
+    }
+}
+
+/// Generate auto aliases for types that are used frequently and are complex enough.
+fn generate_auto_aliases(
+    ctx: &IrContext,
+    region: RegionRef,
+    existing: &HashMap<TypeRef, String>,
+) -> Vec<(String, TypeRef)> {
+    let counts = collect_module_types(ctx, region);
+    let mut candidates: Vec<(TypeRef, usize, usize)> = Vec::new();
+
+    for (&ty, &count) in &counts {
+        if existing.contains_key(&ty) {
+            continue;
+        }
+        let data = ctx.types.get(ty);
+        // Skip leaf types (no params, no attrs) — they're already concise
+        if data.params.is_empty() && data.attrs.is_empty() {
+            continue;
+        }
+        let complexity = type_complexity(ctx, ty);
+        if count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY {
+            candidates.push((ty, count, complexity));
+        }
+    }
+
+    // Sort by (count desc, complexity desc, TypeRef asc) for deterministic output
+    candidates.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+
+    // Name assignment
+    let mut used_names: HashSet<String> = existing.values().cloned().collect();
+    let mut next_num = 0usize;
+    let mut result = Vec::new();
+
+    for &(ty, _, _) in &candidates {
+        let name = choose_alias_name(ctx, ty, &used_names, &mut next_num);
+        used_names.insert(name.clone());
+        result.push((name, ty));
+    }
+
+    // Topological sort: if type A references type B, B must come first
+    topological_sort_aliases(ctx, &mut result);
+
+    result
+}
+
+/// Choose an alias name for a type.
+///
+/// 1. Try dialect-provided hint (e.g., `name` attribute on adt.struct)
+/// 2. On conflict, add suffix: `Point`, `Point_1`, `Point_2`, ...
+/// 3. Fallback: `t0`, `t1`, `t2`, ...
+fn choose_alias_name(
+    ctx: &IrContext,
+    ty: TypeRef,
+    used_names: &HashSet<String>,
+    next_num: &mut usize,
+) -> String {
+    if let Some(sym) = crate::op_interface::suggest_type_alias_name(ctx, ty) {
+        let base = sym.with_str(|s| s.to_string());
+        if !used_names.contains(&base) {
+            return base;
+        }
+        // Try with suffix
+        for i in 1.. {
+            let candidate = format!("{base}_{i}");
+            if !used_names.contains(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    // Fallback: t0, t1, ...
+    loop {
+        let name = format!("t{next_num}");
+        *next_num += 1;
+        if !used_names.contains(&name) {
+            return name;
+        }
+    }
+}
+
+/// Topological sort: ensure that if type A references type B, B's alias appears first.
+fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)>) {
+    // Build a set of aliased types for quick lookup
+    let alias_set: HashSet<TypeRef> = aliases.iter().map(|(_, ty)| *ty).collect();
+
+    // For each alias, compute the set of aliased types it depends on
+    let deps: Vec<HashSet<TypeRef>> = aliases
+        .iter()
+        .map(|(_, ty)| {
+            let mut deps = HashSet::new();
+            collect_type_deps(ctx, *ty, &alias_set, &mut deps);
+            deps
+        })
+        .collect();
+
+    // Simple stable topological sort via repeated extraction of dependency-free items
+    let n = aliases.len();
+    let mut sorted: Vec<(String, TypeRef)> = Vec::with_capacity(n);
+    let mut placed: HashSet<TypeRef> = HashSet::new();
+    let mut remaining: Vec<bool> = vec![true; n];
+
+    for _ in 0..n {
+        for i in 0..n {
+            if !remaining[i] {
+                continue;
+            }
+            // Check if all deps are placed
+            if deps[i].iter().all(|d| placed.contains(d)) {
+                remaining[i] = false;
+                placed.insert(aliases[i].1);
+                sorted.push(aliases[i].clone());
+                break;
+            }
+        }
+    }
+
+    // If we placed everything, use sorted order; otherwise keep original (cycle)
+    if sorted.len() == n {
+        *aliases = sorted;
+    }
+}
+
+/// Collect all TypeRefs within `ty` that are in `alias_set` (direct type params only).
+fn collect_type_deps(
+    ctx: &IrContext,
+    ty: TypeRef,
+    alias_set: &HashSet<TypeRef>,
+    deps: &mut HashSet<TypeRef>,
+) {
+    let data = ctx.types.get(ty);
+    for &param in &data.params {
+        if alias_set.contains(&param) {
+            deps.insert(param);
+        }
+        collect_type_deps(ctx, param, alias_set, deps);
+    }
+    // Also check types embedded in attributes
+    for attr in data.attrs.values() {
+        collect_attr_type_deps(ctx, attr, alias_set, deps);
+    }
+}
+
+fn collect_attr_type_deps(
+    ctx: &IrContext,
+    attr: &Attribute,
+    alias_set: &HashSet<TypeRef>,
+    deps: &mut HashSet<TypeRef>,
+) {
+    match attr {
+        Attribute::Type(ty) => {
+            if alias_set.contains(ty) {
+                deps.insert(*ty);
+            }
+            collect_type_deps(ctx, *ty, alias_set, deps);
+        }
+        Attribute::List(list) => {
+            for item in list {
+                collect_attr_type_deps(ctx, item, alias_set, deps);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ============================================================================
 // Operation printing
 // ============================================================================
 
@@ -540,22 +792,37 @@ fn print_module_op(
     if let Some(&region) = regions.first() {
         f.write_str(" {\n")?;
 
-        // Emit type alias definitions
-        let aliases: Vec<_> = state.ctx.type_aliases().to_vec();
-        if !aliases.is_empty() {
-            let inner_indent = format!("{}  ", indent_str);
-            for (name, ty) in &aliases {
-                write!(f, "{inner_indent}")?;
-                write_type_alias_name(f, &name.to_string())?;
-                f.write_str(" = ")?;
-                // Temporarily remove this alias from the map so we print the
-                // full type definition, while earlier aliases can still be used.
-                state.type_alias_names.remove(ty);
-                state.write_type(f, *ty)?;
-                // Re-insert so subsequent aliases and ops can reference it
-                state.type_alias_names.insert(*ty, name.to_string());
-                f.write_char('\n')?;
-            }
+        let inner_indent = format!("{}  ", indent_str);
+
+        // 1. Emit manual type alias definitions
+        let manual_aliases: Vec<_> = state.ctx.type_aliases().to_vec();
+        for (name, ty) in &manual_aliases {
+            write!(f, "{inner_indent}")?;
+            write_type_alias_name(f, &name.to_string())?;
+            f.write_str(" = ")?;
+            // Temporarily remove this alias from the map so we print the
+            // full type definition, while earlier aliases can still be used.
+            state.type_alias_names.remove(ty);
+            state.write_type(f, *ty)?;
+            // Re-insert so subsequent aliases and ops can reference it
+            state.type_alias_names.insert(*ty, name.to_string());
+            f.write_char('\n')?;
+        }
+
+        // 2. Generate and emit auto aliases
+        let auto_aliases = generate_auto_aliases(state.ctx, region, &state.type_alias_names);
+        for (name, ty) in &auto_aliases {
+            write!(f, "{inner_indent}")?;
+            write_type_alias_name(f, name)?;
+            f.write_str(" = ")?;
+            state.write_type(f, *ty)?;
+            // Register so subsequent aliases and ops can reference it
+            state.type_alias_names.insert(*ty, name.clone());
+            f.write_char('\n')?;
+        }
+
+        // Blank line after all alias definitions
+        if !manual_aliases.is_empty() || !auto_aliases.is_empty() {
             f.write_char('\n')?;
         }
 
@@ -1041,6 +1308,264 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out, "-inf");
+    }
+
+    // ====================================================================
+    // Auto alias tests
+    // ====================================================================
+
+    /// Helper: build an `adt.struct` type with given field list and name.
+    fn make_adt_struct(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
+        let field_list: Vec<Attribute> = fields
+            .iter()
+            .map(|(fname, fty)| {
+                Attribute::List(vec![
+                    Attribute::Symbol(Symbol::from_dynamic(fname)),
+                    Attribute::Type(*fty),
+                ])
+            })
+            .collect();
+        let data = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr("fields", Attribute::List(field_list))
+            .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
+            .build();
+        ctx.types.intern(data)
+    }
+
+    /// Helper: build a module with given functions.
+    fn make_module_with_funcs(ctx: &mut IrContext, loc: Location, funcs: Vec<OpRef>) -> OpRef {
+        let mod_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        for func_op in funcs {
+            ctx.push_op(mod_block, func_op);
+        }
+        let mod_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![mod_block],
+            parent_op: None,
+        });
+        core::module(ctx, loc, Symbol::new("test"), mod_region).op_ref()
+    }
+
+    /// Helper: build a function that takes a param and returns it.
+    fn make_identity_func(
+        ctx: &mut IrContext,
+        loc: Location,
+        name: &str,
+        param_ty: TypeRef,
+        ret_ty: TypeRef,
+    ) -> OpRef {
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: param_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let arg = ctx.block_arg(entry, 0);
+        let ret = func::r#return(ctx, loc, [arg]);
+        ctx.push_op(entry, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        let func_ty = make_func_type(ctx, &[param_ty], ret_ty);
+        func::func(ctx, loc, Symbol::from_dynamic(name), func_ty, body).op_ref()
+    }
+
+    #[test]
+    fn test_auto_alias_repeated_type() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        // Create a complex struct type
+        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+
+        // Use it in 3 functions
+        let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
+        let f3 = make_identity_func(&mut ctx, loc, "f3", struct_ty, struct_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
+        let output = print_module(&ctx, module);
+
+        // The struct type should be auto-aliased with its name
+        assert!(
+            output.contains("!Point = adt.struct()"),
+            "Expected auto alias !Point in:\n{output}"
+        );
+        // The functions should reference the alias
+        assert!(
+            output.contains("!Point)"),
+            "Expected !Point reference in:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_auto_alias_simple_type_skipped() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        // Use core.i32 many times - should NOT get aliased (it's a leaf type)
+        let f1 = make_identity_func(&mut ctx, loc, "f1", i32_ty, i32_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", i32_ty, i32_ty);
+        let f3 = make_identity_func(&mut ctx, loc, "f3", i32_ty, i32_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
+        let output = print_module(&ctx, module);
+
+        // core.i32 should NOT be aliased (it's a leaf type with no params/attrs)
+        // The func type may be aliased, but core.i32 itself should appear inline
+        assert!(
+            !output.contains("= core.i32\n"),
+            "core.i32 should not be aliased:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_auto_alias_named_struct() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        // Create a named struct
+        let marker_ty = make_adt_struct(
+            &mut ctx,
+            "_Marker",
+            &[("ability_id", i32_ty), ("prompt_tag", i32_ty)],
+        );
+
+        let f1 = make_identity_func(&mut ctx, loc, "f1", marker_ty, marker_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", marker_ty, marker_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
+        let output = print_module(&ctx, module);
+
+        // Should use the name from the `name` attribute
+        assert!(
+            output.contains("!_Marker = adt.struct()"),
+            "Expected !_Marker alias:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_auto_alias_manual_priority() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+
+        // Manually register this type as an alias
+        ctx.register_type_alias(Symbol::from_dynamic("my_point"), struct_ty);
+
+        let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
+        let output = print_module(&ctx, module);
+
+        // Should use the manual alias, not auto-generate one
+        assert!(
+            output.contains("!my_point = adt.struct()"),
+            "Expected manual alias:\n{output}"
+        );
+        assert!(
+            !output.contains("!Point"),
+            "Should not auto-alias when manual exists:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_auto_alias_roundtrip() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+
+        let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
+        let output1 = print_module(&ctx, module);
+
+        // Parse the output back
+        let mut ctx2 = IrContext::new();
+        let root2 = crate::parser::parse_module(&mut ctx2, &output1).expect("parse failed");
+        let output2 = print_module(&ctx2, root2);
+
+        assert_eq!(output1, output2, "Round-trip mismatch");
+    }
+
+    #[test]
+    fn test_auto_alias_topological() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        // Type B: a simple struct
+        let b_ty = make_adt_struct(&mut ctx, "Inner", &[("val", i32_ty)]);
+        // Type A: references B
+        let a_ty = make_adt_struct(&mut ctx, "Outer", &[("inner", b_ty), ("extra", i32_ty)]);
+
+        // Use both types multiple times
+        let f1 = make_identity_func(&mut ctx, loc, "f1", a_ty, a_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", a_ty, b_ty);
+        let f3 = make_identity_func(&mut ctx, loc, "f3", b_ty, b_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
+        let output = print_module(&ctx, module);
+
+        // B (Inner) should appear before A (Outer) in alias definitions
+        let inner_pos = output.find("!Inner").expect("Expected !Inner alias");
+        let outer_pos = output.find("!Outer").expect("Expected !Outer alias");
+        assert!(
+            inner_pos < outer_pos,
+            "!Inner should come before !Outer for topological ordering:\n{output}"
+        );
+        // Outer's definition should reference !Inner
+        let outer_line = output.lines().find(|l| l.contains("!Outer =")).unwrap();
+        assert!(
+            outer_line.contains("!Inner"),
+            "Outer should reference !Inner:\n{outer_line}"
+        );
+    }
+
+    #[test]
+    fn test_auto_alias_name_conflict() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = make_i32_type(&mut ctx);
+
+        // Two different struct types with the same name attribute
+        let s1_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty)]);
+        let s2_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+
+        let f1 = make_identity_func(&mut ctx, loc, "f1", s1_ty, s1_ty);
+        let f2 = make_identity_func(&mut ctx, loc, "f2", s2_ty, s2_ty);
+
+        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
+        let output = print_module(&ctx, module);
+
+        // Both should exist, one as !Point and other as !Point_1
+        assert!(
+            output.contains("!Point ="),
+            "Expected !Point alias:\n{output}"
+        );
+        assert!(
+            output.contains("!Point_1 ="),
+            "Expected !Point_1 alias for conflict:\n{output}"
+        );
     }
 
     #[test]

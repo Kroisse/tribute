@@ -52,6 +52,48 @@ pub enum Attribute {
     Location(Location),
 }
 
+impl Attribute {
+    /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
+    pub fn as_symbol(&self) -> Option<Symbol> {
+        match self {
+            Attribute::Symbol(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner `TypeRef` if this is `Attribute::Type`.
+    pub fn as_type(&self) -> Option<TypeRef> {
+        match self {
+            Attribute::Type(t) => Some(*t),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner integer if this is `Attribute::Int`.
+    pub fn as_int(&self) -> Option<i128> {
+        match self {
+            Attribute::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner bool if this is `Attribute::Bool`.
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            Attribute::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner string slice if this is `Attribute::String`.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Attribute::String(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
 impl From<i32> for Attribute {
     fn from(value: i32) -> Self {
         Attribute::Int(value as i128)
