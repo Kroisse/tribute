@@ -92,6 +92,31 @@ impl Attribute {
             _ => None,
         }
     }
+
+    /// Estimate the printed character length of this attribute.
+    pub fn print_len(&self) -> usize {
+        match self {
+            Attribute::Unit => 4,
+            Attribute::Bool(_) => 5,
+            Attribute::Int(v) => {
+                // Approximate digit count without allocating
+                if *v == 0 {
+                    1
+                } else {
+                    ((*v as f64).abs().log10() as usize) + 1 + usize::from(*v < 0)
+                }
+            }
+            Attribute::FloatBits(_) => 8,
+            Attribute::String(s) => s.len() + 2,
+            Attribute::Bytes(b) => b.len() * 4 + 7,
+            Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
+            Attribute::Type(_) => 10, // rough estimate; actual depends on type
+            Attribute::List(list) => {
+                list.iter().map(Attribute::print_len).sum::<usize>() + list.len() * 2
+            }
+            Attribute::Location(_) => 20,
+        }
+    }
 }
 
 impl From<i32> for Attribute {
@@ -260,6 +285,20 @@ impl TypeInterner {
     /// Returns `None` if no type with the given data exists.
     pub fn lookup(&self, data: &TypeData) -> Option<TypeRef> {
         self.dedup.get(data).copied()
+    }
+
+    /// Estimate the printed character length of a type.
+    pub fn print_len(&self, ty: TypeRef) -> usize {
+        let data = &self.types[ty];
+        let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
+        for &param in &data.params {
+            size += self.print_len(param) + 2; // ", " separator
+        }
+        for (key, val) in &data.attrs {
+            size += key.with_str(|s| s.len()) + 3; // "key = "
+            size += val.print_len();
+        }
+        size
     }
 }
 

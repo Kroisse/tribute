@@ -395,36 +395,6 @@ fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
     }
 }
 
-/// Estimate the printed character length of a type.
-fn type_complexity(ctx: &IrContext, ty: TypeRef) -> usize {
-    let data = ctx.types.get(ty);
-    let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
-    for &param in &data.params {
-        size += type_complexity(ctx, param) + 2; // ", " separator
-    }
-    for (key, val) in &data.attrs {
-        size += key.with_str(|s| s.len()) + 3; // "key = "
-        size += attr_complexity(val);
-    }
-    size
-}
-
-/// Estimate the printed character length of an attribute.
-fn attr_complexity(attr: &Attribute) -> usize {
-    match attr {
-        Attribute::Unit => 4,
-        Attribute::Bool(_) => 5,
-        Attribute::Int(v) => format!("{v}").len(),
-        Attribute::FloatBits(_) => 8,
-        Attribute::String(s) => s.len() + 2,
-        Attribute::Bytes(b) => b.len() * 4 + 7,
-        Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
-        Attribute::Type(_) => 10, // rough estimate; actual depends on type
-        Attribute::List(list) => list.iter().map(attr_complexity).sum::<usize>() + list.len() * 2,
-        Attribute::Location(_) => 20,
-    }
-}
-
 /// Generate auto aliases for types that are used frequently and are complex enough.
 fn generate_auto_aliases(
     ctx: &IrContext,
@@ -443,7 +413,7 @@ fn generate_auto_aliases(
         if crate::op_interface::suggest_type_alias_name(ctx, ty).is_none() {
             continue;
         }
-        let complexity = type_complexity(ctx, ty);
+        let complexity = ctx.types.print_len(ty);
         if count >= MIN_ALIAS_USES || complexity >= MIN_ALIAS_COMPLEXITY {
             candidates.push((ty, count, complexity));
         }
