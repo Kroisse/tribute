@@ -577,10 +577,10 @@ fn is_type_alias_def(input: &str) -> bool {
         return false;
     }
     let rest = &input[1..];
-    let after_name = if rest.starts_with('"') {
+    let after_name = if let Some(quoted) = rest.strip_prefix('"') {
         // Quoted: skip to closing quote (simplified — no escape handling needed for lookahead)
-        match rest[1..].find('"') {
-            Some(end) => &rest[end + 2..],
+        match quoted.find('"') {
+            Some(end) => &quoted[end + 1..],
             None => return false,
         }
     } else {
