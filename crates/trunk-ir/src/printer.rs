@@ -438,9 +438,9 @@ fn generate_auto_aliases(
         if existing.contains_key(&ty) {
             continue;
         }
-        let data = ctx.types.get(ty);
-        // Skip leaf types (no params, no attrs) — they're already concise
-        if data.params.is_empty() && data.attrs.is_empty() {
+        // Only auto-alias types that have a dialect-provided name hint.
+        // Generic fallback names (t0, t1, ...) don't improve readability.
+        if crate::op_interface::suggest_type_alias_name(ctx, ty).is_none() {
             continue;
         }
         let complexity = type_complexity(ctx, ty);
@@ -1423,11 +1423,11 @@ mod tests {
         let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2, f3]);
         let output = print_module(&ctx, module);
 
-        // core.i32 should NOT be aliased (it's a leaf type with no params/attrs)
-        // The func type may be aliased, but core.i32 itself should appear inline
+        // No auto aliases should be generated — core.i32 is a leaf type and
+        // core.func has no dialect-provided name hint
         assert!(
-            !output.contains("= core.i32\n"),
-            "core.i32 should not be aliased:\n{output}"
+            !output.contains('!'),
+            "No types should be aliased:\n{output}"
         );
     }
 

@@ -6,7 +6,6 @@ expression: ir_text
 core.module @test {
   !Pair = adt.struct() {fields = [[@first, tribute_rt.anyref], [@second, tribute_rt.anyref]], name = @Pair}
   !Pair_1 = adt.typeref() {name = @Pair}
-  !t0 = core.func(tribute_rt.anyref, !Pair_1)
 
   core.module @Pair {
     func.func @"test::Pair::first"(%0: !Pair_1) -> tribute_rt.anyref {

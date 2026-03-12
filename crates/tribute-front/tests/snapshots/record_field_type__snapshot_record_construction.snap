@@ -6,7 +6,6 @@ expression: ir_text
 core.module @test {
   !Point = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}
   !Point_1 = adt.typeref() {name = @Point}
-  !t0 = core.func(core.i32, !Point_1)
 
   core.module @Point {
     func.func @"test::Point::x"(%0: !Point_1) -> core.i32 {

@@ -4,8 +4,6 @@ assertion_line: 1601
 expression: output
 ---
 core.module @test {
-  !t0 = core.func(core.i32, core.i1)
-
   func.func @original(%0: core.i1) -> core.i32 {
     ^bb0:
       %1 = scf.if %0 : core.i32 {

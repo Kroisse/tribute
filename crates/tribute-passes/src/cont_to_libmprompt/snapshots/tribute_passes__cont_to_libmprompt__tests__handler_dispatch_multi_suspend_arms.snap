@@ -4,12 +4,6 @@ assertion_line: 365
 expression: result
 ---
 core.module @test {
-  !t0 = core.func(core.i32)
-  !t1 = core.func(core.ptr, core.ptr)
-  !t2 = core.func(core.ptr)
-  !t3 = core.func(core.ptr, core.i32, core.ptr, core.ptr)
-  !t4 = core.func(core.ptr, core.i32, core.i32, core.ptr)
-
   func.func @__tribute_next_tag() -> core.i32 {
       func.unreachable
   }

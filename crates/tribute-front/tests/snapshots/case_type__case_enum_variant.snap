@@ -5,7 +5,6 @@ expression: ir_text
 ---
 core.module @test {
   !Option = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
-  !t0 = core.func(core.i32, tribute_rt.anyref, core.i32)
 
   func.func @unwrap_or(%0: tribute_rt.anyref, %1: core.i32) -> core.i32 {
     ^bb0:
