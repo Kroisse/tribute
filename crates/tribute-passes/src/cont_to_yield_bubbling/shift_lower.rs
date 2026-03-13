@@ -6,14 +6,13 @@
 //! 3. Create ShiftInfo with value, prompt tag, op_idx, and continuation
 //! 4. Return `YieldResult::Shift(shift_info)`
 
-use std::collections::HashMap;
-
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;
 use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
+use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::location::Span;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -201,7 +200,7 @@ impl RewritePattern for LowerShiftPattern {
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
-        let const_op = arena_func::constant(ctx, location, t.i32, resume_name_sym);
+        let const_op = arena_func::constant(ctx, location, t.ptr, resume_name_sym);
         let resume_fn_val = const_op.result(ctx);
         ops.push(const_op.op_ref());
 
@@ -294,11 +293,13 @@ pub(crate) fn create_resume_function(
     let name = Symbol::from_dynamic(&spec.name);
 
     // Function type: (evidence, anyref) -> YieldResult
+    // Use Layout A: params[0] = return type, params[1..] = parameter types
+    // (Cranelift backend's translate_signature expects Layout A)
     let func_ty_ref = ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+            .param(types.yield_result)
             .param(evidence_ty)
             .param(types.anyref)
-            .attr("result", Attribute::Type(types.yield_result))
             .build(),
     );
 
@@ -321,7 +322,7 @@ pub(crate) fn create_resume_function(
 
     let wrapper_arg = ctx.block_args(body_block)[1];
 
-    let mut value_map: HashMap<ValueRef, ValueRef> = HashMap::new();
+    let mut mapping = IrMapping::new();
 
     // Cast wrapper to ResumeWrapper
     let wrapper_cast =
@@ -349,7 +350,32 @@ pub(crate) fn create_resume_function(
     }
 
     if let Some(shift_result) = spec.shift_result_value {
-        value_map.insert(shift_result, resume_value);
+        mapping.map_value(shift_result, resume_value);
+
+        // After RAUW by replace_op, continuation ops may reference the
+        // replacement value (e.g., adt.variant_new result) instead of the
+        // original shift result. Detect and map the RAUW'd value.
+        let live_value_set: std::collections::HashSet<ValueRef> =
+            spec.original_live_values.iter().copied().collect();
+        let cont_op_set: std::collections::HashSet<OpRef> =
+            spec.continuation_ops.iter().copied().collect();
+        for &cont_op in &spec.continuation_ops {
+            for &operand in ctx.op_operands(cont_op) {
+                if operand == shift_result || live_value_set.contains(&operand) {
+                    continue;
+                }
+                if mapping.contains_value(operand) {
+                    continue;
+                }
+                // Check if the operand is defined by an op outside the continuation
+                if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(operand)
+                    && !cont_op_set.contains(&def_op)
+                {
+                    // This is the RAUW'd shift result — map to resume_value
+                    mapping.map_value(operand, resume_value);
+                }
+            }
+        }
     }
 
     // Extract state from wrapper (field 0) and restore captured values
@@ -395,11 +421,13 @@ pub(crate) fn create_resume_function(
                 *original_field_type,
             );
             ctx.push_op(body_block, cast.op_ref());
-            value_map.insert(*original_value, cast.result(ctx));
+            mapping.map_value(*original_value, cast.result(ctx));
         }
     }
 
-    // Execute continuation operations with value remapping
+    // Execute continuation operations with value remapping using IrMapping.
+    // clone_op_into_block automatically remaps operands via the mapping and
+    // registers new result↔old result correspondences.
     let mut last_result: Option<ValueRef> = None;
     let mut encountered_shift = false;
 
@@ -407,7 +435,7 @@ pub(crate) fn create_resume_function(
         // Skip func.return - handle final return ourselves
         if arena_func::Return::from_op(ctx, op).is_ok() {
             if let Some(&return_val) = ctx.op_operands(op).first() {
-                last_result = Some(*value_map.get(&return_val).unwrap_or(&return_val));
+                last_result = Some(mapping.lookup_value_or_default(return_val));
             }
             continue;
         }
@@ -452,7 +480,7 @@ pub(crate) fn create_resume_function(
             // Cast live values to anyref and create state
             let mut anyref_vals: Vec<ValueRef> = Vec::new();
             for (v, _ty) in &next_shift_info.live_values {
-                let remapped = *value_map.get(v).unwrap_or(v);
+                let remapped = mapping.lookup_value_or_default(*v);
                 let cast =
                     arena_core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
                 ctx.push_op(body_block, cast.op_ref());
@@ -466,7 +494,7 @@ pub(crate) fn create_resume_function(
 
             // Resume function reference
             let resume_name_sym = Symbol::from_dynamic(next_resume_name);
-            let const_op = arena_func::constant(ctx, location, types.i32, resume_name_sym);
+            let const_op = arena_func::constant(ctx, location, types.ptr, resume_name_sym);
             ctx.push_op(body_block, const_op.op_ref());
 
             // Continuation struct
@@ -490,7 +518,7 @@ pub(crate) fn create_resume_function(
 
             // Shift value
             let sv = if let Some(sv_operand) = shift_value_operand {
-                let remapped = *value_map.get(&sv_operand).unwrap_or(&sv_operand);
+                let remapped = mapping.lookup_value_or_default(sv_operand);
                 let cast =
                     arena_core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
                 ctx.push_op(body_block, cast.op_ref());
@@ -502,7 +530,7 @@ pub(crate) fn create_resume_function(
             };
 
             // Prompt tag
-            let tag_val = *value_map.get(&tag_operand).unwrap_or(&tag_operand);
+            let tag_val = mapping.lookup_value_or_default(tag_operand);
             let prompt_val =
                 arena_core::unrealized_conversion_cast(ctx, location, tag_val, types.i32);
             ctx.push_op(body_block, prompt_val.op_ref());
@@ -549,51 +577,12 @@ pub(crate) fn create_resume_function(
             break;
         }
 
-        // Remap operands and clone operation
-        let old_operands = ctx.op_operands(op).to_vec();
-        let remapped_operands: Vec<ValueRef> = old_operands
-            .iter()
-            .map(|&v| *value_map.get(&v).unwrap_or(&v))
-            .collect();
+        // Clone operation into the resume function body using IrMapping
+        let new_op = ctx.clone_op_into_block(body_block, op, &mut mapping);
 
-        let needs_rebuild = remapped_operands != old_operands;
-        if needs_rebuild {
-            let op_data = ctx.op(op);
-            let mut builder = trunk_ir::context::OperationDataBuilder::new(
-                op_data.location,
-                op_data.dialect,
-                op_data.name,
-            )
-            .operands(remapped_operands)
-            .results(ctx.op_result_types(op).to_vec());
-            for (k, v) in &op_data.attributes {
-                builder = builder.attr(*k, v.clone());
-            }
-            for &r in &op_data.regions {
-                builder = builder.region(r);
-            }
-            let new_data = builder.build(ctx);
-            let new_op = ctx.create_op(new_data);
-            ctx.push_op(body_block, new_op);
-
-            let old_results = ctx.op_results(op).to_vec();
-            let new_results = ctx.op_results(new_op).to_vec();
-            for (old_r, new_r) in old_results.iter().zip(new_results.iter()) {
-                if old_r != new_r {
-                    value_map.insert(*old_r, *new_r);
-                }
-            }
-
-            let new_results = ctx.op_results(new_op);
-            if !new_results.is_empty() {
-                last_result = Some(new_results[0]);
-            }
-        } else {
-            ctx.push_op(body_block, op);
-            let results = ctx.op_results(op);
-            if !results.is_empty() {
-                last_result = Some(results[0]);
-            }
+        let new_results = ctx.op_results(new_op);
+        if !new_results.is_empty() {
+            last_result = Some(new_results[0]);
         }
     }
 

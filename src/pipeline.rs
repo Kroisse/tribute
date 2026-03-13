@@ -435,13 +435,15 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     evidence::transform_evidence_calls(&mut ctx, m);
     tribute_passes::tail_resumptive::convert_tail_resumptive(&mut ctx, m);
     tribute_passes::resolve_evidence::resolve_evidence_dispatch(&mut ctx, m);
-    tribute_passes::tr_dispatch::insert_tr_dispatch(&mut ctx, m);
 
     Some((ctx, m))
 }
 
 /// Run the WASM target pipeline in arena and return IR text for dump-ir.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+    // TR dispatch is needed for the trampoline backend
+    tribute_passes::tr_dispatch::insert_tr_dispatch(ctx, m);
+
     lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
@@ -462,12 +464,22 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 
 /// Run the native target pipeline in arena (shared + native-specific passes).
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
-    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(ctx, m);
+    if let Err(illegal_ops) =
+        tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m)
+    {
+        tracing::error!(
+            "cont_to_yield_bubbling left illegal ops: {:?}",
+            illegal_ops
+                .iter()
+                .map(|op| format!("{}.{}", op.dialect, op.name))
+                .collect::<Vec<_>>()
+        );
+    }
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
-                "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
+                "Value integrity errors after cont_to_yield_bubbling: stale={:?}, use_chain={:?}",
                 result.stale_errors,
                 result.use_chain_errors
             );
@@ -525,7 +537,9 @@ pub fn dump_ir(
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
 
-    // WASM-specific: cont_to_trampoline + DCE + resolve_casts
+    // WASM-specific: tr_dispatch + cont_to_trampoline + DCE + resolve_casts
+    tribute_passes::tr_dispatch::insert_tr_dispatch(&mut ctx, m);
+
     if let Err(e) = lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
@@ -693,13 +707,31 @@ pub fn compile_to_native_binary<'db>(
 ) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
 
-    // Native-specific: cont_to_libmprompt + evidence_to_native + DCE + resolve_casts
-    tribute_passes::cont_to_libmprompt::lower_cont_to_libmprompt(&mut ctx, m);
+    // Native-specific: cont_to_yield_bubbling + evidence_to_native + DCE + resolve_casts
+    if let Err(illegal_ops) =
+        tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(&mut ctx, m)
+    {
+        Diagnostic {
+            message: format!(
+                "Pipeline failed: illegal ops after cont_to_yield_bubbling: {}",
+                illegal_ops
+                    .iter()
+                    .map(|op| format!("{}.{}", op.dialect, op.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            span: Span::new(0, 0),
+            severity: DiagnosticSeverity::Error,
+            phase: CompilationPhase::Lowering,
+        }
+        .accumulate(db);
+        return None;
+    }
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(&ctx, m);
         if !result.is_ok() {
             tracing::warn!(
-                "Value integrity errors after cont_to_libmprompt: stale={:?}, use_chain={:?}",
+                "Value integrity errors after cont_to_yield_bubbling: stale={:?}, use_chain={:?}",
                 result.stale_errors,
                 result.use_chain_errors
             );

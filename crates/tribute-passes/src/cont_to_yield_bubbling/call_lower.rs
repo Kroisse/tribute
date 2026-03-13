@@ -38,6 +38,8 @@ pub(crate) struct ChainFuncSpec {
     pub(crate) original_live_types: Vec<TypeRef>,
     /// Original values of live variables (for remapping in chain function)
     pub(crate) original_live_values: Vec<ValueRef>,
+    /// Block args from the original function (evidence param, etc.) for remapping
+    pub(crate) original_block_args: Vec<ValueRef>,
     /// The original call result value (to remap)
     pub(crate) call_result_value: ValueRef,
     /// The original call result type (before YieldResult conversion)
@@ -60,6 +62,8 @@ pub(crate) struct OpSnapshot {
     pub(crate) dialect: Symbol,
     pub(crate) name: Symbol,
     pub(crate) operands: Vec<ValueRef>,
+    /// Original result ValueRefs — used to map old→new results when cloning
+    pub(crate) result_values: Vec<ValueRef>,
     pub(crate) result_types: Vec<TypeRef>,
     pub(crate) attributes: Vec<(Symbol, Attribute)>,
     pub(crate) regions: Vec<RegionRef>,
@@ -255,6 +259,9 @@ fn expand_first_effectful_call(
     let state_name = Symbol::from_dynamic(&state_name_str);
     let state_type = adt_struct_type(ctx, state_name, &state_fields);
 
+    // Capture original block args for remapping in chain function
+    let original_block_args = ctx.block_args(block).to_vec();
+
     // Record chain spec
     chain_specs.borrow_mut().push(ChainFuncSpec {
         name: chain_name.clone(),
@@ -262,6 +269,7 @@ fn expand_first_effectful_call(
         state_fields: state_fields.clone(),
         original_live_types: live_vars.iter().map(|(_, ty)| *ty).collect(),
         original_live_values: live_vars.iter().map(|(v, _)| *v).collect(),
+        original_block_args,
         call_result_value: call_result,
         call_result_type: original_result_ty,
         remaining_op_snapshots: snapshots,
@@ -589,7 +597,7 @@ fn build_inline_shift_branch(
     ctx.push_op(block, state_anyref.op_ref());
 
     // Create chained Continuation { resume_fn: chain_fn, state: state_anyref }
-    let chain_fn_const = arena_func::constant(ctx, location, types.i32, chain_name);
+    let chain_fn_const = arena_func::constant(ctx, location, types.ptr, chain_name);
     ctx.push_op(block, chain_fn_const.op_ref());
 
     let chained_cont = arena_adt::struct_new(
@@ -681,11 +689,12 @@ pub(crate) fn create_chain_function(
     let name = Symbol::from_dynamic(&spec.name);
 
     // Function type: (evidence, anyref) -> YieldResult
+    // Use Layout A: params[0] = return type, params[1..] = parameter types
     let func_ty_ref = ctx.types.intern(
         TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+            .param(types.yield_result)
             .param(evidence_ty)
             .param(types.anyref)
-            .attr("result", Attribute::Type(types.yield_result))
             .build(),
     );
 
@@ -797,12 +806,12 @@ pub(crate) fn create_chain_function(
     );
     ctx.push_op(body_block, inner_cont_cast.op_ref());
 
-    // Extract resume_fn (field 0)
+    // Extract resume_fn (field 0) — typed as core.ptr (not RC-managed)
     let get_fn = arena_adt::struct_get(
         ctx,
         location,
         inner_cont_cast.result(ctx),
-        types.i32,
+        types.ptr,
         types.continuation,
         0,
     );
@@ -862,7 +871,8 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, is_done.op_ref());
 
     // === Done branch: extract value, run remaining ops ===
-    let done_branch = build_chain_done_branch(ctx, location, inner_yr_val, spec, types, &value_map);
+    let done_branch =
+        build_chain_done_branch(ctx, location, inner_yr_val, spec, types, &value_map, ev_arg);
 
     // === Shift branch: re-chain ===
     let shift_branch = build_chain_shift_branch(
@@ -913,6 +923,7 @@ fn build_chain_done_branch(
     spec: &ChainFuncSpec,
     types: &YieldBubblingTypes,
     base_remap: &HashMap<ValueRef, ValueRef>,
+    chain_ev_arg: ValueRef,
 ) -> RegionRef {
     let block = ctx.create_block(BlockData {
         location,
@@ -947,9 +958,18 @@ fn build_chain_done_branch(
         get_val.result(ctx)
     };
 
-    // Build value map: base_remap + call_result → unwrapped
+    // Build value map: base_remap + call_result → unwrapped + block_arg mappings
     let mut remap = base_remap.clone();
     remap.insert(spec.call_result_value, unwrapped);
+
+    // Map original block args → chain function's evidence arg
+    // The first block arg is typically the evidence parameter.
+    // Block args that are live vars are already in base_remap, but
+    // they might also be used directly in snapshot operands.
+    for &block_arg in &spec.original_block_args {
+        // Default: map to evidence arg (first block arg is typically evidence)
+        remap.entry(block_arg).or_insert(chain_ev_arg);
+    }
 
     // Clone remaining ops from snapshots
     let mut last_value: Option<ValueRef> = None;
@@ -1007,11 +1027,16 @@ fn build_chain_done_branch(
         let new_data = builder.build(ctx);
         let new_op = ctx.create_op(new_data);
 
-        // Map old results to new
-        // We don't have old result ValueRefs in the snapshot, so we use the operand-based
-        // approach: track by original op's result positions
         ctx.push_op(block, new_op);
-        let new_results = ctx.op_results(new_op);
+        let new_results = ctx.op_results(new_op).to_vec();
+
+        // Map old result ValueRefs → new result ValueRefs for subsequent ops
+        for (old_r, new_r) in snap.result_values.iter().zip(new_results.iter()) {
+            if old_r != new_r {
+                remap.insert(*old_r, *new_r);
+            }
+        }
+
         if !new_results.is_empty() {
             last_value = Some(new_results[0]);
         }
@@ -1119,7 +1144,7 @@ fn build_chain_shift_branch(
 
     // Self-reference: func.constant @__chain_N
     let self_name = Symbol::from_dynamic(&spec.name);
-    let chain_fn = arena_func::constant(ctx, location, types.i32, self_name);
+    let chain_fn = arena_func::constant(ctx, location, types.ptr, self_name);
     ctx.push_op(block, chain_fn.op_ref());
 
     // Build new Continuation
@@ -1242,6 +1267,7 @@ fn snapshot_op(ctx: &IrContext, op: OpRef) -> OpSnapshot {
         dialect: data.dialect,
         name: data.name,
         operands: ctx.op_operands(op).to_vec(),
+        result_values: ctx.op_results(op).to_vec(),
         result_types: ctx.op_result_types(op).to_vec(),
         attributes: data
             .attributes

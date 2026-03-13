@@ -58,9 +58,9 @@ impl RewritePattern for LowerResumePattern {
             arena_core::unrealized_conversion_cast(ctx, location, k_operand, t.continuation);
         ops.push(k_cast.op_ref());
 
-        // Extract resume_fn (field 0)
+        // Extract resume_fn (field 0) — typed as core.ptr (not RC-managed)
         let get_fn =
-            arena_adt::struct_get(ctx, location, k_cast.result(ctx), t.i32, t.continuation, 0);
+            arena_adt::struct_get(ctx, location, k_cast.result(ctx), t.ptr, t.continuation, 0);
         ops.push(get_fn.op_ref());
 
         // Extract state (field 1)
@@ -285,6 +285,8 @@ impl RewritePattern for LowerPushPromptPattern {
                 if arena_scf::Yield::from_op(ctx, body_op).is_ok() {
                     continue;
                 }
+                // Detach from the original block before re-inserting
+                ctx.detach_op(body_op);
                 all_ops.push(body_op);
             }
         }
@@ -347,6 +349,8 @@ impl RewritePattern for LowerPushPromptPattern {
                 if arena_scf::Yield::from_op(ctx, handler_op).is_ok() {
                     continue;
                 }
+                // Detach from the original block before re-inserting
+                ctx.detach_op(handler_op);
                 all_ops.push(handler_op);
             }
         }

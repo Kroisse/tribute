@@ -100,19 +100,32 @@ fn truncate_func_after_shift(
         let func_ty_data = ctx.types.get(func_ty);
 
         if func_ty_data.dialect == Symbol::new("core") && func_ty_data.name == Symbol::new("func") {
-            let original_result = func_ty_data
-                .attrs
-                .get(&Symbol::new("result"))
-                .and_then(|a| match a {
-                    Attribute::Type(t) => Some(*t),
-                    _ => None,
-                });
+            // Detect Layout A (params[0]=return) vs Layout B (attrs.result=return)
+            let has_result_attr = func_ty_data.attrs.contains_key(&Symbol::new("result"));
+            let (original_result, arg_params) = if has_result_attr {
+                // Layout B: params are actual parameters, return type in attrs
+                let ret = func_ty_data
+                    .attrs
+                    .get(&Symbol::new("result"))
+                    .and_then(|a| match a {
+                        Attribute::Type(t) => Some(*t),
+                        _ => None,
+                    });
+                (ret, &func_ty_data.params[..])
+            } else if !func_ty_data.params.is_empty() {
+                // Layout A: params[0] = return type, params[1..] = actual params
+                (Some(func_ty_data.params[0]), &func_ty_data.params[1..])
+            } else {
+                (None, &func_ty_data.params[..])
+            };
 
+            // Build new type in Layout A: params[0] = return type, params[1..] = arg params
+            // (Cranelift backend's translate_signature expects Layout A)
             let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"));
-            for &p in &func_ty_data.params {
+            builder = builder.param(types.yield_result); // return type
+            for &p in arg_params {
                 builder = builder.param(p);
             }
-            builder = builder.attr("result", Attribute::Type(types.yield_result));
             if let Some(Attribute::Type(effect)) = func_ty_data.attrs.get(&Symbol::new("effect")) {
                 builder = builder.attr("effect", Attribute::Type(*effect));
             }

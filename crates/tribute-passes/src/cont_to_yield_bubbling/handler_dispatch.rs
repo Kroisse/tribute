@@ -535,17 +535,21 @@ fn build_arm_region(
     let mut value_remap: std::collections::HashMap<ValueRef, ValueRef> =
         std::collections::HashMap::new();
 
-    // Collect cast ops to skip
+    // Map block args to ShiftInfo fields
+    let ba = ctx.block_args(arm_block).to_vec();
+    let block_arg_set: std::collections::HashSet<ValueRef> = ba.iter().copied().collect();
+
+    // Only skip casts that directly convert block args (continuation, shift_value).
+    // Casts added by LowerResumePattern (e.g., i32→anyref, wrapper→anyref) must be preserved.
     for &op in &original_ops {
         if let Ok(cast) = arena_core::UnrealizedConversionCast::from_op(ctx, op) {
             let cast_input = cast.value(ctx);
-            let cast_output = ctx.op_results(op)[0];
-            value_remap.insert(cast_output, cast_input);
+            if block_arg_set.contains(&cast_input) {
+                let cast_output = ctx.op_results(op)[0];
+                value_remap.insert(cast_output, cast_input);
+            }
         }
     }
-
-    // Map block args to ShiftInfo fields
-    let ba = ctx.block_args(arm_block).to_vec();
     let new_block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -571,9 +575,22 @@ fn build_arm_region(
     // Clone operations with remapping
     let mut last_yr_value: Option<ValueRef> = None;
 
+    // Track which casts were recorded as block-arg casts (to skip in clone loop)
+    let skipped_cast_ops: std::collections::HashSet<OpRef> = original_ops
+        .iter()
+        .filter(|&&op| {
+            if let Ok(cast) = arena_core::UnrealizedConversionCast::from_op(ctx, op) {
+                block_arg_set.contains(&cast.value(ctx))
+            } else {
+                false
+            }
+        })
+        .copied()
+        .collect();
+
     for &op in &original_ops {
-        // Skip unrealized_conversion_cast
-        if arena_core::UnrealizedConversionCast::from_op(ctx, op).is_ok() {
+        // Only skip block-arg casts (not casts added by LowerResumePattern)
+        if skipped_cast_ops.contains(&op) {
             continue;
         }
 
@@ -647,12 +664,19 @@ fn build_arm_region(
                 break;
             }
         } else {
+            ctx.detach_op(op);
             ctx.push_op(new_block, op);
         }
     }
 
-    // Add yield for the result
-    if let Some(yr_val) = last_yr_value {
+    // Add yield for the result (remap through value_remap to avoid stale refs)
+    if let Some(mut yr_val) = last_yr_value {
+        while let Some(&next) = value_remap.get(&yr_val) {
+            if next == yr_val {
+                break;
+            }
+            yr_val = next;
+        }
         let yield_op = arena_scf::r#yield(ctx, location, [yr_val]);
         ctx.push_op(new_block, yield_op.op_ref());
     } else {

@@ -18,12 +18,14 @@ pub(crate) struct YieldBubblingTypes {
     pub(crate) yield_result: TypeRef,
     /// `adt.struct @ShiftInfo { value: anyref, prompt: i32, op_idx: i32, continuation: anyref }`
     pub(crate) shift_info: TypeRef,
-    /// `adt.struct @Continuation { resume_fn: i32, state: anyref }`
+    /// `adt.struct @Continuation { resume_fn: core.ptr, state: anyref }`
     pub(crate) continuation: TypeRef,
     /// `adt.struct @ResumeWrapper { state: anyref, resume_value: anyref }`
     pub(crate) resume_wrapper: TypeRef,
     /// `tribute_rt.anyref`
     pub(crate) anyref: TypeRef,
+    /// `core.ptr` (raw pointer, not RC-managed)
+    pub(crate) ptr: TypeRef,
     /// `core.i32`
     pub(crate) i32: TypeRef,
     /// `core.i1`
@@ -34,11 +36,12 @@ impl YieldBubblingTypes {
     /// Create and intern all yield bubbling types.
     pub(crate) fn new(ctx: &mut IrContext) -> Self {
         let anyref_ty = arena_tribute_rt::anyref(ctx).as_type_ref();
+        let ptr_ty = intern_ptr(ctx);
         let i32_ty = intern_i32(ctx);
         let i1_ty = intern_i1(ctx);
 
         let shift_info_ty = make_shift_info_type(ctx, anyref_ty, i32_ty);
-        let continuation_ty = make_continuation_type(ctx, anyref_ty, i32_ty);
+        let continuation_ty = make_continuation_type(ctx, ptr_ty, anyref_ty);
         let resume_wrapper_ty = make_resume_wrapper_type(ctx, anyref_ty);
         let yield_result_ty = make_yield_result_type(ctx, anyref_ty, shift_info_ty);
 
@@ -48,6 +51,7 @@ impl YieldBubblingTypes {
             continuation: continuation_ty,
             resume_wrapper: resume_wrapper_ty,
             anyref: anyref_ty,
+            ptr: ptr_ty,
             i32: i32_ty,
             i1: i1_ty,
         }
@@ -57,6 +61,12 @@ impl YieldBubblingTypes {
 // ============================================================================
 // Type Construction Helpers
 // ============================================================================
+
+/// Intern `core.ptr` (raw pointer, not RC-managed).
+fn intern_ptr(ctx: &mut IrContext) -> TypeRef {
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
+}
 
 /// Intern `core.i32`.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {
@@ -84,13 +94,18 @@ fn make_shift_info_type(ctx: &mut IrContext, anyref: TypeRef, i32_ty: TypeRef) -
     )
 }
 
-/// Create `adt.struct @Continuation { resume_fn: i32, state: anyref }`.
-fn make_continuation_type(ctx: &mut IrContext, anyref: TypeRef, i32_ty: TypeRef) -> TypeRef {
+/// Create `adt.struct @Continuation { resume_fn: core.ptr, state: anyref }`.
+///
+/// `resume_fn` is typed as `core.ptr` (raw pointer) so the RC insertion pass
+/// does NOT add retain/release operations for function pointers. On native,
+/// `func.constant` produces a code address that must not be treated as a
+/// heap-allocated RC object.
+fn make_continuation_type(ctx: &mut IrContext, ptr_ty: TypeRef, anyref: TypeRef) -> TypeRef {
     adt_struct_type(
         ctx,
         Symbol::new("@Continuation"),
         &[
-            (Symbol::new("resume_fn"), i32_ty),
+            (Symbol::new("resume_fn"), ptr_ty),
             (Symbol::new("state"), anyref),
         ],
     )
