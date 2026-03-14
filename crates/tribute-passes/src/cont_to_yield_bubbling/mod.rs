@@ -251,10 +251,15 @@ pub fn lower_cont_to_yield_bubbling(
     conversion_target.add_legal_op("cont", "suspend");
     conversion_target.add_legal_op("cont", "yield");
 
-    // Generate resume functions from collected specs
-    let specs = resume_specs.borrow();
-    let chain_specs_ref = chain_specs.borrow();
-    if specs.is_empty() && chain_specs_ref.is_empty() {
+    // Generate resume/chain functions and post-process them iteratively.
+    // Newly generated functions may contain effectful calls that need
+    // lower_effectful_calls + wrap_returns, which may produce more chain specs.
+    let module_block = module
+        .first_block(ctx)
+        .expect("expected module first_block for inserting resume funcs");
+
+    // Check if there are any specs to process
+    if resume_specs.borrow().is_empty() && chain_specs.borrow().is_empty() {
         let illegal = conversion_target.verify(ctx, module_body);
         if illegal.is_empty() {
             return Ok(());
@@ -262,37 +267,88 @@ pub fn lower_cont_to_yield_bubbling(
         return Err(illegal);
     }
 
-    // Validate next_resume_name references
-    for spec in specs.iter() {
-        if let Some(ref next_name) = spec.next_resume_name {
-            debug_assert!(
-                specs.iter().any(|s| s.name == *next_name),
-                "resume spec '{}' references next_resume_name '{}' which does not exist",
-                spec.name,
-                next_name,
-            );
+    // Validate next_resume_name references before draining
+    {
+        let specs = resume_specs.borrow();
+        for spec in specs.iter() {
+            if let Some(ref next_name) = spec.next_resume_name {
+                debug_assert!(
+                    specs.iter().any(|s| s.name == *next_name),
+                    "resume spec '{}' references next_resume_name '{}' which does not exist",
+                    spec.name,
+                    next_name,
+                );
+            }
         }
     }
 
-    let resume_funcs: Vec<OpRef> = specs
-        .iter()
-        .map(|spec| shift_lower::create_resume_function(ctx, spec, &types))
-        .collect();
+    // Iterative generation + post-processing loop.
+    // Each iteration drains current specs, generates functions, then
+    // runs lower_effectful_calls + wrap_returns on them. Those passes
+    // may produce new chain specs, so we loop until no new specs appear.
+    let mut effectful_set = (*effectful_funcs).clone();
 
-    let chain_funcs: Vec<OpRef> = chain_specs_ref
-        .iter()
-        .map(|spec| call_lower::create_chain_function(ctx, spec, &types))
-        .collect();
+    loop {
+        let cur_resume: Vec<_> = resume_specs.borrow_mut().drain(..).collect();
+        let cur_chain: Vec<_> = chain_specs.borrow_mut().drain(..).collect();
 
-    // Add resume and chain functions to module body
-    let module_block = module
-        .first_block(ctx)
-        .expect("expected module first_block for inserting resume funcs");
-    for func_op in resume_funcs {
-        ctx.push_op(module_block, func_op);
-    }
-    for func_op in chain_funcs {
-        ctx.push_op(module_block, func_op);
+        if cur_resume.is_empty() && cur_chain.is_empty() {
+            break;
+        }
+
+        // 1) Generate functions
+        let resume_ops: Vec<OpRef> = cur_resume
+            .iter()
+            .map(|s| shift_lower::create_resume_function(ctx, s, &types))
+            .collect();
+        let chain_ops: Vec<OpRef> = cur_chain
+            .iter()
+            .map(|s| call_lower::create_chain_function(ctx, s, &types))
+            .collect();
+
+        // 2) Collect names, add to effectful set
+        let new_names: Vec<Symbol> = cur_resume
+            .iter()
+            .map(|s| Symbol::from_dynamic(&s.name))
+            .chain(cur_chain.iter().map(|s| Symbol::from_dynamic(&s.name)))
+            .collect();
+        for name in &new_names {
+            effectful_set.insert(*name);
+        }
+
+        // 3) Add to module
+        for op in resume_ops {
+            ctx.push_op(module_block, op);
+        }
+        for op in chain_ops {
+            ctx.push_op(module_block, op);
+        }
+
+        // 4) Post-process new functions:
+        //    a) Update effectful call result types to YieldResult
+        let types_update = YieldBubblingTypes::new(ctx);
+        call_lower::update_effectful_call_types_for_funcs(
+            ctx,
+            module,
+            &effectful_set,
+            &types_update,
+            &new_names,
+        );
+        //    b) Expand effectful calls into Done/Shift branches
+        let ef_rc = Rc::new(effectful_set.clone());
+        let types_new = YieldBubblingTypes::new(ctx);
+        call_lower::lower_effectful_calls_for_funcs(
+            ctx,
+            module,
+            &ef_rc,
+            &types_new,
+            &chain_specs,
+            &chain_counter,
+            module_name,
+            &new_names,
+        );
+        let types_wrap = YieldBubblingTypes::new(ctx);
+        wrap_returns::wrap_returns_for_funcs(ctx, module, &new_names, &types_wrap);
     }
 
     let illegal = conversion_target.verify(ctx, module_body);

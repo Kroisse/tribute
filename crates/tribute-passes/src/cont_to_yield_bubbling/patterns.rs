@@ -17,10 +17,39 @@ use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::dialect::scf as arena_scf;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, ValueRef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
 use super::types::{YieldBubblingTypes, is_yield_result_type};
+
+/// Find the evidence value from the nearest parent function's entry block.
+/// Walks up the IR tree: op → parent_block → parent_region → parent_op → ...
+/// until it finds a func.func, then returns its first block arg (evidence).
+fn find_parent_evidence(ctx: &IrContext, op: OpRef, evidence_ty: TypeRef) -> Option<ValueRef> {
+    let mut current_op = op;
+    loop {
+        let Some(parent_block) = ctx.op(current_op).parent_block else {
+            return None;
+        };
+        let Some(parent_region) = ctx.block(parent_block).parent_region else {
+            return None;
+        };
+        let Some(parent_op) = ctx.region(parent_region).parent_op else {
+            return None;
+        };
+        if arena_func::Func::from_op(ctx, parent_op).is_ok() {
+            // Found the parent function — get entry block's first arg (evidence)
+            let body = ctx.op(parent_op).regions[0];
+            let entry_block = ctx.region(body).blocks[0];
+            let args = ctx.block_args(entry_block);
+            if !args.is_empty() && ctx.value_ty(args[0]) == evidence_ty {
+                return Some(args[0]);
+            }
+            return None;
+        }
+        current_op = parent_op;
+    }
+}
 
 // ============================================================================
 // Pattern: Lower cont.resume → call_indirect via Continuation struct
@@ -95,17 +124,22 @@ impl RewritePattern for LowerResumePattern {
             arena_core::unrealized_conversion_cast(ctx, location, wrapper.result(ctx), t.anyref);
         ops.push(wrapper_anyref.op_ref());
 
-        // Get evidence (use a null evidence for now — evidence is passed through separately)
+        // Get evidence from parent function's entry block args.
         let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-        let null_ev = arena_adt::ref_null(ctx, location, evidence_ty, evidence_ty);
-        ops.push(null_ev.op_ref());
+        let ev_value = if let Some(ev) = find_parent_evidence(ctx, op, evidence_ty) {
+            ev
+        } else {
+            let null_ev = arena_adt::ref_null(ctx, location, evidence_ty, evidence_ty);
+            ops.push(null_ev.op_ref());
+            null_ev.result(ctx)
+        };
 
         // call_indirect(resume_fn, evidence, wrapper) -> YieldResult
         let call = arena_func::call_indirect(
             ctx,
             location,
             get_fn.result(ctx),
-            vec![null_ev.result(ctx), wrapper_anyref.result(ctx)],
+            vec![ev_value, wrapper_anyref.result(ctx)],
             t.yield_result,
         );
         ops.push(call.op_ref());

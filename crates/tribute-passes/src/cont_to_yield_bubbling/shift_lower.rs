@@ -379,6 +379,9 @@ pub(crate) fn create_resume_function(
     }
 
     // Extract state from wrapper (field 0) and restore captured values
+    let ev_arg = ctx.block_args(body_block)[0]; // evidence parameter
+    let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
+
     if !spec.state_fields.is_empty() {
         let get_state = arena_adt::struct_get(
             ctx,
@@ -422,6 +425,19 @@ pub(crate) fn create_resume_function(
             );
             ctx.push_op(body_block, cast.op_ref());
             mapping.map_value(*original_value, cast.result(ctx));
+        }
+    }
+
+    // Override evidence mapping: use the resume function's evidence parameter
+    // instead of the restored-from-state value. After a recursive handler call,
+    // the evidence may have new prompt tags that the restored value lacks.
+    for (original_value, original_type) in spec
+        .original_live_values
+        .iter()
+        .zip(spec.original_field_types.iter())
+    {
+        if *original_type == evidence_ty {
+            mapping.map_value(*original_value, ev_arg);
         }
     }
 

@@ -12,6 +12,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
+use trunk_ir::rewrite::Module;
+
 use super::types::{YieldBubblingTypes, is_yield_result_type};
 
 // ============================================================================
@@ -44,6 +46,35 @@ impl RewritePattern for WrapReturnsPattern {
 
         // Return false - mutated in place, no replacement needed
         false
+    }
+}
+
+/// Wrap returns only in the specified target functions.
+///
+/// Used for post-processing newly generated resume/chain functions.
+pub(crate) fn wrap_returns_for_funcs(
+    ctx: &mut IrContext,
+    module: Module,
+    func_names: &[Symbol],
+    types: &YieldBubblingTypes,
+) {
+    let module_body = match module.body(ctx) {
+        Some(r) => r,
+        None => return,
+    };
+
+    let blocks: Vec<BlockRef> = ctx.region(module_body).blocks.to_vec();
+    for block in blocks {
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        for op in ops {
+            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+                let func_name = func.sym_name(ctx);
+                if func_names.contains(&func_name) {
+                    let body = func.body(ctx);
+                    wrap_returns_in_region(ctx, body, types);
+                }
+            }
+        }
     }
 }
 
