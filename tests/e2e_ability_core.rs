@@ -1124,12 +1124,58 @@ fn main() {
 // Handler Result Transformation Tests
 // =============================================================================
 
+/// Test handler result arm with identity (pass-through).
+///
+/// `pure_value()` returns 10 with no effects. The handler's result arm
+/// just returns result unchanged.
+#[test]
+fn test_handler_result_identity() {
+    let code = r#"ability Ask {
+    fn ask() -> Nat
+}
+
+fn pure_value() ->{Ask} Nat {
+    10
+}
+
+fn main() {
+    let result = handle pure_value() {
+        { result } -> result
+        { Ask::ask() -> k } -> k(0)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_result_identity.trb", code, "10");
+}
+
+/// Test handler result arm that returns a constant.
+#[test]
+fn test_handler_result_constant() {
+    let code = r#"ability Ask {
+    fn ask() -> Nat
+}
+
+fn pure_value() ->{Ask} Nat {
+    10
+}
+
+fn main() {
+    let result = handle pure_value() {
+        { result } -> 42
+        { Ask::ask() -> k } -> k(0)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_result_constant.trb", code, "42");
+}
+
 /// Test handler result arm that transforms the body's return value.
 ///
 /// `pure_value()` returns 10 with no effects. The handler's result arm
 /// doubles it: result + result = 20.
 #[test]
-#[ignore = "handler result arm computation not yet supported — result passes through unchanged"]
 fn test_handler_transforms_result() {
     let code = r#"ability State(s) {
     fn get() -> s
@@ -1328,7 +1374,6 @@ fn main() {
 /// `compute()` does set(5), get()+get() → 10.
 /// Handler result arm adds 1: 10 + 1 = 11.
 #[test]
-#[ignore = "handler result arm computation not yet supported — result passes through unchanged"]
 fn test_handler_result_receives_body_value() {
     let code = r#"ability State(s) {
     fn get() -> s

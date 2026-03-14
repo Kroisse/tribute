@@ -38,8 +38,10 @@ use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 use trunk_ir::types::{Attribute, Location};
 
+use trunk_ir::ir_mapping::IrMapping;
+
 use super::types::{YieldBubblingTypes, is_yield_result_type};
-use crate::cont_util::{SuspendArm, collect_suspend_arms};
+use crate::cont_util::{SuspendArm, collect_suspend_arms, get_done_region};
 
 // ============================================================================
 // Pattern: Lower cont.handler_dispatch
@@ -130,6 +132,7 @@ pub(crate) fn build_handler_dispatch_loop(
         user_result_ty,
         is_in_effectful_func,
         runtime_tag_operand,
+        body_region,
         types,
         effectful_funcs,
     );
@@ -147,6 +150,7 @@ fn build_loop_body(
     user_result_ty: TypeRef,
     is_in_effectful_func: bool,
     runtime_tag_operand: Option<ValueRef>,
+    handler_body_region: RegionRef,
     types: &YieldBubblingTypes,
     effectful_funcs: &HashSet<Symbol>,
 ) -> RegionRef {
@@ -182,6 +186,7 @@ fn build_loop_body(
         current_yr,
         user_result_ty,
         is_in_effectful_func,
+        handler_body_region,
         types,
     );
 
@@ -222,6 +227,7 @@ fn build_done_branch(
     current_yr: ValueRef,
     user_result_ty: TypeRef,
     is_in_effectful_func: bool,
+    handler_body_region: RegionRef,
     types: &YieldBubblingTypes,
 ) -> RegionRef {
     let t = types;
@@ -245,21 +251,77 @@ fn build_done_branch(
     ctx.push_op(block, get_val.op_ref());
     let done_value = get_val.result(ctx);
 
+    // Check for cont.done body (result arm: `{ result } -> expr`)
+    let done_region = get_done_region(ctx, handler_body_region);
+
     if is_in_effectful_func {
-        // Re-wrap as YieldResult::Done and break
-        let rewrap = arena_adt::variant_new(
+        if let Some(done_body) = done_region {
+            // Inline the done body, then re-wrap result as YieldResult::Done
+            let result = inline_done_body(
+                ctx,
+                block,
+                location,
+                done_body,
+                done_value,
+                types,
+                user_result_ty,
+            );
+            // Re-wrap as YieldResult::Done
+            let anyref_val =
+                arena_core::unrealized_conversion_cast(ctx, location, result, t.anyref);
+            ctx.push_op(block, anyref_val.op_ref());
+            let rewrap = arena_adt::variant_new(
+                ctx,
+                location,
+                [anyref_val.result(ctx)],
+                t.yield_result,
+                t.yield_result,
+                Symbol::new("Done"),
+            );
+            ctx.push_op(block, rewrap.op_ref());
+            let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+            ctx.push_op(block, break_op.op_ref());
+        } else {
+            // No done body — re-wrap as YieldResult::Done and break
+            let rewrap = arena_adt::variant_new(
+                ctx,
+                location,
+                [done_value],
+                t.yield_result,
+                t.yield_result,
+                Symbol::new("Done"),
+            );
+            ctx.push_op(block, rewrap.op_ref());
+            let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+            ctx.push_op(block, break_op.op_ref());
+        }
+    } else if let Some(done_body) = done_region {
+        // Inline the done body operations
+        let result = inline_done_body(
             ctx,
+            block,
             location,
-            [done_value],
-            t.yield_result,
-            t.yield_result,
-            Symbol::new("Done"),
+            done_body,
+            done_value,
+            types,
+            user_result_ty,
         );
-        ctx.push_op(block, rewrap.op_ref());
-        let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+        // Cast result to user_result_ty if needed
+        let result_value = {
+            let result_ty = ctx.value_ty(result);
+            if result_ty != user_result_ty {
+                let cast =
+                    arena_core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
+                ctx.push_op(block, cast.op_ref());
+                cast.result(ctx)
+            } else {
+                result
+            }
+        };
+        let break_op = arena_scf::r#break(ctx, location, result_value);
         ctx.push_op(block, break_op.op_ref());
     } else {
-        // Cast anyref to user result type
+        // No done body — cast anyref to user result type
         let result_value = if t.anyref != user_result_ty {
             let cast =
                 arena_core::unrealized_conversion_cast(ctx, location, done_value, user_result_ty);
@@ -277,6 +339,100 @@ fn build_done_branch(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     })
+}
+
+/// Inline a `cont.done` body region's operations into the given block.
+///
+/// Maps the done body's block arg (the `result` variable) to `done_value`,
+/// clones all operations except `scf.yield`, and returns the final result value.
+fn inline_done_body(
+    ctx: &mut IrContext,
+    dest_block: BlockRef,
+    location: Location,
+    done_body: RegionRef,
+    done_value: ValueRef,
+    _types: &YieldBubblingTypes,
+    _user_result_ty: TypeRef,
+) -> ValueRef {
+    let done_blocks = &ctx.region(done_body).blocks;
+    let Some(&done_block) = done_blocks.first() else {
+        return done_value;
+    };
+
+    // Map done body's block arg (the `result` variable) to done_value.
+    // The done body's block arg might be anyref (already converted),
+    // but the operations inside (e.g., arith.add) expect the concrete
+    // user type. Infer the actual type from the ops that use the block arg.
+    let mut mapping = IrMapping::new();
+    let done_block_args = ctx.block_args(done_block).to_vec();
+    if !done_block_args.is_empty() {
+        let anyref_ty = ctx.value_ty(done_value);
+
+        // Infer the concrete type the done body expects for the result.
+        // Look at the first op that uses the block arg and check what type
+        // it expects (via its result type for arithmetic, or first operand type).
+        let concrete_ty =
+            infer_done_body_result_type(ctx, done_block, &done_block_args[0]).unwrap_or(anyref_ty);
+
+        let mapped_value = if concrete_ty != anyref_ty {
+            let cast =
+                arena_core::unrealized_conversion_cast(ctx, location, done_value, concrete_ty);
+            ctx.push_op(dest_block, cast.op_ref());
+            cast.result(ctx)
+        } else {
+            done_value
+        };
+        mapping.map_value(done_block_args[0], mapped_value);
+    }
+
+    // Clone operations, collecting the last yielded value
+    let mut final_result = done_value;
+    let done_ops: Vec<OpRef> = ctx.block(done_block).ops.clone().to_vec();
+    for &done_op in &done_ops {
+        if arena_scf::Yield::matches(ctx, done_op) {
+            // scf.yield's operand is the final result
+            let yielded_operands: Vec<ValueRef> = ctx.op_operands(done_op).to_vec();
+            if let Some(&result) = yielded_operands.first() {
+                final_result = mapping.lookup_value_or_default(result);
+            }
+            continue;
+        }
+        let cloned = ctx.clone_op_into_block(dest_block, done_op, &mut mapping);
+        let cloned_results = ctx.op_results(cloned);
+        if !cloned_results.is_empty() {
+            final_result = cloned_results[0];
+        }
+    }
+
+    final_result
+}
+
+/// Infer the concrete result type used in a done body.
+///
+/// The done body's block arg may have type `anyref`, but the operations inside
+/// (e.g., `arith.add`) work on concrete types like `core.i32`. This function
+/// finds the first operation that uses the block arg and returns its result type,
+/// which indicates the concrete type the block arg should be cast to.
+fn infer_done_body_result_type(
+    ctx: &IrContext,
+    done_block: BlockRef,
+    block_arg: &ValueRef,
+) -> Option<TypeRef> {
+    let ops = &ctx.block(done_block).ops;
+    for &op in ops {
+        if arena_scf::Yield::matches(ctx, op) {
+            continue;
+        }
+        let operands = ctx.op_operands(op);
+        let uses_block_arg = operands.iter().any(|&v| v == *block_arg);
+        if uses_block_arg {
+            let result_types = ctx.op_result_types(op);
+            if !result_types.is_empty() {
+                return Some(result_types[0]);
+            }
+        }
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
