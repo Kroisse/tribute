@@ -89,25 +89,15 @@ pub(crate) fn lower_effectful_calls(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
 ) {
-    let module_body = match module.body(ctx) {
-        Some(r) => r,
-        None => return,
-    };
-
-    let module_block = match module.first_block(ctx) {
-        Some(b) => b,
-        None => return,
-    };
-
-    process_effectful_funcs(
+    lower_effectful_calls_impl(
         ctx,
-        module_body,
+        module,
         effectful_funcs,
         types,
         chain_specs,
         chain_counter,
         module_name,
-        module_block,
+        None,
     );
 }
 
@@ -125,6 +115,33 @@ pub(crate) fn lower_effectful_calls_for_funcs(
     module_name: Symbol,
     target_funcs: &[Symbol],
 ) {
+    lower_effectful_calls_impl(
+        ctx,
+        module,
+        effectful_funcs,
+        types,
+        chain_specs,
+        chain_counter,
+        module_name,
+        Some(target_funcs),
+    );
+}
+
+/// Shared implementation: expand effectful calls in effectful functions.
+///
+/// When `target_funcs` is `Some`, only processes the specified functions.
+/// When `None`, processes all effectful functions in the module.
+#[allow(clippy::too_many_arguments)]
+fn lower_effectful_calls_impl(
+    ctx: &mut IrContext,
+    module: Module,
+    effectful_funcs: &Rc<HashSet<Symbol>>,
+    types: &YieldBubblingTypes,
+    chain_specs: &ChainSpecs,
+    chain_counter: &ResumeCounter,
+    module_name: Symbol,
+    target_funcs: Option<&[Symbol]>,
+) {
     let module_body = match module.body(ctx) {
         Some(r) => r,
         None => return,
@@ -139,64 +156,32 @@ pub(crate) fn lower_effectful_calls_for_funcs(
     for block in blocks {
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
         for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if effectful_funcs.contains(&func_name) && target_funcs.contains(&func_name) {
-                    let body = func.body(ctx);
-                    let entry_block = ctx.region(body).blocks[0];
-                    let func_entry_args = ctx.block_args(entry_block).to_vec();
-                    expand_calls_in_region(
-                        ctx,
-                        body,
-                        effectful_funcs,
-                        types,
-                        chain_specs,
-                        chain_counter,
-                        module_name,
-                        module_block,
-                        &func_entry_args,
-                    );
+            let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+                continue;
+            };
+            let func_name = func.sym_name(ctx);
+            if !effectful_funcs.contains(&func_name) {
+                continue;
+            }
+            if let Some(targets) = target_funcs {
+                if !targets.contains(&func_name) {
+                    continue;
                 }
             }
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn process_effectful_funcs(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    types: &YieldBubblingTypes,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
-    module_block: BlockRef,
-) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if effectful_funcs.contains(&func_name) {
-                    let body = func.body(ctx);
-                    // Capture function entry block args (evidence param, etc.)
-                    let entry_block = ctx.region(body).blocks[0];
-                    let func_entry_args = ctx.block_args(entry_block).to_vec();
-                    expand_calls_in_region(
-                        ctx,
-                        body,
-                        effectful_funcs,
-                        types,
-                        chain_specs,
-                        chain_counter,
-                        module_name,
-                        module_block,
-                        &func_entry_args,
-                    );
-                }
-            }
+            let body = func.body(ctx);
+            let entry_block = ctx.region(body).blocks[0];
+            let func_entry_args = ctx.block_args(entry_block).to_vec();
+            expand_calls_in_region(
+                ctx,
+                body,
+                effectful_funcs,
+                types,
+                chain_specs,
+                chain_counter,
+                module_name,
+                module_block,
+                &func_entry_args,
+            );
         }
     }
 }
@@ -487,36 +472,9 @@ fn build_inline_done_branch(
     for &op in remaining_ops {
         // Handle func.return → scf.yield(Done(value))
         if arena_func::Return::from_op(ctx, op).is_ok() {
-            let operands = ctx.op_operands(op).to_vec();
-            if let Some(&ret_val) = operands.first() {
+            if let Some(&ret_val) = ctx.op_operands(op).first() {
                 let remapped = resolve_remap(&remap, ret_val);
-                let ret_ty = ctx.value_ty(remapped);
-
-                if is_yield_result_type(ctx, ret_ty) {
-                    // Already YieldResult, just yield it
-                    let yield_op = arena_scf::r#yield(ctx, location, [remapped]);
-                    ctx.push_op(block, yield_op.op_ref());
-                } else {
-                    // Wrap in Done
-                    let anyref_val = arena_core::unrealized_conversion_cast(
-                        ctx,
-                        location,
-                        remapped,
-                        types.anyref,
-                    );
-                    ctx.push_op(block, anyref_val.op_ref());
-                    let done_op = arena_adt::variant_new(
-                        ctx,
-                        location,
-                        [anyref_val.result(ctx)],
-                        types.yield_result,
-                        types.yield_result,
-                        Symbol::new("Done"),
-                    );
-                    ctx.push_op(block, done_op.op_ref());
-                    let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
-                    ctx.push_op(block, yield_op.op_ref());
-                }
+                yield_value_or_done(ctx, block, location, remapped, types);
             }
             continue;
         }
@@ -599,26 +557,7 @@ fn build_inline_done_branch(
     };
 
     if !has_yield && let Some(val) = last_value {
-        let val_ty = ctx.value_ty(val);
-        if is_yield_result_type(ctx, val_ty) {
-            let yield_op = arena_scf::r#yield(ctx, location, [val]);
-            ctx.push_op(block, yield_op.op_ref());
-        } else {
-            let anyref_val =
-                arena_core::unrealized_conversion_cast(ctx, location, val, types.anyref);
-            ctx.push_op(block, anyref_val.op_ref());
-            let done_op = arena_adt::variant_new(
-                ctx,
-                location,
-                [anyref_val.result(ctx)],
-                types.yield_result,
-                types.yield_result,
-                Symbol::new("Done"),
-            );
-            ctx.push_op(block, done_op.op_ref());
-            let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
-            ctx.push_op(block, yield_op.op_ref());
-        }
+        yield_value_or_done(ctx, block, location, val, types);
     }
 
     let region = ctx.create_region(RegionData {
@@ -1087,31 +1026,7 @@ fn build_chain_done_branch(
         if snap.dialect == Symbol::new("func") && snap.name == Symbol::new("return") {
             if let Some(&ret_val) = snap.operands.first() {
                 let remapped = resolve_remap(&remap, ret_val);
-                let ret_ty = ctx.value_ty(remapped);
-
-                if is_yield_result_type(ctx, ret_ty) {
-                    let yield_op = arena_scf::r#yield(ctx, location, [remapped]);
-                    ctx.push_op(block, yield_op.op_ref());
-                } else {
-                    let anyref_val = arena_core::unrealized_conversion_cast(
-                        ctx,
-                        location,
-                        remapped,
-                        types.anyref,
-                    );
-                    ctx.push_op(block, anyref_val.op_ref());
-                    let done_op = arena_adt::variant_new(
-                        ctx,
-                        location,
-                        [anyref_val.result(ctx)],
-                        types.yield_result,
-                        types.yield_result,
-                        Symbol::new("Done"),
-                    );
-                    ctx.push_op(block, done_op.op_ref());
-                    let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
-                    ctx.push_op(block, yield_op.op_ref());
-                }
+                yield_value_or_done(ctx, block, location, remapped, types);
             }
             continue;
         }
@@ -1172,26 +1087,7 @@ fn build_chain_done_branch(
     };
 
     if !has_yield && let Some(val) = last_value {
-        let val_ty = ctx.value_ty(val);
-        if is_yield_result_type(ctx, val_ty) {
-            let yield_op = arena_scf::r#yield(ctx, location, [val]);
-            ctx.push_op(block, yield_op.op_ref());
-        } else {
-            let anyref_val =
-                arena_core::unrealized_conversion_cast(ctx, location, val, types.anyref);
-            ctx.push_op(block, anyref_val.op_ref());
-            let done_op = arena_adt::variant_new(
-                ctx,
-                location,
-                [anyref_val.result(ctx)],
-                types.yield_result,
-                types.yield_result,
-                Symbol::new("Done"),
-            );
-            ctx.push_op(block, done_op.op_ref());
-            let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
-            ctx.push_op(block, yield_op.op_ref());
-        }
+        yield_value_or_done(ctx, block, location, val, types);
     }
 
     ctx.create_region(RegionData {
@@ -1399,22 +1295,23 @@ fn snapshot_op(ctx: &IrContext, op: OpRef) -> OpSnapshot {
     }
 }
 
-/// Collect all values used as operands in a set of operations.
+/// Collect all values used as operands in a set of operations (including nested regions).
 fn collect_used_values(ctx: &IrContext, ops: &[OpRef]) -> HashSet<ValueRef> {
+    use std::ops::ControlFlow;
+    use trunk_ir::walk;
+
     let mut used = HashSet::new();
     for &op in ops {
         for &operand in ctx.op_operands(op) {
             used.insert(operand);
         }
-        // Also check nested regions
         for &region in &ctx.op(op).regions {
-            for &block in &ctx.region(region).blocks {
-                for &nested_op in &ctx.block(block).ops {
-                    for &operand in ctx.op_operands(nested_op) {
-                        used.insert(operand);
-                    }
+            let _ = walk::walk_region::<()>(ctx, region, &mut |nested_op| {
+                for &operand in ctx.op_operands(nested_op) {
+                    used.insert(operand);
                 }
-            }
+                ControlFlow::Continue(walk::WalkAction::Advance)
+            });
         }
     }
     used
@@ -1431,4 +1328,36 @@ fn resolve_remap(remap: &HashMap<ValueRef, ValueRef>, val: ValueRef) -> ValueRef
         }
     }
     current
+}
+
+/// Emit `scf.yield` for a value, wrapping in `YieldResult::Done` if needed.
+///
+/// If the value is already a `YieldResult`, yields it directly.
+/// Otherwise, casts to anyref, wraps in `Done`, then yields.
+fn yield_value_or_done(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    location: Location,
+    value: ValueRef,
+    types: &YieldBubblingTypes,
+) {
+    let val_ty = ctx.value_ty(value);
+    if is_yield_result_type(ctx, val_ty) {
+        let yield_op = arena_scf::r#yield(ctx, location, [value]);
+        ctx.push_op(block, yield_op.op_ref());
+    } else {
+        let anyref_val = arena_core::unrealized_conversion_cast(ctx, location, value, types.anyref);
+        ctx.push_op(block, anyref_val.op_ref());
+        let done_op = arena_adt::variant_new(
+            ctx,
+            location,
+            [anyref_val.result(ctx)],
+            types.yield_result,
+            types.yield_result,
+            Symbol::new("Done"),
+        );
+        ctx.push_op(block, done_op.op_ref());
+        let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
+        ctx.push_op(block, yield_op.op_ref());
+    }
 }
