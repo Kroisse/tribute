@@ -1088,3 +1088,264 @@ fn main() {
 "#;
     assert_native_output("multi_ability_single_handler.trb", code, "1");
 }
+
+// =============================================================================
+// Handler Early Return Tests
+// =============================================================================
+
+/// Test handler that discards the continuation (early return).
+///
+/// `might_fail()` calls Fail::fail(), but the handler doesn't call k —
+/// it returns a default value directly, short-circuiting the computation.
+#[test]
+fn test_handler_early_return() {
+    let code = r#"ability Fail {
+    fn fail() -> Nat
+}
+
+fn might_fail() ->{Fail} Nat {
+    let x = Fail::fail()
+    x + 100
+}
+
+fn main() {
+    let result = handle might_fail() {
+        { result } -> result
+        { Fail::fail() -> k } -> 99
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    // Handler returns 99 directly without calling k, so x + 100 is never reached
+    assert_native_output("handler_early_return.trb", code, "99");
+}
+
+// =============================================================================
+// Handler Result Transformation Tests
+// =============================================================================
+
+/// Test handler result arm that transforms the body's return value.
+///
+/// `pure_value()` returns 10 with no effects. The handler's result arm
+/// doubles it: result + result = 20.
+#[test]
+#[ignore = "handler result arm computation not yet supported — result passes through unchanged"]
+fn test_handler_transforms_result() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn pure_value() ->{State(Nat)} Nat {
+    10
+}
+
+fn main() {
+    let result = handle pure_value() {
+        { result } -> result + result
+        { State::get() -> k } -> k(0)
+        { State::set(v) -> k } -> k(Nil)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_transforms_result.trb", code, "20");
+}
+
+// =============================================================================
+// Counter Output Verification Tests
+// =============================================================================
+
+/// Test State::get returns initial value through run_state handler.
+///
+/// Simple get: run_state(fn() { State::get() }, 42) → 42.
+#[test]
+fn test_state_get_returns_initial() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn read() ->{State(Nat)} Nat {
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let result = run_state(fn() { read() }, 42)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("state_get_initial.trb", code, "42");
+}
+
+/// Test State::set followed by get returns the set value.
+///
+/// set(99) then get() → 99.
+#[test]
+fn test_state_set_then_get_value() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn write_read() ->{State(Nat)} Nat {
+    State::set(99)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let result = run_state(fn() { write_read() }, 0)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("state_set_then_get_value.trb", code, "99");
+}
+
+// =============================================================================
+// Triple Nested Handler Tests
+// =============================================================================
+
+/// Test three different abilities with nested handlers.
+///
+/// `use_all()` calls Reader::ask() → 5, Writer::tell(5), State::set(5), State::get() → 5.
+/// Handlers: Reader provides 5, Writer is no-op, State starts at 0.
+/// Expected: 5.
+#[test]
+fn test_three_abilities_nested_handlers() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+ability Reader(r) {
+    fn ask() -> r
+}
+
+ability Writer(w) {
+    fn tell(value: w) -> Nil
+}
+
+fn use_all() ->{State(Nat), Reader(Nat), Writer(Nat)} Nat {
+    let config = Reader::ask()
+    Writer::tell(config)
+    State::set(config)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { Reader::ask() -> k } -> run_reader(fn() { k(value) }, value)
+    }
+}
+
+fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { Writer::tell(v) -> k } -> run_writer(fn() { k(Nil) })
+    }
+}
+
+fn main() {
+    let result = run_reader(fn() {
+        run_writer(fn() {
+            run_state(fn() { use_all() }, 0)
+        })
+    }, 5)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("three_abilities_nested.trb", code, "5");
+}
+
+// =============================================================================
+// State Final Value Tests
+// =============================================================================
+
+/// Test reading final state after multiple mutations.
+///
+/// Performs: set(3), set(get()+10) → set(13), get() → 13.
+#[test]
+fn test_state_multiple_mutations() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn mutate() ->{State(Nat)} Nat {
+    State::set(3)
+    let n = State::get()
+    State::set(n + 10)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() { k(init) }, init)
+        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+    }
+}
+
+fn main() {
+    let result = run_state(fn() { mutate() }, 0)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("state_multiple_mutations.trb", code, "13");
+}
+
+/// Test that handler result arm receives the final computed value.
+///
+/// `compute()` does set(5), get()+get() → 10.
+/// Handler result arm adds 1: 10 + 1 = 11.
+#[test]
+#[ignore = "handler result arm computation not yet supported — result passes through unchanged"]
+fn test_handler_result_receives_body_value() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn compute() ->{State(Nat)} Nat {
+    State::set(5)
+    let a = State::get()
+    let b = State::get()
+    a + b
+}
+
+fn main() {
+    let result = handle compute() {
+        { result } -> result + 1
+        { State::get() -> k } -> k(5)
+        { State::set(v) -> k } -> k(Nil)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_result_body_value.trb", code, "11");
+}
