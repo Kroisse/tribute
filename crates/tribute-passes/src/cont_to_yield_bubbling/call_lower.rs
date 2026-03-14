@@ -163,10 +163,8 @@ fn lower_effectful_calls_impl(
             if !effectful_funcs.contains(&func_name) {
                 continue;
             }
-            if let Some(targets) = target_funcs {
-                if !targets.contains(&func_name) {
-                    continue;
-                }
+            if target_funcs.is_some_and(|targets| !targets.contains(&func_name)) {
+                continue;
             }
             let body = func.body(ctx);
             let entry_block = ctx.region(body).blocks[0];
