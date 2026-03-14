@@ -351,31 +351,6 @@ pub(crate) fn create_resume_function(
 
     if let Some(shift_result) = spec.shift_result_value {
         mapping.map_value(shift_result, resume_value);
-
-        // After RAUW by replace_op, continuation ops may reference the
-        // replacement value (e.g., adt.variant_new result) instead of the
-        // original shift result. Detect and map the RAUW'd value.
-        let live_value_set: std::collections::HashSet<ValueRef> =
-            spec.original_live_values.iter().copied().collect();
-        let cont_op_set: std::collections::HashSet<OpRef> =
-            spec.continuation_ops.iter().copied().collect();
-        for &cont_op in &spec.continuation_ops {
-            for &operand in ctx.op_operands(cont_op) {
-                if operand == shift_result || live_value_set.contains(&operand) {
-                    continue;
-                }
-                if mapping.contains_value(operand) {
-                    continue;
-                }
-                // Check if the operand is defined by an op outside the continuation
-                if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(operand)
-                    && !cont_op_set.contains(&def_op)
-                {
-                    // This is the RAUW'd shift result — map to resume_value
-                    mapping.map_value(operand, resume_value);
-                }
-            }
-        }
     }
 
     // Extract state from wrapper (field 0) and restore captured values
@@ -438,6 +413,51 @@ pub(crate) fn create_resume_function(
     {
         if *original_type == evidence_ty {
             mapping.map_value(*original_value, ev_arg);
+        }
+    }
+
+    // After RAUW by replace_op, continuation ops may reference the
+    // replacement value (e.g., adt.variant_new result) instead of the
+    // original shift result or a live value. Detect and map RAUW'd values.
+    // This must run AFTER state restoration so that live value mappings
+    // are available for distinguishing RAUW'd live values from RAUW'd
+    // shift results.
+    if let Some(shift_result) = spec.shift_result_value {
+        let live_value_set: std::collections::HashSet<ValueRef> =
+            spec.original_live_values.iter().copied().collect();
+        let cont_op_set: std::collections::HashSet<OpRef> =
+            spec.continuation_ops.iter().copied().collect();
+        for &cont_op in &spec.continuation_ops {
+            for &operand in ctx.op_operands(cont_op) {
+                if operand == shift_result || live_value_set.contains(&operand) {
+                    continue;
+                }
+                if mapping.contains_value(operand) {
+                    continue;
+                }
+                if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(operand)
+                    && !cont_op_set.contains(&def_op)
+                {
+                    // This operand was RAUW'd from either the current shift's result
+                    // or a previous shift's result (which is now a live value).
+                    // Use the defining op's span to look up the original shift result
+                    // in shift_analysis, then reuse whatever mapping was established.
+                    let def_span = ctx.op(def_op).location.span;
+                    let mut mapped_via_analysis = false;
+                    if let Some(info) = spec.shift_analysis.get(&def_span) {
+                        if let Some(original_result) = info.shift_result_value {
+                            let mapped = mapping.lookup_value_or_default(original_result);
+                            if mapped != original_result {
+                                mapping.map_value(operand, mapped);
+                                mapped_via_analysis = true;
+                            }
+                        }
+                    }
+                    if !mapped_via_analysis {
+                        mapping.map_value(operand, resume_value);
+                    }
+                }
+            }
         }
     }
 

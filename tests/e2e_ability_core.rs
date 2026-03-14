@@ -1156,18 +1156,21 @@ fn main() {
 // Counter Output Verification Tests
 // =============================================================================
 
-/// Test State::get returns initial value through run_state handler.
+/// Test classic counter pattern: get, set(n+1), return n.
 ///
-/// Simple get: run_state(fn() { State::get() }, 42) → 42.
+/// counter() does get → set(n+1) → return n.
+/// Starting from 0: counter()=0 (state→1). Returns 0.
 #[test]
-fn test_state_get_returns_initial() {
+fn test_counter_returns_correct_value() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn read() ->{State(Nat)} Nat {
-    State::get()
+fn counter() ->{State(Nat)} Nat {
+    let n = State::get()
+    State::set(n + 1)
+    n
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
@@ -1179,26 +1182,27 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 fn main() {
-    let result = run_state(fn() { read() }, 42)
+    let result = run_state(fn() { counter() }, 0)
     __tribute_print_nat(result)
 }
 "#;
-    assert_native_output("state_get_initial.trb", code, "42");
+    assert_native_output("counter_value.trb", code, "0");
 }
 
-/// Test State::set followed by get returns the set value.
+/// Test counter starting from a non-zero initial state.
 ///
-/// set(99) then get() → 99.
+/// Starting from 10: counter()=10 (state→11). Returns 10.
 #[test]
-fn test_state_set_then_get_value() {
+fn test_counter_nonzero_initial() {
     let code = r#"ability State(s) {
     fn get() -> s
     fn set(value: s) -> Nil
 }
 
-fn write_read() ->{State(Nat)} Nat {
-    State::set(99)
-    State::get()
+fn counter() ->{State(Nat)} Nat {
+    let n = State::get()
+    State::set(n + 1)
+    n
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
@@ -1210,11 +1214,11 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 fn main() {
-    let result = run_state(fn() { write_read() }, 0)
+    let result = run_state(fn() { counter() }, 10)
     __tribute_print_nat(result)
 }
 "#;
-    assert_native_output("state_set_then_get_value.trb", code, "99");
+    assert_native_output("counter_nonzero.trb", code, "10");
 }
 
 // =============================================================================
