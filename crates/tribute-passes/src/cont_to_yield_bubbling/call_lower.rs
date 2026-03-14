@@ -72,6 +72,16 @@ pub(crate) struct OpSnapshot {
 
 pub(crate) type ChainSpecs = Rc<RefCell<Vec<ChainFuncSpec>>>;
 
+/// Shared context for call lowering, grouping arguments that are passed
+/// through the entire call chain unchanged.
+pub(crate) struct CallLowerCtx<'a> {
+    pub(crate) effectful_funcs: &'a Rc<HashSet<Symbol>>,
+    pub(crate) types: &'a YieldBubblingTypes,
+    pub(crate) chain_specs: &'a ChainSpecs,
+    pub(crate) chain_counter: &'a ResumeCounter,
+    pub(crate) module_name: Symbol,
+}
+
 // ============================================================================
 // Main Entry Point
 // ============================================================================
@@ -89,66 +99,40 @@ pub(crate) fn lower_effectful_calls(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
 ) {
-    lower_effectful_calls_impl(
-        ctx,
-        module,
+    let lc = CallLowerCtx {
         effectful_funcs,
         types,
         chain_specs,
         chain_counter,
         module_name,
-        None,
-    );
+    };
+    lower_effectful_calls_impl(ctx, module, &lc, None);
 }
 
 /// Expand effectful calls only in the specified target functions.
 ///
 /// Used for post-processing newly generated resume/chain functions.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_effectful_calls_for_funcs(
     ctx: &mut IrContext,
     module: Module,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    types: &YieldBubblingTypes,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
+    lc: &CallLowerCtx<'_>,
     target_funcs: &[Symbol],
 ) {
-    lower_effectful_calls_impl(
-        ctx,
-        module,
-        effectful_funcs,
-        types,
-        chain_specs,
-        chain_counter,
-        module_name,
-        Some(target_funcs),
-    );
+    lower_effectful_calls_impl(ctx, module, lc, Some(target_funcs));
 }
 
 /// Shared implementation: expand effectful calls in effectful functions.
 ///
 /// When `target_funcs` is `Some`, only processes the specified functions.
 /// When `None`, processes all effectful functions in the module.
-#[allow(clippy::too_many_arguments)]
 fn lower_effectful_calls_impl(
     ctx: &mut IrContext,
     module: Module,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    types: &YieldBubblingTypes,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
+    lower_ctx: &CallLowerCtx<'_>,
     target_funcs: Option<&[Symbol]>,
 ) {
     let module_body = match module.body(ctx) {
         Some(r) => r,
-        None => return,
-    };
-
-    let module_block = match module.first_block(ctx) {
-        Some(b) => b,
         None => return,
     };
 
@@ -160,7 +144,7 @@ fn lower_effectful_calls_impl(
                 continue;
             };
             let func_name = func.sym_name(ctx);
-            if !effectful_funcs.contains(&func_name) {
+            if !lower_ctx.effectful_funcs.contains(&func_name) {
                 continue;
             }
             if target_funcs.is_some_and(|targets| !targets.contains(&func_name)) {
@@ -169,46 +153,20 @@ fn lower_effectful_calls_impl(
             let body = func.body(ctx);
             let entry_block = ctx.region(body).blocks[0];
             let func_entry_args = ctx.block_args(entry_block).to_vec();
-            expand_calls_in_region(
-                ctx,
-                body,
-                effectful_funcs,
-                types,
-                chain_specs,
-                chain_counter,
-                module_name,
-                module_block,
-                &func_entry_args,
-            );
+            expand_calls_in_region(ctx, body, lower_ctx, &func_entry_args);
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn expand_calls_in_region(
     ctx: &mut IrContext,
     region: RegionRef,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    types: &YieldBubblingTypes,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
-    module_block: BlockRef,
+    lower_ctx: &CallLowerCtx<'_>,
     func_entry_block_args: &[ValueRef],
 ) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
-        expand_first_effectful_call(
-            ctx,
-            block,
-            effectful_funcs,
-            types,
-            chain_specs,
-            chain_counter,
-            module_name,
-            module_block,
-            func_entry_block_args,
-        );
+        expand_first_effectful_call(ctx, block, lower_ctx, func_entry_block_args);
     }
 }
 
@@ -217,24 +175,19 @@ fn expand_calls_in_region(
 // ============================================================================
 
 /// Expand the first effectful call in a block into Done/Shift branches.
-#[allow(clippy::too_many_arguments)]
 fn expand_first_effectful_call(
     ctx: &mut IrContext,
     block: BlockRef,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    types: &YieldBubblingTypes,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
-    module_block: BlockRef,
+    lower_ctx: &CallLowerCtx<'_>,
     func_entry_block_args: &[ValueRef],
 ) -> bool {
+    let lc = lower_ctx;
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
     // Find first effectful call
     let mut call_index = None;
     for (i, &op) in ops.iter().enumerate() {
-        if is_effectful_call(ctx, op, effectful_funcs) {
+        if is_effectful_call(ctx, op, lc.effectful_funcs) {
             call_index = Some(i);
             break;
         }
@@ -266,8 +219,8 @@ fn expand_first_effectful_call(
     }
 
     // Get original result type from callee function signature
-    let original_result_ty =
-        get_callee_original_result_type(ctx, call_op, effectful_funcs).unwrap_or(types.anyref);
+    let original_result_ty = get_callee_original_result_type(ctx, call_op, lc.effectful_funcs)
+        .unwrap_or(lc.types.anyref);
 
     let remaining_ops: Vec<OpRef> = ops[call_index + 1..].to_vec();
 
@@ -311,14 +264,17 @@ fn expand_first_effectful_call(
         .collect();
 
     // Generate chain function
-    let chain_name = fresh_resume_name(chain_counter);
+    let chain_name = fresh_resume_name(lc.chain_counter);
     let chain_name_sym = Symbol::from_dynamic(&chain_name);
 
     // Build chain state type: [inner_cont, live_var_0, live_var_1, ...]
     let mut state_fields: Vec<(Symbol, TypeRef)> = Vec::new();
-    state_fields.push((Symbol::new("inner_cont"), types.anyref));
+    state_fields.push((Symbol::new("inner_cont"), lc.types.anyref));
     for (i, _) in live_vars.iter().enumerate() {
-        state_fields.push((Symbol::from_dynamic(&format!("field_{}", i)), types.anyref));
+        state_fields.push((
+            Symbol::from_dynamic(&format!("field_{}", i)),
+            lc.types.anyref,
+        ));
     }
     let state_name_str = format!(
         "__ChainState_{}",
@@ -328,7 +284,7 @@ fn expand_first_effectful_call(
     let state_type = adt_struct_type(ctx, state_name, &state_fields);
 
     // Record chain spec
-    chain_specs.borrow_mut().push(ChainFuncSpec {
+    lc.chain_specs.borrow_mut().push(ChainFuncSpec {
         name: chain_name.clone(),
         state_type,
         state_fields: state_fields.clone(),
@@ -339,8 +295,8 @@ fn expand_first_effectful_call(
         call_result_type: original_result_ty,
         remaining_op_snapshots: snapshots,
         location,
-        effectful_funcs: Rc::clone(effectful_funcs),
-        module_name,
+        effectful_funcs: Rc::clone(lc.effectful_funcs),
+        module_name: lc.module_name,
     });
 
     // Remove remaining ops from block
@@ -355,12 +311,7 @@ fn expand_first_effectful_call(
         call_result,
         original_result_ty,
         &remaining_ops,
-        types,
-        effectful_funcs,
-        chain_specs,
-        chain_counter,
-        module_name,
-        module_block,
+        lc,
         func_entry_block_args,
     );
 
@@ -372,8 +323,7 @@ fn expand_first_effectful_call(
         &live_vars,
         chain_name_sym,
         state_type,
-        &state_fields,
-        types,
+        lc.types,
     );
 
     // Add is_done check
@@ -381,8 +331,8 @@ fn expand_first_effectful_call(
         ctx,
         location,
         call_result,
-        types.i1,
-        types.yield_result,
+        lc.types.i1,
+        lc.types.yield_result,
         Symbol::new("Done"),
     );
     ctx.push_op(block, is_done.op_ref());
@@ -392,7 +342,7 @@ fn expand_first_effectful_call(
         ctx,
         location,
         is_done.result(ctx),
-        types.yield_result,
+        lc.types.yield_result,
         done_branch,
         shift_branch,
     );
@@ -413,19 +363,13 @@ fn expand_first_effectful_call(
 ///
 /// Unwraps the YieldResult::Done value, remaps the call result,
 /// and executes remaining operations.
-#[allow(clippy::too_many_arguments)]
 fn build_inline_done_branch(
     ctx: &mut IrContext,
     location: Location,
     call_result: ValueRef,
     original_result_ty: TypeRef,
     remaining_ops: &[OpRef],
-    types: &YieldBubblingTypes,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
-    chain_specs: &ChainSpecs,
-    chain_counter: &ResumeCounter,
-    module_name: Symbol,
-    module_block: BlockRef,
+    lower_ctx: &CallLowerCtx<'_>,
     func_entry_block_args: &[ValueRef],
 ) -> RegionRef {
     let block = ctx.create_block(BlockData {
@@ -435,20 +379,22 @@ fn build_inline_done_branch(
         parent_region: None,
     });
 
+    let t = lower_ctx.types;
+
     // Extract value from YieldResult::Done
     let get_val = arena_adt::variant_get(
         ctx,
         location,
         call_result,
-        types.anyref,
-        types.yield_result,
+        t.anyref,
+        t.yield_result,
         Symbol::new("Done"),
         0,
     );
     ctx.push_op(block, get_val.op_ref());
 
     // Cast to original type
-    let unwrapped = if original_result_ty != types.anyref {
+    let unwrapped = if original_result_ty != t.anyref {
         let cast = arena_core::unrealized_conversion_cast(
             ctx,
             location,
@@ -472,7 +418,7 @@ fn build_inline_done_branch(
         if arena_func::Return::from_op(ctx, op).is_ok() {
             if let Some(&ret_val) = ctx.op_operands(op).first() {
                 let remapped = resolve_remap(&remap, ret_val);
-                yield_value_or_done(ctx, block, location, remapped, types);
+                yield_value_or_done(ctx, block, location, remapped, t);
             }
             continue;
         }
@@ -487,7 +433,6 @@ fn build_inline_done_branch(
         let needs_rebuild = remapped_operands != old_operands;
 
         if needs_rebuild {
-            // Snapshot op data before mutating ctx (for borrow safety)
             let op_data = ctx.op(op);
             let op_location = op_data.location;
             let op_dialect = op_data.dialect;
@@ -500,7 +445,6 @@ fn build_inline_done_branch(
             let op_regions: Vec<RegionRef> = op_data.regions.to_vec();
             let result_types = ctx.op_result_types(op).to_vec();
 
-            // Deep-clone nested regions to avoid "region already belongs" panic
             let cloned_regions: Vec<RegionRef> = op_regions
                 .iter()
                 .map(|&r| {
@@ -545,8 +489,7 @@ fn build_inline_done_branch(
         }
     }
 
-    // If no func.return was found (e.g., remaining ops didn't end with return),
-    // wrap the last value as Done
+    // If no func.return was found, wrap the last value as Done
     let has_yield = {
         let ops = ctx.block(block).ops.to_vec();
         ops.last()
@@ -555,7 +498,7 @@ fn build_inline_done_branch(
     };
 
     if !has_yield && let Some(val) = last_value {
-        yield_value_or_done(ctx, block, location, val, types);
+        yield_value_or_done(ctx, block, location, val, t);
     }
 
     let region = ctx.create_region(RegionData {
@@ -565,17 +508,7 @@ fn build_inline_done_branch(
     });
 
     // Recursively expand effectful calls in this Done branch
-    expand_calls_in_region(
-        ctx,
-        region,
-        effectful_funcs,
-        types,
-        chain_specs,
-        chain_counter,
-        module_name,
-        module_block,
-        func_entry_block_args,
-    );
+    expand_calls_in_region(ctx, region, lower_ctx, func_entry_block_args);
 
     region
 }
@@ -588,7 +521,6 @@ fn build_inline_done_branch(
 ///
 /// Extracts ShiftInfo, captures live variables into chain state,
 /// creates a chained continuation, and returns YieldResult::Shift.
-#[allow(clippy::too_many_arguments)]
 fn build_inline_shift_branch(
     ctx: &mut IrContext,
     location: Location,
@@ -596,7 +528,6 @@ fn build_inline_shift_branch(
     live_vars: &[(ValueRef, TypeRef)],
     chain_name: Symbol,
     state_type: TypeRef,
-    _state_fields: &[(Symbol, TypeRef)],
     types: &YieldBubblingTypes,
 ) -> RegionRef {
     let block = ctx.create_block(BlockData {

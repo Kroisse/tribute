@@ -44,6 +44,32 @@ use super::types::{YieldBubblingTypes, is_yield_result_type};
 use crate::cont_util::{SuspendArm, collect_suspend_arms, get_done_region};
 
 // ============================================================================
+// Handler Dispatch Context
+// ============================================================================
+
+/// Context grouping handler-dispatch–specific state.
+///
+/// Passed through the builder functions to avoid repeated argument threading.
+struct HandlerDispatchCtx<'a> {
+    /// Compile-time effect tag for this handler.
+    our_tag: u32,
+    /// The user-facing result type the handler produces.
+    user_result_ty: TypeRef,
+    /// Whether this handler is inside an effectful function.
+    is_in_effectful_func: bool,
+    /// Runtime prompt tag, if provided by `push_prompt` lowering.
+    runtime_tag_operand: Option<ValueRef>,
+    /// The handler body region (contains `cont.done`/`cont.suspend`/`cont.yield` arms).
+    handler_body_region: RegionRef,
+    /// Suspend arms collected from `handler_body_region`.
+    suspend_arms: Vec<SuspendArm>,
+    /// YieldResult ADT types.
+    types: &'a YieldBubblingTypes,
+    /// Set of effectful function names.
+    effectful_funcs: &'a HashSet<Symbol>,
+}
+
+// ============================================================================
 // Pattern: Lower cont.handler_dispatch
 // ============================================================================
 
@@ -75,16 +101,23 @@ impl RewritePattern for LowerHandlerDispatchPattern {
 
         let is_in_effectful_func = self.handlers_in_effectful_funcs.contains(&location.span);
 
-        let loop_op = build_handler_dispatch_loop(
-            ctx,
-            &dispatch,
-            op,
-            yr_operand,
-            runtime_tag_operand,
+        let compile_time_tag = dispatch.tag(ctx);
+        let user_result_ty = dispatch.result_type(ctx);
+        let handler_body_region = dispatch.body(ctx);
+        let suspend_arms = collect_suspend_arms(ctx, handler_body_region);
+
+        let hd_ctx = HandlerDispatchCtx {
+            our_tag: compile_time_tag,
+            user_result_ty,
             is_in_effectful_func,
-            &self.types,
-            &self.effectful_funcs,
-        );
+            runtime_tag_operand,
+            handler_body_region,
+            suspend_arms,
+            types: &self.types,
+            effectful_funcs: &self.effectful_funcs,
+        };
+
+        let loop_op = build_handler_dispatch_loop(ctx, location, yr_operand, &hd_ctx);
 
         rewriter.replace_op(loop_op);
         true
@@ -92,69 +125,37 @@ impl RewritePattern for LowerHandlerDispatchPattern {
 }
 
 /// Build the scf.loop that implements handler dispatch.
-///
-/// This is called both by `LowerHandlerDispatchPattern` (for standalone handler_dispatch)
-/// and by `LowerPushPromptPattern` (for handler_dispatch inside push_prompt, with runtime tag).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_handler_dispatch_loop(
+fn build_handler_dispatch_loop(
     ctx: &mut IrContext,
-    dispatch: &arena_cont::HandlerDispatch,
-    op: OpRef,
+    location: Location,
     yr_operand: ValueRef,
-    runtime_tag_operand: Option<ValueRef>,
-    is_in_effectful_func: bool,
-    types: &YieldBubblingTypes,
-    effectful_funcs: &Rc<HashSet<Symbol>>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> OpRef {
-    let location = ctx.op(op).location;
-    let compile_time_tag = dispatch.tag(ctx);
-    let user_result_ty = dispatch.result_type(ctx);
-    let body_region = dispatch.body(ctx);
-    let suspend_arms = collect_suspend_arms(ctx, body_region);
     tracing::debug!(
         "build_handler_dispatch_loop: compile_tag={}, runtime_tag={}, arms={}",
-        compile_time_tag,
-        runtime_tag_operand.is_some(),
-        suspend_arms.len(),
+        hd_ctx.our_tag,
+        hd_ctx.runtime_tag_operand.is_some(),
+        hd_ctx.suspend_arms.len(),
     );
 
-    let loop_result_ty = if is_in_effectful_func {
-        types.yield_result
+    let loop_result_ty = if hd_ctx.is_in_effectful_func {
+        hd_ctx.types.yield_result
     } else {
-        user_result_ty
+        hd_ctx.user_result_ty
     };
 
-    let loop_body = build_loop_body(
-        ctx,
-        location,
-        compile_time_tag,
-        &suspend_arms,
-        user_result_ty,
-        is_in_effectful_func,
-        runtime_tag_operand,
-        body_region,
-        types,
-        effectful_funcs,
-    );
+    let loop_body = build_loop_body(ctx, location, hd_ctx);
 
     let loop_op = arena_scf::r#loop(ctx, location, [yr_operand], loop_result_ty, loop_body);
     loop_op.op_ref()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_loop_body(
     ctx: &mut IrContext,
     location: Location,
-    our_tag: u32,
-    suspend_arms: &[SuspendArm],
-    user_result_ty: TypeRef,
-    is_in_effectful_func: bool,
-    runtime_tag_operand: Option<ValueRef>,
-    handler_body_region: RegionRef,
-    types: &YieldBubblingTypes,
-    effectful_funcs: &HashSet<Symbol>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> RegionRef {
-    let t = types;
+    let t = hd_ctx.types;
 
     // Create block with current YieldResult as argument
     let block = ctx.create_block(BlockData {
@@ -180,27 +181,10 @@ fn build_loop_body(
     ctx.push_op(block, is_done.op_ref());
 
     // Build Done branch
-    let done_branch = build_done_branch(
-        ctx,
-        location,
-        current_yr,
-        user_result_ty,
-        is_in_effectful_func,
-        handler_body_region,
-        types,
-    );
+    let done_branch = build_done_branch(ctx, location, current_yr, hd_ctx);
 
     // Build Shift branch
-    let shift_branch = build_shift_branch(
-        ctx,
-        location,
-        our_tag,
-        current_yr,
-        suspend_arms,
-        runtime_tag_operand,
-        types,
-        effectful_funcs,
-    );
+    let shift_branch = build_shift_branch(ctx, location, current_yr, hd_ctx);
 
     // Result type for the if: void (both branches break/continue the loop)
     let nil_ty = arena_core::nil(ctx).as_type_ref();
@@ -225,12 +209,10 @@ fn build_done_branch(
     ctx: &mut IrContext,
     location: Location,
     current_yr: ValueRef,
-    user_result_ty: TypeRef,
-    is_in_effectful_func: bool,
-    handler_body_region: RegionRef,
-    types: &YieldBubblingTypes,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> RegionRef {
-    let t = types;
+    let t = hd_ctx.types;
+    let user_result_ty = hd_ctx.user_result_ty;
     let block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -252,20 +234,13 @@ fn build_done_branch(
     let done_value = get_val.result(ctx);
 
     // Check for cont.done body (result arm: `{ result } -> expr`)
-    let done_region = get_done_region(ctx, handler_body_region);
+    let done_region = get_done_region(ctx, hd_ctx.handler_body_region);
 
-    if is_in_effectful_func {
+    if hd_ctx.is_in_effectful_func {
         if let Some(done_body) = done_region {
             // Inline the done body, then re-wrap result as YieldResult::Done
-            let result = inline_done_body(
-                ctx,
-                block,
-                location,
-                done_body,
-                done_value,
-                types,
-                user_result_ty,
-            );
+            let result =
+                inline_done_body(ctx, block, location, done_body, done_value, user_result_ty);
             // Re-wrap as YieldResult::Done
             let anyref_val =
                 arena_core::unrealized_conversion_cast(ctx, location, result, t.anyref);
@@ -297,15 +272,7 @@ fn build_done_branch(
         }
     } else if let Some(done_body) = done_region {
         // Inline the done body operations
-        let result = inline_done_body(
-            ctx,
-            block,
-            location,
-            done_body,
-            done_value,
-            types,
-            user_result_ty,
-        );
+        let result = inline_done_body(ctx, block, location, done_body, done_value, user_result_ty);
         // Cast result to user_result_ty if needed
         let result_value = {
             let result_ty = ctx.value_ty(result);
@@ -351,7 +318,6 @@ fn inline_done_body(
     location: Location,
     done_body: RegionRef,
     done_value: ValueRef,
-    _types: &YieldBubblingTypes,
     _user_result_ty: TypeRef,
 ) -> ValueRef {
     let done_blocks = &ctx.region(done_body).blocks;
@@ -435,18 +401,13 @@ fn infer_done_body_result_type(
     None
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_shift_branch(
     ctx: &mut IrContext,
     location: Location,
-    our_tag: u32,
     current_yr: ValueRef,
-    suspend_arms: &[SuspendArm],
-    runtime_tag_operand: Option<ValueRef>,
-    types: &YieldBubblingTypes,
-    effectful_funcs: &HashSet<Symbol>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> RegionRef {
-    let t = types;
+    let t = hd_ctx.types;
     let block = ctx.create_block(BlockData {
         location,
         args: vec![],
@@ -473,10 +434,11 @@ fn build_shift_branch(
     let prompt_val = get_prompt.result(ctx);
 
     // Compare with our handler's tag (prefer runtime tag over compile-time constant)
-    let our_tag_val = if let Some(rt_tag) = runtime_tag_operand {
+    let our_tag_val = if let Some(rt_tag) = hd_ctx.runtime_tag_operand {
         rt_tag
     } else {
-        let our_tag_const = arith::r#const(ctx, location, t.i32, Attribute::Int(our_tag as i128));
+        let our_tag_const =
+            arith::r#const(ctx, location, t.i32, Attribute::Int(hd_ctx.our_tag as i128));
         ctx.push_op(block, our_tag_const.op_ref());
         our_tag_const.result(ctx)
     };
@@ -484,8 +446,7 @@ fn build_shift_branch(
     ctx.push_op(block, tag_matches.op_ref());
 
     // Build dispatch region (when tag matches)
-    let dispatch_region =
-        build_dispatch_region(ctx, location, shift_info, suspend_arms, t, effectful_funcs);
+    let dispatch_region = build_dispatch_region(ctx, location, shift_info, hd_ctx);
 
     // Build propagate region (when tag doesn't match → break with current yr)
     let propagate_region = {
@@ -528,11 +489,9 @@ fn build_dispatch_region(
     ctx: &mut IrContext,
     location: Location,
     shift_info: ValueRef,
-    suspend_arms: &[SuspendArm],
-    types: &YieldBubblingTypes,
-    effectful_funcs: &HashSet<Symbol>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> RegionRef {
-    if suspend_arms.is_empty() {
+    if hd_ctx.suspend_arms.is_empty() {
         let block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -556,23 +515,20 @@ fn build_dispatch_region(
     });
 
     // Get op_idx from ShiftInfo (field 2)
-    let get_op_idx =
-        arena_adt::struct_get(ctx, location, shift_info, types.i32, types.shift_info, 2);
+    let get_op_idx = arena_adt::struct_get(
+        ctx,
+        location,
+        shift_info,
+        hd_ctx.types.i32,
+        hd_ctx.types.shift_info,
+        2,
+    );
     ctx.push_op(block, get_op_idx.op_ref());
     let current_op_idx = get_op_idx.result(ctx);
 
     // Build nested if-else dispatch
-    let final_result = build_nested_dispatch(
-        ctx,
-        block,
-        location,
-        shift_info,
-        current_op_idx,
-        suspend_arms,
-        0,
-        types,
-        effectful_funcs,
-    );
+    let final_result =
+        build_nested_dispatch(ctx, block, location, shift_info, current_op_idx, 0, hd_ctx);
 
     // Continue loop with result
     let continue_op = arena_scf::r#continue(ctx, location, [final_result]);
@@ -585,31 +541,30 @@ fn build_dispatch_region(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_nested_dispatch(
     ctx: &mut IrContext,
     block: BlockRef,
     location: Location,
     shift_info: ValueRef,
     current_op_idx: ValueRef,
-    suspend_arms: &[SuspendArm],
     arm_index: usize,
-    types: &YieldBubblingTypes,
-    effectful_funcs: &HashSet<Symbol>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> ValueRef {
-    if arm_index >= suspend_arms.len() {
+    if arm_index >= hd_ctx.suspend_arms.len() {
         panic!("build_nested_dispatch: arm_index out of bounds");
     }
 
-    let arm = &suspend_arms[arm_index];
-    let is_last_arm = arm_index + 1 >= suspend_arms.len();
+    let arm = &hd_ctx.suspend_arms[arm_index];
+    let is_last_arm = arm_index + 1 >= hd_ctx.suspend_arms.len();
 
     // Build then region (handler arm)
-    let then_region = build_arm_region(ctx, location, arm.body, shift_info, types, effectful_funcs);
+    let then_region = build_arm_region(ctx, location, arm.body, shift_info, hd_ctx);
+
+    let t = hd_ctx.types;
 
     if is_last_arm {
         // Last arm: unconditional
-        let true_const = arith::r#const(ctx, location, types.i1, Attribute::Int(1));
+        let true_const = arith::r#const(ctx, location, t.i1, Attribute::Int(1));
         ctx.push_op(block, true_const.op_ref());
         let else_block = ctx.create_block(BlockData {
             location,
@@ -629,7 +584,7 @@ fn build_nested_dispatch(
             ctx,
             location,
             true_const.result(ctx),
-            types.yield_result,
+            t.yield_result,
             then_region,
             else_region,
         );
@@ -641,7 +596,7 @@ fn build_nested_dispatch(
     let expected_const = arith::r#const(
         ctx,
         location,
-        types.i32,
+        t.i32,
         Attribute::Int(arm.expected_op_idx as i128),
     );
     ctx.push_op(block, expected_const.op_ref());
@@ -650,7 +605,7 @@ fn build_nested_dispatch(
         location,
         current_op_idx,
         expected_const.result(ctx),
-        types.i1,
+        t.i1,
     );
     ctx.push_op(block, cmp_op.op_ref());
 
@@ -667,10 +622,8 @@ fn build_nested_dispatch(
         location,
         shift_info,
         current_op_idx,
-        suspend_arms,
         arm_index + 1,
-        types,
-        effectful_funcs,
+        hd_ctx,
     );
     let else_yield = arena_scf::r#yield(ctx, location, [else_result]);
     ctx.push_op(else_block, else_yield.op_ref());
@@ -684,7 +637,7 @@ fn build_nested_dispatch(
         ctx,
         location,
         cmp_op.result(ctx),
-        types.yield_result,
+        t.yield_result,
         then_region,
         else_region,
     );
@@ -705,9 +658,10 @@ fn build_arm_region(
     location: Location,
     arm_body: RegionRef,
     shift_info: ValueRef,
-    types: &YieldBubblingTypes,
-    effectful_funcs: &HashSet<Symbol>,
+    hd_ctx: &HandlerDispatchCtx<'_>,
 ) -> RegionRef {
+    let types = hd_ctx.types;
+    let effectful_funcs = hd_ctx.effectful_funcs;
     let blocks = &ctx.region(arm_body).blocks;
     let Some(&arm_block) = blocks.first() else {
         let block = ctx.create_block(BlockData {

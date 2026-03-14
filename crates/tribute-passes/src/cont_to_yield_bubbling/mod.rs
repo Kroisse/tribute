@@ -340,16 +340,14 @@ pub fn lower_cont_to_yield_bubbling(
         //    b) Expand effectful calls into Done/Shift branches
         let ef_rc = Rc::new(effectful_set.clone());
         let types_new = YieldBubblingTypes::new(ctx);
-        call_lower::lower_effectful_calls_for_funcs(
-            ctx,
-            module,
-            &ef_rc,
-            &types_new,
-            &chain_specs,
-            &chain_counter,
+        let lc = call_lower::CallLowerCtx {
+            effectful_funcs: &ef_rc,
+            types: &types_new,
+            chain_specs: &chain_specs,
+            chain_counter: &chain_counter,
             module_name,
-            &new_names,
-        );
+        };
+        call_lower::lower_effectful_calls_for_funcs(ctx, module, &lc, &new_names);
         let types_wrap = YieldBubblingTypes::new(ctx);
         wrap_returns::wrap_returns_for_funcs(ctx, module, &new_names, &types_wrap);
     }
