@@ -15,8 +15,9 @@ use trunk_ir::dialect::adt as arena_adt;
 use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::scf as arena_scf;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::OpRef;
+use trunk_ir::refs::{OpRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
 use super::types::{YieldBubblingTypes, is_yield_result_type};
@@ -194,8 +195,6 @@ impl RewritePattern for UpdateScfIfResultTypePattern {
     }
 }
 
-use trunk_ir::dialect::scf as arena_scf;
-
 fn region_yields_yr(ctx: &IrContext, region: trunk_ir::refs::RegionRef) -> bool {
     let blocks = &ctx.region(region).blocks;
     for &block in blocks {
@@ -270,6 +269,17 @@ impl RewritePattern for LowerPushPromptPattern {
         let location = ctx.op(op).location;
         let t = &self.types;
 
+        // Extract runtime tag from push_prompt's args (set by resolve_evidence)
+        let runtime_tag_operand = {
+            let args: Vec<ValueRef> = push_prompt.args(ctx).to_vec();
+            tracing::debug!(
+                "LowerPushPromptPattern: matched push_prompt with {} args, runtime_tag={}",
+                args.len(),
+                !args.is_empty(),
+            );
+            args.first().copied()
+        };
+
         // Get the body region and inline its operations
         let body = push_prompt.body(ctx);
         let body_result = crate::cont_util::get_region_result_value(ctx, body);
@@ -292,10 +302,9 @@ impl RewritePattern for LowerPushPromptPattern {
         }
 
         // Determine if body result is already a YieldResult
-        let yr_value = if let Some(result) = body_result {
+        let _yr_value = if let Some(result) = body_result {
             let result_ty = ctx.value_ty(result);
             if is_yield_result_type(ctx, result_ty) {
-                // Already a YieldResult — pass through
                 result
             } else {
                 // Wrap in YieldResult::Done
@@ -331,27 +340,24 @@ impl RewritePattern for LowerPushPromptPattern {
             done_op.result(ctx)
         };
 
-        // Now inline the handlers region operations
-        let handlers = push_prompt.handlers(ctx);
-        let handler_blocks = &ctx.region(handlers).blocks;
-        if let Some(&handler_block) = handler_blocks.first() {
-            let handler_ops = ctx.block(handler_block).ops.to_vec();
-            for handler_op in handler_ops {
-                // Wire the YieldResult into handler_dispatch's operand
-                if arena_cont::HandlerDispatch::from_op(ctx, handler_op).is_ok() {
-                    let operands = ctx.op_operands(handler_op).to_vec();
-                    if !operands.is_empty() {
-                        ctx.set_op_operand(handler_op, 0, yr_value);
+        // Pass runtime tag to the sibling handler_dispatch op.
+        // push_prompt and handler_dispatch are siblings in the same block:
+        //   %pp = cont.push_prompt { body } { handlers }
+        //   %final = cont.handler_dispatch(%pp) { handler_body }
+        // Since push_prompt is processed before handler_dispatch (same block order),
+        // we can add the runtime tag as an extra operand now, and
+        // LowerHandlerDispatchPattern will see it when it processes handler_dispatch.
+        if let Some(rt_tag) = runtime_tag_operand {
+            let pp_results = ctx.op_results(op);
+            if !pp_results.is_empty() {
+                let pp_result = pp_results[0];
+                // Find the handler_dispatch that uses push_prompt's result
+                let uses: Vec<_> = ctx.uses(pp_result).to_vec();
+                for u in uses {
+                    if arena_cont::HandlerDispatch::from_op(ctx, u.user).is_ok() {
+                        ctx.push_op_operand(u.user, rt_tag);
                     }
                 }
-
-                // Skip scf.yield in handlers region
-                if arena_scf::Yield::from_op(ctx, handler_op).is_ok() {
-                    continue;
-                }
-                // Detach from the original block before re-inserting
-                ctx.detach_op(handler_op);
-                all_ops.push(handler_op);
             }
         }
 

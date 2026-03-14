@@ -201,7 +201,20 @@ pub fn lower_cont_to_yield_bubbling(
 
     applicator.apply_partial(ctx, module);
 
-    // Step 3.5: Expand effectful calls into Done/Shift branches with chaining (#336)
+    // Step 3.5: Truncate effectful function bodies after first effect point.
+    // Must run BEFORE lower_effectful_calls so that dead code from shift lowering
+    // (sequential effectful calls in shift-proxy functions) is removed first.
+    truncate::truncate_after_shift(ctx, module, &effectful_funcs, &types);
+
+    // Step 3.55: Fix push_prompt body call_indirect types.
+    // After truncation, effectful body thunks return YieldResult, but the
+    // call_indirect in the (already-inlined) push_prompt body still has the
+    // original type, wrapped in Done → double-wrapping. Fix by changing
+    // call_indirect result type to YieldResult and removing the Done wrap.
+    truncate::fix_body_call_types(ctx, module, &effectful_funcs, &types);
+
+    // Step 3.6: Expand effectful calls into Done/Shift branches with chaining (#336)
+    // Runs after truncate so only meaningful remaining ops are expanded.
     let chain_specs: call_lower::ChainSpecs = Rc::new(RefCell::new(Vec::new()));
     let chain_counter: ResumeCounter = Rc::new(RefCell::new(1000)); // offset to avoid name collisions
     let types_for_chain = YieldBubblingTypes::new(ctx);
@@ -215,9 +228,6 @@ pub fn lower_cont_to_yield_bubbling(
         module_name,
     );
 
-    // Step 3.6: Truncate effectful function bodies after first effect point
-    truncate::truncate_after_shift(ctx, module, &effectful_funcs, &types);
-
     // Step 4: Wrap returns in effectful functions with YieldResult::Done
     let type_converter2 = standard_type_converter(ctx);
     let types_for_wrap = YieldBubblingTypes::new(ctx);
@@ -227,6 +237,11 @@ pub fn lower_cont_to_yield_bubbling(
             types: types_for_wrap,
         });
     applicator2.apply_partial(ctx, module);
+
+    // Step 5: Unwrap YieldResult in non-effectful functions that call effectful ones.
+    // Since these functions handle all effects locally, the result is always Done.
+    // We extract the Done value and cast to the original type.
+    truncate::unwrap_yr_in_non_effectful_funcs(ctx, module, &effectful_funcs, &types);
 
     // Verify all cont.* ops (except cont.drop) are converted
     let mut conversion_target = ConversionTarget::new();

@@ -10,6 +10,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+use trunk_ir::IrMapping;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
 use trunk_ir::dialect::adt as arena_adt;
@@ -129,6 +130,9 @@ fn process_effectful_funcs(
                 let func_name = func.sym_name(ctx);
                 if effectful_funcs.contains(&func_name) {
                     let body = func.body(ctx);
+                    // Capture function entry block args (evidence param, etc.)
+                    let entry_block = ctx.region(body).blocks[0];
+                    let func_entry_args = ctx.block_args(entry_block).to_vec();
                     expand_calls_in_region(
                         ctx,
                         body,
@@ -138,6 +142,7 @@ fn process_effectful_funcs(
                         chain_counter,
                         module_name,
                         module_block,
+                        &func_entry_args,
                     );
                 }
             }
@@ -155,6 +160,7 @@ fn expand_calls_in_region(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
     module_block: BlockRef,
+    func_entry_block_args: &[ValueRef],
 ) {
     let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
     for block in blocks {
@@ -167,6 +173,7 @@ fn expand_calls_in_region(
             chain_counter,
             module_name,
             module_block,
+            func_entry_block_args,
         );
     }
 }
@@ -186,6 +193,7 @@ fn expand_first_effectful_call(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
     module_block: BlockRef,
+    func_entry_block_args: &[ValueRef],
 ) -> bool {
     let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
 
@@ -211,19 +219,45 @@ fn expand_first_effectful_call(
     let call_result = call_results[0];
     let location = ctx.op(call_op).location;
 
+    // Skip if call result is consumed by an scf.loop (handler dispatch).
+    // The handler dispatch loop needs the raw YieldResult to do Done/Shift branching itself.
+    if call_index + 1 < ops.len() {
+        let next_op = ops[call_index + 1];
+        if arena_scf::Loop::from_op(ctx, next_op).is_ok() {
+            let loop_operands = ctx.op_operands(next_op);
+            if !loop_operands.is_empty() && loop_operands[0] == call_result {
+                return false;
+            }
+        }
+    }
+
     // Get original result type from callee function signature
     let original_result_ty =
         get_callee_original_result_type(ctx, call_op, effectful_funcs).unwrap_or(types.anyref);
 
     let remaining_ops: Vec<OpRef> = ops[call_index + 1..].to_vec();
 
+    // If the only remaining op is func.return, the function already returns
+    // YieldResult directly — no Done/Shift expansion needed.
+    if remaining_ops.len() == 1 && arena_func::Return::from_op(ctx, remaining_ops[0]).is_ok() {
+        return false;
+    }
+
     // Compute live variables at call point
     let used_in_remaining = collect_used_values(ctx, &remaining_ops);
     let mut live_vars: Vec<(ValueRef, TypeRef)> = Vec::new();
+    let mut seen_values: HashSet<ValueRef> = HashSet::new();
 
-    // Block args
+    // Function entry block args (evidence param, etc.) — may be referenced
+    // from nested Done branches even though they're not in the current block.
+    for &arg in func_entry_block_args {
+        if used_in_remaining.contains(&arg) && seen_values.insert(arg) {
+            live_vars.push((arg, ctx.value_ty(arg)));
+        }
+    }
+    // Current block args (may overlap with func entry args at top level)
     for &arg in ctx.block_args(block) {
-        if used_in_remaining.contains(&arg) {
+        if used_in_remaining.contains(&arg) && seen_values.insert(arg) {
             live_vars.push((arg, ctx.value_ty(arg)));
         }
     }
@@ -259,9 +293,6 @@ fn expand_first_effectful_call(
     let state_name = Symbol::from_dynamic(&state_name_str);
     let state_type = adt_struct_type(ctx, state_name, &state_fields);
 
-    // Capture original block args for remapping in chain function
-    let original_block_args = ctx.block_args(block).to_vec();
-
     // Record chain spec
     chain_specs.borrow_mut().push(ChainFuncSpec {
         name: chain_name.clone(),
@@ -269,7 +300,7 @@ fn expand_first_effectful_call(
         state_fields: state_fields.clone(),
         original_live_types: live_vars.iter().map(|(_, ty)| *ty).collect(),
         original_live_values: live_vars.iter().map(|(v, _)| *v).collect(),
-        original_block_args,
+        original_block_args: func_entry_block_args.to_vec(),
         call_result_value: call_result,
         call_result_type: original_result_ty,
         remaining_op_snapshots: snapshots,
@@ -296,6 +327,7 @@ fn expand_first_effectful_call(
         chain_counter,
         module_name,
         module_block,
+        func_entry_block_args,
     );
 
     // Build Shift branch: chain continuation
@@ -360,6 +392,7 @@ fn build_inline_done_branch(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
     module_block: BlockRef,
+    func_entry_block_args: &[ValueRef],
 ) -> RegionRef {
     let block = ctx.create_block(BlockData {
         location,
@@ -447,15 +480,38 @@ fn build_inline_done_branch(
         let needs_rebuild = remapped_operands != old_operands;
 
         if needs_rebuild {
+            // Snapshot op data before mutating ctx (for borrow safety)
             let op_data = ctx.op(op);
-            let mut builder =
-                OperationDataBuilder::new(op_data.location, op_data.dialect, op_data.name)
-                    .operands(remapped_operands)
-                    .results(ctx.op_result_types(op).to_vec());
-            for (k, v) in &op_data.attributes {
-                builder = builder.attr(*k, v.clone());
+            let op_location = op_data.location;
+            let op_dialect = op_data.dialect;
+            let op_name = op_data.name;
+            let op_attrs: Vec<(Symbol, Attribute)> = op_data
+                .attributes
+                .iter()
+                .map(|(k, v)| (*k, v.clone()))
+                .collect();
+            let op_regions: Vec<RegionRef> = op_data.regions.to_vec();
+            let result_types = ctx.op_result_types(op).to_vec();
+
+            // Deep-clone nested regions to avoid "region already belongs" panic
+            let cloned_regions: Vec<RegionRef> = op_regions
+                .iter()
+                .map(|&r| {
+                    let mut mapping = IrMapping::new();
+                    for (&old_v, &new_v) in &remap {
+                        mapping.map_value(old_v, new_v);
+                    }
+                    ctx.clone_region(r, &mut mapping)
+                })
+                .collect();
+
+            let mut builder = OperationDataBuilder::new(op_location, op_dialect, op_name)
+                .operands(remapped_operands)
+                .results(result_types);
+            for (k, v) in op_attrs {
+                builder = builder.attr(k, v);
             }
-            for &r in &op_data.regions {
+            for r in cloned_regions {
                 builder = builder.region(r);
             }
             let new_data = builder.build(ctx);
@@ -530,6 +586,7 @@ fn build_inline_done_branch(
         chain_counter,
         module_name,
         module_block,
+        func_entry_block_args,
     );
 
     region
@@ -1015,13 +1072,26 @@ fn build_chain_done_branch(
             .map(|&v| resolve_remap(&remap, v))
             .collect();
 
+        // Deep-clone nested regions to avoid "region already belongs" panic
+        let cloned_regions: Vec<RegionRef> = snap
+            .regions
+            .iter()
+            .map(|&r| {
+                let mut mapping = IrMapping::new();
+                for (&old_v, &new_v) in &remap {
+                    mapping.map_value(old_v, new_v);
+                }
+                ctx.clone_region(r, &mut mapping)
+            })
+            .collect();
+
         let mut builder = OperationDataBuilder::new(snap.location, snap.dialect, snap.name)
             .operands(remapped_operands)
             .results(snap.result_types.clone());
         for (k, v) in &snap.attributes {
             builder = builder.attr(*k, v.clone());
         }
-        for &r in &snap.regions {
+        for r in cloned_regions {
             builder = builder.region(r);
         }
         let new_data = builder.build(ctx);
@@ -1239,7 +1309,7 @@ fn is_effectful_call(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbo
 }
 
 /// Get the original result type of a callee function (before YieldResult conversion).
-fn get_callee_original_result_type(
+pub(crate) fn get_callee_original_result_type(
     ctx: &IrContext,
     call_op: OpRef,
     effectful_funcs: &HashSet<Symbol>,

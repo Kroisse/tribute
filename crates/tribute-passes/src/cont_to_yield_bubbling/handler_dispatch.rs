@@ -63,270 +63,308 @@ impl RewritePattern for LowerHandlerDispatchPattern {
         };
 
         let location = ctx.op(op).location;
-        let t = &self.types;
 
-        // Get the YieldResult operand
-        let yr_operand = ctx.op_operands(op)[0];
+        // Get operands: [0] = YieldResult, [1] = runtime prompt tag (optional,
+        // added by LowerPushPromptPattern when the handler_dispatch is paired
+        // with a push_prompt).
+        let operands = ctx.op_operands(op).to_vec();
+        let yr_operand = operands[0];
+        let runtime_tag_operand = operands.get(1).copied();
 
-        // Get the handler's tag
-        let our_tag = dispatch.tag(ctx);
-
-        // Get the user's result type
-        let user_result_ty = dispatch.result_type(ctx);
-
-        // Get the body region with child ops
-        let body_region = dispatch.body(ctx);
-
-        // Collect suspend arms
-        let suspend_arms = collect_suspend_arms(ctx, body_region);
-
-        // Check if this handler is inside an effectful function
         let is_in_effectful_func = self.handlers_in_effectful_funcs.contains(&location.span);
-        let loop_result_ty = if is_in_effectful_func {
-            t.yield_result
-        } else {
-            user_result_ty
-        };
 
-        // Build the trampoline loop body
-        let loop_body = self.build_loop_body(
+        let loop_op = build_handler_dispatch_loop(
             ctx,
-            location,
-            our_tag,
-            &suspend_arms,
-            user_result_ty,
+            &dispatch,
+            op,
+            yr_operand,
+            runtime_tag_operand,
             is_in_effectful_func,
+            &self.types,
+            &self.effectful_funcs,
         );
 
-        // Create scf.loop with yr_operand as initial value
-        let loop_op = arena_scf::r#loop(ctx, location, [yr_operand], loop_result_ty, loop_body);
-
-        rewriter.replace_op(loop_op.op_ref());
+        rewriter.replace_op(loop_op);
         true
     }
 }
 
-impl LowerHandlerDispatchPattern {
-    #[allow(clippy::too_many_arguments)]
-    fn build_loop_body(
-        &self,
-        ctx: &mut IrContext,
-        location: Location,
-        our_tag: u32,
-        suspend_arms: &[SuspendArm],
-        user_result_ty: TypeRef,
-        is_in_effectful_func: bool,
-    ) -> RegionRef {
-        let t = &self.types;
+/// Build the scf.loop that implements handler dispatch.
+///
+/// This is called both by `LowerHandlerDispatchPattern` (for standalone handler_dispatch)
+/// and by `LowerPushPromptPattern` (for handler_dispatch inside push_prompt, with runtime tag).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_handler_dispatch_loop(
+    ctx: &mut IrContext,
+    dispatch: &arena_cont::HandlerDispatch,
+    op: OpRef,
+    yr_operand: ValueRef,
+    runtime_tag_operand: Option<ValueRef>,
+    is_in_effectful_func: bool,
+    types: &YieldBubblingTypes,
+    effectful_funcs: &Rc<HashSet<Symbol>>,
+) -> OpRef {
+    let location = ctx.op(op).location;
+    let compile_time_tag = dispatch.tag(ctx);
+    let user_result_ty = dispatch.result_type(ctx);
+    let body_region = dispatch.body(ctx);
+    let suspend_arms = collect_suspend_arms(ctx, body_region);
+    tracing::debug!(
+        "build_handler_dispatch_loop: compile_tag={}, runtime_tag={}, arms={}",
+        compile_time_tag,
+        runtime_tag_operand.is_some(),
+        suspend_arms.len(),
+    );
 
-        // Create block with current YieldResult as argument
-        let block = ctx.create_block(BlockData {
-            location,
-            args: vec![trunk_ir::context::BlockArgData {
-                ty: t.yield_result,
-                attrs: Default::default(),
-            }],
-            ops: trunk_ir::smallvec::smallvec![],
-            parent_region: None,
-        });
-        let current_yr = ctx.block_args(block)[0];
+    let loop_result_ty = if is_in_effectful_func {
+        types.yield_result
+    } else {
+        user_result_ty
+    };
 
-        // Check if Done variant
-        let is_done = arena_adt::variant_is(
+    let loop_body = build_loop_body(
+        ctx,
+        location,
+        compile_time_tag,
+        &suspend_arms,
+        user_result_ty,
+        is_in_effectful_func,
+        runtime_tag_operand,
+        types,
+        effectful_funcs,
+    );
+
+    let loop_op = arena_scf::r#loop(ctx, location, [yr_operand], loop_result_ty, loop_body);
+    loop_op.op_ref()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_loop_body(
+    ctx: &mut IrContext,
+    location: Location,
+    our_tag: u32,
+    suspend_arms: &[SuspendArm],
+    user_result_ty: TypeRef,
+    is_in_effectful_func: bool,
+    runtime_tag_operand: Option<ValueRef>,
+    types: &YieldBubblingTypes,
+    effectful_funcs: &HashSet<Symbol>,
+) -> RegionRef {
+    let t = types;
+
+    // Create block with current YieldResult as argument
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![trunk_ir::context::BlockArgData {
+            ty: t.yield_result,
+            attrs: Default::default(),
+        }],
+        ops: trunk_ir::smallvec::smallvec![],
+        parent_region: None,
+    });
+    let current_yr = ctx.block_args(block)[0];
+
+    // Check if Done variant
+    let is_done = arena_adt::variant_is(
+        ctx,
+        location,
+        current_yr,
+        t.i1,
+        t.yield_result,
+        Symbol::new("Done"),
+    );
+    ctx.push_op(block, is_done.op_ref());
+
+    // Build Done branch
+    let done_branch = build_done_branch(
+        ctx,
+        location,
+        current_yr,
+        user_result_ty,
+        is_in_effectful_func,
+        types,
+    );
+
+    // Build Shift branch
+    let shift_branch = build_shift_branch(
+        ctx,
+        location,
+        our_tag,
+        current_yr,
+        suspend_arms,
+        runtime_tag_operand,
+        types,
+        effectful_funcs,
+    );
+
+    // Result type for the if: void (both branches break/continue the loop)
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
+    let if_op = arena_scf::r#if(
+        ctx,
+        location,
+        is_done.result(ctx),
+        nil_ty,
+        done_branch,
+        shift_branch,
+    );
+    ctx.push_op(block, if_op.op_ref());
+
+    ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
+
+fn build_done_branch(
+    ctx: &mut IrContext,
+    location: Location,
+    current_yr: ValueRef,
+    user_result_ty: TypeRef,
+    is_in_effectful_func: bool,
+    types: &YieldBubblingTypes,
+) -> RegionRef {
+    let t = types;
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: trunk_ir::smallvec::smallvec![],
+        parent_region: None,
+    });
+
+    // Extract value: adt.variant_get(@YieldResult, "Done", 0, %yr)
+    let get_val = arena_adt::variant_get(
+        ctx,
+        location,
+        current_yr,
+        t.anyref,
+        t.yield_result,
+        Symbol::new("Done"),
+        0,
+    );
+    ctx.push_op(block, get_val.op_ref());
+    let done_value = get_val.result(ctx);
+
+    if is_in_effectful_func {
+        // Re-wrap as YieldResult::Done and break
+        let rewrap = arena_adt::variant_new(
             ctx,
             location,
-            current_yr,
-            t.i1,
+            [done_value],
+            t.yield_result,
             t.yield_result,
             Symbol::new("Done"),
         );
-        ctx.push_op(block, is_done.op_ref());
-
-        // Build Done branch
-        let done_branch = self.build_done_branch(
-            ctx,
-            location,
-            current_yr,
-            user_result_ty,
-            is_in_effectful_func,
-        );
-
-        // Build Shift branch
-        let shift_branch =
-            self.build_shift_branch(ctx, location, our_tag, current_yr, suspend_arms);
-
-        // Result type for the if: void (both branches break/continue the loop)
-        let nil_ty = arena_core::nil(ctx).as_type_ref();
-        let if_op = arena_scf::r#if(
-            ctx,
-            location,
-            is_done.result(ctx),
-            nil_ty,
-            done_branch,
-            shift_branch,
-        );
-        ctx.push_op(block, if_op.op_ref());
-
-        ctx.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![block],
-            parent_op: None,
-        })
-    }
-
-    fn build_done_branch(
-        &self,
-        ctx: &mut IrContext,
-        location: Location,
-        current_yr: ValueRef,
-        user_result_ty: TypeRef,
-        is_in_effectful_func: bool,
-    ) -> RegionRef {
-        let t = &self.types;
-        let block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: trunk_ir::smallvec::smallvec![],
-            parent_region: None,
-        });
-
-        // Extract value: adt.variant_get(@YieldResult, "Done", 0, %yr)
-        let get_val = arena_adt::variant_get(
-            ctx,
-            location,
-            current_yr,
-            t.anyref,
-            t.yield_result,
-            Symbol::new("Done"),
-            0,
-        );
-        ctx.push_op(block, get_val.op_ref());
-        let done_value = get_val.result(ctx);
-
-        if is_in_effectful_func {
-            // Re-wrap as YieldResult::Done and break
-            let rewrap = arena_adt::variant_new(
-                ctx,
-                location,
-                [done_value],
-                t.yield_result,
-                t.yield_result,
-                Symbol::new("Done"),
-            );
-            ctx.push_op(block, rewrap.op_ref());
-            let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
-            ctx.push_op(block, break_op.op_ref());
+        ctx.push_op(block, rewrap.op_ref());
+        let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+        ctx.push_op(block, break_op.op_ref());
+    } else {
+        // Cast anyref to user result type
+        let result_value = if t.anyref != user_result_ty {
+            let cast =
+                arena_core::unrealized_conversion_cast(ctx, location, done_value, user_result_ty);
+            ctx.push_op(block, cast.op_ref());
+            cast.result(ctx)
         } else {
-            // Cast anyref to user result type
-            let result_value = if t.anyref != user_result_ty {
-                let cast = arena_core::unrealized_conversion_cast(
-                    ctx,
-                    location,
-                    done_value,
-                    user_result_ty,
-                );
-                ctx.push_op(block, cast.op_ref());
-                cast.result(ctx)
-            } else {
-                done_value
-            };
-            let break_op = arena_scf::r#break(ctx, location, result_value);
-            ctx.push_op(block, break_op.op_ref());
-        }
-
-        ctx.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![block],
-            parent_op: None,
-        })
+            done_value
+        };
+        let break_op = arena_scf::r#break(ctx, location, result_value);
+        ctx.push_op(block, break_op.op_ref());
     }
 
-    fn build_shift_branch(
-        &self,
-        ctx: &mut IrContext,
-        location: Location,
-        our_tag: u32,
-        current_yr: ValueRef,
-        suspend_arms: &[SuspendArm],
-    ) -> RegionRef {
-        let t = &self.types;
-        let block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: trunk_ir::smallvec::smallvec![],
-            parent_region: None,
-        });
+    ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
+}
 
-        // Extract ShiftInfo from YieldResult::Shift
-        let get_info = arena_adt::variant_get(
-            ctx,
-            location,
-            current_yr,
-            t.shift_info,
-            t.yield_result,
-            Symbol::new("Shift"),
-            0,
-        );
-        ctx.push_op(block, get_info.op_ref());
-        let shift_info = get_info.result(ctx);
+#[allow(clippy::too_many_arguments)]
+fn build_shift_branch(
+    ctx: &mut IrContext,
+    location: Location,
+    our_tag: u32,
+    current_yr: ValueRef,
+    suspend_arms: &[SuspendArm],
+    runtime_tag_operand: Option<ValueRef>,
+    types: &YieldBubblingTypes,
+    effectful_funcs: &HashSet<Symbol>,
+) -> RegionRef {
+    let t = types;
+    let block = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: trunk_ir::smallvec::smallvec![],
+        parent_region: None,
+    });
 
-        // Extract prompt from ShiftInfo (field 1)
-        let get_prompt = arena_adt::struct_get(ctx, location, shift_info, t.i32, t.shift_info, 1);
-        ctx.push_op(block, get_prompt.op_ref());
-        let prompt_val = get_prompt.result(ctx);
+    // Extract ShiftInfo from YieldResult::Shift
+    let get_info = arena_adt::variant_get(
+        ctx,
+        location,
+        current_yr,
+        t.shift_info,
+        t.yield_result,
+        Symbol::new("Shift"),
+        0,
+    );
+    ctx.push_op(block, get_info.op_ref());
+    let shift_info = get_info.result(ctx);
 
-        // Compare with our handler's tag
+    // Extract prompt from ShiftInfo (field 1)
+    let get_prompt = arena_adt::struct_get(ctx, location, shift_info, t.i32, t.shift_info, 1);
+    ctx.push_op(block, get_prompt.op_ref());
+    let prompt_val = get_prompt.result(ctx);
+
+    // Compare with our handler's tag (prefer runtime tag over compile-time constant)
+    let our_tag_val = if let Some(rt_tag) = runtime_tag_operand {
+        rt_tag
+    } else {
         let our_tag_const = arith::r#const(ctx, location, t.i32, Attribute::Int(our_tag as i128));
         ctx.push_op(block, our_tag_const.op_ref());
-        let tag_matches = arith::cmp_eq(ctx, location, prompt_val, our_tag_const.result(ctx), t.i1);
-        ctx.push_op(block, tag_matches.op_ref());
+        our_tag_const.result(ctx)
+    };
+    let tag_matches = arith::cmp_eq(ctx, location, prompt_val, our_tag_val, t.i1);
+    ctx.push_op(block, tag_matches.op_ref());
 
-        // Build dispatch region (when tag matches)
-        let dispatch_region = build_dispatch_region(
-            ctx,
+    // Build dispatch region (when tag matches)
+    let dispatch_region =
+        build_dispatch_region(ctx, location, shift_info, suspend_arms, t, effectful_funcs);
+
+    // Build propagate region (when tag doesn't match → break with current yr)
+    let propagate_region = {
+        let pb = ctx.create_block(BlockData {
             location,
-            shift_info,
-            suspend_arms,
-            t,
-            &self.effectful_funcs,
-        );
-
-        // Build propagate region (when tag doesn't match → break with current yr)
-        let propagate_region = {
-            let pb = ctx.create_block(BlockData {
-                location,
-                args: vec![],
-                ops: trunk_ir::smallvec::smallvec![],
-                parent_region: None,
-            });
-            // Propagate: break out of loop, returning the YieldResult as-is
-            let break_op = arena_scf::r#break(ctx, location, current_yr);
-            ctx.push_op(pb, break_op.op_ref());
-            ctx.create_region(RegionData {
-                location,
-                blocks: trunk_ir::smallvec::smallvec![pb],
-                parent_op: None,
-            })
-        };
-
-        // scf.if for tag match
-        let nil_ty = arena_core::nil(ctx).as_type_ref();
-        let if_op = arena_scf::r#if(
-            ctx,
-            location,
-            tag_matches.result(ctx),
-            nil_ty,
-            dispatch_region,
-            propagate_region,
-        );
-        ctx.push_op(block, if_op.op_ref());
-
+            args: vec![],
+            ops: trunk_ir::smallvec::smallvec![],
+            parent_region: None,
+        });
+        let break_op = arena_scf::r#break(ctx, location, current_yr);
+        ctx.push_op(pb, break_op.op_ref());
         ctx.create_region(RegionData {
             location,
-            blocks: trunk_ir::smallvec::smallvec![block],
+            blocks: trunk_ir::smallvec::smallvec![pb],
             parent_op: None,
         })
-    }
+    };
+
+    // scf.if for tag match
+    let nil_ty = arena_core::nil(ctx).as_type_ref();
+    let if_op = arena_scf::r#if(
+        ctx,
+        location,
+        tag_matches.result(ctx),
+        nil_ty,
+        dispatch_region,
+        propagate_region,
+    );
+    ctx.push_op(block, if_op.op_ref());
+
+    ctx.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![block],
+        parent_op: None,
+    })
 }
 
 /// Build dispatch region for suspend arms using nested scf.if.
