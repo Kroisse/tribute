@@ -52,39 +52,42 @@ fn analyze_shift_points_in_region(
 ) {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if effectful_funcs.contains(&func_name) {
-                    let body = func.body(ctx);
-                    if let Some(func_analysis) = FunctionAnalysis::analyze(ctx, body) {
-                        let total_shifts = func_analysis.shift_points.len();
-                        for shift_point in func_analysis.shift_points {
-                            let span = ctx.op(shift_point.shift_op).location.span;
-                            let results = ctx.op_results(shift_point.shift_op);
-                            let (shift_result_value, shift_result_type) = if !results.is_empty() {
-                                (Some(results[0]), Some(ctx.value_ty(results[0])))
-                            } else {
-                                (None, None)
-                            };
-                            analysis.insert(
-                                span,
-                                ShiftPointInfo {
-                                    index: shift_point.index,
-                                    total_shifts,
-                                    live_values: shift_point.live_values,
-                                    shift_result_value,
-                                    shift_result_type,
-                                    continuation_ops: shift_point.continuation_ops,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-
             // Recursively check nested regions
             for &nested_region in &ctx.op(op).regions {
                 analyze_shift_points_in_region(ctx, nested_region, effectful_funcs, analysis);
+            }
+
+            let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+                continue;
+            };
+            let func_name = func.sym_name(ctx);
+            if !effectful_funcs.contains(&func_name) {
+                continue;
+            }
+            let body = func.body(ctx);
+            let Some(func_analysis) = FunctionAnalysis::analyze(ctx, body) else {
+                continue;
+            };
+            let total_shifts = func_analysis.shift_points.len();
+            for shift_point in func_analysis.shift_points {
+                let span = ctx.op(shift_point.shift_op).location.span;
+                let results = ctx.op_results(shift_point.shift_op);
+                let (shift_result_value, shift_result_type) = if !results.is_empty() {
+                    (Some(results[0]), Some(ctx.value_ty(results[0])))
+                } else {
+                    (None, None)
+                };
+                analysis.insert(
+                    span,
+                    ShiftPointInfo {
+                        index: shift_point.index,
+                        total_shifts,
+                        live_values: shift_point.live_values,
+                        shift_result_value,
+                        shift_result_type,
+                        continuation_ops: shift_point.continuation_ops,
+                    },
+                );
             }
         }
     }
