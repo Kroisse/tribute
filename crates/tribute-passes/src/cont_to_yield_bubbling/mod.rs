@@ -325,15 +325,18 @@ pub fn lower_cont_to_yield_bubbling(
         }
 
         // 4) Post-process new functions:
-        //    a) Update effectful call result types to YieldResult
+        //    a) Update effectful call result types to YieldResult.
+        //       Reuse UpdateEffectfulCallResultTypePattern via PatternApplicator.
+        //       The pattern is idempotent — already-processed calls are skipped.
+        let ef_for_update = Rc::new(effectful_set.clone());
         let types_update = YieldBubblingTypes::new(ctx);
-        call_lower::update_effectful_call_types_for_funcs(
-            ctx,
-            module,
-            &effectful_set,
-            &types_update,
-            &new_names,
+        let update_applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(
+            patterns::UpdateEffectfulCallResultTypePattern {
+                effectful_funcs: ef_for_update,
+                types: types_update,
+            },
         );
+        update_applicator.apply_partial(ctx, module);
         //    b) Expand effectful calls into Done/Shift branches
         let ef_rc = Rc::new(effectful_set.clone());
         let types_new = YieldBubblingTypes::new(ctx);

@@ -111,66 +111,6 @@ pub(crate) fn lower_effectful_calls(
     );
 }
 
-/// Update effectful call result types to YieldResult in the specified functions.
-///
-/// Must run before `lower_effectful_calls_for_funcs` so that the Done/Shift
-/// expansion sees YieldResult-typed call results.
-pub(crate) fn update_effectful_call_types_for_funcs(
-    ctx: &mut IrContext,
-    module: Module,
-    effectful_funcs: &HashSet<Symbol>,
-    types: &YieldBubblingTypes,
-    target_funcs: &[Symbol],
-) {
-    let module_body = match module.body(ctx) {
-        Some(r) => r,
-        None => return,
-    };
-
-    let blocks: Vec<BlockRef> = ctx.region(module_body).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if target_funcs.contains(&func_name) {
-                    let body = func.body(ctx);
-                    update_call_types_in_region(ctx, body, effectful_funcs, types);
-                }
-            }
-        }
-    }
-}
-
-fn update_call_types_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    effectful_funcs: &HashSet<Symbol>,
-    types: &YieldBubblingTypes,
-) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            // Recurse into nested regions
-            let regions: Vec<_> = ctx.op(op).regions.to_vec();
-            for r in regions {
-                update_call_types_in_region(ctx, r, effectful_funcs, types);
-            }
-
-            if let Ok(call) = arena_func::Call::from_op(ctx, op) {
-                let callee = call.callee(ctx);
-                if effectful_funcs.contains(&callee) {
-                    let result_types = ctx.op_result_types(op);
-                    if !result_types.is_empty() && !is_yield_result_type(ctx, result_types[0]) {
-                        ctx.set_op_result_type(op, 0, types.yield_result);
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Expand effectful calls only in the specified target functions.
 ///
 /// Used for post-processing newly generated resume/chain functions.
