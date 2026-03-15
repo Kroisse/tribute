@@ -20,6 +20,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
+use super::analysis;
 use super::types::{YieldBubblingTypes, is_yield_result_type};
 
 /// Find the evidence value from the nearest parent function's entry block.
@@ -169,12 +170,20 @@ impl RewritePattern for UpdateEffectfulCallResultTypePattern {
         op: OpRef,
         _rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call) = arena_func::Call::from_op(ctx, op) else {
-            return false;
-        };
-
-        let callee = call.callee(ctx);
-        if !self.effectful_funcs.contains(&callee) {
+        // Match direct calls to known effectful functions
+        if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+            if !self.effectful_funcs.contains(&call.callee(ctx)) {
+                return false;
+            }
+        } else if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+            // Match indirect calls where callee has an effectful type
+            let operands = ctx.op_operands(op).to_vec();
+            if operands.first().map_or(true, |&v| {
+                !analysis::has_effectful_type(ctx, ctx.value_ty(v))
+            }) {
+                return false;
+            }
+        } else {
             return false;
         }
 

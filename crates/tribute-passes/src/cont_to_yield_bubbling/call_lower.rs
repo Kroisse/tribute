@@ -432,7 +432,10 @@ fn build_inline_done_branch(
             .map(|&v| resolve_remap(&remap, v))
             .collect();
 
-        let needs_rebuild = remapped_operands != old_operands;
+        // If remap is non-empty and op has regions, always rebuild.
+        // Region bodies may reference remapped values that aren't direct operands.
+        let has_regions = !ctx.op(op).regions.is_empty();
+        let needs_rebuild = remapped_operands != old_operands || (has_regions && !remap.is_empty());
 
         if needs_rebuild {
             let op_data = ctx.op(op);
@@ -1178,30 +1181,58 @@ fn build_chain_shift_branch(
 // ============================================================================
 
 /// Check if an operation is a call to an effectful function.
+///
+/// Matches both `func.call` (direct) and `func.call_indirect` (indirect/closure).
 fn is_effectful_call(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>) -> bool {
     if let Ok(call) = arena_func::Call::from_op(ctx, op) {
         effectful_funcs.contains(&call.callee(ctx)) && !ctx.op_results(op).is_empty()
+    } else if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+        let operands = ctx.op_operands(op).to_vec();
+        if let Some(&callee) = operands.first() {
+            super::analysis::has_effectful_type(ctx, ctx.value_ty(callee))
+                && !ctx.op_results(op).is_empty()
+        } else {
+            false
+        }
     } else {
         false
     }
 }
 
 /// Get the original result type of a callee function (before YieldResult conversion).
+///
+/// For `func.call`: looks up the callee function definition in the module.
+/// For `func.call_indirect`: extracts return type from the callee value's `core.func` type.
 pub(crate) fn get_callee_original_result_type(
     ctx: &IrContext,
     call_op: OpRef,
     effectful_funcs: &HashSet<Symbol>,
     module_body: RegionRef,
 ) -> Option<TypeRef> {
-    let Ok(call) = arena_func::Call::from_op(ctx, call_op) else {
-        return None;
-    };
-    let callee = call.callee(ctx);
-    if !effectful_funcs.contains(&callee) {
-        return None;
+    // Direct call: look up callee function definition
+    if let Ok(call) = arena_func::Call::from_op(ctx, call_op) {
+        let callee = call.callee(ctx);
+        if !effectful_funcs.contains(&callee) {
+            return None;
+        }
+        return super::truncate::find_original_result_type(ctx, module_body, callee);
     }
-
-    super::truncate::find_original_result_type(ctx, module_body, callee)
+    // Indirect call: extract return type from callee value's core.func type
+    if arena_func::CallIndirect::from_op(ctx, call_op).is_ok() {
+        let operands = ctx.op_operands(call_op).to_vec();
+        if let Some(&callee_value) = operands.first() {
+            let callee_ty = ctx.value_ty(callee_value);
+            let func_data = ctx.types.get(callee_ty);
+            if func_data.dialect == Symbol::new("core")
+                && func_data.name == Symbol::new("func")
+                && !func_data.params.is_empty()
+            {
+                // params[0] is the return type in core.func
+                return Some(func_data.params[0]);
+            }
+        }
+    }
+    None
 }
 
 /// Snapshot an operation's data.

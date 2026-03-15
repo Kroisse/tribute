@@ -1398,3 +1398,44 @@ fn main() {
 "#;
     assert_native_output("handler_result_body_value.trb", code, "11");
 }
+
+// =============================================================================
+// Closure / call_indirect with Effects Tests
+// =============================================================================
+
+/// Test that a closure (lambda) performing effectful operations compiles correctly
+/// when passed as an argument and called via call_indirect.
+///
+/// The closure `fn() { State::get() }` is passed to `apply` which calls it
+/// indirectly. Yield bubbling must recognize this `func.call_indirect` as
+/// effectful and expand it into Done/Shift branches.
+#[test]
+fn test_call_indirect_effectful_closure() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn apply(f: fn() ->{State(Nat)} Nat) ->{State(Nat)} Nat {
+    f()
+}
+
+fn run() -> Nat {
+    handle apply(fn() { State::get() }) {
+        { result } -> result
+        { State::get() -> k } -> k(42)
+        { State::set(v) -> k } -> k(Nil)
+    }
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_and_check(code, "call_indirect_effectful_closure.trb");
+    print_diagnostics(&diagnostics);
+    assert!(
+        diagnostics.is_empty(),
+        "Effectful closure via call_indirect should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
+}
