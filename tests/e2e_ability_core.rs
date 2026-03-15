@@ -1439,3 +1439,66 @@ fn main() { }
         diagnostics.len()
     );
 }
+
+/// Test that multiple effectful calls followed by a non-effectful call
+/// execute correctly.
+///
+/// Exercises the `needs_rebuild` fix: after effectful calls are expanded into
+/// Done/Shift branches, subsequent ops that reference remapped call results
+/// must have their operands correctly updated.
+#[test]
+fn test_multiple_effectful_calls_then_pure_call() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn add(a: Nat, b: Nat) -> Nat { a + b }
+
+fn compute() ->{State(Nat)} Nat {
+    let a = State::get()
+    let b = State::get()
+    add(a, b)
+}
+
+fn main() {
+    let result = handle compute() {
+        { result } -> result
+        { State::get() -> k } -> k(5)
+        { State::set(v) -> k } -> k(Nil)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("multiple_effectful_then_pure_call.trb", code, "10");
+}
+
+/// Test that a non-effectful function call nested inside a conditional
+/// after an effectful call is not incorrectly truncated as dead code.
+///
+/// Exercises the `remaining_are_dead_code` recursive region descent fix.
+#[test]
+fn test_non_effectful_call_in_nested_region() {
+    let code = r#"ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn identity(x: Nat) -> Nat { x }
+
+fn compute() ->{State(Nat)} Nat {
+    let n = State::get()
+    identity(n)
+}
+
+fn main() {
+    let result = handle compute() {
+        { result } -> result
+        { State::get() -> k } -> k(7)
+        { State::set(v) -> k } -> k(Nil)
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("non_effectful_call_in_nested_region.trb", code, "7");
+}
