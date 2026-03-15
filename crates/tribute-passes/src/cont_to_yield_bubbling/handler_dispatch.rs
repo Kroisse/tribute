@@ -390,7 +390,7 @@ fn infer_done_body_result_type(
             continue;
         }
         let operands = ctx.op_operands(op);
-        let uses_block_arg = operands.iter().any(|&v| v == *block_arg);
+        let uses_block_arg = operands.contains(block_arg);
         if uses_block_arg {
             let result_types = ctx.op_result_types(op);
             if !result_types.is_empty() {

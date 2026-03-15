@@ -444,13 +444,13 @@ pub(crate) fn create_resume_function(
                     // in shift_analysis, then reuse whatever mapping was established.
                     let def_span = ctx.op(def_op).location.span;
                     let mut mapped_via_analysis = false;
-                    if let Some(info) = spec.shift_analysis.get(&def_span) {
-                        if let Some(original_result) = info.shift_result_value {
-                            let mapped = mapping.lookup_value_or_default(original_result);
-                            if mapped != original_result {
-                                mapping.map_value(operand, mapped);
-                                mapped_via_analysis = true;
-                            }
+                    if let Some(info) = spec.shift_analysis.get(&def_span)
+                        && let Some(original_result) = info.shift_result_value
+                    {
+                        let mapped = mapping.lookup_value_or_default(original_result);
+                        if mapped != original_result {
+                            mapping.map_value(operand, mapped);
+                            mapped_via_analysis = true;
                         }
                     }
                     if !mapped_via_analysis {

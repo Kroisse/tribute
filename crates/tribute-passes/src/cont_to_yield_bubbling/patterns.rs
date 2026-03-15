@@ -29,15 +29,9 @@ use super::types::{YieldBubblingTypes, is_yield_result_type};
 fn find_parent_evidence(ctx: &IrContext, op: OpRef, evidence_ty: TypeRef) -> Option<ValueRef> {
     let mut current_op = op;
     loop {
-        let Some(parent_block) = ctx.op(current_op).parent_block else {
-            return None;
-        };
-        let Some(parent_region) = ctx.block(parent_block).parent_region else {
-            return None;
-        };
-        let Some(parent_op) = ctx.region(parent_region).parent_op else {
-            return None;
-        };
+        let parent_block = ctx.op(current_op).parent_block?;
+        let parent_region = ctx.block(parent_block).parent_region?;
+        let parent_op = ctx.region(parent_region).parent_op?;
         if arena_func::Func::from_op(ctx, parent_op).is_ok() {
             // Found the parent function — get entry block's first arg (evidence)
             let body = ctx.op(parent_op).regions[0];
@@ -178,9 +172,10 @@ impl RewritePattern for UpdateEffectfulCallResultTypePattern {
         } else if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
             // Match indirect calls where callee has an effectful type
             let operands = ctx.op_operands(op).to_vec();
-            if operands.first().map_or(true, |&v| {
-                !analysis::has_effectful_type(ctx, ctx.value_ty(v))
-            }) {
+            if !operands
+                .first()
+                .is_some_and(|&v| analysis::has_effectful_type(ctx, ctx.value_ty(v)))
+            {
                 return false;
             }
         } else {
@@ -392,6 +387,10 @@ impl RewritePattern for LowerPushPromptPattern {
             done_op.result(ctx)
         };
 
+        if all_ops.is_empty() {
+            return false;
+        }
+
         // Pass runtime tag to the sibling handler_dispatch op.
         // push_prompt and handler_dispatch are siblings in the same block:
         //   %pp = cont.push_prompt { body } { handlers }
@@ -411,10 +410,6 @@ impl RewritePattern for LowerPushPromptPattern {
                     }
                 }
             }
-        }
-
-        if all_ops.is_empty() {
-            return false;
         }
 
         let last = all_ops.pop().unwrap();
