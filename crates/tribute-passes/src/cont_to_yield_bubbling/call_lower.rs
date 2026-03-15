@@ -80,6 +80,7 @@ pub(crate) struct CallLowerCtx<'a> {
     pub(crate) chain_specs: &'a ChainSpecs,
     pub(crate) chain_counter: &'a ResumeCounter,
     pub(crate) module_name: Symbol,
+    pub(crate) module_body: RegionRef,
 }
 
 // ============================================================================
@@ -99,12 +100,17 @@ pub(crate) fn lower_effectful_calls(
     chain_counter: &ResumeCounter,
     module_name: Symbol,
 ) {
+    let module_body = match module.body(ctx) {
+        Some(r) => r,
+        None => return,
+    };
     let lc = CallLowerCtx {
         effectful_funcs,
         types,
         chain_specs,
         chain_counter,
         module_name,
+        module_body,
     };
     lower_effectful_calls_impl(ctx, module, &lc, None);
 }
@@ -127,16 +133,11 @@ pub(crate) fn lower_effectful_calls_for_funcs(
 /// When `None`, processes all effectful functions in the module.
 fn lower_effectful_calls_impl(
     ctx: &mut IrContext,
-    module: Module,
+    _module: Module,
     lower_ctx: &CallLowerCtx<'_>,
     target_funcs: Option<&[Symbol]>,
 ) {
-    let module_body = match module.body(ctx) {
-        Some(r) => r,
-        None => return,
-    };
-
-    let blocks: Vec<BlockRef> = ctx.region(module_body).blocks.to_vec();
+    let blocks: Vec<BlockRef> = ctx.region(lower_ctx.module_body).blocks.to_vec();
     for block in blocks {
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
         for op in ops {
@@ -219,8 +220,9 @@ fn expand_first_effectful_call(
     }
 
     // Get original result type from callee function signature
-    let original_result_ty = get_callee_original_result_type(ctx, call_op, lc.effectful_funcs)
-        .unwrap_or(lc.types.anyref);
+    let original_result_ty =
+        get_callee_original_result_type(ctx, call_op, lc.effectful_funcs, lc.module_body)
+            .unwrap_or(lc.types.anyref);
 
     let remaining_ops: Vec<OpRef> = ops[call_index + 1..].to_vec();
 
@@ -1189,6 +1191,7 @@ pub(crate) fn get_callee_original_result_type(
     ctx: &IrContext,
     call_op: OpRef,
     effectful_funcs: &HashSet<Symbol>,
+    module_body: RegionRef,
 ) -> Option<TypeRef> {
     let Ok(call) = arena_func::Call::from_op(ctx, call_op) else {
         return None;
@@ -1198,11 +1201,7 @@ pub(crate) fn get_callee_original_result_type(
         return None;
     }
 
-    // Look up callee's original_result_type attribute (set by truncation)
-    // or infer from the function's type signature
-    // For now, try to find the callee function in the IR
-    // This is a simplified approach; in production we'd use a function table
-    None // Will fall back to anyref
+    super::truncate::find_original_result_type(ctx, module_body, callee)
 }
 
 /// Snapshot an operation's data.

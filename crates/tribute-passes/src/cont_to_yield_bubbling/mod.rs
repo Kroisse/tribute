@@ -243,7 +243,7 @@ pub fn lower_cont_to_yield_bubbling(
     // We extract the Done value and cast to the original type.
     truncate::unwrap_yr_in_non_effectful_funcs(ctx, module, &effectful_funcs, &types);
 
-    // Verify all cont.* ops (except cont.drop) are converted
+    // Verify all cont.* ops (except cont.drop, cont.done, cont.suspend, cont.yield) are converted
     let mut conversion_target = ConversionTarget::new();
     conversion_target.add_illegal_dialect("cont");
     conversion_target.add_legal_op("cont", "drop");
@@ -346,6 +346,7 @@ pub fn lower_cont_to_yield_bubbling(
             chain_specs: &chain_specs,
             chain_counter: &chain_counter,
             module_name,
+            module_body,
         };
         call_lower::lower_effectful_calls_for_funcs(ctx, module, &lc, &new_names);
         let types_wrap = YieldBubblingTypes::new(ctx);

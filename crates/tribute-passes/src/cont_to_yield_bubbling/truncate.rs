@@ -653,7 +653,7 @@ fn unwrap_yr_calls_in_block(
 /// Find the original result type of a function (before yield bubbling changed it).
 /// Walks the module to find the function definition and reads its
 /// `original_result_type` attribute (set by truncation).
-fn find_original_result_type(
+pub(crate) fn find_original_result_type(
     ctx: &IrContext,
     module_body: RegionRef,
     func_name: Symbol,

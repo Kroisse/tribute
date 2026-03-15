@@ -788,15 +788,32 @@ fn build_arm_region(
 
         let needs_rebuild = remapped_operands != operands || produces_yr;
         if needs_rebuild {
-            let op_data = ctx.op(op);
-            let mut builder =
-                OperationDataBuilder::new(op_data.location, op_data.dialect, op_data.name)
-                    .operands(remapped_operands)
-                    .results(result_types);
-            for (k, v) in &op_data.attributes {
-                builder = builder.attr(*k, v.clone());
+            let (location, dialect, name, attrs, regions) = {
+                let op_data = ctx.op(op);
+                (
+                    op_data.location,
+                    op_data.dialect,
+                    op_data.name,
+                    op_data
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| (*k, v.clone()))
+                        .collect::<Vec<_>>(),
+                    op_data.regions.to_vec(),
+                )
+            };
+
+            for &r in &regions {
+                ctx.detach_region(r);
             }
-            for &r in &op_data.regions {
+
+            let mut builder = OperationDataBuilder::new(location, dialect, name)
+                .operands(remapped_operands)
+                .results(result_types);
+            for (k, v) in attrs {
+                builder = builder.attr(k, v);
+            }
+            for r in regions {
                 builder = builder.region(r);
             }
             let new_data = builder.build(ctx);

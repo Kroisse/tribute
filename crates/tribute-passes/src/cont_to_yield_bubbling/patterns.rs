@@ -233,8 +233,8 @@ fn region_yields_yr(ctx: &IrContext, region: trunk_ir::refs::RegionRef) -> bool 
     let blocks = &ctx.region(region).blocks;
     for &block in blocks {
         let ops = &ctx.block(block).ops;
-        for &op in ops {
-            let result_types = ctx.op_result_types(op);
+        if let Some(&last_op) = ops.last() {
+            let result_types = ctx.op_result_types(last_op);
             if !result_types.is_empty() && is_yield_result_type(ctx, result_types[0]) {
                 return true;
             }
