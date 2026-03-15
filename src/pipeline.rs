@@ -463,18 +463,18 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 }
 
 /// Run the native target pipeline in arena (shared + native-specific passes).
-fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
-    if let Err(illegal_ops) =
-        tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m)
-    {
-        tracing::error!(
-            "cont_to_yield_bubbling left illegal ops: {:?}",
-            illegal_ops
-                .iter()
-                .map(|op| format!("{}.{}", op.dialect, op.name))
-                .collect::<Vec<_>>()
-        );
-    }
+fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+    tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m).map_err(
+        |illegal_ops| ConversionError {
+            illegal_ops: illegal_ops
+                .into_iter()
+                .map(|op| IllegalOp {
+                    dialect: op.dialect.to_string(),
+                    name: op.name.to_string(),
+                })
+                .collect(),
+        },
+    )?;
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
@@ -502,6 +502,8 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) {
 
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
+
+    Ok(())
 }
 
 /// Dump IR text after running the pipeline up to the target-specific passes.
@@ -519,7 +521,7 @@ pub fn dump_ir(
     };
 
     if native {
-        run_native_target_pipeline(&mut ctx, m);
+        run_native_target_pipeline(&mut ctx, m)?;
     } else {
         run_wasm_target_pipeline(&mut ctx, m)?;
     }
