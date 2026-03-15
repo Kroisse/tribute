@@ -46,12 +46,24 @@ impl FunctionAnalysis {
 
         // Phase 1-2: Only support single-block functions
         if blocks.len() != 1 {
-            tracing::debug!("FunctionAnalysis: skipping multi-block function");
+            tracing::debug!(
+                "FunctionAnalysis: skipping multi-block function (blocks={})",
+                blocks.len()
+            );
             return None;
         }
 
         let block = blocks[0];
         let ops: Vec<OpRef> = ctx.block(block).ops.iter().copied().collect();
+
+        tracing::trace!(
+            "FunctionAnalysis: analyzing block with {} ops: [{}]",
+            ops.len(),
+            ops.iter()
+                .map(|&op| format!("{}.{}", ctx.op(op).dialect, ctx.op(op).name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         // Find all shift operations and their indices
         let mut shift_indices: Vec<(usize, OpRef)> = Vec::new();
@@ -65,7 +77,11 @@ impl FunctionAnalysis {
                 }
                 shift_indices.push((i, op));
             } else if has_shift_in_nested_region(ctx, op) {
-                tracing::debug!("FunctionAnalysis: skipping function with shift in nested region");
+                tracing::debug!(
+                    "FunctionAnalysis: skipping — op {}.{} has shift in nested region",
+                    ctx.op(op).dialect,
+                    ctx.op(op).name
+                );
                 return None;
             }
         }

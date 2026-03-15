@@ -166,9 +166,29 @@ impl<'a> FunctionTranslator<'a> {
 
     fn lookup(&self, ir_val: ValueRef) -> CompilationResult<cl_ir::Value> {
         self.values.get(&ir_val).copied().ok_or_else(|| {
+            let val_def = self.ctx.value_def(ir_val);
+            let val_ty = self.ctx.value_ty(ir_val);
+            let ty_data = self.ctx.types.get(val_ty);
+            // Check if the defining op is in any of the blocks we know about
+            let def_info = match val_def {
+                trunk_ir::refs::ValueDef::OpResult(op, idx) => {
+                    let op_data = self.ctx.op(op);
+                    let parent_block = op_data.parent_block;
+                    let in_block_map = parent_block.map(|b| self.block_map.contains_key(&b)).unwrap_or(false);
+                    format!("op={:?} idx={} dialect={} name={} parent_block={:?} in_block_map={}",
+                        op, idx, op_data.dialect, op_data.name, parent_block, in_block_map)
+                }
+                trunk_ir::refs::ValueDef::BlockArg(block, idx) => {
+                    let in_block_map = self.block_map.contains_key(&block);
+                    format!("block_arg block={:?} idx={} in_block_map={}", block, idx, in_block_map)
+                }
+            };
             CompilationError::codegen(format!(
-                "TrunkIR value not found in Cranelift mapping (mapped {} values total)",
+                "TrunkIR value not found in Cranelift mapping (mapped {} values total, type: {}.{}, def: {})",
                 self.values.len(),
+                ty_data.dialect,
+                ty_data.name,
+                def_info,
             ))
         })
     }
