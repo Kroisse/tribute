@@ -826,7 +826,6 @@ fn build_arm_region(
             ctx.push_op(new_block, new_op);
             if produces_yr {
                 last_yr_value = Some(ctx.op_results(new_op)[0]);
-                break;
             }
         } else {
             ctx.detach_op(op);

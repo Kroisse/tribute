@@ -704,31 +704,49 @@ fn find_func_original_result_in_region(
 /// Returns false if the remaining ops contain a non-effectful function call
 /// (like `__tribute_print_nat`) — those must be kept for `lower_effectful_calls`.
 /// Pure operations (arith, casts, constants) and effectful calls are safe to drop.
+/// Recursively descends into nested regions (scf.if, scf.loop, etc.).
 fn remaining_are_dead_code(
     ctx: &IrContext,
     remaining: &[OpRef],
     effectful_funcs: &HashSet<Symbol>,
 ) -> bool {
     for &op in remaining {
-        // Direct call to a non-effectful function → has side effects, can't truncate
-        if let Ok(call) = arena_func::Call::from_op(ctx, op) {
-            if !effectful_funcs.contains(&call.callee(ctx)) {
+        if !op_is_dead_code(ctx, op, effectful_funcs) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check if a single op (and its nested regions) is dead code.
+fn op_is_dead_code(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>) -> bool {
+    // Direct call to a non-effectful function → has side effects, can't truncate
+    if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+        if !effectful_funcs.contains(&call.callee(ctx)) {
+            return false;
+        }
+        return true;
+    }
+    // call_indirect to non-effectful function → has side effects
+    if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+        let operands = ctx.op_operands(op).to_vec();
+        if !operands.is_empty() {
+            let callee_ty = ctx.value_ty(operands[0]);
+            if !super::analysis::has_effectful_type(ctx, callee_ty) {
                 return false;
             }
-            continue;
         }
-        // call_indirect to non-effectful function → has side effects
-        if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
-            let operands = ctx.op_operands(op).to_vec();
-            if !operands.is_empty() {
-                let callee_ty = ctx.value_ty(operands[0]);
-                if !super::analysis::has_effectful_type(ctx, callee_ty) {
+        return true;
+    }
+    // Recurse into nested regions
+    for &region in &ctx.op(op).regions {
+        for &block in &ctx.region(region).blocks {
+            for &nested_op in &ctx.block(block).ops {
+                if !op_is_dead_code(ctx, nested_op, effectful_funcs) {
                     return false;
                 }
             }
-            continue;
         }
-        // All other ops (arith, casts, returns, struct ops, etc.) are pure or terminal
     }
     true
 }

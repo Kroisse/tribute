@@ -243,9 +243,18 @@ fn region_yields_yr(ctx: &IrContext, region: trunk_ir::refs::RegionRef) -> bool 
     for &block in blocks {
         let ops = &ctx.block(block).ops;
         if let Some(&last_op) = ops.last() {
-            let result_types = ctx.op_result_types(last_op);
-            if !result_types.is_empty() && is_yield_result_type(ctx, result_types[0]) {
-                return true;
+            // scf.yield has no results — check its operand types instead
+            if arena_scf::Yield::from_op(ctx, last_op).is_ok() {
+                let operands = ctx.op_operands(last_op);
+                if !operands.is_empty() && is_yield_result_type(ctx, ctx.value_ty(operands[0])) {
+                    return true;
+                }
+            } else {
+                // Non-yield terminators: check result types as before
+                let result_types = ctx.op_result_types(last_op);
+                if !result_types.is_empty() && is_yield_result_type(ctx, result_types[0]) {
+                    return true;
+                }
             }
         }
     }
