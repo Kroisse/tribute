@@ -9,10 +9,10 @@ use trunk_ir::dialect::adt as arena_adt;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
-use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
-
-use trunk_ir::rewrite::Module;
+use trunk_ir::refs::OpRef;
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
 
 use super::types::{YieldBubblingTypes, is_yield_result_type};
 
@@ -25,27 +25,70 @@ pub(crate) struct WrapReturnsPattern {
     pub(crate) types: YieldBubblingTypes,
 }
 
+/// Walk up the parent chain from an op to find the enclosing `func.func` name.
+fn find_parent_func_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+    let mut current_block = ctx.op(op).parent_block?;
+    loop {
+        let region = ctx.block(current_block).parent_region?;
+        let parent_op = ctx.region(region).parent_op?;
+        if let Ok(func) = arena_func::Func::from_op(ctx, parent_op) {
+            return Some(func.sym_name(ctx));
+        }
+        current_block = ctx.op(parent_op).parent_block?;
+    }
+}
+
 impl RewritePattern for WrapReturnsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
-        _rewriter: &mut PatternRewriter<'_>,
+        rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+        // Match func.return
+        if arena_func::Return::from_op(ctx, op).is_err() {
+            return false;
+        }
+
+        // Find enclosing function and check if it's effectful
+        let Some(func_name) = find_parent_func_name(ctx, op) else {
             return false;
         };
-
-        let func_name = func.sym_name(ctx);
         if !self.effectful_funcs.contains(&func_name) {
             return false;
         }
 
-        let body = func.body(ctx);
-        wrap_returns_in_region(ctx, body, &self.types);
+        // Check if return value is already YieldResult
+        let Some(&value) = ctx.op_operands(op).first() else {
+            return false;
+        };
+        if is_yield_result_type(ctx, ctx.value_ty(value)) {
+            return false;
+        }
 
-        // Return false - mutated in place, no replacement needed
-        false
+        let location = ctx.op(op).location;
+
+        // Cast to anyref
+        let anyref_val =
+            arena_core::unrealized_conversion_cast(ctx, location, value, self.types.anyref);
+        rewriter.insert_op(anyref_val.op_ref());
+
+        // Create YieldResult::Done
+        let done_op = arena_adt::variant_new(
+            ctx,
+            location,
+            [anyref_val.result(ctx)],
+            self.types.yield_result,
+            self.types.yield_result,
+            Symbol::new("Done"),
+        );
+        rewriter.insert_op(done_op.op_ref());
+
+        // Replace return with new return using Done value
+        let new_return = arena_func::r#return(ctx, location, [done_op.result(ctx)]);
+        rewriter.replace_op(new_return.op_ref());
+
+        true
     }
 }
 
@@ -58,74 +101,10 @@ pub(crate) fn wrap_returns_for_funcs(
     func_names: &[Symbol],
     types: &YieldBubblingTypes,
 ) {
-    let module_body = match module.body(ctx) {
-        Some(r) => r,
-        None => return,
-    };
-
-    let blocks: Vec<BlockRef> = ctx.region(module_body).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if func_names.contains(&func_name) {
-                    let body = func.body(ctx);
-                    wrap_returns_in_region(ctx, body, types);
-                }
-            }
-        }
-    }
-}
-
-/// Recursively wrap returns in a region with YieldResult::Done.
-fn wrap_returns_in_region(ctx: &mut IrContext, region: RegionRef, types: &YieldBubblingTypes) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        wrap_returns_in_block(ctx, block, types);
-    }
-}
-
-/// Wrap returns in a block.
-fn wrap_returns_in_block(ctx: &mut IrContext, block: BlockRef, types: &YieldBubblingTypes) {
-    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-
-    for op in ops {
-        // Recursively process nested regions
-        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-        for r in regions {
-            wrap_returns_in_region(ctx, r, types);
-        }
-
-        // Check if this is func.return
-        if arena_func::Return::from_op(ctx, op).is_ok() {
-            let operands = ctx.op_operands(op).to_vec();
-
-            if let Some(&value) = operands.first() {
-                let is_yr = is_yield_result_type(ctx, ctx.value_ty(value));
-                if !is_yr {
-                    let location = ctx.op(op).location;
-
-                    // Cast to anyref
-                    let anyref_val =
-                        arena_core::unrealized_conversion_cast(ctx, location, value, types.anyref);
-                    ctx.insert_op_before(block, op, anyref_val.op_ref());
-
-                    // Create YieldResult::Done
-                    let done_op = arena_adt::variant_new(
-                        ctx,
-                        location,
-                        [anyref_val.result(ctx)],
-                        types.yield_result,
-                        types.yield_result,
-                        Symbol::new("Done"),
-                    );
-                    ctx.insert_op_before(block, op, done_op.op_ref());
-
-                    // Update return operand
-                    ctx.set_op_operand(op, 0, done_op.result(ctx));
-                }
-            }
-        }
-    }
+    let target_funcs: HashSet<Symbol> = func_names.iter().copied().collect();
+    let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(WrapReturnsPattern {
+        effectful_funcs: Rc::new(target_funcs),
+        types: *types,
+    });
+    applicator.apply_partial(ctx, module);
 }

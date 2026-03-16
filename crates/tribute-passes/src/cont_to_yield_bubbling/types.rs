@@ -13,6 +13,7 @@ use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 /// Cached type references for yield bubbling types.
 ///
 /// Created once per pass invocation via `YieldBubblingTypes::new()`.
+#[derive(Clone, Copy)]
 pub(crate) struct YieldBubblingTypes {
     /// `adt.enum @YieldResult { Done(anyref), Shift(ShiftInfo) }`
     pub(crate) yield_result: TypeRef,

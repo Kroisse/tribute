@@ -160,41 +160,24 @@ pub fn lower_cont_to_yield_bubbling(
     // Step 3: Lower cont.* operations
     let type_converter = standard_type_converter(ctx);
 
-    // Create second set of types for patterns that need owned copies
-    let types_for_shift = YieldBubblingTypes::new(ctx);
-    let types_for_resume = YieldBubblingTypes::new(ctx);
-    let types_for_call = YieldBubblingTypes::new(ctx);
-    let types_for_if = YieldBubblingTypes::new(ctx);
-    let types_for_yield = YieldBubblingTypes::new(ctx);
-    let types_for_dispatch = YieldBubblingTypes::new(ctx);
-    let types_for_push = YieldBubblingTypes::new(ctx);
-
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(shift_lower::LowerShiftPattern {
-            types: types_for_shift,
+            types,
             resume_specs: Rc::clone(&resume_specs),
             resume_counter: Rc::clone(&resume_counter),
             shift_analysis: Rc::clone(&shift_analysis),
             module_name,
         })
-        .add_pattern(patterns::LowerResumePattern {
-            types: types_for_resume,
-        })
+        .add_pattern(patterns::LowerResumePattern { types })
         .add_pattern(patterns::UpdateEffectfulCallResultTypePattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
-            types: types_for_call,
+            types,
         })
-        .add_pattern(patterns::UpdateScfIfResultTypePattern {
-            types: types_for_if,
-        })
-        .add_pattern(patterns::UpdateScfYieldToYieldResultPattern {
-            _types: types_for_yield,
-        })
-        .add_pattern(patterns::LowerPushPromptPattern {
-            types: types_for_push,
-        })
+        .add_pattern(patterns::UpdateScfIfResultTypePattern { types })
+        .add_pattern(patterns::UpdateScfYieldToYieldResultPattern { _types: types })
+        .add_pattern(patterns::LowerPushPromptPattern { types })
         .add_pattern(handler_dispatch::LowerHandlerDispatchPattern {
-            types: types_for_dispatch,
+            types,
             effectful_funcs: Rc::clone(&effectful_funcs),
             handlers_in_effectful_funcs: Rc::new(handlers_in_effectful_funcs),
         });
@@ -217,12 +200,11 @@ pub fn lower_cont_to_yield_bubbling(
     // Runs after truncate so only meaningful remaining ops are expanded.
     let chain_specs: call_lower::ChainSpecs = Rc::new(RefCell::new(Vec::new()));
     let chain_counter: ResumeCounter = Rc::new(RefCell::new(1000)); // offset to avoid name collisions
-    let types_for_chain = YieldBubblingTypes::new(ctx);
     call_lower::lower_effectful_calls(
         ctx,
         module,
         &effectful_funcs,
-        &types_for_chain,
+        &types,
         &chain_specs,
         &chain_counter,
         module_name,
@@ -230,11 +212,10 @@ pub fn lower_cont_to_yield_bubbling(
 
     // Step 4: Wrap returns in effectful functions with YieldResult::Done
     let type_converter2 = standard_type_converter(ctx);
-    let types_for_wrap = YieldBubblingTypes::new(ctx);
     let applicator2 =
         PatternApplicator::new(type_converter2).add_pattern(wrap_returns::WrapReturnsPattern {
             effectful_funcs: Rc::clone(&effectful_funcs),
-            types: types_for_wrap,
+            types,
         });
     applicator2.apply_partial(ctx, module);
 
@@ -329,28 +310,25 @@ pub fn lower_cont_to_yield_bubbling(
         //       Reuse UpdateEffectfulCallResultTypePattern via PatternApplicator.
         //       The pattern is idempotent — already-processed calls are skipped.
         let ef_for_update = Rc::new(effectful_set.clone());
-        let types_update = YieldBubblingTypes::new(ctx);
         let update_applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(
             patterns::UpdateEffectfulCallResultTypePattern {
                 effectful_funcs: ef_for_update,
-                types: types_update,
+                types,
             },
         );
         update_applicator.apply_partial(ctx, module);
         //    b) Expand effectful calls into Done/Shift branches
         let ef_rc = Rc::new(effectful_set.clone());
-        let types_new = YieldBubblingTypes::new(ctx);
         let lc = call_lower::CallLowerCtx {
             effectful_funcs: &ef_rc,
-            types: &types_new,
+            types: &types,
             chain_specs: &chain_specs,
             chain_counter: &chain_counter,
             module_name,
             module_body,
         };
         call_lower::lower_effectful_calls_for_funcs(ctx, module, &lc, &new_names);
-        let types_wrap = YieldBubblingTypes::new(ctx);
-        wrap_returns::wrap_returns_for_funcs(ctx, module, &new_names, &types_wrap);
+        wrap_returns::wrap_returns_for_funcs(ctx, module, &new_names, &types);
     }
 
     let illegal = conversion_target.verify(ctx, module_body);

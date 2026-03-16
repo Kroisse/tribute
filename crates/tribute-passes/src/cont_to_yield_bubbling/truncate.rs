@@ -4,6 +4,7 @@
 //! so they return YieldResult at the first effect point.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -15,8 +16,36 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::walk::{self, WalkAction};
 
 use super::types::{YieldBubblingTypes, is_yield_result_type};
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Collect all `func.func` ops in a region matching a predicate.
+///
+/// Uses `walk_region` to traverse the module. All func bodies are skipped
+/// (not descended into), so only top-level funcs are collected.
+fn collect_func_ops(
+    ctx: &IrContext,
+    region: RegionRef,
+    predicate: impl Fn(Symbol) -> bool,
+) -> Vec<OpRef> {
+    let mut result = Vec::new();
+    let _: ControlFlow<(), ()> = walk::walk_region(ctx, region, &mut |op| {
+        if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+            if predicate(func.sym_name(ctx)) {
+                result.push(op);
+            }
+            ControlFlow::Continue(WalkAction::Skip)
+        } else {
+            ControlFlow::Continue(WalkAction::Advance)
+        }
+    });
+    result
+}
 
 // ============================================================================
 // Truncate After Shift
@@ -39,40 +68,9 @@ pub(crate) fn truncate_after_shift(
         effectful_funcs.len(),
     );
 
-    find_and_truncate_effectful_funcs_in_region(ctx, module_body, effectful_funcs, types);
-}
-
-/// Recursively find and truncate effectful functions in a region.
-fn find_and_truncate_effectful_funcs_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    effectful_funcs: &HashSet<Symbol>,
-    types: &YieldBubblingTypes,
-) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if effectful_funcs.contains(&func_name) {
-                    truncate_func_after_shift(ctx, op, effectful_funcs, types);
-                    continue;
-                }
-            }
-
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-            for nested_region in regions {
-                find_and_truncate_effectful_funcs_in_region(
-                    ctx,
-                    nested_region,
-                    effectful_funcs,
-                    types,
-                );
-            }
-        }
+    let func_ops = collect_func_ops(ctx, module_body, |name| effectful_funcs.contains(&name));
+    for func_op in func_ops {
+        truncate_func_after_shift(ctx, func_op, effectful_funcs, types);
     }
 }
 
@@ -327,36 +325,16 @@ pub(crate) fn fix_body_call_types(
         None => return,
     };
 
-    fix_body_call_types_in_region(ctx, module_body, effectful_funcs);
-}
-
-fn fix_body_call_types_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    effectful_funcs: &HashSet<Symbol>,
-) {
-    let blocks: Vec<_> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if effectful_funcs.contains(&func_name) {
-                    fix_body_call_types_in_func(ctx, func.body(ctx));
-                }
-            }
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-            for nested in regions {
-                fix_body_call_types_in_region(ctx, nested, effectful_funcs);
-            }
+    let func_ops = collect_func_ops(ctx, module_body, |name| effectful_funcs.contains(&name));
+    for func_op in func_ops {
+        let Ok(func) = arena_func::Func::from_op(ctx, func_op) else {
+            continue;
+        };
+        let body = func.body(ctx);
+        let blocks: Vec<_> = ctx.region(body).blocks.to_vec();
+        for block in blocks {
+            fix_body_call_types_in_block(ctx, block);
         }
-    }
-}
-
-fn fix_body_call_types_in_func(ctx: &mut IrContext, region: RegionRef) {
-    let blocks: Vec<_> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        fix_body_call_types_in_block(ctx, block);
     }
 }
 
@@ -501,31 +479,9 @@ pub(crate) fn unwrap_yr_in_non_effectful_funcs(
         None => return,
     };
 
-    unwrap_yr_in_region(ctx, module_body, effectful_funcs, types);
-}
-
-fn unwrap_yr_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    effectful_funcs: &HashSet<Symbol>,
-    types: &YieldBubblingTypes,
-) {
-    let blocks: Vec<_> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op) {
-                let func_name = func.sym_name(ctx);
-                if !effectful_funcs.contains(&func_name) {
-                    unwrap_yr_calls_in_func(ctx, op, effectful_funcs, types, region);
-                }
-            }
-            // Also recurse into nested regions (for non-func nested regions)
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-            for nested in regions {
-                unwrap_yr_in_region(ctx, nested, effectful_funcs, types);
-            }
-        }
+    let func_ops = collect_func_ops(ctx, module_body, |name| !effectful_funcs.contains(&name));
+    for func_op in func_ops {
+        unwrap_yr_calls_in_func(ctx, func_op, effectful_funcs, types, module_body);
     }
 }
 
