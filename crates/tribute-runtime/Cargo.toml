@@ -11,6 +11,3 @@ crate-type = ["lib"]
 itoa.workspace = true
 smallvec.workspace = true
 zmij.workspace = true
-
-[build-dependencies]
-cc.workspace = true
