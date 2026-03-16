@@ -1,13 +1,14 @@
 //! Tail-Resumptive Dispatch pass.
 //!
-//! This pass runs after `resolve_evidence` and before `cont_to_yield_bubbling`.
+//! This pass runs after `resolve_evidence` and before `cont_to_trampoline`
+//! (WASM path). See `src/pipeline.rs` for invocation order.
 //! It optimizes tail-resumptive handlers by generating TR dispatch functions
 //! and inserting fast-path branches at shift sites.
 //!
 //! ## Overview
 //!
 //! For handlers where **all** suspend arms are tail-resumptive (`k(value)`),
-//! continuation capture via `mp_yield` is unnecessary. Instead, a dispatch
+//! continuation capture is unnecessary. Instead, a dispatch
 //! function is generated that directly computes the resume value.
 //!
 //! ## Transformations
