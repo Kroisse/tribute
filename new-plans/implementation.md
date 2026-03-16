@@ -418,9 +418,11 @@ cont.* 연산을 ADT enum/struct 기반 yield bubbling으로 변환한다.
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → evidence_params → closure_lower → evidence_calls → resolve_evidence
+      → cont_to_yield_bubbling → [native only: evidence_to_native]
+      → dce → resolve_casts
 
-WASM:   → cont_to_yield_bubbling → dce → resolve_casts → lower_to_wasm → emit_wasm
-Native: → cont_to_yield_bubbling → dce → resolve_casts → lower_to_clif → emit_native
+WASM:   → lower_to_wasm → emit_wasm
+Native: → lower_to_clif → emit_native
 ```
 
 ---
