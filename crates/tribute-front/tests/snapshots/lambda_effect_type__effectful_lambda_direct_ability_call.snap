@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 89
 expression: ir_text
 ---
 core.module @test {
@@ -26,17 +25,14 @@ core.module @test {
       %10 = arith.const {value = unit} : core.nil
       func.return %10
   }
-  func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-    ^bb0:
-      %2 = arith.const {value = 4294967295} : cont.prompt_tag
-      %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref {
-      }
-      func.return %3
-  }
   func.func @main() -> core.i32 {
-      %0 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-      %1 = closure.new %0 {func_ref = @"test::__lambda_0"} : closure.closure(core.func(tribute_rt.anyref))
-      %2 = func.call %1 {callee = @run_with_state} : core.i32
-      func.return %2
+      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
+          %1 = arith.const {value = 4294967295} : cont.prompt_tag
+          %2 = cont.shift %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref {
+          }
+          func.return %2
+      }
+      %3 = func.call %0 {callee = @run_with_state} : core.i32
+      func.return %3
   }
 }

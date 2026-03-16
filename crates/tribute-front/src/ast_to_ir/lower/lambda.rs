@@ -1,7 +1,8 @@
 //! Lambda/closure lowering.
 //!
-//! Performs closure conversion: captures analysis, lifted function generation,
-//! and closure.new emission.
+//! Emits `closure.lambda` ops for source-level lambda expressions.
+//! The downstream `lower_closure_lambda` pass handles extraction into
+//! top-level functions and closure conversion.
 
 use std::collections::HashSet;
 
@@ -137,14 +138,11 @@ fn analyze_captures<'db>(
     captures
 }
 
-/// Lower a lambda expression to a closure.
+/// Lower a lambda expression to a `closure.lambda` op.
 ///
-/// Performs closure conversion:
-/// 1. Analyze captures
-/// 2. Generate a lifted function with `(evidence, env, params...)` signature
-/// 3. Push the lifted function to the module block
-/// 4. Create an env struct with captured values
-/// 5. Emit `closure.new` at the call site
+/// Emits a high-level `closure.lambda` with captured values and a body region.
+/// The downstream `lower_closure_lambda` pass extracts the body into a
+/// top-level `func.func` and replaces this op with `closure.new`.
 pub(super) fn lower_lambda<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -157,50 +155,11 @@ pub(super) fn lower_lambda<'db>(
     // Step 1: Analyze captures
     let captures = analyze_captures(builder.ctx, builder.ir, params, body);
 
-    // Step 2: Generate unique name for the lifted function
-    let lifted_name = builder.ctx.gen_lambda_name();
-
-    // Step 3: Build the lifted function
+    // Step 2: Build lambda body region.
+    // Entry block has only the lambda's formal parameters — evidence/env are
+    // added later by the lower_closure_lambda pass.
     let any_ty = builder.ctx.anyref_type(builder.ir);
-    let evidence_ty = arena_ability::evidence_adt_type_ref(builder.ir);
-
-    // Build env struct type if captures exist
-    let concrete_env_ty = if captures.is_empty() {
-        None
-    } else {
-        let fields: Vec<(Symbol, TypeRef)> = captures
-            .iter()
-            .enumerate()
-            .map(|(i, cap)| (Symbol::from_dynamic(&format!("_{}", i)), cap.ty))
-            .collect();
-        let env_name = Symbol::from_dynamic(&format!("{}::env", lifted_name));
-        Some(builder.ctx.adt_struct_type(builder.ir, env_name, &fields))
-    };
-
-    // Param args: [evidence, env, param1, param2, ...]
     let mut block_args = Vec::new();
-    {
-        let mut arg = BlockArgData {
-            ty: evidence_ty,
-            attrs: Default::default(),
-        };
-        arg.attrs.insert(
-            Symbol::new("bind_name"),
-            Attribute::Symbol(Symbol::new("__evidence")),
-        );
-        block_args.push(arg);
-    }
-    {
-        let mut arg = BlockArgData {
-            ty: any_ty,
-            attrs: Default::default(),
-        };
-        arg.attrs.insert(
-            Symbol::new("bind_name"),
-            Attribute::Symbol(Symbol::new("__env")),
-        );
-        block_args.push(arg);
-    }
     for (i, param) in params.iter().enumerate() {
         let ty = param_ir_types.get(i).copied().unwrap_or(any_ty);
         let mut arg = BlockArgData {
@@ -212,64 +171,27 @@ pub(super) fn lower_lambda<'db>(
         block_args.push(arg);
     }
 
-    let total_params = block_args.len();
-
-    // Create entry block for the lifted function
     let entry_block = builder.ir.create_block(BlockData {
         location,
         args: block_args,
         ops: Default::default(),
         parent_region: None,
     });
-    let arg_values: Vec<ValueRef> = (0..total_params)
-        .map(|i| builder.ir.block_arg(entry_block, i as u32))
-        .collect();
-
-    // arg_values[0] = evidence, arg_values[1] = env, arg_values[2..] = params
-    let raw_env_value = arg_values[1];
-
-    // Cast env from anyref to concrete struct type if captures exist
-    let env_value = if let Some(env_struct_ty) = concrete_env_ty {
-        let cast_op = adt::ref_cast(
-            builder.ir,
-            location,
-            raw_env_value,
-            env_struct_ty,
-            env_struct_ty,
-        );
-        builder.ir.push_op(entry_block, cast_op.op_ref());
-        Some(cast_op.result(builder.ir))
-    } else {
-        None
-    };
 
     // Enter scope for lambda body
     builder.ctx.enter_scope();
 
-    // Bind lambda parameters (skip evidence and env at indices 0 and 1)
+    // Bind lambda parameters
     for (i, param) in params.iter().enumerate() {
         if let Some(local_id) = param.local_id {
-            let arg_val = arg_values[i + 2];
+            let arg_val = builder.ir.block_arg(entry_block, i as u32);
             builder.ctx.bind(local_id, param.name, arg_val);
         }
     }
 
-    // Extract captured values from env and bind them
-    if let (Some(env_val), Some(env_struct_ty)) = (env_value, concrete_env_ty) {
-        for (i, cap) in captures.iter().enumerate() {
-            let extracted = adt::struct_get(
-                builder.ir,
-                location,
-                env_val,
-                cap.ty,
-                env_struct_ty,
-                i as u32,
-            );
-            builder.ir.push_op(entry_block, extracted.op_ref());
-            let extracted_val = extracted.result(builder.ir);
-            builder.ctx.bind(cap.local_id, cap.name, extracted_val);
-        }
-    }
+    // No need to rebind captures — they are already in scope from the parent.
+    // The closure.lambda body is NOT isolated from above, so parent-scope
+    // ValueRefs are valid inside the body region.
 
     // Lower the lambda body
     {
@@ -291,54 +213,29 @@ pub(super) fn lower_lambda<'db>(
 
     builder.ctx.exit_scope();
 
-    // Create region and func op
     let body_region = builder.ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![entry_block],
         parent_op: None,
     });
 
-    // Build function type: (evidence, env, params...) -> result
-    let mut all_param_types = vec![evidence_ty, any_ty];
-    all_param_types.extend_from_slice(param_ir_types);
-    let func_ty =
+    // Step 3: Emit closure.lambda
+    let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
+    let closure_func_ty =
         builder
             .ctx
-            .func_type_with_effect(builder.ir, &all_param_types, result_ir_ty, effect);
-
-    let func_op = func::func(builder.ir, location, lifted_name, func_ty, body_region);
-
-    // Push lifted function to module block (in-place, no lifted_functions vec)
-    let module_block = builder
-        .ctx
-        .module_block()
-        .expect("module block should be set");
-    builder.ir.push_op(module_block, func_op.op_ref());
-
-    // Step 4: Create env struct with captured values at the call site
-    let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
-    let closure_env = if captures.is_empty() {
-        // Use a null pointer (any type) instead of nil — core.nil maps to void
-        // in Cranelift and can't be stored in the closure struct.
-        let null_op = adt::ref_null(builder.ir, location, any_ty, any_ty);
-        builder.ir.push_op(builder.block, null_op.op_ref());
-        null_op.result(builder.ir)
-    } else {
-        let struct_ty = concrete_env_ty.unwrap();
-        let struct_op = adt::struct_new(builder.ir, location, capture_values, struct_ty, struct_ty);
-        builder.ir.push_op(builder.block, struct_op.op_ref());
-        struct_op.result(builder.ir)
-    };
-
-    // Step 5: Create closure.new
-    let closure_func_ty = builder
-        .ctx
-        .func_type(builder.ir, param_ir_types, result_ir_ty);
+            .func_type_with_effect(builder.ir, param_ir_types, result_ir_ty, effect);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
-    let closure_op = arena_closure::new(builder.ir, location, closure_env, closure_ty, lifted_name);
-    builder.ir.push_op(builder.block, closure_op.op_ref());
-    Some(closure_op.result(builder.ir))
+    let lambda_op = arena_closure::lambda(
+        builder.ir,
+        location,
+        capture_values,
+        closure_ty,
+        body_region,
+    );
+    builder.ir.push_op(builder.block, lambda_op.op_ref());
+    Some(lambda_op.result(builder.ir))
 }
 
 /// Wrap a named function reference as a closure value.
