@@ -122,8 +122,12 @@ fn truncate_func_after_shift(
             for &p in arg_params {
                 builder = builder.param(p);
             }
-            if let Some(Attribute::Type(effect)) = func_ty_data.attrs.get(&Symbol::new("effect")) {
-                builder = builder.attr("effect", Attribute::Type(*effect));
+            // Preserve all type attrs except "result" (normalized away into Layout A)
+            let result_key = Symbol::new("result");
+            for (attr_name, attr_val) in &func_ty_data.attrs {
+                if *attr_name != result_key {
+                    builder = builder.attr(*attr_name, attr_val.clone());
+                }
             }
             let new_func_ty = ctx.types.intern(builder.build());
 
