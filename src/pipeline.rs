@@ -45,8 +45,16 @@
 //!     ▼ resolve_evidence
 //! Module (cont.shift uses dynamic tags)
 //!     │
-//!     ├─► [wasm]   cont_to_trampoline ─► dce ─► resolve_casts ─► compile_to_wasm
-//!     └─► [native] cont_to_yield_bubbling ─► dce ─► resolve_casts ─► compile_to_native
+//!     ▼ cont_to_yield_bubbling
+//! Module (cont.* lowered to ADT yield bubbling)
+//!     │
+//!     ├─► [native only] evidence_to_native
+//!     │
+//!     ▼ dce ─► resolve_casts
+//! Module (ready for codegen)
+//!     │
+//!     ├─► [wasm]   compile_to_wasm
+//!     └─► [native] compile_to_native
 //! ```
 //!
 //! ## Diagnostics
@@ -64,7 +72,6 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
 use tribute_passes::generic_type_converter;
-use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::{IrContext, Module};
@@ -421,15 +428,15 @@ pub fn run_through_closure_lower(
 
 /// Run the shared middle-end pipeline (backend-independent) in an arena session.
 ///
-/// Runs all four arena passes (evidence_params, closure_lower, evidence_calls,
-/// resolve_evidence) in a **single arena session**, avoiding 4 separate
-/// Salsa↔Arena round-trips.
+/// Runs frontend passes and continuation lowering in a **single arena session**,
+/// avoiding Salsa↔Arena round-trips.
 ///
 /// Returns the arena session so that backend-specific pipelines can continue
 /// without a Salsa↔Arena round-trip.
 fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend(db, source)?;
 
+    // Middle-end passes
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
@@ -439,31 +446,11 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     Some((ctx, m))
 }
 
-/// Run the WASM target pipeline in arena and return IR text for dump-ir.
-fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
-    // TR dispatch is needed for the trampoline backend
-    tribute_passes::tr_dispatch::insert_tr_dispatch(ctx, m);
-
-    lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
-        illegal_ops: illegal_ops
-            .into_iter()
-            .map(|op| IllegalOp {
-                dialect: op.dialect.to_string(),
-                name: op.name.to_string(),
-            })
-            .collect(),
-    })?;
-
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
-
-    let tc = generic_type_converter(ctx);
-    resolve_unrealized_casts(ctx, m, &tc);
-
-    Ok(())
-}
-
-/// Run the native target pipeline in arena (shared + native-specific passes).
-fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+/// Lower continuation ops and run cleanup passes shared by both backends.
+///
+/// Runs `cont_to_yield_bubbling` + DCE + `resolve_casts`.
+/// Native pipeline inserts `evidence_to_native` before DCE.
+fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m).map_err(
         |illegal_ops| ConversionError {
             illegal_ops: illegal_ops
@@ -486,6 +473,27 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conv
         }
     }
 
+    Ok(())
+}
+
+/// Run DCE + resolve_casts (shared cleanup after all lowering).
+fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
+    let tc = generic_type_converter(ctx);
+    resolve_unrealized_casts(ctx, m, &tc);
+}
+
+/// Run the WASM target pipeline: lowering + cleanup.
+fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+    run_lowering_pipeline(ctx, m)?;
+    run_cleanup_passes(ctx, m);
+    Ok(())
+}
+
+/// Run the native target pipeline: lowering + evidence_to_native + cleanup.
+fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
+    run_lowering_pipeline(ctx, m)?;
+
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
@@ -498,11 +506,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conv
         }
     }
 
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
-
-    let tc = generic_type_converter(ctx);
-    resolve_unrealized_casts(ctx, m, &tc);
-
+    run_cleanup_passes(ctx, m);
     Ok(())
 }
 
@@ -539,18 +543,7 @@ pub fn dump_ir(
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
 
-    // WASM-specific: tr_dispatch + cont_to_trampoline + DCE + resolve_casts
-    tribute_passes::tr_dispatch::insert_tr_dispatch(&mut ctx, m);
-
-    if let Err(e) = lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
-        illegal_ops: illegal_ops
-            .into_iter()
-            .map(|op| IllegalOp {
-                dialect: op.dialect.to_string(),
-                name: op.name.to_string(),
-            })
-            .collect(),
-    }) {
+    if let Err(e) = run_wasm_target_pipeline(&mut ctx, m) {
         Diagnostic {
             message: format!("Pipeline failed: {}", e),
             span: Span::new(0, 0),
@@ -560,13 +553,6 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
         .accumulate(db);
         return None;
     }
-
-    // Dead code elimination
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
-
-    // Resolve unrealized conversion casts
-    let tc = generic_type_converter(&mut ctx);
-    resolve_unrealized_casts(&mut ctx, m, &tc);
 
     // WASM backend lowering + emit
     match compile_to_wasm(&mut ctx, m) {
@@ -708,19 +694,9 @@ pub fn compile_to_native_binary<'db>(
 ) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
 
-    // Native-specific: cont_to_yield_bubbling + evidence_to_native + DCE + resolve_casts
-    if let Err(illegal_ops) =
-        tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(&mut ctx, m)
-    {
+    if let Err(e) = run_native_target_pipeline(&mut ctx, m) {
         Diagnostic {
-            message: format!(
-                "Pipeline failed: illegal ops after cont_to_yield_bubbling: {}",
-                illegal_ops
-                    .iter()
-                    .map(|op| format!("{}.{}", op.dialect, op.name))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            message: format!("Pipeline failed: {}", e),
             span: Span::new(0, 0),
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::Lowering,
@@ -728,35 +704,6 @@ pub fn compile_to_native_binary<'db>(
         .accumulate(db);
         return None;
     }
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(&ctx, m);
-        if !result.is_ok() {
-            tracing::warn!(
-                "Value integrity errors after cont_to_yield_bubbling: stale={:?}, use_chain={:?}",
-                result.stale_errors,
-                result.use_chain_errors
-            );
-        }
-    }
-
-    tribute_passes::native::evidence::lower_evidence_to_native(&mut ctx, m);
-    if cfg!(debug_assertions) {
-        let result = trunk_ir::validation::validate_value_integrity(&ctx, m);
-        if !result.is_ok() {
-            tracing::warn!(
-                "Value integrity errors after evidence_to_native: stale={:?}, use_chain={:?}",
-                result.stale_errors,
-                result.use_chain_errors
-            );
-        }
-    }
-
-    // Dead code elimination
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(&mut ctx, m);
-
-    // Resolve unrealized conversion casts
-    let tc = generic_type_converter(&mut ctx);
-    resolve_unrealized_casts(&mut ctx, m, &tc);
 
     // Native backend lowering + emit
     let sanitize = config.sanitize_address(db);

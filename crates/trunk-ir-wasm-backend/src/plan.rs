@@ -44,7 +44,7 @@ pub struct MainExports {
     /// When main is effectful, this will be the Step type.
     pub main_result_type: Option<TypeRef>,
     /// The original return type of main before Step conversion.
-    /// This is used by the trampoline to properly unbox the result.
+    /// This is used to properly unbox the result.
     pub original_result_type: Option<TypeRef>,
     /// Whether main has been exported.
     pub main_exported: bool,

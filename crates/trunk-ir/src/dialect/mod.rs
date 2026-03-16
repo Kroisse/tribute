@@ -11,7 +11,6 @@ pub mod core;
 pub mod func;
 pub mod mem;
 pub mod scf;
-pub mod trampoline;
 pub mod wasm;
 
 #[cfg(test)]

@@ -399,11 +399,10 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 (resume $cont (local.get $value))
 ```
 
-### Cranelift (Yield Bubbling)
+### WASM / Native 공통: ADT-based Yield Bubbling
 
-Native 백엔드는 ADT 기반 yield bubbling으로 ability를 구현한다.
-`cont_to_yield_bubbling` pass가 cont.* 연산을 ADT enum/struct로 변환한다.
-(WASM 백엔드는 별도의 `cont_to_trampoline` pass를 사용.)
+WASM과 Native 백엔드 모두 동일한 `cont_to_yield_bubbling` pass를 사용하여
+cont.* 연산을 ADT enum/struct 기반 yield bubbling으로 변환한다.
 
 **cont.* → yield bubbling 매핑:**
 
@@ -419,9 +418,11 @@ Native 백엔드는 ADT 기반 yield bubbling으로 ability를 구현한다.
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → evidence_params → closure_lower → evidence_calls → resolve_evidence
+      → cont_to_yield_bubbling → [native only: evidence_to_native]
+      → dce → resolve_casts
 
-WASM:   → cont_to_trampoline → dce → resolve_casts → lower_to_wasm → emit_wasm
-Native: → cont_to_yield_bubbling → dce → resolve_casts → lower_to_clif → emit_native
+WASM:   → lower_to_wasm → emit_wasm
+Native: → lower_to_clif → emit_native
 ```
 
 ---

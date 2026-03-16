@@ -1,7 +1,6 @@
 //! Lower cont dialect operations to yield bubbling (ADT-based).
 //!
-//! This pass replaces `cont_to_trampoline`
-//! with a unified transformation that uses ADT enum/struct types:
+//! This pass lowers cont.* operations using ADT enum/struct types:
 //!
 //! - `cont.shift` → capture state + build Continuation + ShiftInfo → YieldResult::Shift
 //! - `cont.resume` → extract resume_fn from Continuation + call_indirect
@@ -131,7 +130,7 @@ fn standard_type_converter(ctx: &mut IrContext) -> TypeConverter {
 
 /// Lower cont dialect operations to yield bubbling (ADT-based).
 ///
-/// This is the unified replacement for `lower_cont_to_trampoline`.
+/// Lowers all cont.* operations to ADT-based yield bubbling.
 pub fn lower_cont_to_yield_bubbling(
     ctx: &mut IrContext,
     module: Module,

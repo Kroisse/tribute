@@ -1,8 +1,7 @@
 //! Effectful function and shift point analysis for yield bubbling.
 //!
-//! This module re-exports and adapts the shared analysis infrastructure
-//! from `cont_to_trampoline::analysis`. The analysis logic is identical —
-//! only the lowering output differs.
+//! Identifies effectful functions and their shift points to determine
+//! which functions need yield bubbling wrappers.
 
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;

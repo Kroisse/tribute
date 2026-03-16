@@ -42,13 +42,6 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) {
         super::normalize_primitive_types::lower(ctx, module);
     }
 
-    // Convert trampoline types/ops BEFORE func_to_wasm so function signatures
-    // have ADT types (not trampoline.Step) when converted to wasm.func
-    {
-        let _span = tracing::info_span!("trampoline_to_wasm").entered();
-        trunk_ir_wasm_backend::passes::trampoline_to_wasm::lower(ctx, module);
-    }
-
     {
         let _span = tracing::info_span!("func_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
