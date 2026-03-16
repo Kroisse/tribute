@@ -566,6 +566,19 @@ pub(super) fn lower_expr<'db>(
             Some(handle_val)
         }
 
+        ExprKind::Resume { arg, local_id } => {
+            let cont_value = local_id
+                .and_then(|id| builder.ctx.lookup(id))
+                .or_else(|| builder.ctx.current_resume_continuation())
+                .expect("ICE: resume used outside of op handler");
+            let resume_value =
+                lower_expr(builder, arg).unwrap_or_else(|| builder.emit_nil(location));
+            let result_ty = builder.ctx.anyref_type(builder.ir);
+            let op = cont::resume(builder.ir, location, cont_value, resume_value, result_ty);
+            builder.ir.push_op(builder.block, op.op_ref());
+            Some(op.result(builder.ir))
+        }
+
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => Some(builder.emit_nil(location)),

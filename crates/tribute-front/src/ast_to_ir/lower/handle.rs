@@ -11,7 +11,7 @@ use trunk_ir::dialect::{adt, arith, cont, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use crate::ast::{Expr, HandlerArm, HandlerKind, ResolvedRef, TypedRef};
+use crate::ast::{Expr, ExprKind, HandlerArm, HandlerKind, LocalId, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
 use super::IrBuilder;
@@ -195,8 +195,8 @@ fn build_handler_dispatch_body<'db>(
 
     for handler in handlers {
         match &handler.kind {
-            HandlerKind::Result { .. } => result_handler = Some(handler),
-            HandlerKind::Effect { .. } => effect_handlers.push(handler),
+            HandlerKind::Do { .. } => result_handler = Some(handler),
+            HandlerKind::Fn { .. } | HandlerKind::Op { .. } => effect_handlers.push(handler),
         }
     }
 
@@ -243,7 +243,7 @@ fn build_done_handler_region<'db>(
     let result = if let Some(handler) = result_handler {
         ctx.enter_scope();
 
-        if let HandlerKind::Result { binding } = &handler.kind {
+        if let HandlerKind::Do { binding } = &handler.kind {
             bind_pattern_fields(ctx, ir, block, location, done_value, binding);
         }
 
@@ -285,8 +285,9 @@ fn extract_ability_ref_and_op_name<'db>(
     handler: &HandlerArm<TypedRef<'db>>,
 ) -> (TypeRef, Symbol) {
     let db = ctx.db;
-    let HandlerKind::Effect { ability, op, .. } = &handler.kind else {
-        unreachable!("extract_ability_ref_and_op_name called with non-effect handler");
+    let (ability, op) = match &handler.kind {
+        HandlerKind::Fn { ability, op, .. } | HandlerKind::Op { ability, op, .. } => (ability, op),
+        _ => unreachable!("extract_ability_ref_and_op_name called with non-effect handler"),
     };
 
     let ability_name = match &ability.resolved {
@@ -318,14 +319,9 @@ fn build_suspend_handler_region<'db>(
     location: Location,
     handler: &HandlerArm<TypedRef<'db>>,
 ) -> trunk_ir::refs::RegionRef {
-    let HandlerKind::Effect {
-        params,
-        continuation,
-        continuation_local_id,
-        ..
-    } = &handler.kind
-    else {
-        unreachable!("build_suspend_handler_region called with non-effect handler");
+    let params = match &handler.kind {
+        HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => params,
+        _ => unreachable!("build_suspend_handler_region called with non-effect handler"),
     };
 
     let any_ty = ctx.anyref_type(ir);
@@ -351,10 +347,14 @@ fn build_suspend_handler_region<'db>(
 
     ctx.enter_scope();
 
-    // Bind continuation if named
-    if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
-        ctx.bind(*k_local_id, *k_name, cont_value);
+    // Make the continuation value available for `resume` expressions in
+    // `op` handler bodies.
+    // Use the LocalId assigned during name resolution so that lambda capture
+    // analysis correctly tracks it.
+    if let Some(resume_local_id) = find_resume_local_id(&handler.body) {
+        ctx.bind(resume_local_id, Symbol::new("resume"), cont_value);
     }
+    ctx.push_resume_continuation(cont_value);
 
     // Bind params patterns
     if params.len() == 1 {
@@ -375,6 +375,7 @@ fn build_suspend_handler_region<'db>(
         super::expr::lower_expr(&mut builder, handler.body.clone())
     };
 
+    ctx.pop_resume_continuation();
     ctx.exit_scope();
 
     let yield_val = match body_result {
@@ -394,4 +395,33 @@ fn build_suspend_handler_region<'db>(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     })
+}
+
+/// Find the LocalId assigned to `resume` in the body expression.
+/// Searches for the first `ExprKind::Resume` node in the expression tree.
+fn find_resume_local_id<'db>(expr: &Expr<TypedRef<'db>>) -> Option<LocalId> {
+    match &*expr.kind {
+        ExprKind::Resume { local_id, .. } => *local_id,
+        ExprKind::Block { stmts, value } => {
+            for stmt in stmts {
+                match stmt {
+                    crate::ast::Stmt::Let { value, .. }
+                    | crate::ast::Stmt::Expr { expr: value, .. } => {
+                        if let Some(id) = find_resume_local_id(value) {
+                            return Some(id);
+                        }
+                    }
+                }
+            }
+            find_resume_local_id(value)
+        }
+        ExprKind::Call { callee, args } => {
+            if let Some(id) = find_resume_local_id(callee) {
+                return Some(id);
+            }
+            args.iter().find_map(find_resume_local_id)
+        }
+        ExprKind::Lambda { body, .. } => find_resume_local_id(body),
+        _ => None,
+    }
 }

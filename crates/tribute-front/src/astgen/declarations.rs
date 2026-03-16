@@ -4,9 +4,9 @@ use tree_sitter::Node;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, OpDecl, ParamDecl,
-    StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName, UseDecl,
-    VariantDecl,
+    AbilityDecl, Decl, EnumDecl, FieldDecl, FuncDecl, Module, ModuleDecl, OpDecl, OpDeclKind,
+    ParamDecl, StructDecl, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName,
+    UseDecl, VariantDecl,
 };
 
 use super::context::AstLoweringCtx;
@@ -672,6 +672,15 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
 
+    // Determine operation kind from the "kind" field (keyword_fn or keyword_op)
+    let kind = node
+        .child_by_field_name("kind")
+        .map(|n| match n.kind() {
+            "keyword_op" => OpDeclKind::Op,
+            _ => OpDeclKind::Fn,
+        })
+        .unwrap_or(OpDeclKind::Fn);
+
     let params = find_child_by_kind(node, "typed_parameter_list")
         .map(|n| lower_param_list(ctx, n))
         .unwrap_or_default();
@@ -689,6 +698,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
 
     Some(OpDecl {
         id,
+        kind,
         name,
         params,
         return_ty,

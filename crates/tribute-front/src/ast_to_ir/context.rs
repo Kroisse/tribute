@@ -60,6 +60,10 @@ pub struct IrLoweringCtx<'db> {
     /// The top of the stack is the currently active prompt tag.
     active_prompt_tag_stack: Vec<u32>,
 
+    /// Stack of continuation values for `resume` expressions.
+    /// Pushed when entering an `op` handler region, popped when exiting.
+    resume_continuation_stack: Vec<ValueRef>,
+
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
@@ -89,6 +93,7 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: im::HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
+            resume_continuation_stack: Vec::new(),
 
             node_types,
         }
@@ -205,6 +210,25 @@ impl<'db> IrLoweringCtx<'db> {
     /// This should be called when exiting a `handle` expression.
     pub fn pop_prompt_tag(&mut self) {
         self.active_prompt_tag_stack.pop();
+    }
+
+    /// Push a continuation value for `resume` expressions.
+    ///
+    /// Called when entering an `op` handler region.
+    pub fn push_resume_continuation(&mut self, cont_value: ValueRef) {
+        self.resume_continuation_stack.push(cont_value);
+    }
+
+    /// Pop the current continuation value.
+    ///
+    /// Called when exiting an `op` handler region.
+    pub fn pop_resume_continuation(&mut self) {
+        self.resume_continuation_stack.pop();
+    }
+
+    /// Get the current continuation value for `resume` expressions.
+    pub fn current_resume_continuation(&self) -> Option<ValueRef> {
+        self.resume_continuation_stack.last().copied()
     }
 
     /// Get the currently active prompt tag.

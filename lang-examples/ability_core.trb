@@ -1,6 +1,6 @@
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn counter() ->{State(Nat)} Nat {
@@ -11,9 +11,9 @@ fn counter() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() { k(init) }, init)
-        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+        do(result) { result }
+        op State::get() { run_state(fn() { resume(init) }, init) }
+        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
     }
 }
 

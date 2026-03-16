@@ -127,6 +127,13 @@ where
         handlers: Vec<HandlerArm<V>>,
     },
 
+    /// Resume expression: `resume(value)` — only valid inside `op` handler arms.
+    Resume {
+        arg: Expr<V>,
+        /// LocalId for the continuation binding, assigned during name resolution.
+        local_id: Option<LocalId>,
+    },
+
     // === Compound Expressions ===
     /// Tuple expression: `(a, b, c)`
     Tuple(Vec<Expr<V>>),
@@ -199,17 +206,23 @@ pub enum HandlerKind<V>
 where
     V: salsa::Update,
 {
-    /// Result handler: `{ result }`
-    Result { binding: Pattern<V> },
+    /// Completion handler: `do(result) { body }`
+    Do { binding: Pattern<V> },
 
-    /// Effect handler: `{ Effect.op(args) -> k }`
-    Effect {
+    /// Tail-resumptive handler: `fn Op(args) { body }`
+    /// Return value is used as the resume value. No continuation capture.
+    Fn {
         ability: V,
         op: Symbol,
         params: Vec<Pattern<V>>,
-        continuation: Option<Symbol>,
-        /// LocalId for the continuation binding (assigned during name resolution).
-        continuation_local_id: Option<LocalId>,
+    },
+
+    /// General handler: `op Op(args) { body }`
+    /// Uses `resume` keyword in body. Continuation is captured.
+    Op {
+        ability: V,
+        op: Symbol,
+        params: Vec<Pattern<V>>,
     },
 }
 
