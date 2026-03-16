@@ -128,9 +128,7 @@ fn lower_single_lambda(
 
     // Determine function return type and effect from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let closure_sig = extract_func_sig_from_closure(ctx, result_ty);
-    let func_result_ty = closure_sig.return_ty;
-    let func_effect = closure_sig.effect;
+    let func_result_ty = extract_return_type_from_closure(ctx, result_ty).unwrap_or(anyref_ty);
     let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
@@ -161,16 +159,12 @@ fn lower_single_lambda(
         },
     );
 
-    // Function type: (evidence, env, params...) -> result
+    // Function type: (evidence, env, params...) -> result, preserving effect row.
+    let effect = extract_effect_from_closure(ctx, result_ty);
     let mut all_param_tys = vec![evidence_ty, anyref_ty];
     all_param_tys.extend_from_slice(&orig_param_types);
-    let func_ty = core::func(
-        ctx,
-        func_result_ty,
-        all_param_tys.iter().copied(),
-        func_effect,
-    )
-    .as_type_ref();
+    let func_ty =
+        core::func(ctx, func_result_ty, all_param_tys.iter().copied(), effect).as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
     ctx.push_op(module_block, func_op.op_ref());
@@ -194,13 +188,8 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty = core::func(
-        ctx,
-        func_result_ty,
-        orig_param_types.iter().copied(),
-        func_effect,
-    )
-    .as_type_ref();
+    let closure_func_ty =
+        core::func(ctx, func_result_ty, orig_param_types.iter().copied(), effect).as_type_ref();
     let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
@@ -385,44 +374,36 @@ impl LambdaNamer {
     }
 }
 
-/// Extracted function signature from `closure.closure<core.func<Return, Params...>>`.
-struct ClosureFuncSig {
-    return_ty: TypeRef,
-    effect: Option<TypeRef>,
+/// Extract return type from `closure.closure<core.func<Return, Params...>>`.
+fn extract_return_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+    let func_ty = extract_func_type_from_closure(ctx, closure_ty)?;
+    let func_data = ctx.types.get(func_ty);
+    // core.func params[0] = return type
+    func_data.params.first().copied()
 }
 
-/// Extract return type and effect from `closure.closure<core.func<Return, Params...>>`.
-fn extract_func_sig_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> ClosureFuncSig {
-    let data = ctx.types.get(closure_ty);
-    assert!(
-        data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"),
-        "closure.lambda result type must be closure.closure, got {}.{}",
-        data.dialect.with_str(|s| s.to_string()),
-        data.name.with_str(|s| s.to_string()),
-    );
-    let func_ty = *data
-        .params
-        .first()
-        .expect("closure.closure must have a func type parameter");
+/// Extract effect attribute from the func type inside a closure type.
+fn extract_effect_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+    let func_ty = extract_func_type_from_closure(ctx, closure_ty)?;
     let func_data = ctx.types.get(func_ty);
-    assert!(
-        func_data.dialect == Symbol::new("core") && func_data.name == Symbol::new("func"),
-        "closure.closure type parameter must be core.func, got {}.{}",
-        func_data.dialect.with_str(|s| s.to_string()),
-        func_data.name.with_str(|s| s.to_string()),
-    );
-    let return_ty = *func_data
-        .params
-        .first()
-        .expect("core.func must have a return type parameter");
-    let effect = func_data
-        .attrs
-        .get(&Symbol::new("effect"))
-        .and_then(|attr| match attr {
-            Attribute::Type(ty) => Some(*ty),
-            _ => None,
-        });
-    ClosureFuncSig { return_ty, effect }
+    match func_data.attrs.get(&Symbol::new("effect")) {
+        Some(Attribute::Type(ty)) => Some(*ty),
+        _ => None,
+    }
+}
+
+/// Extract the `core.func` TypeRef from a `closure.closure<core.func<...>>`.
+fn extract_func_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+    let data = ctx.types.get(closure_ty);
+    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
+        return None;
+    }
+    let func_ty = *data.params.first()?;
+    let func_data = ctx.types.get(func_ty);
+    if func_data.dialect != Symbol::new("core") || func_data.name != Symbol::new("func") {
+        return None;
+    }
+    Some(func_ty)
 }
 
 /// Create an `adt.struct` type with name and fields.
@@ -580,7 +561,7 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (test_fn + __clam_0).
+        // Verify: module should now have 2 functions (test_fn + __lambda_0).
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 2, "expected 2 top-level ops after lowering");
 
