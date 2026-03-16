@@ -28,7 +28,10 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
-    tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed")
+    let (mut ctx, m) =
+        tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed");
+    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
+    (ctx, m)
 }
 
 /// Helper to get all function names and their effectful status.

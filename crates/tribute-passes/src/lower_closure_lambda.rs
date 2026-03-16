@@ -11,7 +11,7 @@
 //! }
 //!
 //! // After:
-//! func.func @__clam_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
+//! func.func @__lambda_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
 //!   %env_cast = adt.ref_cast %env : env_struct
 //!   %x = adt.struct_get %env_cast, 0
 //!   %y = adt.struct_get %env_cast, 1
@@ -19,7 +19,7 @@
 //!   func.return %r
 //! }
 //! %env = adt.struct_new(%x, %y)
-//! %k = closure.new @__clam_0, %env
+//! %k = closure.new @__lambda_0, %env
 //! ```
 
 use trunk_ir::Symbol;
@@ -113,7 +113,7 @@ fn lower_single_lambda(
     let body_region = lambda_op.body(ctx);
 
     // Generate unique lifted name.
-    let lifted_name = Symbol::from_dynamic(&format!("__clam_{}", *counter));
+    let lifted_name = Symbol::from_dynamic(&format!("__lambda_{}", *counter));
     *counter += 1;
 
     // Original entry block args = lambda formal parameters.
@@ -156,11 +156,12 @@ fn lower_single_lambda(
         },
     );
 
-    // Function type: (evidence, env, params...) -> result
+    // Function type: (evidence, env, params...) -> result, preserving effect row.
+    let effect = extract_effect_from_closure(ctx, result_ty);
     let mut all_param_tys = vec![evidence_ty, anyref_ty];
     all_param_tys.extend_from_slice(&orig_param_types);
     let func_ty =
-        core::func(ctx, func_result_ty, all_param_tys.iter().copied(), None).as_type_ref();
+        core::func(ctx, func_result_ty, all_param_tys.iter().copied(), effect).as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
     ctx.push_op(module_block, func_op.op_ref());
@@ -334,18 +335,34 @@ fn build_lifted_body(
 
 /// Extract return type from `closure.closure<core.func<Return, Params...>>`.
 fn extract_return_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+    let func_ty = extract_func_type_from_closure(ctx, closure_ty)?;
+    let func_data = ctx.types.get(func_ty);
+    // core.func params[0] = return type
+    func_data.params.first().copied()
+}
+
+/// Extract effect attribute from the func type inside a closure type.
+fn extract_effect_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+    let func_ty = extract_func_type_from_closure(ctx, closure_ty)?;
+    let func_data = ctx.types.get(func_ty);
+    match func_data.attrs.get(&Symbol::new("effect")) {
+        Some(Attribute::Type(ty)) => Some(*ty),
+        _ => None,
+    }
+}
+
+/// Extract the `core.func` TypeRef from a `closure.closure<core.func<...>>`.
+fn extract_func_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.types.get(closure_ty);
     if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
         return None;
     }
-    // closure.closure has one type param: the func type
     let func_ty = *data.params.first()?;
     let func_data = ctx.types.get(func_ty);
     if func_data.dialect != Symbol::new("core") || func_data.name != Symbol::new("func") {
         return None;
     }
-    // core.func params[0] = return type
-    func_data.params.first().copied()
+    Some(func_ty)
 }
 
 /// Create an `adt.struct` type with name and fields.
@@ -503,7 +520,7 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (test_fn + __clam_0).
+        // Verify: module should now have 2 functions (test_fn + __lambda_0).
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 2, "expected 2 top-level ops after lowering");
 
@@ -523,7 +540,7 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(lifted.sym_name(&ctx), Symbol::from_dynamic("__clam_0"));
+        assert_eq!(lifted.sym_name(&ctx), Symbol::from_dynamic("__lambda_0"));
 
         // Lifted function should have 3 params: evidence, env, x
         let lifted_ty = lifted.r#type(&ctx);

@@ -404,19 +404,21 @@ pub fn run_through_evidence_params(
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend(db, source)?;
+    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     evidence::add_evidence_params(&mut ctx, m);
     Some((ctx, m))
 }
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs frontend + `add_evidence_params` + `lower_closures`
+/// Runs frontend + `lower_closure_lambda` + `add_evidence_params` + `lower_closures`
 /// in a single arena session.
 pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend(db, source)?;
+    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     Some((ctx, m))
@@ -437,6 +439,7 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     let (mut ctx, m) = compile_frontend(db, source)?;
 
     // Middle-end passes
+    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
