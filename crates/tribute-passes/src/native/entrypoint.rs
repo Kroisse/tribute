@@ -209,13 +209,13 @@ fn build_entrypoint(
         parent_region: None,
     });
 
-    // Initialize ASan before anything else (must precede libmprompt's SIGSEGV handler)
+    // Initialize ASan before anything else
     if sanitize {
         let asan_call = arena_func::call(ctx, loc, [], nil_ty, Symbol::new("__asan_init"));
         ctx.push_op(entry_block, asan_call.op_ref());
     }
 
-    // Initialize libmprompt runtime before any ability use
+    // Initialize runtime TLS before any ability use
     let init_call = arena_func::call(ctx, loc, [], nil_ty, Symbol::new("__tribute_init"));
     ctx.push_op(entry_block, init_call.op_ref());
 

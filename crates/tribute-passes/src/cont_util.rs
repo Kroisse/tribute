@@ -1,7 +1,7 @@
 //! Shared utilities for continuation lowering passes.
 //!
 //! This module contains functions and types shared between `cont_to_trampoline`
-//! and `cont_to_libmprompt` (and potentially other continuation backends).
+//! and `cont_to_yield_bubbling` (and potentially other continuation backends).
 
 use std::collections::HashSet;
 
