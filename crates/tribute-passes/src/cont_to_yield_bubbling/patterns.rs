@@ -254,44 +254,6 @@ fn region_yields_yr(ctx: &IrContext, region: trunk_ir::refs::RegionRef) -> bool 
 }
 
 // ============================================================================
-// Pattern: Update scf.yield to YieldResult type
-// ============================================================================
-
-pub(crate) struct UpdateScfYieldToYieldResultPattern {
-    pub(crate) _types: YieldBubblingTypes,
-}
-
-impl RewritePattern for UpdateScfYieldToYieldResultPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        _rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if scf::Yield::from_op(ctx, op).is_err() {
-            return false;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        if operands.is_empty() {
-            return false;
-        }
-
-        let val = operands[0];
-        let val_ty = ctx.value_ty(val);
-
-        // If value is already YieldResult, nothing to do
-        if is_yield_result_type(ctx, val_ty) {
-            return false;
-        }
-
-        // Check if this yield is in a context expecting YieldResult
-        // For now, skip — this pattern is applied after other patterns
-        false
-    }
-}
-
-// ============================================================================
 // Pattern: Lower cont.push_prompt
 // ============================================================================
 

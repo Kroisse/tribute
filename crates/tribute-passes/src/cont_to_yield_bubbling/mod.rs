@@ -174,7 +174,6 @@ pub fn lower_cont_to_yield_bubbling(
             types,
         })
         .add_pattern(patterns::UpdateScfIfResultTypePattern { types })
-        .add_pattern(patterns::UpdateScfYieldToYieldResultPattern { _types: types })
         .add_pattern(patterns::LowerPushPromptPattern { types })
         .add_pattern(handler_dispatch::LowerHandlerDispatchPattern {
             types,

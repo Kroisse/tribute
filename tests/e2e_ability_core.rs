@@ -1473,10 +1473,10 @@ fn main() {
     assert_native_output("multiple_effectful_then_pure_call.trb", code, "10");
 }
 
-/// Test that a non-effectful function call nested inside a conditional
-/// after an effectful call is not incorrectly truncated as dead code.
+/// Test that a direct non-effectful function call after an effectful call
+/// is not incorrectly truncated as dead code.
 ///
-/// Exercises the `remaining_are_dead_code` recursive region descent fix.
+/// Exercises the `remaining_are_dead_code` check on a direct call.
 #[test]
 fn test_non_effectful_call_in_nested_region() {
     let code = r#"ability State(s) {
