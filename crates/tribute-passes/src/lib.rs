@@ -14,7 +14,6 @@ pub mod diagnostic;
 // === TrunkIR passes ===
 pub mod boxing;
 pub mod closure_lower;
-pub mod cont_to_trampoline;
 pub mod cont_to_yield_bubbling;
 pub mod cont_util;
 pub mod evidence;
@@ -28,7 +27,6 @@ pub mod wasm;
 
 // Re-exports
 pub use closure_lower::lower_closures;
-pub use cont_to_trampoline::lower_cont_to_trampoline;
 pub use cont_to_yield_bubbling::lower_cont_to_yield_bubbling;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use resolve_evidence::resolve_evidence_dispatch;

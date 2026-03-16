@@ -772,7 +772,7 @@ impl RewritePattern for LowerBuildStatePattern {
         let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
 
         // Use the original state type directly. State fields are already set to
-        // anyref (tribute_rt.any) in cont_to_trampoline, ensuring the same nominal
+        // anyref (tribute_rt.any) in cont_to_yield_bubbling, ensuring the same nominal
         // type is used for both creation (build_state) and extraction (struct_get).
         let state_type = build_state.state_type(ctx);
 

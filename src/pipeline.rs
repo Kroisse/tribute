@@ -45,8 +45,16 @@
 //!     ▼ resolve_evidence
 //! Module (cont.shift uses dynamic tags)
 //!     │
-//!     ├─► [wasm]   cont_to_trampoline ─► dce ─► resolve_casts ─► compile_to_wasm
-//!     └─► [native] cont_to_yield_bubbling ─► dce ─► resolve_casts ─► compile_to_native
+//!     ▼ cont_to_yield_bubbling
+//! Module (cont.* lowered to ADT yield bubbling)
+//!     │
+//!     ├─► [native only] evidence_to_native
+//!     │
+//!     ▼ dce ─► resolve_casts
+//! Module (ready for codegen)
+//!     │
+//!     ├─► [wasm]   compile_to_wasm
+//!     └─► [native] compile_to_native
 //! ```
 //!
 //! ## Diagnostics
@@ -64,7 +72,6 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_passes::evidence;
 use tribute_passes::generic_type_converter;
-use tribute_passes::lower_cont_to_trampoline;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
 use trunk_ir::{IrContext, Module};
@@ -441,18 +448,17 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
 
 /// Run the WASM target pipeline in arena and return IR text for dump-ir.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
-    // TR dispatch is needed for the trampoline backend
-    tribute_passes::tr_dispatch::insert_tr_dispatch(ctx, m);
-
-    lower_cont_to_trampoline(ctx, m).map_err(|illegal_ops| ConversionError {
-        illegal_ops: illegal_ops
-            .into_iter()
-            .map(|op| IllegalOp {
-                dialect: op.dialect.to_string(),
-                name: op.name.to_string(),
-            })
-            .collect(),
-    })?;
+    tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m).map_err(
+        |illegal_ops| ConversionError {
+            illegal_ops: illegal_ops
+                .into_iter()
+                .map(|op| IllegalOp {
+                    dialect: op.dialect.to_string(),
+                    name: op.name.to_string(),
+                })
+                .collect(),
+        },
+    )?;
 
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
 
@@ -539,10 +545,11 @@ pub fn dump_ir(
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
 
-    // WASM-specific: tr_dispatch + cont_to_trampoline + DCE + resolve_casts
-    tribute_passes::tr_dispatch::insert_tr_dispatch(&mut ctx, m);
-
-    if let Err(e) = lower_cont_to_trampoline(&mut ctx, m).map_err(|illegal_ops| ConversionError {
+    // WASM-specific: cont_to_yield_bubbling + DCE + resolve_casts
+    if let Err(e) = tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(
+        &mut ctx, m,
+    )
+    .map_err(|illegal_ops| ConversionError {
         illegal_ops: illegal_ops
             .into_iter()
             .map(|op| IllegalOp {

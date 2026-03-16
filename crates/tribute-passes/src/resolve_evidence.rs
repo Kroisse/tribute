@@ -795,7 +795,7 @@ fn transform_shifts_in_block(
             let tag_val = ctx.op_result(tag_call.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_call.op_ref());
 
-            // Create null tr_dispatch_fn (TR dispatch pass will update this later)
+            // Create null tr_dispatch_fn (unused by yield bubbling; kept for Marker ABI)
             let ptr_ty = arena_core::ptr(ctx).as_type_ref();
             let null_ptr = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
             let tr_dispatch_fn_val = null_ptr.result(ctx);

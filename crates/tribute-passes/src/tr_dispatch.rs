@@ -1,7 +1,7 @@
 //! Tail-Resumptive Dispatch pass.
 //!
-//! This pass runs after `resolve_evidence` and before `cont_to_trampoline`
-//! (WASM path). See `src/pipeline.rs` for invocation order.
+//! This pass runs after `resolve_evidence` and before continuation lowering.
+//! Currently not wired into the pipeline (yield bubbling doesn't use it yet).
 //! It optimizes tail-resumptive handlers by generating TR dispatch functions
 //! and inserting fast-path branches at shift sites.
 //!
