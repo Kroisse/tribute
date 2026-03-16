@@ -7,69 +7,8 @@
 //! lazily allocated on first access via [`thread_state()`].
 
 use alloc::boxed::Box;
-use core::cell::{Cell, RefCell};
+use core::cell::Cell;
 use core::ffi::c_void;
-use core::ptr::NonNull;
-
-use smallvec::SmallVec;
-
-use crate::MpPrompt;
-
-// =============================================================================
-// Prompt tag registry
-//
-// Maps integer tags to their active prompt pointers. Uses SmallVec-based
-// linear search instead of HashMap, since the number of simultaneously
-// active prompt tags is typically 1–4.
-// =============================================================================
-
-type PromptStack = SmallVec<[NonNull<MpPrompt>; 2]>;
-
-pub(crate) struct PromptRegistry {
-    entries: SmallVec<[(i32, PromptStack); 4]>,
-}
-
-impl PromptRegistry {
-    fn new() -> Self {
-        Self {
-            entries: SmallVec::new(),
-        }
-    }
-
-    pub(crate) fn push(&mut self, tag: i32, prompt: NonNull<MpPrompt>) {
-        if let Some((_, stack)) = self.entries.iter_mut().find(|(t, _)| *t == tag) {
-            stack.push(prompt);
-        } else {
-            let mut stack = SmallVec::new();
-            stack.push(prompt);
-            self.entries.push((tag, stack));
-        }
-    }
-
-    pub(crate) fn pop(&mut self, tag: i32, prompt: NonNull<MpPrompt>) {
-        if let Some(pos) = self.entries.iter().position(|(t, _)| *t == tag) {
-            let stack = &mut self.entries[pos].1;
-            if let Some(idx) = stack.iter().rposition(|p| *p == prompt) {
-                stack.remove(idx);
-            }
-            if stack.is_empty() {
-                self.entries.remove(pos);
-            }
-        }
-    }
-
-    pub(crate) fn lookup(&self, tag: i32) -> Option<NonNull<MpPrompt>> {
-        self.entries
-            .iter()
-            .find(|(t, _)| *t == tag)
-            .and_then(|(_, stack)| stack.last().copied())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
 
 // =============================================================================
 // Thread-local state
@@ -79,24 +18,12 @@ impl PromptRegistry {
 // =============================================================================
 
 pub(crate) struct ThreadState {
-    pub(crate) yield_active: Cell<bool>,
-    pub(crate) yield_resume: Cell<*mut u8>,
-    pub(crate) yield_op_idx: Cell<i32>,
-    pub(crate) yield_shift_value: Cell<*mut u8>,
-    pub(crate) yield_rc_roots: Cell<(*mut u8, usize)>,
-    pub(crate) prompt_registry: RefCell<PromptRegistry>,
     tag_counter: Cell<i32>,
 }
 
 impl ThreadState {
     fn new() -> Self {
         Self {
-            yield_active: Cell::new(false),
-            yield_resume: Cell::new(core::ptr::null_mut()),
-            yield_op_idx: Cell::new(0),
-            yield_shift_value: Cell::new(core::ptr::null_mut()),
-            yield_rc_roots: Cell::new((core::ptr::null_mut(), 0)),
-            prompt_registry: RefCell::new(PromptRegistry::new()),
             tag_counter: Cell::new(0),
         }
     }

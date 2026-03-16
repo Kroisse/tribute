@@ -1,3 +1,0 @@
-[submodule "crates/tribute-runtime/libmprompt"]
-	path = crates/tribute-runtime/libmprompt
-	url = https://github.com/Kroisse/libmprompt.git

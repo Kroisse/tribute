@@ -24,10 +24,8 @@ fn main() {
         // the runtime staticlib is built without instrumentation.
         //
         // `cargo-llvm-cov` injects `-C instrument-coverage` via RUSTC_WRAPPER
-        // (and possibly RUSTFLAGS).  When the instrumented runtime is linked
-        // into a native binary that uses libmprompt's setjmp/longjmp-based
-        // stack switching, the profiling counters corrupt heap metadata across
-        // stack-switch boundaries (`munmap_chunk(): invalid pointer`).
+        // (and possibly RUSTFLAGS). The runtime is a no_std staticlib and
+        // should not carry profiling instrumentation.
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTFLAGS")
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
@@ -40,7 +38,7 @@ fn main() {
     );
 
     // The staticlib is at {target_dir}/runtime/libtribute_runtime.a
-    // It bundles both Rust runtime code and libmprompt (native static lib).
+    // It bundles the Rust runtime code as a native static lib.
     let static_lib_dir = runtime_target_dir.join("runtime");
     println!(
         "cargo:rustc-env=TRIBUTE_RUNTIME_STATIC_LIB_DIR={}",
@@ -49,8 +47,6 @@ fn main() {
 
     // Rerun when tribute-runtime sources change.
     println!("cargo:rerun-if-changed=crates/tribute-runtime/src");
-    println!("cargo:rerun-if-changed=crates/tribute-runtime/libmprompt/src");
-    println!("cargo:rerun-if-changed=crates/tribute-runtime/libmprompt/include");
     println!("cargo:rerun-if-changed=crates/tribute-runtime/Cargo.toml");
 
     // Rerun when instrumentation-related env vars change (e.g., switching
