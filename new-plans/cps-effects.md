@@ -110,12 +110,14 @@ ast_to_ir (CPS for effectful bodies, closure.lambda 생성)
 
 #### expr.rs: `lower_block_cps()`
 
+
 - 각 statement를 순회, effectful call 감지
 - Effect point 발견 시: 나머지 stmts + value를 body region으로 만들어
   `closure.lambda` 생성 (lambda lifting은 별도 pass가 처리)
 - 자연스러운 재귀: 분기/case arm 내 effect도 동일하게 처리
 
 #### handle.rs: handle expression
+
 
 - done handler → `closure.lambda`로 생성 (CPS body의 outermost continuation)
 - push_prompt body → CPS 모드로 lowering (done_k를 continuation으로 전달)
@@ -234,6 +236,7 @@ Heuristic 불필요 — single-use closure는 항상 flattening이 이득.
 
 기존 types.rs 재사용:
 
+
 - YieldResult { Done(anyref), Shift(ShiftInfo) }
 - ShiftInfo { value, prompt, op_idx, continuation }
 - Continuation { resume_fn, state } → CPS에서는 closure로 단순화 가능
@@ -241,6 +244,7 @@ Heuristic 불필요 — single-use closure는 항상 flattening이 이득.
 ### tail_resumptive 상호작용
 
 handler 쪽 (cont.suspend → cont.yield)에서 동작 — CPS 변환과 직교.
+
 
 - cont.yield arm: handler 값 함수 직접 호출 → continuation 즉시 호출
 - lambda_flattening이 즉시 호출 패턴 인라인
@@ -299,6 +303,7 @@ TrunkIR에서는 `scf.if`의 nested region 안에 `cont.shift`가 존재:
 
 문제점:
 
+
 - Continuation이 "이 branch의 나머지" + "if 이후의 코드"를 포함해야 함
 - `scf.yield`를 통한 값 흐름을 가로질러 추출해야 함
 - **현재 `live_vars.rs`가 nested region 내 shift를 명시적으로 거부**
@@ -325,6 +330,7 @@ ability.handle_dispatch + ability.perform이 effect semantics를 담당.
 하므로, effect row를 tribute-specific 타입으로 분리하는 것이 바람직.
 
 선택지:
+
 
 - `tribute_rt.Func` 타입에 effect row 이동
 - Effect row를 `func.func` op attribute로 이동
