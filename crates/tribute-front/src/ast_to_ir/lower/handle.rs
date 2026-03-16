@@ -11,7 +11,7 @@ use trunk_ir::dialect::{adt, arith, cont, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use crate::ast::{Expr, ExprKind, HandlerArm, HandlerKind, LocalId, ResolvedRef, TypedRef};
+use crate::ast::{Expr, HandlerArm, HandlerKind, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
 use super::IrBuilder;
@@ -351,8 +351,12 @@ fn build_suspend_handler_region<'db>(
     // `op` handler bodies.
     // Use the LocalId assigned during name resolution so that lambda capture
     // analysis correctly tracks it.
-    if let Some(resume_local_id) = find_resume_local_id(&handler.body) {
-        ctx.bind(resume_local_id, Symbol::new("resume"), cont_value);
+    if let HandlerKind::Op {
+        resume_local_id: Some(id),
+        ..
+    } = &handler.kind
+    {
+        ctx.bind(*id, Symbol::new("resume"), cont_value);
     }
     ctx.push_resume_continuation(cont_value);
 
@@ -395,33 +399,4 @@ fn build_suspend_handler_region<'db>(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     })
-}
-
-/// Find the LocalId assigned to `resume` in the body expression.
-/// Searches for the first `ExprKind::Resume` node in the expression tree.
-fn find_resume_local_id<'db>(expr: &Expr<TypedRef<'db>>) -> Option<LocalId> {
-    match &*expr.kind {
-        ExprKind::Resume { local_id, .. } => *local_id,
-        ExprKind::Block { stmts, value } => {
-            for stmt in stmts {
-                match stmt {
-                    crate::ast::Stmt::Let { value, .. }
-                    | crate::ast::Stmt::Expr { expr: value, .. } => {
-                        if let Some(id) = find_resume_local_id(value) {
-                            return Some(id);
-                        }
-                    }
-                }
-            }
-            find_resume_local_id(value)
-        }
-        ExprKind::Call { callee, args } => {
-            if let Some(id) = find_resume_local_id(callee) {
-                return Some(id);
-            }
-            args.iter().find_map(find_resume_local_id)
-        }
-        ExprKind::Lambda { body, .. } => find_resume_local_id(body),
-        _ => None,
-    }
 }

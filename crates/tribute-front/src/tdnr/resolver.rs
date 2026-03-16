@@ -724,6 +724,7 @@ impl<'db> TdnrResolver<'db> {
                 ability,
                 op,
                 params,
+                resume_local_id,
             } => HandlerKind::Op {
                 ability,
                 op,
@@ -731,6 +732,7 @@ impl<'db> TdnrResolver<'db> {
                     .into_iter()
                     .map(|p| self.resolve_pattern(p))
                     .collect(),
+                resume_local_id,
             },
         };
         HandlerArm {

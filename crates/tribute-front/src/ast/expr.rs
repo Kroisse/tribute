@@ -223,6 +223,8 @@ where
         ability: V,
         op: Symbol,
         params: Vec<Pattern<V>>,
+        /// LocalId for the synthetic `resume` binding (assigned during name resolution).
+        resume_local_id: Option<LocalId>,
     },
 }
 

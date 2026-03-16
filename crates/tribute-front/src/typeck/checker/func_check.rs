@@ -442,6 +442,7 @@ impl<'db> TypeChecker<'db> {
                 ability,
                 op,
                 params,
+                resume_local_id,
             } => HandlerKind::Op {
                 ability: self.apply_subst_to_typed_ref(
                     ability,
@@ -454,6 +455,7 @@ impl<'db> TypeChecker<'db> {
                     .into_iter()
                     .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
                     .collect(),
+                resume_local_id,
             },
         };
         HandlerArm {

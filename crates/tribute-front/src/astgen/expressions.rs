@@ -732,6 +732,7 @@ fn lower_op_handler(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<U
             ability,
             op,
             params,
+            resume_local_id: None,
         },
         body,
     })
