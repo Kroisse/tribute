@@ -18,6 +18,7 @@ pub mod cont_to_yield_bubbling;
 pub mod cont_util;
 pub mod evidence;
 pub mod live_vars;
+pub mod lower_ability_perform;
 pub mod lower_closure_lambda;
 pub mod native;
 pub mod resolve_evidence;
