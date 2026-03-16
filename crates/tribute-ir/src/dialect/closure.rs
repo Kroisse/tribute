@@ -11,6 +11,17 @@ mod closure {
     fn func(closure: ()) -> result {}
 
     fn env(closure: ()) -> result {}
+
+    /// High-level lambda: captures + body region → closure value.
+    ///
+    /// The body region receives block arguments for the lambda's formal parameters.
+    /// Captured values are referenced from the parent scope (NOT isolated from above).
+    /// A downstream `lambda_lift` pass extracts the body into a top-level `func.func`
+    /// and replaces this op with `closure.new`.
+    fn lambda(#[rest] captures: ()) -> result {
+        #[region(body)]
+        {}
+    }
 }
 
 // === Pure operation registrations ===
@@ -19,6 +30,7 @@ mod closure {
 inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "new") }
 inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "func") }
 inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "env") }
+inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "lambda") }
 
 #[cfg(test)]
 mod tests {
