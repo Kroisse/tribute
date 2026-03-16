@@ -189,6 +189,14 @@ fn truncate_block_after_shift(
         );
     }
 
+    // Recurse into nested regions first (scf.if branches, scf.loop bodies, etc.)
+    for &op in &ops {
+        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+        for nested_region in regions {
+            truncate_region_after_shift(ctx, nested_region, effectful_funcs, _types);
+        }
+    }
+
     let mut truncation_result: Option<ValueRef> = None;
     let mut truncation_location = None;
     let mut truncation_index = None;

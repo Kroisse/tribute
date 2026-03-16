@@ -1200,12 +1200,15 @@ pub(crate) fn get_callee_original_result_type(
         if let Some(&callee_value) = operands.first() {
             let callee_ty = ctx.value_ty(callee_value);
             let func_data = ctx.types.get(callee_ty);
-            if func_data.dialect == Symbol::new("core")
-                && func_data.name == Symbol::new("func")
-                && !func_data.params.is_empty()
-            {
-                // params[0] is the return type in core.func
-                return Some(func_data.params[0]);
+            if func_data.dialect == Symbol::new("core") && func_data.name == Symbol::new("func") {
+                // Layout B: return type in attrs["result"]
+                if let Some(Attribute::Type(ret)) = func_data.attrs.get(&Symbol::new("result")) {
+                    return Some(*ret);
+                }
+                // Layout A: params[0] is the return type
+                if !func_data.params.is_empty() {
+                    return Some(func_data.params[0]);
+                }
             }
         }
     }
