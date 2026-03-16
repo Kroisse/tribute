@@ -46,7 +46,7 @@
 //! Module (cont.shift uses dynamic tags)
 //!     │
 //!     ├─► [wasm]   cont_to_trampoline ─► dce ─► resolve_casts ─► compile_to_wasm
-//!     └─► [native] cont_to_libmprompt ─► dce ─► resolve_casts ─► compile_to_native
+//!     └─► [native] cont_to_yield_bubbling ─► dce ─► resolve_casts ─► compile_to_native
 //! ```
 //!
 //! ## Diagnostics
@@ -650,13 +650,12 @@ fn compile_module_to_native(
         arith_to_clif::lower(ctx, module, type_converter);
     }
 
-    // Phase 2.7-2.85 - tribute_rt_to_clif + RC insertion + cont RC
+    // Phase 2.7-2.8 - tribute_rt_to_clif + RC insertion
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter);
         tribute_passes::native::rc_insertion::insert_rc(ctx, module);
-        tribute_passes::native::cont_rc::rewrite_cont_rc(ctx, module);
     }
 
     // Phase 3 - Resolve unrealized_conversion_cast operations

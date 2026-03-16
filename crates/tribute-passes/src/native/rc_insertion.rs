@@ -36,7 +36,6 @@
 use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
-use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif as arena_clif;
 use trunk_ir::dialect::core as arena_core;
@@ -366,56 +365,6 @@ struct InsertionPlan {
     at_start: Vec<OpRef>,
 }
 
-/// Check if value has any use after given op index in block.
-fn has_use_after(
-    ctx: &IrContext,
-    ops: &[OpRef],
-    after_idx: usize,
-    value: ValueRef,
-    ptr_alias_map: &HashMap<ValueRef, ValueRef>,
-) -> bool {
-    for &op in ops.iter().skip(after_idx + 1) {
-        for &operand in ctx.op_operands(op) {
-            if operand == value {
-                return true;
-            }
-            if let Some(&aliased) = ptr_alias_map.get(&operand)
-                && aliased == value
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Check if value is defined before given op index.
-fn is_defined_before(ctx: &IrContext, ops: &[OpRef], before_idx: usize, value: ValueRef) -> bool {
-    match ctx.value_def(value) {
-        ValueDef::BlockArg(_, _) => true,
-        ValueDef::OpResult(def_op, _) => {
-            for (i, &op) in ops.iter().enumerate() {
-                if i >= before_idx {
-                    return false;
-                }
-                if op == def_op {
-                    return true;
-                }
-            }
-            false
-        }
-    }
-}
-
-/// Check if an operation is `clif.call @__tribute_yield`.
-fn is_yield_call(ctx: &IrContext, op: OpRef) -> bool {
-    if let Ok(call_op) = arena_clif::Call::from_op(ctx, op) {
-        call_op.callee(ctx) == Symbol::new("__tribute_yield")
-    } else {
-        false
-    }
-}
-
 /// Insert reference counting operations for all `tribute_rt.anyref`-typed values,
 /// then lower all remaining `tribute_rt.anyref` types to `core.ptr`.
 pub fn insert_rc(ctx: &mut IrContext, module: Module) {
@@ -706,105 +655,6 @@ fn insert_rc_in_block(
 
     let defs_in_block = liveness.def_set.get(&block).cloned().unwrap_or_default();
 
-    // 3. Yield handling
-    for (op_idx, &op) in ops.iter().enumerate() {
-        if !is_yield_call(ctx, op) {
-            continue;
-        }
-
-        let live_across_yield: Vec<ValueRef> = {
-            let mut live: Vec<ValueRef> = Vec::new();
-            for v in &live_in {
-                if live_out.contains(v) || has_use_after(ctx, &ops, op_idx, *v, ptr_alias_map) {
-                    live.push(*v);
-                }
-            }
-            for v in &defs_in_block {
-                if (live_out.contains(v) || has_use_after(ctx, &ops, op_idx, *v, ptr_alias_map))
-                    && is_defined_before(ctx, &ops, op_idx, *v)
-                    && !live.contains(v)
-                {
-                    live.push(*v);
-                }
-            }
-            live.sort_by_key(|v| match ctx.value_def(*v) {
-                ValueDef::BlockArg(_, idx) => (0usize, idx),
-                ValueDef::OpResult(def_op, idx) => {
-                    let pos = ops.iter().position(|&o| o == def_op).unwrap_or(usize::MAX);
-                    (pos.saturating_add(1), idx)
-                }
-            });
-            live
-        };
-
-        if live_across_yield.is_empty() {
-            continue;
-        }
-
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i64_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build());
-        let nil_ty = arena_core::nil(ctx).as_type_ref();
-        let op_loc = ctx.op(op).location;
-
-        let before_ops = plan.before.entry(op_idx).or_default();
-
-        for v in &live_across_yield {
-            let retain_op = arena_tribute_rt::retain(ctx, op_loc, *v, ptr_ty);
-            before_ops.push(retain_op.op_ref());
-        }
-
-        let roots_count = live_across_yield.len();
-        let array_size = (roots_count * 16) as i64;
-
-        let alloc_size_const = arena_clif::iconst(ctx, op_loc, i64_ty, array_size);
-        before_ops.push(alloc_size_const.op_ref());
-
-        let alloc_call = arena_clif::call(
-            ctx,
-            op_loc,
-            [alloc_size_const.result(ctx)],
-            ptr_ty,
-            Symbol::new("__tribute_alloc"),
-        );
-        before_ops.push(alloc_call.op_ref());
-        let roots_ptr = alloc_call.result(ctx);
-
-        for (i, v) in live_across_yield.iter().enumerate() {
-            let offset = (i * 16) as i32;
-            let store_ptr = arena_clif::store(ctx, op_loc, *v, roots_ptr, offset);
-            before_ops.push(store_ptr.op_ref());
-            let obj_alloc_size = infer_alloc_size(ctx, *v);
-            let size_const = arena_clif::iconst(ctx, op_loc, i64_ty, obj_alloc_size as i64);
-            before_ops.push(size_const.op_ref());
-            let store_size =
-                arena_clif::store(ctx, op_loc, size_const.result(ctx), roots_ptr, offset + 8);
-            before_ops.push(store_size.op_ref());
-        }
-
-        let count_const = arena_clif::iconst(ctx, op_loc, i32_ty, roots_count as i64);
-        before_ops.push(count_const.op_ref());
-
-        let set_roots_call = arena_clif::call(
-            ctx,
-            op_loc,
-            [roots_ptr, count_const.result(ctx)],
-            nil_ty,
-            Symbol::new("__tribute_yield_set_rc_roots"),
-        );
-        before_ops.push(set_roots_call.op_ref());
-
-        let after_ops = plan.after.entry(op_idx).or_default();
-        for v in &live_across_yield {
-            let obj_alloc_size = infer_alloc_size(ctx, *v);
-            let release_op = arena_tribute_rt::release(ctx, op_loc, *v, obj_alloc_size);
-            after_ops.push(release_op.op_ref());
-        }
-    }
-
     // --- Release insertions ---
     let mut dying_values: HashSet<ValueRef> = HashSet::new();
 
@@ -977,21 +827,6 @@ mod tests {
     %1 = clif.load %0 {offset = 0} : core.i32
     %2 = clif.load %0 {offset = 4} : core.i32
     clif.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(output);
-    }
-
-    #[test]
-    fn test_snapshot_yield_with_live_ptr() {
-        // anyref param + yield: RC root setup around yield
-        let output = run_pass(
-            r#"core.module @test {
-  clif.func @f(%0: tribute_rt.anyref, %1: core.ptr) -> core.nil {
-    %2 = clif.call %1 {callee = @__tribute_yield} : core.nil
-    %3 = clif.load %0 {offset = 0} : core.i32
-    clif.return %2
   }
 }"#,
         );

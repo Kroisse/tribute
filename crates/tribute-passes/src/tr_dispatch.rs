@@ -1,6 +1,6 @@
 //! Tail-Resumptive Dispatch pass.
 //!
-//! This pass runs after `resolve_evidence` and before `cont_to_libmprompt`.
+//! This pass runs after `resolve_evidence` and before `cont_to_yield_bubbling`.
 //! It optimizes tail-resumptive handlers by generating TR dispatch functions
 //! and inserting fast-path branches at shift sites.
 //!

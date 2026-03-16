@@ -835,7 +835,7 @@ fn transform_shifts_in_block(
             }
 
             // Store the runtime tag as the first operand of cont.push_prompt
-            // so the downstream cont_to_libmprompt pass can use it.
+            // so the downstream continuation lowering pass can use it.
             ctx.push_op_operand(op, tag_val);
 
             // Transform body/handlers with extended evidence.
