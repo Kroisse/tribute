@@ -460,10 +460,32 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
                 let ir_args = ctx.block_args(ir_block);
                 let ir_arg_count = ir_args.len();
                 if ir_arg_count != cl_params.len() {
+                    let is_entry = ir_blocks.first() == Some(&ir_block);
+                    let ir_arg_types: Vec<String> = ir_args
+                        .iter()
+                        .map(|&a| {
+                            let ty = ctx.value_ty(a);
+                            let td = ctx.types.get(ty);
+                            format!("{}.{}", td.dialect, td.name)
+                        })
+                        .collect();
+                    let func_ty_data = ctx.types.get(func_type_ref);
+                    let func_ty_params: Vec<String> = func_ty_data
+                        .params
+                        .iter()
+                        .map(|&p| {
+                            let td = ctx.types.get(p);
+                            format!("{}.{}", td.dialect, td.name)
+                        })
+                        .collect();
                     return Err(CompilationError::codegen(format!(
-                        "block arg count mismatch: TrunkIR block has {} args but Cranelift block has {} params",
+                        "block arg count mismatch: TrunkIR block has {} args ({:?}) but Cranelift block has {} params (function: {}, entry: {}, func_type_params: {:?})",
                         ir_arg_count,
+                        ir_arg_types,
                         cl_params.len(),
+                        name_sym,
+                        is_entry,
+                        func_ty_params,
                     )));
                 }
                 for (i, &cl_param) in cl_params.iter().enumerate() {
@@ -490,6 +512,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
 
         // Compile the function via Cranelift
         let mut cr_ctx = Context::for_function(cl_func);
+
         obj_module
             .define_function(func_id, &mut cr_ctx)
             .map_err(|e| CompilationError::codegen(format!("Function {} {e:?}", name_sym)))?;

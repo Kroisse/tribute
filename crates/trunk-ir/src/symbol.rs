@@ -23,9 +23,17 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 ///
 /// Ordering is based on the underlying string content (not interning order),
 /// so that `BTreeMap<Symbol, _>` iteration is deterministic.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "salsa", derive(salsa::Update))]
 pub struct Symbol(Spur);
+
+impl std::hash::Hash for Symbol {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash the string content, not the internal Spur index,
+        // so the result is stable regardless of interning order.
+        self.with_str(|s| s.hash(state));
+    }
+}
 
 impl PartialOrd for Symbol {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {

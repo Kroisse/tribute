@@ -50,7 +50,7 @@ core.module @test {
       %0 = arith.const {value = 42} : core.i32
       %1 = arith.const {value = 1} : core.i32
       %2 = core.unrealized_conversion_cast %1 : core.ptr
-      %3 = arith.const {value = 519690198} : core.i32
+      %3 = arith.const {value = 1972422014} : core.i32
       %4 = func.call %0, %3, %2 {callee = @__tribute_yield} : core.ptr
       func.return %4
   }

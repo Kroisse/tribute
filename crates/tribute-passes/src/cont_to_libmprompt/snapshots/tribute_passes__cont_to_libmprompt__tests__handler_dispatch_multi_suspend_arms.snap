@@ -59,7 +59,7 @@ core.module @test {
               %9 = func.call {callee = @__tribute_get_yield_continuation} : core.ptr
               %10 = func.call {callee = @__tribute_get_yield_shift_value} : core.ptr
               %11 = func.call {callee = @__tribute_reset_yield_state} : core.nil
-              %12 = arith.const {value = 132566882} : core.i32
+              %12 = arith.const {value = 1972422014} : core.i32
               %13 = arith.cmp_eq %8, %12 : core.i1
               %14 = scf.if %13 : core.ptr {
                   %15 = func.call %9, %10 {callee = @__tribute_resume} : core.ptr
