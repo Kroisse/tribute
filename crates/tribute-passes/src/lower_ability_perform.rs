@@ -258,15 +258,11 @@ mod tests {
 
         let anyref_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
         let evidence_ty = arena_ability::evidence_adt_type_ref(&mut ctx);
-        let _i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
 
-        // Build: func.func @test_fn(%ev: Evidence) -> YieldResult {
-        //   %k = ... (dummy closure value)
+        // Build: func.func @test_fn(%ev: Evidence) {
+        //   %k = arith.const 0   (dummy continuation)
         //   %yr = ability.perform %k, [] { ability_ref: @State, op_name: @get }
         // }
-
         let func_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
@@ -278,12 +274,10 @@ mod tests {
         });
         let _ev_val = ctx.block_arg(func_entry, 0);
 
-        // Create a dummy closure value via arith.const (just need a ValueRef)
         let dummy_k = arith::r#const(&mut ctx, loc, anyref_ty, Attribute::Int(0));
         ctx.push_op(func_entry, dummy_k.op_ref());
         let k_val = dummy_k.result(&ctx);
 
-        // ability.perform %k, [] { ability_ref: @State, op_name: @get }
         let state_ref = make_ability_ref_type(&mut ctx, "State");
         let perform_op = arena_ability::perform(
             &mut ctx,
@@ -343,6 +337,170 @@ mod tests {
             ops.iter()
                 .any(|&o| arena_ability::EvidenceLookup::matches(&ctx, o)),
             "should have ability.evidence_lookup"
+        );
+    }
+
+    /// Integration test: closure.lambda + ability.perform → lowered IR.
+    ///
+    /// Simulates the CPS output of ast_to_ir for `State::get()`:
+    /// 1. A function containing closure.lambda (continuation) + ability.perform
+    /// 2. lower_closure_lambda extracts the lambda into a top-level function
+    /// 3. lower_ability_perform converts perform → YieldResult::Shift
+    #[test]
+    fn test_cps_shift_path_integration() {
+        let (mut ctx, loc) = test_ctx();
+        let (module, module_block) = make_module(&mut ctx, loc);
+
+        let anyref_ty = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let evidence_ty = arena_ability::evidence_adt_type_ref(&mut ctx);
+        let i32_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
+
+        // Simulate CPS output for: fn foo() ->{State} Int { State::get() }
+        //
+        // func.func @foo(%ev: Evidence) {
+        //   // continuation: fn(result) { func.return result }
+        //   %k = closure.lambda [] {
+        //     ^bb0(%result: i32):
+        //       func.return %result
+        //   }
+        //   %yr = ability.perform %k, [] { ability_ref: @State, op_name: @get }
+        //   func.return %yr
+        // }
+
+        // Build the closure.lambda body: ^bb0(%result: i32): func.return %result
+        let lambda_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let lambda_result = ctx.block_arg(lambda_entry, 0);
+        let lambda_ret = func::r#return(&mut ctx, loc, [lambda_result]);
+        ctx.push_op(lambda_entry, lambda_ret.op_ref());
+
+        let lambda_body_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![lambda_entry],
+            parent_op: None,
+        });
+
+        // closure type
+        let func_ty_inner = arena_core::func(&mut ctx, i32_ty, [i32_ty], None).as_type_ref();
+        let closure_ty =
+            tribute_ir::dialect::closure::closure(&mut ctx, func_ty_inner).as_type_ref();
+
+        // Build the main function
+        let func_entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: evidence_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+
+        // closure.lambda [] { ... }
+        let lambda_op = tribute_ir::dialect::closure::lambda(
+            &mut ctx,
+            loc,
+            Vec::<ValueRef>::new(),
+            closure_ty,
+            lambda_body_region,
+        );
+        ctx.push_op(func_entry, lambda_op.op_ref());
+        let k_val = lambda_op.result(&ctx);
+
+        // ability.perform %k, [] { @State, @get }
+        let state_ref = make_ability_ref_type(&mut ctx, "State");
+        let perform_op = arena_ability::perform(
+            &mut ctx,
+            loc,
+            k_val,
+            Vec::<ValueRef>::new(),
+            anyref_ty,
+            state_ref,
+            Symbol::new("get"),
+        );
+        ctx.push_op(func_entry, perform_op.op_ref());
+
+        // func.return %yr
+        let yr_val = perform_op.result(&ctx);
+        let ret_op = func::r#return(&mut ctx, loc, [yr_val]);
+        ctx.push_op(func_entry, ret_op.op_ref());
+
+        let func_body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![func_entry],
+            parent_op: None,
+        });
+        let yr_ty = YieldBubblingTypes::new(&mut ctx).yield_result;
+        let func_ty = arena_core::func(&mut ctx, yr_ty, [evidence_ty], None).as_type_ref();
+        let foo_func = func::func(&mut ctx, loc, Symbol::new("foo"), func_ty, func_body);
+        ctx.push_op(module_block, foo_func.op_ref());
+
+        // === Pass 1: lower_closure_lambda ===
+        crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+
+        // Verify: module should now have 2 functions (foo + __lambda_0)
+        let ops_after_lambda = module.ops(&ctx);
+        assert_eq!(
+            ops_after_lambda.len(),
+            2,
+            "expected foo + lifted lambda function"
+        );
+
+        // foo should now have closure.new instead of closure.lambda
+        let foo = func::Func::from_op(&ctx, ops_after_lambda[0]).unwrap();
+        let foo_body = foo.body(&ctx);
+        let foo_entry = ctx.region(foo_body).blocks[0];
+        let foo_ops: Vec<OpRef> = ctx.block(foo_entry).ops.to_vec();
+        assert!(
+            foo_ops
+                .iter()
+                .any(|&o| tribute_ir::dialect::closure::New::matches(&ctx, o)),
+            "foo should have closure.new after lower_closure_lambda"
+        );
+        assert!(
+            foo_ops
+                .iter()
+                .any(|&o| arena_ability::Perform::matches(&ctx, o)),
+            "foo should still have ability.perform"
+        );
+
+        // === Pass 2: lower_ability_perform ===
+        lower_ability_perform(&mut ctx, module);
+
+        // Verify: ability.perform should be replaced with YieldResult construction
+        let ops_after_perform = module.ops(&ctx);
+        let foo2 = func::Func::from_op(&ctx, ops_after_perform[0]).unwrap();
+        let foo2_body = foo2.body(&ctx);
+        let foo2_entry = ctx.region(foo2_body).blocks[0];
+        let foo2_ops: Vec<OpRef> = ctx.block(foo2_entry).ops.to_vec();
+
+        assert!(
+            !foo2_ops
+                .iter()
+                .any(|&o| arena_ability::Perform::matches(&ctx, o)),
+            "ability.perform should be gone after lowering"
+        );
+        assert!(
+            foo2_ops.iter().any(|&o| adt::VariantNew::matches(&ctx, o)),
+            "should have YieldResult::Shift variant_new"
+        );
+
+        // The lifted lambda function should exist as __lambda_0
+        let lifted = func::Func::from_op(&ctx, ops_after_perform[1]).unwrap();
+        let lifted_name = lifted.sym_name(&ctx).to_string();
+        assert!(
+            lifted_name.contains("__lambda_"),
+            "lifted function should be __lambda_N, got: {}",
+            lifted_name
         );
     }
 }
