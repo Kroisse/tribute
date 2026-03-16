@@ -680,207 +680,6 @@ fn remaining_are_dead_code(
     true
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use trunk_ir::context::{BlockData, OperationDataBuilder, RegionData};
-    use trunk_ir::dialect::arith;
-    use trunk_ir::location::Span;
-    use trunk_ir::smallvec::smallvec;
-    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-
-    fn test_ctx() -> (IrContext, Location) {
-        let mut ctx = IrContext::new();
-        let path = ctx.paths.intern("test.trb".to_owned());
-        let loc = Location::new(path, Span::new(0, 0));
-        (ctx, loc)
-    }
-
-    fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
-    }
-
-    /// Create a func.func op with the given name, return type, and body ops.
-    fn make_func(
-        ctx: &mut IrContext,
-        loc: Location,
-        name: &'static str,
-        ret_ty: TypeRef,
-        body_ops: Vec<OpRef>,
-    ) -> OpRef {
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(ret_ty)
-                .build(),
-        );
-        let block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        for op in body_ops {
-            ctx.push_op(block, op);
-        }
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![block],
-            parent_op: None,
-        });
-        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new(name)))
-            .attr("type", Attribute::Type(func_ty))
-            .region(body)
-            .build(ctx);
-        ctx.create_op(func_data)
-    }
-
-    /// Create a core.module containing the given ops.
-    fn make_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
-        let block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        for op in ops {
-            ctx.push_op(block, op);
-        }
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![block],
-            parent_op: None,
-        });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .region(body)
-                .build(ctx);
-        let module_op = ctx.create_op(module_data);
-        Module::new(ctx, module_op).expect("should be a valid module")
-    }
-
-    #[test]
-    fn collect_func_ops_finds_matching_funcs() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-
-        let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let c_val = c.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [c_val]);
-        let func_a = make_func(&mut ctx, loc, "foo", i32_ty, vec![c.op_ref(), ret.op_ref()]);
-
-        let c2 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
-        let c2_val = c2.result(&ctx);
-        let ret2 = func::r#return(&mut ctx, loc, [c2_val]);
-        let func_b = make_func(
-            &mut ctx,
-            loc,
-            "bar",
-            i32_ty,
-            vec![c2.op_ref(), ret2.op_ref()],
-        );
-
-        let module = make_module(&mut ctx, loc, vec![func_a, func_b]);
-        let module_body = module.body(&ctx).unwrap();
-
-        // Find only "foo"
-        let found = collect_func_ops(&ctx, module_body, |name| name == Symbol::new("foo"));
-        assert_eq!(found.len(), 1);
-        let found_func = func::Func::from_op(&ctx, found[0]).unwrap();
-        assert_eq!(found_func.sym_name(&ctx), Symbol::new("foo"));
-
-        // Find all
-        let found_all = collect_func_ops(&ctx, module_body, |_| true);
-        assert_eq!(found_all.len(), 2);
-
-        // Find none
-        let found_none = collect_func_ops(&ctx, module_body, |_| false);
-        assert!(found_none.is_empty());
-    }
-
-    #[test]
-    fn collect_func_ops_skips_nested_funcs() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-
-        // Inner function
-        let c_inner = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
-        let c_inner_val = c_inner.result(&ctx);
-        let ret_inner = func::r#return(&mut ctx, loc, [c_inner_val]);
-        let inner_func = make_func(
-            &mut ctx,
-            loc,
-            "inner",
-            i32_ty,
-            vec![c_inner.op_ref(), ret_inner.op_ref()],
-        );
-
-        // Outer function containing the inner function
-        let c_outer = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
-        let c_outer_val = c_outer.result(&ctx);
-        let ret_outer = func::r#return(&mut ctx, loc, [c_outer_val]);
-        let outer_func = make_func(
-            &mut ctx,
-            loc,
-            "outer",
-            i32_ty,
-            vec![inner_func, c_outer.op_ref(), ret_outer.op_ref()],
-        );
-
-        let module = make_module(&mut ctx, loc, vec![outer_func]);
-        let module_body = module.body(&ctx).unwrap();
-
-        // Should find "outer" but not "inner" (skip func bodies)
-        let found = collect_func_ops(&ctx, module_body, |_| true);
-        assert_eq!(found.len(), 1);
-        let found_func = func::Func::from_op(&ctx, found[0]).unwrap();
-        assert_eq!(found_func.sym_name(&ctx), Symbol::new("outer"));
-    }
-
-    #[test]
-    fn find_original_result_type_layout_a() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let types = YieldBubblingTypes::new(&mut ctx);
-
-        // Create a func with YieldResult return and original_result_type attr
-        let func_ty = ctx.types.intern(
-            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
-                .param(types.yield_result)
-                .build(),
-        );
-        let block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![block],
-            parent_op: None,
-        });
-        let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("my_func")))
-            .attr("type", Attribute::Type(func_ty))
-            .attr("original_result_type", Attribute::Type(i32_ty))
-            .region(body)
-            .build(&mut ctx);
-        let func_op = ctx.create_op(func_data);
-
-        let module = make_module(&mut ctx, loc, vec![func_op]);
-        let module_body = module.body(&ctx).unwrap();
-
-        let result = find_original_result_type(&ctx, module_body, Symbol::new("my_func"));
-        assert_eq!(result, Some(i32_ty));
-    }
-}
-
 /// Check if a single op (and its nested regions) is dead code.
 fn op_is_dead_code(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>) -> bool {
     // Direct call to a non-effectful function → has side effects, can't truncate
@@ -912,4 +711,104 @@ fn op_is_dead_code(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>
         }
     }
     true
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::context::IrContext;
+    use trunk_ir::ops::DialectOp;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn collect_func_ops_finds_matching_funcs() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @foo() -> core.i32 {
+    %c = arith.const {value = 1} : core.i32
+    func.return %c
+  }
+  func.func @bar() -> core.i32 {
+    %c = arith.const {value = 2} : core.i32
+    func.return %c
+  }
+}"#,
+        );
+        let module_body = module.body(&ctx).unwrap();
+
+        // Find only "foo"
+        let found = collect_func_ops(&ctx, module_body, |name| name == Symbol::new("foo"));
+        assert_eq!(found.len(), 1);
+        let found_func = func::Func::from_op(&ctx, found[0]).unwrap();
+        assert_eq!(found_func.sym_name(&ctx), Symbol::new("foo"));
+
+        // Find all
+        let found_all = collect_func_ops(&ctx, module_body, |_| true);
+        assert_eq!(found_all.len(), 2);
+
+        // Find none
+        let found_none = collect_func_ops(&ctx, module_body, |_| false);
+        assert!(found_none.is_empty());
+    }
+
+    #[test]
+    fn collect_func_ops_skips_nested_funcs() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @outer() -> core.i32 {
+    func.func @inner() -> core.i32 {
+      %c = arith.const {value = 1} : core.i32
+      func.return %c
+    }
+    %c = arith.const {value = 2} : core.i32
+    func.return %c
+  }
+}"#,
+        );
+        let module_body = module.body(&ctx).unwrap();
+
+        // Should find "outer" but not "inner" (skip func bodies)
+        let found = collect_func_ops(&ctx, module_body, |_| true);
+        assert_eq!(found.len(), 1);
+        let found_func = func::Func::from_op(&ctx, found[0]).unwrap();
+        assert_eq!(found_func.sym_name(&ctx), Symbol::new("outer"));
+    }
+
+    #[test]
+    fn find_original_result_type_reads_attribute() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @my_func() -> core.i32 {
+    %c = arith.const {value = 42} : core.i32
+    func.return %c
+  }
+}"#,
+        );
+        let module_body = module.body(&ctx).unwrap();
+
+        // Manually set original_result_type attribute (as truncation would)
+        let func_ops = collect_func_ops(&ctx, module_body, |n| n == Symbol::new("my_func"));
+        let func_op = func_ops[0];
+        let i32_ty = func::Func::from_op(&ctx, func_op).unwrap().r#type(&ctx);
+        let i32_ty_data = ctx.types.get(i32_ty);
+        // Extract return type from Layout A (params[0])
+        let original_ret = i32_ty_data.params[0];
+        ctx.op_mut(func_op).attributes.insert(
+            Symbol::new("original_result_type"),
+            Attribute::Type(original_ret),
+        );
+
+        let result = find_original_result_type(&ctx, module_body, Symbol::new("my_func"));
+        assert_eq!(result, Some(original_ret));
+    }
 }
