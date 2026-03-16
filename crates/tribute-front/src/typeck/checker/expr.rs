@@ -1609,36 +1609,15 @@ impl<'db> TypeChecker<'db> {
                 op,
                 params,
                 resume_local_id,
-            } => {
-                // Bind `resume` with Continuation type, mirroring the old `k` binding.
-                if let Some(resume_id) = resume_local_id {
-                    let arg_ty = ctx.fresh_type_var();
-                    let result_ty = ctx.fresh_type_var();
-                    let cont_effect = handle_ctx
-                        .map(|hc| hc.body_effect)
-                        .unwrap_or_else(|| ctx.fresh_effect_row());
-                    let cont_ty = Type::new(
-                        self.db(),
-                        TypeKind::Continuation {
-                            arg: arg_ty,
-                            result: result_ty,
-                            effect: cont_effect,
-                        },
-                    );
-                    ctx.bind_local(resume_id, cont_ty);
-                    ctx.bind_local_by_name(Symbol::new("resume"), cont_ty);
-                }
-
-                HandlerKind::Op {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                    resume_local_id,
-                }
-            }
+            } => HandlerKind::Op {
+                ability: self.convert_ref_with_ctx(ctx, ability),
+                op,
+                params: params
+                    .into_iter()
+                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                    .collect(),
+                resume_local_id,
+            },
         };
         HandlerArm {
             id: arm.id,

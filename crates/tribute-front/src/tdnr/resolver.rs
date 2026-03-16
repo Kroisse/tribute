@@ -449,9 +449,9 @@ impl<'db> TdnrResolver<'db> {
                     .collect(),
             },
 
-            ExprKind::Resume { arg, .. } => ExprKind::Resume {
+            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
                 arg: self.resolve_expr(arg),
-                local_id: None,
+                local_id,
             },
 
             ExprKind::Tuple(elements) => {

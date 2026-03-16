@@ -358,24 +358,8 @@ impl<'db> Resolver<'db> {
 
             ExprKind::Resume { arg, .. } => {
                 let arg = self.resolve_expr(arg);
-                // Transform resume(value) into a regular Call to the synthetic
-                // `resume` variable. This way lambda capture, type checking,
-                // and IR lowering all use the existing k(value) code path.
-                if let Some(&resume_id) = self.resume_local_id_stack.last() {
-                    let resume_name = Symbol::new("resume");
-                    let callee_ref = ResolvedRef::local(resume_id, resume_name);
-                    let callee = Expr::new(arg.id, ExprKind::Var(callee_ref));
-                    ExprKind::Call {
-                        callee,
-                        args: vec![arg],
-                    }
-                } else {
-                    // resume used outside of op handler — keep as-is for error reporting
-                    ExprKind::Resume {
-                        arg,
-                        local_id: None,
-                    }
-                }
+                let local_id = self.resume_local_id_stack.last().copied();
+                ExprKind::Resume { arg, local_id }
             }
 
             ExprKind::Tuple(exprs) => {
@@ -480,9 +464,9 @@ impl<'db> Resolver<'db> {
                     .into_iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
-                // Bind `resume` as a synthetic local variable so that lambda
-                // capture and the rest of the pipeline treat it like the old `k`.
-                let resume_id = self.bind_local(Symbol::new("resume"));
+                // Allocate a synthetic LocalId for `resume` so that lambda
+                // capture analysis can track the continuation value.
+                let resume_id = self.local_id_gen.fresh();
                 self.resume_local_id_stack.push(resume_id);
                 HandlerKind::Op {
                     ability: resolved_ability,

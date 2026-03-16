@@ -176,7 +176,6 @@ fn main() { }
 ///
 /// Note: Full execution requires backend support (issues #112-#114).
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_milestone_target_code() {
     // This is the target code from issue #100
     let code = r#"ability State(s) {
@@ -683,7 +682,6 @@ fn main() {
 /// and State::set both from State), the handled_abilities list may contain
 /// duplicates. The deduplication fix ensures constraint generation doesn't fail.
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_duplicate_ability_handlers_compile() {
     // This code has two handlers for the same ability (State)
     // Previously, this could cause constraint issues due to duplicate entries
@@ -768,7 +766,6 @@ fn main() { }
 
 /// Test that State(Int) and State(Int) are the same ability and unify correctly.
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_parameterized_ability_same_type_unifies() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -807,7 +804,6 @@ fn main() { }
 
 /// Test type variable unification in ability args: State(?a) unifies with State(Int).
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_parameterized_ability_type_var_unification() {
     // Generic function with State(s) should unify with concrete State(Int)
     let code = r#"ability State(s) {
@@ -879,7 +875,6 @@ fn main() { }
 /// When handling State(Int), the type argument Int should be preserved in the
 /// effect row constraint, not lost by creating Effect entries with empty args.
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_handle_preserves_parameterized_ability_type_args() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -1390,7 +1385,6 @@ fn main() {
 /// indirectly. Yield bubbling must recognize this `func.call_indirect` as
 /// effectful and expand it into Done/Shift branches.
 #[test]
-#[ignore = "WIP: type inference issue with op handler resume binding"]
 fn test_call_indirect_effectful_closure() {
     let code = r#"ability State(s) {
     op get() -> s
