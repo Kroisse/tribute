@@ -87,7 +87,7 @@ SSA-level code extraction을 완전히 대체.
 ast_to_ir (CPS for effectful bodies, closure.lambda 생성)
 → evidence_params → closure_lower → evidence_calls
 → tail_resumptive → ability lowering (ability.perform → YieldResult)
-→ lambda_lift → lambda_flattening → dce → resolve_casts → emit
+→ lower_closure_lambda → lambda_flattening → dce → resolve_casts → emit
 ```
 
 ### 장점
@@ -124,7 +124,7 @@ ast_to_ir (CPS for effectful bodies, closure.lambda 생성)
 #### lambda.rs: 소스 lambda도 `closure.lambda` 생성
 
 - 기존 inline lambda lifting 로직을 `closure.lambda` 생성으로 교체
-- Lambda lifting은 별도 pass (`lambda_lift.rs`)로 이동
+- Closure conversion은 별도 pass (`lower_closure_lambda`)로 이동
 
 ## closure.lambda: 고수준 lambda op
 
@@ -144,7 +144,7 @@ lambda lifting을 inline으로 수행하기 때문이다. 고수준 `closure.lam
     scf.yield %r
 }
 
-// lambda_lift pass에 의해 변환:
+// lower_closure_lambda pass에 의해 변환:
 func.func @__lambda_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
   %x = adt.struct_get %env, 0 : anyref
   %y = adt.struct_get %env, 1 : anyref
@@ -186,17 +186,17 @@ let f = fn(x) { x + captured_var }
 현재: ast_to_ir → (inline lambda lift) → `closure.new @lambda_0, [%captured_var]`
 
 전환 후: ast_to_ir → `closure.lambda [%captured_var] { ^bb0(%x): ... }`
-→ lambda_lift pass → `closure.new @lambda_0, [%captured_var]`
+→ lower_closure_lambda pass → `closure.new @lambda_0, [%captured_var]`
 
 이로써:
 
 - ast_to_ir의 lambda lifting 로직 (~200줄, lambda.rs) 분리
 - 소스 lambda와 CPS continuation이 동일한 경로로 처리
-- Lambda lifting이 독립적으로 테스트 가능한 별도 pass가 됨
+- Closure conversion이 독립적으로 테스트 가능한 별도 pass가 됨
 
-### lambda_lift pass
+### lower_closure_lambda pass
 
-**위치**: `crates/tribute-passes/src/lambda_lift.rs` (신규)
+**위치**: `crates/tribute-passes/src/lower_closure_lambda.rs` (신규)
 
 역할:
 
@@ -205,7 +205,8 @@ let f = fn(x) { x + captured_var }
 3. Captures를 env struct로 패킹
 4. `closure.lambda` → `closure.new` 치환
 
-기존 `lower_lambda()` (lambda.rs)의 로직을 TrunkIR pass로 재구성.
+기존 `lower_lambda()` (lambda.rs)의 closure conversion 로직을
+TrunkIR pass로 재구성.
 
 ## 공통 구성요소
 

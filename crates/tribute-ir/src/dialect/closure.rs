@@ -16,8 +16,8 @@ mod closure {
     ///
     /// The body region receives block arguments for the lambda's formal parameters.
     /// Captured values are referenced from the parent scope (NOT isolated from above).
-    /// A downstream `lambda_lift` pass extracts the body into a top-level `func.func`
-    /// and replaces this op with `closure.new`.
+    /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
+    /// `func.func` and replaces this op with `closure.new`.
     fn lambda(#[rest] captures: ()) -> result {
         #[region(body)]
         {}
