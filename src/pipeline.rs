@@ -916,7 +916,7 @@ impl std::error::Error for LinkError {
 /// Link native object bytes into an executable.
 ///
 /// Writes object bytes to a temp file and invokes the system linker (`cc`),
-/// linking against the tribute runtime library (which includes libmprompt).
+/// linking against the tribute runtime library.
 pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), LinkError> {
     let obj_file = tempfile::Builder::new()
         .suffix(".o")
@@ -927,7 +927,7 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(obj_file.path());
 
-    // Link tribute-runtime staticlib (bundles both Rust runtime and libmprompt).
+    // Link tribute-runtime staticlib.
     // The library directory is set at build time by build.rs.
     if let Some(static_lib_dir) = option_env!("TRIBUTE_RUNTIME_STATIC_LIB_DIR") {
         cmd.arg("-L").arg(static_lib_dir);

@@ -399,58 +399,20 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 (resume $cont (local.get $value))
 ```
 
-### Cranelift (libmprompt)
+### Cranelift (Yield Bubbling)
 
-**libmprompt C FFI:**
+Native 백엔드는 ADT 기반 yield bubbling으로 ability를 구현한다.
+`cont_to_yield_bubbling` pass가 cont.* 연산을 ADT enum/struct로 변환한다.
+(WASM 백엔드는 별도의 `cont_to_trampoline` pass를 사용.)
 
-```c
-void* mp_prompt(mp_prompt_t* p, mp_start_fun_t* fun, void* arg);
-void* mp_yield(mp_prompt_t* p, mp_yield_fun_t* fun, void* arg);
-void* mp_resume(mp_resume_t* r, void* result);
-void  mp_resume_drop(mp_resume_t* r);
-```
+**cont.* → yield bubbling 매핑:**
 
-libmprompt는 setjmp/longjmp + 스택 복사로 delimited continuation을 구현한다.
-
-**cont.* → libmprompt 매핑:**
-
-| cont.* op | libmprompt 호출 | 설명 |
-| --------- | --------------- | ---- |
-| `cont.push_prompt` | `mp_prompt(&p, body_fn, env)` | body region을 별도 함수로 outline 후 호출 |
-| `cont.shift` | `mp_yield(%tag, yield_fn, %yr)` | YieldResult { op_idx, shift_value } 할당 |
-| `cont.resume(k, val)` | `mp_resume(yr.resume, box(val))` | 캡처된 continuation 재개 |
-| `cont.drop(k)` | `mp_resume_drop(yr.resume)` | continuation 폐기 |
-
-**Done/Shift 프로토콜:**
-
-`mp_prompt` 반환 후 body가 정상 완료(Done)인지 yield(Shift)인지 구분이 필요하다.
-Thread-local `__tribute_yield_active` 플래그를 사용:
-
-```text
-mp_prompt 반환 →
-  if __tribute_yield_active == false → Done: 결과값 직접 반환
-  if __tribute_yield_active == true  → Shift: handler_dispatch 각 arm으로 분기
-```
-
-**메모리 레이아웃:**
-
-```text
-┌─────────────────┐
-│ Main Stack      │
-├─────────────────┤
-│ Prompt P1       │ ← marker
-├─────────────────┤
-│ Stack Segment   │
-├─────────────────┤
-│ Prompt P2       │ ← marker
-├─────────────────┤
-│ Current Frame   │
-└─────────────────┘
-```
-
-Continuation 캡처 시 해당 prompt까지의 스택 세그먼트를 힙에 복사.
-WASM의 trampoline과 달리 라이브 변수 캡처/state struct가 불필요 —
-libmprompt가 스택 자체를 관리.
+| cont.* op | 변환 결과 | 설명 |
+| --------- | --------- | ---- |
+| `cont.push_prompt` | body 호출 + handler dispatch loop | YieldResult enum으로 Done/Shift 구분 |
+| `cont.shift` | state 캡처 + Continuation struct + YieldResult::Shift 반환 | 라이브 변수를 ADT struct에 저장 |
+| `cont.resume(k, val)` | Continuation에서 resume_fn 추출 + call_indirect | 캡처된 상태 복원 후 재개 |
+| `cont.drop(k)` | (no-op) | RC가 자동 관리 |
 
 **파이프라인 분기:**
 
@@ -459,7 +421,7 @@ libmprompt가 스택 자체를 관리.
       → evidence_params → closure_lower → evidence_calls → resolve_evidence
 
 WASM:   → cont_to_trampoline → dce → resolve_casts → lower_to_wasm → emit_wasm
-Native: → cont_to_libmprompt → dce → resolve_casts → lower_to_clif → emit_native
+Native: → cont_to_yield_bubbling → dce → resolve_casts → lower_to_clif → emit_native
 ```
 
 ---
@@ -496,11 +458,9 @@ Cranelift 타겟에서는 **Reference Counting**을 채택한다.
 
 **Continuation과 RC:**
 
-- libmprompt가 캡처한 스택에는 RC 객체 포인터가 포함됨
-- 스택 캡처 시 포함된 모든 RC 객체를 retain
-- `mp_resume_drop` 시 캡처된 스택의 RC 객체를 release
-- 이를 위해 런타임에 "스택 스캔" 또는
-  컴파일 타임 live variable 분석이 필요
+- Yield bubbling에서 continuation은 ADT struct로 캡처됨
+- 캡처된 라이브 변수들은 struct 필드로 저장되어 RC가 자동 관리
+- Resume 시 struct에서 필드를 꺼내 복원
 
 **단계적 구현:**
 
@@ -595,7 +555,7 @@ flowchart TB
     lower_case -->|"scf.if"| dce
     dce --> wasm & cranelift & future
     wasm -->|"yield bubbling"| wasm_bin
-    cranelift -->|"libmprompt"| native
+    cranelift -->|"yield bubbling"| native
 ```
 
 ### 패스 분류
@@ -777,9 +737,7 @@ let idx = evidence_lookup(ev, STATE_ID)  // binary search
 
 - [Generalized Evidence Passing for Effect Handlers][koka-evidence] (Koka)
 - [Effect Handlers, Evidently][effect-evidently] (Scoped Resumption)
-- [libmprompt][libmprompt] (Delimited Continuation Runtime)
 - [Do Be Do Be Do](https://arxiv.org/abs/1611.09259) (Frank, Unison의 기반)
 
 [koka-evidence]: https://www.microsoft.com/en-us/research/publication/generalized-evidence-passing-for-effect-handlers-or-efficient-compilation-of-effect-handlers-to-c/
 [effect-evidently]: https://dl.acm.org/doi/10.1145/3408981
-[libmprompt]: https://github.com/koka-lang/libmprompt
