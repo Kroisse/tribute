@@ -549,6 +549,9 @@ fn unwrap_yr_calls_in_block(
         // Skip if the call result is consumed by handler_dispatch infrastructure
         // (scf.loop, adt.variant_new Done). These are already handled by the
         // handler dispatch loop and should not be unwrapped.
+        // Note: the VariantNew check is intentionally broad — in non-effectful
+        // functions (the only context where this runs), the only VariantNew ops
+        // consuming a YieldResult are handler dispatch wrappers.
         let uses = ctx.uses(call_result).to_vec();
         let consumed_by_handler = uses.iter().any(|u| {
             scf::Loop::from_op(ctx, u.user).is_ok() || adt::VariantNew::from_op(ctx, u.user).is_ok()
