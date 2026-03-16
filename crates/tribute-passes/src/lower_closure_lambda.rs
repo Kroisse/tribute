@@ -24,6 +24,7 @@
 
 use std::collections::HashMap;
 
+
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
