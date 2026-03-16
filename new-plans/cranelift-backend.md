@@ -32,7 +32,7 @@ graph TD
     subgraph "tribute-passes/src/native/ (tribute-ir 의존)"
         lower["lower.rs — 오케스트레이션"]
         type_conv["type_converter.rs — 네이티브 타입 변환"]
-        cont_libmprompt["cont_to_libmprompt.rs — effect lowering"]
+        cont_yb["cont_to_yield_bubbling — effect lowering"]
         rc["rc.rs — RC 삽입 (future)"]
     end
 
@@ -41,12 +41,12 @@ graph TD
     end
 
     dialects --> passes
-    dialects --> cont_libmprompt
+    dialects --> cont_yb
     passes --> translate
     translate --> function
     translate --> validation
     lower --> passes
-    lower --> cont_libmprompt
+    lower --> cont_yb
     pipeline --> lower
     pipeline --> translate
 ```
@@ -62,7 +62,7 @@ flowchart TB
     input["TrunkIR Module\n(cont.*, func.*, arith.*, scf.*, adt.*)"]
 
     subgraph native_passes["tribute-passes/src/native/"]
-        cont["cont_to_libmprompt\ncont.* → libmprompt FFI 호출"]
+        cont["cont_to_yield_bubbling\ncont.* → ADT-based yield bubbling"]
         rc_pass["rc 삽입 (future)\nretain/release 삽입"]
     end
 
@@ -92,7 +92,7 @@ flowchart TB
 
 | 측면 | WASM | Native |
 | ---- | ---- | ------ |
-| Effect | trampoline (yield bubbling) | libmprompt (스택 관리) |
+| Effect | yield bubbling (ADT-based) | yield bubbling (ADT-based) |
 | 메모리 | WasmGC (런타임 GC) | Reference Counting |
 | ADT | GC struct/array | 포인터 + load/store |
 | 제어 흐름 | Structured (block/loop/if) | CFG (brif/jump/br_table) |
@@ -114,12 +114,12 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 
 ---
 
-## Effect 구현: libmprompt
+## Effect 구현: Yield Bubbling
 
-WASM의 trampoline 방식과 달리, libmprompt가 스택 자체를 관리하므로
-라이브 변수 캡처/state struct가 불필요하다.
+WASM과 Native 모두 ADT 기반 yield bubbling을 사용한다.
+`cont_to_yield_bubbling` pass가 cont.* 연산을 ADT enum/struct로 변환.
 
-상세 내용은 [implementation.md](implementation.md#cranelift-libmprompt)를 참조.
+상세 내용은 [implementation.md](implementation.md#cranelift-yield-bubbling)를 참조.
 
 ---
 
@@ -166,11 +166,10 @@ Array:  [length: i64] [elements...]
 - RC retain/release 삽입 pass
 - Valgrind / AddressSanitizer 검증
 
-### Phase 4: libmprompt 기반 Effect
+### Phase 4: ADT-based Yield Bubbling Effect
 
-- `cont_to_libmprompt` pass
+- `cont_to_yield_bubbling` pass (WASM/Native 공유)
 - Evidence 런타임 (native)
-- libmprompt 정적 링킹
 
 ### Phase 5: E2E 파이프라인
 
@@ -181,7 +180,5 @@ Array:  [length: i64] [elements...]
 
 ## References
 
-- [libmprompt](https://github.com/koka-lang/libmprompt)
-  — Koka 언어의 delimited continuation 런타임
 - [Cranelift](https://cranelift.dev/) — Rust로 작성된 코드 생성기
 - [wasm-backend.md](wasm-backend.md) — WASM 백엔드 아키텍처 (대칭 구조)
