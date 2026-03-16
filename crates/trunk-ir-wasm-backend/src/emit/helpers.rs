@@ -191,22 +191,6 @@ pub(crate) fn type_to_valtype(
                 ty: AbstractHeapType::Struct,
             },
         }))
-    } else if is_type(ctx, ty, "trampoline", "step") {
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Concrete(STEP_IDX),
-        }))
-    } else if is_type(ctx, ty, "trampoline", "continuation")
-        || is_type(ctx, ty, "trampoline", "state")
-        || is_type(ctx, ty, "trampoline", "resume_wrapper")
-    {
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            },
-        }))
     } else if ctx.types.get(ty).dialect == Symbol::new("adt") {
         Ok(ValType::Ref(RefType::ANYREF))
     } else if is_nil_type(ctx, ty) {
