@@ -8,10 +8,10 @@ use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -35,7 +35,7 @@ fn collect_func_ops(
 ) -> Vec<OpRef> {
     let mut result = Vec::new();
     let _: ControlFlow<(), ()> = walk::walk_region(ctx, region, &mut |op| {
-        if let Ok(func) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func) = func::Func::from_op(ctx, op) {
             if predicate(func.sym_name(ctx)) {
                 result.push(op);
             }
@@ -81,7 +81,7 @@ fn truncate_func_after_shift(
     effectful_funcs: &HashSet<Symbol>,
     types: &YieldBubblingTypes,
 ) {
-    let Ok(func) = arena_func::Func::from_op(ctx, func_op) else {
+    let Ok(func) = func::Func::from_op(ctx, func_op) else {
         return;
     };
 
@@ -195,7 +195,7 @@ fn truncate_block_after_shift(
 
     for (i, &op) in ops.iter().enumerate() {
         // Case 1: adt.variant_new with "Shift" tag → shift-lowered dead code follows
-        if arena_adt::VariantNew::from_op(ctx, op).is_ok() {
+        if adt::VariantNew::from_op(ctx, op).is_ok() {
             let result_types = ctx.op_result_types(op);
             if !result_types.is_empty() && is_yield_result_type(ctx, result_types[0]) {
                 let attrs = &ctx.op(op).attributes;
@@ -203,7 +203,7 @@ fn truncate_block_after_shift(
                     && *tag == Symbol::new("Shift")
                 {
                     // Check if there's an scf.loop immediately after (handler dispatch)
-                    if i + 1 < ops.len() && arena_scf::Loop::from_op(ctx, ops[i + 1]).is_ok() {
+                    if i + 1 < ops.len() && scf::Loop::from_op(ctx, ops[i + 1]).is_ok() {
                         let loop_op = ops[i + 1];
                         let after_loop = &ops[i + 2..];
                         // Only truncate after the loop if remaining ops are dead code.
@@ -233,7 +233,7 @@ fn truncate_block_after_shift(
         // Only truncate if ALL remaining ops after the loop are dead code.
         // This prevents removing meaningful code (like print_nat) after
         // a handler dispatch loop in functions like main.
-        if arena_scf::Loop::from_op(ctx, op).is_ok() {
+        if scf::Loop::from_op(ctx, op).is_ok() {
             let result_types = ctx.op_result_types(op);
             if !result_types.is_empty() && is_yield_result_type(ctx, result_types[0]) {
                 let remaining = &ops[i + 1..];
@@ -253,7 +253,7 @@ fn truncate_block_after_shift(
         // Only truncate if it's a direct func.call to a known effectful function
         // AND all remaining ops are dead code. Skip call_indirect (may be push_prompt
         // body call) and other YieldResult-producing ops to avoid removing handler dispatch.
-        if let Ok(call) = arena_func::Call::from_op(ctx, op)
+        if let Ok(call) = func::Call::from_op(ctx, op)
             && effectful_funcs.contains(&call.callee(ctx))
         {
             let result_types = ctx.op_result_types(op);
@@ -286,9 +286,9 @@ fn truncate_block_after_shift(
         let block_ops = ctx.block(block).ops.to_vec();
         let already_has_return = block_ops
             .last()
-            .is_some_and(|&last| arena_func::Return::from_op(ctx, last).is_ok());
+            .is_some_and(|&last| func::Return::from_op(ctx, last).is_ok());
         if !already_has_return {
-            let return_op = arena_func::r#return(ctx, location, [result]);
+            let return_op = func::r#return(ctx, location, [result]);
             ctx.push_op(block, return_op.op_ref());
         }
     }
@@ -327,7 +327,7 @@ pub(crate) fn fix_body_call_types(
 
     let func_ops = collect_func_ops(ctx, module_body, |name| effectful_funcs.contains(&name));
     for func_op in func_ops {
-        let Ok(func) = arena_func::Func::from_op(ctx, func_op) else {
+        let Ok(func) = func::Func::from_op(ctx, func_op) else {
             continue;
         };
         let body = func.body(ctx);
@@ -343,7 +343,7 @@ fn fix_body_call_types_in_block(ctx: &mut IrContext, block: BlockRef) {
 
     for (i, &op) in ops.iter().enumerate() {
         // Look for adt.variant_new with "Done" tag producing YieldResult
-        if arena_adt::VariantNew::from_op(ctx, op).is_err() {
+        if adt::VariantNew::from_op(ctx, op).is_err() {
             continue;
         }
         let result_types = ctx.op_result_types(op);
@@ -367,7 +367,7 @@ fn fix_body_call_types_in_block(ctx: &mut IrContext, block: BlockRef) {
         let ValueDef::OpResult(cast_op, _) = ctx.value_def(cast_val) else {
             continue;
         };
-        if arena_core::UnrealizedConversionCast::from_op(ctx, cast_op).is_err() {
+        if core::UnrealizedConversionCast::from_op(ctx, cast_op).is_err() {
             continue;
         }
 
@@ -380,7 +380,7 @@ fn fix_body_call_types_in_block(ctx: &mut IrContext, block: BlockRef) {
         let ValueDef::OpResult(call_op, _) = ctx.value_def(call_val) else {
             continue;
         };
-        if arena_func::CallIndirect::from_op(ctx, call_op).is_err() {
+        if func::CallIndirect::from_op(ctx, call_op).is_err() {
             continue;
         }
 
@@ -402,7 +402,7 @@ fn fix_body_call_types_in_block(ctx: &mut IrContext, block: BlockRef) {
             if super::analysis::has_effectful_type(ctx, callee_ty) {
                 true
             } else if let ValueDef::OpResult(struct_get_op, _) = ctx.value_def(callee_val) {
-                if arena_adt::StructGet::from_op(ctx, struct_get_op).is_ok() {
+                if adt::StructGet::from_op(ctx, struct_get_op).is_ok() {
                     let sg_operands = ctx.op_operands(struct_get_op).to_vec();
                     if !sg_operands.is_empty() {
                         let closure_ty = ctx.value_ty(sg_operands[0]);
@@ -492,7 +492,7 @@ fn unwrap_yr_calls_in_func(
     types: &YieldBubblingTypes,
     module_body: RegionRef,
 ) {
-    let Ok(func) = arena_func::Func::from_op(ctx, func_op) else {
+    let Ok(func) = func::Func::from_op(ctx, func_op) else {
         return;
     };
     let body = func.body(ctx);
@@ -513,7 +513,7 @@ fn unwrap_yr_calls_in_block(
 
     for &op in &ops {
         // Find func.call to effectful functions with YieldResult result
-        let Ok(call) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call) = func::Call::from_op(ctx, op) else {
             // Recurse into nested regions
             let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
             for region in regions {
@@ -543,8 +543,7 @@ fn unwrap_yr_calls_in_block(
         // handler dispatch loop and should not be unwrapped.
         let uses = ctx.uses(call_result).to_vec();
         let consumed_by_handler = uses.iter().any(|u| {
-            arena_scf::Loop::from_op(ctx, u.user).is_ok()
-                || arena_adt::VariantNew::from_op(ctx, u.user).is_ok()
+            scf::Loop::from_op(ctx, u.user).is_ok() || adt::VariantNew::from_op(ctx, u.user).is_ok()
         });
         if consumed_by_handler {
             continue;
@@ -566,7 +565,7 @@ fn unwrap_yr_calls_in_block(
         );
 
         // Extract Done value: adt.variant_get(@YieldResult, "Done", 0, %r) : anyref
-        let get_done = arena_adt::variant_get(
+        let get_done = adt::variant_get(
             ctx,
             location,
             call_result,
@@ -577,12 +576,8 @@ fn unwrap_yr_calls_in_block(
         );
 
         // Cast anyref to original type
-        let cast = arena_core::unrealized_conversion_cast(
-            ctx,
-            location,
-            get_done.result(ctx),
-            original_ty,
-        );
+        let cast =
+            core::unrealized_conversion_cast(ctx, location, get_done.result(ctx), original_ty);
 
         // Replace all uses of call_result (except by get_done) with cast result
         // Must do this before inserting ops to avoid stale use lists
@@ -624,7 +619,7 @@ fn find_func_original_result_in_region(
 ) -> Option<TypeRef> {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
-            if let Ok(func) = arena_func::Func::from_op(ctx, op)
+            if let Ok(func) = func::Func::from_op(ctx, op)
                 && func.sym_name(ctx) == func_name
             {
                 let attrs = &ctx.op(op).attributes;
@@ -677,14 +672,14 @@ fn remaining_are_dead_code(
 /// Check if a single op (and its nested regions) is dead code.
 fn op_is_dead_code(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>) -> bool {
     // Direct call to a non-effectful function → has side effects, can't truncate
-    if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+    if let Ok(call) = func::Call::from_op(ctx, op) {
         if !effectful_funcs.contains(&call.callee(ctx)) {
             return false;
         }
         return true;
     }
     // call_indirect to non-effectful function → has side effects
-    if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+    if func::CallIndirect::from_op(ctx, op).is_ok() {
         let operands = ctx.op_operands(op).to_vec();
         if !operands.is_empty() {
             let callee_ty = ctx.value_ty(operands[0]);

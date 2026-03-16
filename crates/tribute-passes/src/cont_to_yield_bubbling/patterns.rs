@@ -11,11 +11,11 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::cont as arena_cont;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::cont;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
@@ -32,7 +32,7 @@ fn find_parent_evidence(ctx: &IrContext, op: OpRef, evidence_ty: TypeRef) -> Opt
         let parent_block = ctx.op(current_op).parent_block?;
         let parent_region = ctx.block(parent_block).parent_region?;
         let parent_op = ctx.region(parent_region).parent_op?;
-        if arena_func::Func::from_op(ctx, parent_op).is_ok() {
+        if func::Func::from_op(ctx, parent_op).is_ok() {
             // Found the parent function — get entry block's first arg (evidence)
             let body = ctx.op(parent_op).regions[0];
             let entry_block = ctx.region(body).blocks[0];
@@ -61,7 +61,7 @@ impl RewritePattern for LowerResumePattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_resume) = arena_cont::Resume::from_op(ctx, op) else {
+        let Ok(_resume) = cont::Resume::from_op(ctx, op) else {
             return false;
         };
 
@@ -79,17 +79,15 @@ impl RewritePattern for LowerResumePattern {
         let mut ops = Vec::new();
 
         // Cast continuation to Continuation struct
-        let k_cast =
-            arena_core::unrealized_conversion_cast(ctx, location, k_operand, t.continuation);
+        let k_cast = core::unrealized_conversion_cast(ctx, location, k_operand, t.continuation);
         ops.push(k_cast.op_ref());
 
         // Extract resume_fn (field 0) — typed as core.ptr (not RC-managed)
-        let get_fn =
-            arena_adt::struct_get(ctx, location, k_cast.result(ctx), t.ptr, t.continuation, 0);
+        let get_fn = adt::struct_get(ctx, location, k_cast.result(ctx), t.ptr, t.continuation, 0);
         ops.push(get_fn.op_ref());
 
         // Extract state (field 1)
-        let get_state = arena_adt::struct_get(
+        let get_state = adt::struct_get(
             ctx,
             location,
             k_cast.result(ctx),
@@ -100,12 +98,11 @@ impl RewritePattern for LowerResumePattern {
         ops.push(get_state.op_ref());
 
         // Cast resume_value to anyref
-        let rv_anyref =
-            arena_core::unrealized_conversion_cast(ctx, location, value_operand, t.anyref);
+        let rv_anyref = core::unrealized_conversion_cast(ctx, location, value_operand, t.anyref);
         ops.push(rv_anyref.op_ref());
 
         // Build ResumeWrapper { state, resume_value }
-        let wrapper = arena_adt::struct_new(
+        let wrapper = adt::struct_new(
             ctx,
             location,
             vec![get_state.result(ctx), rv_anyref.result(ctx)],
@@ -116,7 +113,7 @@ impl RewritePattern for LowerResumePattern {
 
         // Cast wrapper to anyref for call_indirect
         let wrapper_anyref =
-            arena_core::unrealized_conversion_cast(ctx, location, wrapper.result(ctx), t.anyref);
+            core::unrealized_conversion_cast(ctx, location, wrapper.result(ctx), t.anyref);
         ops.push(wrapper_anyref.op_ref());
 
         // Get evidence from parent function's entry block args.
@@ -124,13 +121,13 @@ impl RewritePattern for LowerResumePattern {
         let ev_value = if let Some(ev) = find_parent_evidence(ctx, op, evidence_ty) {
             ev
         } else {
-            let null_ev = arena_adt::ref_null(ctx, location, evidence_ty, evidence_ty);
+            let null_ev = adt::ref_null(ctx, location, evidence_ty, evidence_ty);
             ops.push(null_ev.op_ref());
             null_ev.result(ctx)
         };
 
         // call_indirect(resume_fn, evidence, wrapper) -> YieldResult
-        let call = arena_func::call_indirect(
+        let call = func::call_indirect(
             ctx,
             location,
             get_fn.result(ctx),
@@ -165,11 +162,11 @@ impl RewritePattern for UpdateEffectfulCallResultTypePattern {
         _rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Match direct calls to known effectful functions
-        if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+        if let Ok(call) = func::Call::from_op(ctx, op) {
             if !self.effectful_funcs.contains(&call.callee(ctx)) {
                 return false;
             }
-        } else if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+        } else if func::CallIndirect::from_op(ctx, op).is_ok() {
             // Match indirect calls where callee has an effectful type
             let operands = ctx.op_operands(op).to_vec();
             if !operands
@@ -211,7 +208,7 @@ impl RewritePattern for UpdateScfIfResultTypePattern {
         op: OpRef,
         _rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_scf::If::from_op(ctx, op).is_err() {
+        if scf::If::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -239,7 +236,7 @@ fn region_yields_yr(ctx: &IrContext, region: trunk_ir::refs::RegionRef) -> bool 
         let ops = &ctx.block(block).ops;
         if let Some(&last_op) = ops.last() {
             // scf.yield has no results — check its operand types instead
-            if arena_scf::Yield::from_op(ctx, last_op).is_ok() {
+            if scf::Yield::from_op(ctx, last_op).is_ok() {
                 let operands = ctx.op_operands(last_op);
                 if !operands.is_empty() && is_yield_result_type(ctx, ctx.value_ty(operands[0])) {
                     return true;
@@ -271,7 +268,7 @@ impl RewritePattern for UpdateScfYieldToYieldResultPattern {
         op: OpRef,
         _rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_scf::Yield::from_op(ctx, op).is_err() {
+        if scf::Yield::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -309,7 +306,7 @@ impl RewritePattern for LowerPushPromptPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(push_prompt) = arena_cont::PushPrompt::from_op(ctx, op) else {
+        let Ok(push_prompt) = cont::PushPrompt::from_op(ctx, op) else {
             return false;
         };
 
@@ -339,7 +336,7 @@ impl RewritePattern for LowerPushPromptPattern {
             let ops = ctx.block(body_block).ops.to_vec();
             for body_op in ops {
                 // Skip scf.yield — we'll use body_result directly
-                if arena_scf::Yield::from_op(ctx, body_op).is_ok() {
+                if scf::Yield::from_op(ctx, body_op).is_ok() {
                     continue;
                 }
                 // Detach from the original block before re-inserting
@@ -355,11 +352,10 @@ impl RewritePattern for LowerPushPromptPattern {
                 result
             } else {
                 // Wrap in YieldResult::Done
-                let anyref_val =
-                    arena_core::unrealized_conversion_cast(ctx, location, result, t.anyref);
+                let anyref_val = core::unrealized_conversion_cast(ctx, location, result, t.anyref);
                 all_ops.push(anyref_val.op_ref());
 
-                let done_op = arena_adt::variant_new(
+                let done_op = adt::variant_new(
                     ctx,
                     location,
                     [anyref_val.result(ctx)],
@@ -372,10 +368,10 @@ impl RewritePattern for LowerPushPromptPattern {
             }
         } else {
             // No body result — create a YieldResult::Done with null
-            let null_op = arena_adt::ref_null(ctx, location, t.anyref, t.anyref);
+            let null_op = adt::ref_null(ctx, location, t.anyref, t.anyref);
             all_ops.push(null_op.op_ref());
 
-            let done_op = arena_adt::variant_new(
+            let done_op = adt::variant_new(
                 ctx,
                 location,
                 [null_op.result(ctx)],
@@ -405,7 +401,7 @@ impl RewritePattern for LowerPushPromptPattern {
                 // Find the handler_dispatch that uses push_prompt's result
                 let uses: Vec<_> = ctx.uses(pp_result).to_vec();
                 for u in uses {
-                    if arena_cont::HandlerDispatch::from_op(ctx, u.user).is_ok() {
+                    if cont::HandlerDispatch::from_op(ctx, u.user).is_ok() {
                         ctx.push_op_operand(u.user, rt_tag);
                     }
                 }

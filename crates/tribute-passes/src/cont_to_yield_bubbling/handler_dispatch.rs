@@ -26,12 +26,12 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::cont as arena_cont;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::cont;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::scf;
 use trunk_ir::location::Span;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -86,7 +86,7 @@ impl RewritePattern for LowerHandlerDispatchPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(dispatch) = arena_cont::HandlerDispatch::from_op(ctx, op) else {
+        let Ok(dispatch) = cont::HandlerDispatch::from_op(ctx, op) else {
             return false;
         };
 
@@ -146,7 +146,7 @@ fn build_handler_dispatch_loop(
 
     let loop_body = build_loop_body(ctx, location, hd_ctx);
 
-    let loop_op = arena_scf::r#loop(ctx, location, [yr_operand], loop_result_ty, loop_body);
+    let loop_op = scf::r#loop(ctx, location, [yr_operand], loop_result_ty, loop_body);
     loop_op.op_ref()
 }
 
@@ -170,7 +170,7 @@ fn build_loop_body(
     let current_yr = ctx.block_args(block)[0];
 
     // Check if Done variant
-    let is_done = arena_adt::variant_is(
+    let is_done = adt::variant_is(
         ctx,
         location,
         current_yr,
@@ -187,8 +187,8 @@ fn build_loop_body(
     let shift_branch = build_shift_branch(ctx, location, current_yr, hd_ctx);
 
     // Result type for the if: void (both branches break/continue the loop)
-    let nil_ty = arena_core::nil(ctx).as_type_ref();
-    let if_op = arena_scf::r#if(
+    let nil_ty = core::nil(ctx).as_type_ref();
+    let if_op = scf::r#if(
         ctx,
         location,
         is_done.result(ctx),
@@ -221,7 +221,7 @@ fn build_done_branch(
     });
 
     // Extract value: adt.variant_get(@YieldResult, "Done", 0, %yr)
-    let get_val = arena_adt::variant_get(
+    let get_val = adt::variant_get(
         ctx,
         location,
         current_yr,
@@ -242,10 +242,9 @@ fn build_done_branch(
             let result =
                 inline_done_body(ctx, block, location, done_body, done_value, user_result_ty);
             // Re-wrap as YieldResult::Done
-            let anyref_val =
-                arena_core::unrealized_conversion_cast(ctx, location, result, t.anyref);
+            let anyref_val = core::unrealized_conversion_cast(ctx, location, result, t.anyref);
             ctx.push_op(block, anyref_val.op_ref());
-            let rewrap = arena_adt::variant_new(
+            let rewrap = adt::variant_new(
                 ctx,
                 location,
                 [anyref_val.result(ctx)],
@@ -254,11 +253,11 @@ fn build_done_branch(
                 Symbol::new("Done"),
             );
             ctx.push_op(block, rewrap.op_ref());
-            let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+            let break_op = scf::r#break(ctx, location, rewrap.result(ctx));
             ctx.push_op(block, break_op.op_ref());
         } else {
             // No done body — re-wrap as YieldResult::Done and break
-            let rewrap = arena_adt::variant_new(
+            let rewrap = adt::variant_new(
                 ctx,
                 location,
                 [done_value],
@@ -267,7 +266,7 @@ fn build_done_branch(
                 Symbol::new("Done"),
             );
             ctx.push_op(block, rewrap.op_ref());
-            let break_op = arena_scf::r#break(ctx, location, rewrap.result(ctx));
+            let break_op = scf::r#break(ctx, location, rewrap.result(ctx));
             ctx.push_op(block, break_op.op_ref());
         }
     } else if let Some(done_body) = done_region {
@@ -277,27 +276,25 @@ fn build_done_branch(
         let result_value = {
             let result_ty = ctx.value_ty(result);
             if result_ty != user_result_ty {
-                let cast =
-                    arena_core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
+                let cast = core::unrealized_conversion_cast(ctx, location, result, user_result_ty);
                 ctx.push_op(block, cast.op_ref());
                 cast.result(ctx)
             } else {
                 result
             }
         };
-        let break_op = arena_scf::r#break(ctx, location, result_value);
+        let break_op = scf::r#break(ctx, location, result_value);
         ctx.push_op(block, break_op.op_ref());
     } else {
         // No done body — cast anyref to user result type
         let result_value = if t.anyref != user_result_ty {
-            let cast =
-                arena_core::unrealized_conversion_cast(ctx, location, done_value, user_result_ty);
+            let cast = core::unrealized_conversion_cast(ctx, location, done_value, user_result_ty);
             ctx.push_op(block, cast.op_ref());
             cast.result(ctx)
         } else {
             done_value
         };
-        let break_op = arena_scf::r#break(ctx, location, result_value);
+        let break_op = scf::r#break(ctx, location, result_value);
         ctx.push_op(block, break_op.op_ref());
     }
 
@@ -341,8 +338,7 @@ fn inline_done_body(
             infer_done_body_result_type(ctx, done_block, &done_block_args[0]).unwrap_or(anyref_ty);
 
         let mapped_value = if concrete_ty != anyref_ty {
-            let cast =
-                arena_core::unrealized_conversion_cast(ctx, location, done_value, concrete_ty);
+            let cast = core::unrealized_conversion_cast(ctx, location, done_value, concrete_ty);
             ctx.push_op(dest_block, cast.op_ref());
             cast.result(ctx)
         } else {
@@ -355,7 +351,7 @@ fn inline_done_body(
     let mut final_result = done_value;
     let done_ops: Vec<OpRef> = ctx.block(done_block).ops.clone().to_vec();
     for &done_op in &done_ops {
-        if arena_scf::Yield::matches(ctx, done_op) {
+        if scf::Yield::matches(ctx, done_op) {
             // scf.yield's operand is the final result
             let yielded_operands: Vec<ValueRef> = ctx.op_operands(done_op).to_vec();
             if let Some(&result) = yielded_operands.first() {
@@ -386,7 +382,7 @@ fn infer_done_body_result_type(
 ) -> Option<TypeRef> {
     let ops = &ctx.block(done_block).ops;
     for &op in ops {
-        if arena_scf::Yield::matches(ctx, op) {
+        if scf::Yield::matches(ctx, op) {
             continue;
         }
         let operands = ctx.op_operands(op);
@@ -416,7 +412,7 @@ fn build_shift_branch(
     });
 
     // Extract ShiftInfo from YieldResult::Shift
-    let get_info = arena_adt::variant_get(
+    let get_info = adt::variant_get(
         ctx,
         location,
         current_yr,
@@ -429,7 +425,7 @@ fn build_shift_branch(
     let shift_info = get_info.result(ctx);
 
     // Extract prompt from ShiftInfo (field 1)
-    let get_prompt = arena_adt::struct_get(ctx, location, shift_info, t.i32, t.shift_info, 1);
+    let get_prompt = adt::struct_get(ctx, location, shift_info, t.i32, t.shift_info, 1);
     ctx.push_op(block, get_prompt.op_ref());
     let prompt_val = get_prompt.result(ctx);
 
@@ -456,7 +452,7 @@ fn build_shift_branch(
             ops: trunk_ir::smallvec::smallvec![],
             parent_region: None,
         });
-        let break_op = arena_scf::r#break(ctx, location, current_yr);
+        let break_op = scf::r#break(ctx, location, current_yr);
         ctx.push_op(pb, break_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -466,8 +462,8 @@ fn build_shift_branch(
     };
 
     // scf.if for tag match
-    let nil_ty = arena_core::nil(ctx).as_type_ref();
-    let if_op = arena_scf::r#if(
+    let nil_ty = core::nil(ctx).as_type_ref();
+    let if_op = scf::r#if(
         ctx,
         location,
         tag_matches.result(ctx),
@@ -498,7 +494,7 @@ fn build_dispatch_region(
             ops: trunk_ir::smallvec::smallvec![],
             parent_region: None,
         });
-        let unreachable = arena_func::unreachable(ctx, location);
+        let unreachable = func::unreachable(ctx, location);
         ctx.push_op(block, unreachable.op_ref());
         return ctx.create_region(RegionData {
             location,
@@ -515,7 +511,7 @@ fn build_dispatch_region(
     });
 
     // Get op_idx from ShiftInfo (field 2)
-    let get_op_idx = arena_adt::struct_get(
+    let get_op_idx = adt::struct_get(
         ctx,
         location,
         shift_info,
@@ -531,7 +527,7 @@ fn build_dispatch_region(
         build_nested_dispatch(ctx, block, location, shift_info, current_op_idx, 0, hd_ctx);
 
     // Continue loop with result
-    let continue_op = arena_scf::r#continue(ctx, location, [final_result]);
+    let continue_op = scf::r#continue(ctx, location, [final_result]);
     ctx.push_op(block, continue_op.op_ref());
 
     ctx.create_region(RegionData {
@@ -572,7 +568,7 @@ fn build_nested_dispatch(
             ops: trunk_ir::smallvec::smallvec![],
             parent_region: None,
         });
-        let unreachable = arena_func::unreachable(ctx, location);
+        let unreachable = func::unreachable(ctx, location);
         ctx.push_op(else_block, unreachable.op_ref());
         let else_region = ctx.create_region(RegionData {
             location,
@@ -580,7 +576,7 @@ fn build_nested_dispatch(
             parent_op: None,
         });
 
-        let if_op = arena_scf::r#if(
+        let if_op = scf::r#if(
             ctx,
             location,
             true_const.result(ctx),
@@ -625,7 +621,7 @@ fn build_nested_dispatch(
         arm_index + 1,
         hd_ctx,
     );
-    let else_yield = arena_scf::r#yield(ctx, location, [else_result]);
+    let else_yield = scf::r#yield(ctx, location, [else_result]);
     ctx.push_op(else_block, else_yield.op_ref());
     let else_region = ctx.create_region(RegionData {
         location,
@@ -633,7 +629,7 @@ fn build_nested_dispatch(
         parent_op: None,
     });
 
-    let if_op = arena_scf::r#if(
+    let if_op = scf::r#if(
         ctx,
         location,
         cmp_op.result(ctx),
@@ -670,7 +666,7 @@ fn build_arm_region(
             ops: trunk_ir::smallvec::smallvec![],
             parent_region: None,
         });
-        let unreachable = arena_func::unreachable(ctx, location);
+        let unreachable = func::unreachable(ctx, location);
         ctx.push_op(block, unreachable.op_ref());
         return ctx.create_region(RegionData {
             location,
@@ -690,7 +686,7 @@ fn build_arm_region(
     // Only skip casts that directly convert block args (continuation, shift_value).
     // Casts added by LowerResumePattern (e.g., i32→anyref, wrapper→anyref) must be preserved.
     for &op in &original_ops {
-        if let Ok(cast) = arena_core::UnrealizedConversionCast::from_op(ctx, op) {
+        if let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op) {
             let cast_input = cast.value(ctx);
             if block_arg_set.contains(&cast_input) {
                 let cast_output = ctx.op_results(op)[0];
@@ -708,14 +704,13 @@ fn build_arm_region(
     // arg[0] → continuation (ShiftInfo field 3)
     if !ba.is_empty() {
         let get_cont =
-            arena_adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 3);
+            adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 3);
         ctx.push_op(new_block, get_cont.op_ref());
         value_remap.insert(ba[0], get_cont.result(ctx));
     }
     // arg[1] → shift_value (ShiftInfo field 0)
     if ba.len() >= 2 {
-        let get_sv =
-            arena_adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 0);
+        let get_sv = adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 0);
         ctx.push_op(new_block, get_sv.op_ref());
         value_remap.insert(ba[1], get_sv.result(ctx));
     }
@@ -727,7 +722,7 @@ fn build_arm_region(
     let skipped_cast_ops: std::collections::HashSet<OpRef> = original_ops
         .iter()
         .filter(|&&op| {
-            if let Ok(cast) = arena_core::UnrealizedConversionCast::from_op(ctx, op) {
+            if let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op) {
                 block_arg_set.contains(&cast.value(ctx))
             } else {
                 false
@@ -743,7 +738,7 @@ fn build_arm_region(
         }
 
         // Skip existing scf.yield
-        if arena_scf::Yield::from_op(ctx, op).is_ok() {
+        if scf::Yield::from_op(ctx, op).is_ok() {
             continue;
         }
 
@@ -754,14 +749,14 @@ fn build_arm_region(
         }
 
         // Detect effectful function calls
-        let is_effectful_call = if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+        let is_effectful_call = if let Ok(call) = func::Call::from_op(ctx, op) {
             let callee = call.callee(ctx);
             effectful_funcs.contains(&callee) && !ctx.op_results(op).is_empty()
         } else {
             false
         };
 
-        let is_resume = arena_cont::Resume::from_op(ctx, op).is_ok();
+        let is_resume = cont::Resume::from_op(ctx, op).is_ok();
         let produces_yr = is_effectful_call || is_resume;
 
         // Remap operands (follow chains transitively)
@@ -841,7 +836,7 @@ fn build_arm_region(
             }
             yr_val = next;
         }
-        let yield_op = arena_scf::r#yield(ctx, location, [yr_val]);
+        let yield_op = scf::r#yield(ctx, location, [yr_val]);
         ctx.push_op(new_block, yield_op.op_ref());
     } else {
         // Check if last op has results and wrap in YieldResult::Done
@@ -850,14 +845,10 @@ fn build_arm_region(
             let results = ctx.op_results(last_op);
             if !results.is_empty() {
                 let result_value = results[0];
-                let anyref_val = arena_core::unrealized_conversion_cast(
-                    ctx,
-                    location,
-                    result_value,
-                    types.anyref,
-                );
+                let anyref_val =
+                    core::unrealized_conversion_cast(ctx, location, result_value, types.anyref);
                 ctx.push_op(new_block, anyref_val.op_ref());
-                let done_op = arena_adt::variant_new(
+                let done_op = adt::variant_new(
                     ctx,
                     location,
                     [anyref_val.result(ctx)],
@@ -866,14 +857,14 @@ fn build_arm_region(
                     Symbol::new("Done"),
                 );
                 ctx.push_op(new_block, done_op.op_ref());
-                let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
+                let yield_op = scf::r#yield(ctx, location, [done_op.result(ctx)]);
                 ctx.push_op(new_block, yield_op.op_ref());
             } else {
-                let unreachable = arena_func::unreachable(ctx, location);
+                let unreachable = func::unreachable(ctx, location);
                 ctx.push_op(new_block, unreachable.op_ref());
             }
         } else {
-            let unreachable = arena_func::unreachable(ctx, location);
+            let unreachable = func::unreachable(ctx, location);
             ctx.push_op(new_block, unreachable.op_ref());
         }
     }

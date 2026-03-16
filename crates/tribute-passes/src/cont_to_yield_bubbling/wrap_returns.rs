@@ -5,9 +5,9 @@ use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -31,7 +31,7 @@ fn find_parent_func_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
     loop {
         let region = ctx.block(current_block).parent_region?;
         let parent_op = ctx.region(region).parent_op?;
-        if let Ok(func) = arena_func::Func::from_op(ctx, parent_op) {
+        if let Ok(func) = func::Func::from_op(ctx, parent_op) {
             return Some(func.sym_name(ctx));
         }
         current_block = ctx.op(parent_op).parent_block?;
@@ -46,7 +46,7 @@ impl RewritePattern for WrapReturnsPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         // Match func.return
-        if arena_func::Return::from_op(ctx, op).is_err() {
+        if func::Return::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -69,12 +69,11 @@ impl RewritePattern for WrapReturnsPattern {
         let location = ctx.op(op).location;
 
         // Cast to anyref
-        let anyref_val =
-            arena_core::unrealized_conversion_cast(ctx, location, value, self.types.anyref);
+        let anyref_val = core::unrealized_conversion_cast(ctx, location, value, self.types.anyref);
         rewriter.insert_op(anyref_val.op_ref());
 
         // Create YieldResult::Done
-        let done_op = arena_adt::variant_new(
+        let done_op = adt::variant_new(
             ctx,
             location,
             [anyref_val.result(ctx)],
@@ -85,7 +84,7 @@ impl RewritePattern for WrapReturnsPattern {
         rewriter.insert_op(done_op.op_ref());
 
         // Replace return with new return using Done value
-        let new_return = arena_func::r#return(ctx, location, [done_op.result(ctx)]);
+        let new_return = func::r#return(ctx, location, [done_op.result(ctx)]);
         rewriter.replace_op(new_return.op_ref());
 
         true

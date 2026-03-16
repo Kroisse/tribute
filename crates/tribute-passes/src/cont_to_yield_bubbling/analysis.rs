@@ -10,8 +10,8 @@ use std::rc::Rc;
 use crate::live_vars::FunctionAnalysis;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cont as arena_cont;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::cont;
+use trunk_ir::dialect::func;
 use trunk_ir::location::Span;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
@@ -53,7 +53,7 @@ fn analyze_shift_points_in_region(
     use std::ops::ControlFlow;
 
     let _ = walk::walk_region::<()>(ctx, region, &mut |op| {
-        let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func) = func::Func::from_op(ctx, op) else {
             return ControlFlow::Continue(walk::WalkAction::Advance);
         };
         let func_name = func.sym_name(ctx);
@@ -100,7 +100,7 @@ pub(crate) fn collect_handlers_in_effectful_funcs(
 
     // Find effectful func.func ops, then walk their bodies for handler_dispatch ops.
     let _ = walk::walk_region::<()>(ctx, module_body, &mut |op| {
-        let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func) = func::Func::from_op(ctx, op) else {
             return ControlFlow::Continue(walk::WalkAction::Advance);
         };
         if !effectful_funcs.contains(&func.sym_name(ctx)) {
@@ -108,7 +108,7 @@ pub(crate) fn collect_handlers_in_effectful_funcs(
         }
         // Walk the effectful function's body for handler_dispatch ops
         let _ = walk::walk_region::<()>(ctx, func.body(ctx), &mut |inner_op| {
-            if arena_cont::HandlerDispatch::from_op(ctx, inner_op).is_ok() {
+            if cont::HandlerDispatch::from_op(ctx, inner_op).is_ok() {
                 handler_spans.insert(ctx.op(inner_op).location.span);
             }
             ControlFlow::Continue(walk::WalkAction::Advance)
@@ -187,7 +187,7 @@ fn collect_direct_effectful_funcs(
     use std::ops::ControlFlow;
 
     let _ = walk::walk_region::<()>(ctx, region, &mut |op| {
-        let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func) = func::Func::from_op(ctx, op) else {
             return ControlFlow::Continue(walk::WalkAction::Advance);
         };
         let func_name = func.sym_name(ctx);
@@ -218,10 +218,10 @@ fn region_contains_push_prompt(ctx: &IrContext, region: RegionRef) -> bool {
     use std::ops::ControlFlow;
 
     walk::walk_region::<()>(ctx, region, &mut |op| {
-        if arena_func::Func::from_op(ctx, op).is_ok() {
+        if func::Func::from_op(ctx, op).is_ok() {
             return ControlFlow::Continue(walk::WalkAction::Skip);
         }
-        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+        if cont::PushPrompt::from_op(ctx, op).is_ok() {
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(walk::WalkAction::Advance)
@@ -238,16 +238,16 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
     use std::ops::ControlFlow;
 
     walk::walk_region::<()>(ctx, region, &mut |op| {
-        if arena_func::Func::from_op(ctx, op).is_ok() {
+        if func::Func::from_op(ctx, op).is_ok() {
             return ControlFlow::Continue(walk::WalkAction::Skip);
         }
-        if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+        if cont::PushPrompt::from_op(ctx, op).is_ok() {
             return ControlFlow::Continue(walk::WalkAction::Skip);
         }
-        if arena_cont::HandlerDispatch::from_op(ctx, op).is_ok() {
+        if cont::HandlerDispatch::from_op(ctx, op).is_ok() {
             return ControlFlow::Continue(walk::WalkAction::Skip);
         }
-        if arena_cont::Resume::from_op(ctx, op).is_ok() {
+        if cont::Resume::from_op(ctx, op).is_ok() {
             return ControlFlow::Break(());
         }
         ControlFlow::Continue(walk::WalkAction::Advance)
@@ -303,10 +303,10 @@ pub(crate) fn calls_effectful_function(
 
     /// Check if a single op is an effectful call/call_indirect.
     fn is_effectful_call(ctx: &IrContext, op: OpRef, effectful: &HashSet<Symbol>) -> bool {
-        if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+        if let Ok(call) = func::Call::from_op(ctx, op) {
             return effectful.contains(&call.callee(ctx));
         }
-        if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+        if func::CallIndirect::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op).to_vec();
             if let Some(&callee) = operands.first() {
                 return has_effectful_type(ctx, ctx.value_ty(callee));
@@ -316,12 +316,10 @@ pub(crate) fn calls_effectful_function(
     }
 
     walk::walk_region::<()>(ctx, region, &mut |op| {
-        if arena_func::Func::from_op(ctx, op).is_ok()
-            || arena_cont::PushPrompt::from_op(ctx, op).is_ok()
-        {
+        if func::Func::from_op(ctx, op).is_ok() || cont::PushPrompt::from_op(ctx, op).is_ok() {
             return ControlFlow::Continue(walk::WalkAction::Skip);
         }
-        if let Ok(dispatch) = arena_cont::HandlerDispatch::from_op(ctx, op) {
+        if let Ok(dispatch) = cont::HandlerDispatch::from_op(ctx, op) {
             // Walk into child ops' body regions (done/suspend/yield)
             let body_region = dispatch.body(ctx);
             for &block in &ctx.region(body_region).blocks {

@@ -13,10 +13,10 @@ use std::rc::Rc;
 use trunk_ir::IrMapping;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
+use trunk_ir::dialect::scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -141,7 +141,7 @@ fn lower_effectful_calls_impl(
     for block in blocks {
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
         for op in ops {
-            let Ok(func) = arena_func::Func::from_op(ctx, op) else {
+            let Ok(func) = func::Func::from_op(ctx, op) else {
                 continue;
             };
             let func_name = func.sym_name(ctx);
@@ -211,7 +211,7 @@ fn expand_first_effectful_call(
     // The handler dispatch loop needs the raw YieldResult to do Done/Shift branching itself.
     if call_index + 1 < ops.len() {
         let next_op = ops[call_index + 1];
-        if arena_scf::Loop::from_op(ctx, next_op).is_ok() {
+        if scf::Loop::from_op(ctx, next_op).is_ok() {
             let loop_operands = ctx.op_operands(next_op);
             if !loop_operands.is_empty() && loop_operands[0] == call_result {
                 return false;
@@ -228,7 +228,7 @@ fn expand_first_effectful_call(
 
     // If the only remaining op is func.return, the function already returns
     // YieldResult directly — no Done/Shift expansion needed.
-    if remaining_ops.len() == 1 && arena_func::Return::from_op(ctx, remaining_ops[0]).is_ok() {
+    if remaining_ops.len() == 1 && func::Return::from_op(ctx, remaining_ops[0]).is_ok() {
         return false;
     }
 
@@ -329,7 +329,7 @@ fn expand_first_effectful_call(
     );
 
     // Add is_done check
-    let is_done = arena_adt::variant_is(
+    let is_done = adt::variant_is(
         ctx,
         location,
         call_result,
@@ -340,7 +340,7 @@ fn expand_first_effectful_call(
     ctx.push_op(block, is_done.op_ref());
 
     // Add scf.if
-    let if_op = arena_scf::r#if(
+    let if_op = scf::r#if(
         ctx,
         location,
         is_done.result(ctx),
@@ -351,7 +351,7 @@ fn expand_first_effectful_call(
     ctx.push_op(block, if_op.op_ref());
 
     // Add func.return
-    let ret_op = arena_func::r#return(ctx, location, [if_op.result(ctx)]);
+    let ret_op = func::r#return(ctx, location, [if_op.result(ctx)]);
     ctx.push_op(block, ret_op.op_ref());
 
     true
@@ -384,7 +384,7 @@ fn build_inline_done_branch(
     let t = lower_ctx.types;
 
     // Extract value from YieldResult::Done
-    let get_val = arena_adt::variant_get(
+    let get_val = adt::variant_get(
         ctx,
         location,
         call_result,
@@ -397,7 +397,7 @@ fn build_inline_done_branch(
 
     // Cast to original type
     let unwrapped = if original_result_ty != t.anyref {
-        let cast = arena_core::unrealized_conversion_cast(
+        let cast = core::unrealized_conversion_cast(
             ctx,
             location,
             get_val.result(ctx),
@@ -417,7 +417,7 @@ fn build_inline_done_branch(
 
     for &op in remaining_ops {
         // Handle func.return → scf.yield(Done(value))
-        if arena_func::Return::from_op(ctx, op).is_ok() {
+        if func::Return::from_op(ctx, op).is_ok() {
             if let Some(&ret_val) = ctx.op_operands(op).first() {
                 let remapped = resolve_remap(&remap, ret_val);
                 yield_value_or_done(ctx, block, location, remapped, t);
@@ -498,7 +498,7 @@ fn build_inline_done_branch(
     let has_yield = {
         let ops = ctx.block(block).ops.to_vec();
         ops.last()
-            .map(|&op| arena_scf::Yield::from_op(ctx, op).is_ok())
+            .map(|&op| scf::Yield::from_op(ctx, op).is_ok())
             .unwrap_or(false)
     };
 
@@ -543,7 +543,7 @@ fn build_inline_shift_branch(
     });
 
     // Extract ShiftInfo from YieldResult::Shift
-    let get_info = arena_adt::variant_get(
+    let get_info = adt::variant_get(
         ctx,
         location,
         call_result,
@@ -557,31 +557,31 @@ fn build_inline_shift_branch(
 
     // Extract inner continuation (field 3 of ShiftInfo)
     let get_inner_cont =
-        arena_adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 3);
+        adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 3);
     ctx.push_op(block, get_inner_cont.op_ref());
     let inner_cont = get_inner_cont.result(ctx);
 
     // Build chain state: [inner_cont, live_var_0, live_var_1, ...]
     let mut state_values: Vec<ValueRef> = vec![inner_cont];
     for &(val, _ty) in live_vars {
-        let anyref_val = arena_core::unrealized_conversion_cast(ctx, location, val, types.anyref);
+        let anyref_val = core::unrealized_conversion_cast(ctx, location, val, types.anyref);
         ctx.push_op(block, anyref_val.op_ref());
         state_values.push(anyref_val.result(ctx));
     }
 
-    let state_op = arena_adt::struct_new(ctx, location, state_values, types.anyref, state_type);
+    let state_op = adt::struct_new(ctx, location, state_values, types.anyref, state_type);
     ctx.push_op(block, state_op.op_ref());
 
     // Cast state to anyref
     let state_anyref =
-        arena_core::unrealized_conversion_cast(ctx, location, state_op.result(ctx), types.anyref);
+        core::unrealized_conversion_cast(ctx, location, state_op.result(ctx), types.anyref);
     ctx.push_op(block, state_anyref.op_ref());
 
     // Create chained Continuation { resume_fn: chain_fn, state: state_anyref }
-    let chain_fn_const = arena_func::constant(ctx, location, types.ptr, chain_name);
+    let chain_fn_const = func::constant(ctx, location, types.ptr, chain_name);
     ctx.push_op(block, chain_fn_const.op_ref());
 
-    let chained_cont = arena_adt::struct_new(
+    let chained_cont = adt::struct_new(
         ctx,
         location,
         vec![chain_fn_const.result(ctx), state_anyref.result(ctx)],
@@ -591,26 +591,19 @@ fn build_inline_shift_branch(
     ctx.push_op(block, chained_cont.op_ref());
 
     // Cast chained continuation to anyref
-    let chained_anyref = arena_core::unrealized_conversion_cast(
-        ctx,
-        location,
-        chained_cont.result(ctx),
-        types.anyref,
-    );
+    let chained_anyref =
+        core::unrealized_conversion_cast(ctx, location, chained_cont.result(ctx), types.anyref);
     ctx.push_op(block, chained_anyref.op_ref());
 
     // Build new ShiftInfo: same value/prompt/op_idx but with chained continuation
-    let get_sv =
-        arena_adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 0);
+    let get_sv = adt::struct_get(ctx, location, shift_info, types.anyref, types.shift_info, 0);
     ctx.push_op(block, get_sv.op_ref());
-    let get_prompt =
-        arena_adt::struct_get(ctx, location, shift_info, types.i32, types.shift_info, 1);
+    let get_prompt = adt::struct_get(ctx, location, shift_info, types.i32, types.shift_info, 1);
     ctx.push_op(block, get_prompt.op_ref());
-    let get_op_idx =
-        arena_adt::struct_get(ctx, location, shift_info, types.i32, types.shift_info, 2);
+    let get_op_idx = adt::struct_get(ctx, location, shift_info, types.i32, types.shift_info, 2);
     ctx.push_op(block, get_op_idx.op_ref());
 
-    let new_info = arena_adt::struct_new(
+    let new_info = adt::struct_new(
         ctx,
         location,
         vec![
@@ -625,7 +618,7 @@ fn build_inline_shift_branch(
     ctx.push_op(block, new_info.op_ref());
 
     // Build YieldResult::Shift with new info
-    let yr = arena_adt::variant_new(
+    let yr = adt::variant_new(
         ctx,
         location,
         [new_info.result(ctx)],
@@ -635,7 +628,7 @@ fn build_inline_shift_branch(
     );
     ctx.push_op(block, yr.op_ref());
 
-    let yield_op = arena_scf::r#yield(ctx, location, [yr.result(ctx)]);
+    let yield_op = scf::r#yield(ctx, location, [yr.result(ctx)]);
     ctx.push_op(block, yield_op.op_ref());
 
     ctx.create_region(RegionData {
@@ -702,11 +695,11 @@ pub(crate) fn create_chain_function(
 
     // Cast wrapper to ResumeWrapper
     let wrapper_cast =
-        arena_core::unrealized_conversion_cast(ctx, location, wrapper_arg, types.resume_wrapper);
+        core::unrealized_conversion_cast(ctx, location, wrapper_arg, types.resume_wrapper);
     ctx.push_op(body_block, wrapper_cast.op_ref());
 
     // Extract resume_value (field 1)
-    let get_rv = arena_adt::struct_get(
+    let get_rv = adt::struct_get(
         ctx,
         location,
         wrapper_cast.result(ctx),
@@ -718,7 +711,7 @@ pub(crate) fn create_chain_function(
     let resume_value = get_rv.result(ctx);
 
     // Extract state (field 0)
-    let get_state = arena_adt::struct_get(
+    let get_state = adt::struct_get(
         ctx,
         location,
         wrapper_cast.result(ctx),
@@ -729,18 +722,14 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, get_state.op_ref());
 
     // Cast state to chain state type
-    let state_cast = arena_core::unrealized_conversion_cast(
-        ctx,
-        location,
-        get_state.result(ctx),
-        spec.state_type,
-    );
+    let state_cast =
+        core::unrealized_conversion_cast(ctx, location, get_state.result(ctx), spec.state_type);
     ctx.push_op(body_block, state_cast.op_ref());
     let state_val = state_cast.result(ctx);
 
     // Extract inner_cont (field 0 of chain state)
     let get_inner_cont =
-        arena_adt::struct_get(ctx, location, state_val, types.anyref, spec.state_type, 0);
+        adt::struct_get(ctx, location, state_val, types.anyref, spec.state_type, 0);
     ctx.push_op(body_block, get_inner_cont.op_ref());
     let inner_cont_anyref = get_inner_cont.result(ctx);
 
@@ -754,7 +743,7 @@ pub(crate) fn create_chain_function(
         .zip(spec.original_live_types.iter())
         .enumerate()
     {
-        let get_field = arena_adt::struct_get(
+        let get_field = adt::struct_get(
             ctx,
             location,
             state_val,
@@ -764,12 +753,8 @@ pub(crate) fn create_chain_function(
         );
         ctx.push_op(body_block, get_field.op_ref());
 
-        let cast = arena_core::unrealized_conversion_cast(
-            ctx,
-            location,
-            get_field.result(ctx),
-            *original_ty,
-        );
+        let cast =
+            core::unrealized_conversion_cast(ctx, location, get_field.result(ctx), *original_ty);
         ctx.push_op(body_block, cast.op_ref());
 
         value_map.insert(*original_val, cast.result(ctx));
@@ -779,16 +764,12 @@ pub(crate) fn create_chain_function(
     // === Resume inner continuation ===
 
     // Cast inner_cont to Continuation struct
-    let inner_cont_cast = arena_core::unrealized_conversion_cast(
-        ctx,
-        location,
-        inner_cont_anyref,
-        types.continuation,
-    );
+    let inner_cont_cast =
+        core::unrealized_conversion_cast(ctx, location, inner_cont_anyref, types.continuation);
     ctx.push_op(body_block, inner_cont_cast.op_ref());
 
     // Extract resume_fn (field 0) — typed as core.ptr (not RC-managed)
-    let get_fn = arena_adt::struct_get(
+    let get_fn = adt::struct_get(
         ctx,
         location,
         inner_cont_cast.result(ctx),
@@ -799,7 +780,7 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, get_fn.op_ref());
 
     // Extract inner state (field 1)
-    let get_inner_state = arena_adt::struct_get(
+    let get_inner_state = adt::struct_get(
         ctx,
         location,
         inner_cont_cast.result(ctx),
@@ -810,7 +791,7 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, get_inner_state.op_ref());
 
     // Build inner ResumeWrapper { state: inner_state, resume_value: rv }
-    let inner_wrapper = arena_adt::struct_new(
+    let inner_wrapper = adt::struct_new(
         ctx,
         location,
         vec![get_inner_state.result(ctx), resume_value],
@@ -820,16 +801,12 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, inner_wrapper.op_ref());
 
     // Cast to anyref for call_indirect
-    let inner_wrapper_anyref = arena_core::unrealized_conversion_cast(
-        ctx,
-        location,
-        inner_wrapper.result(ctx),
-        types.anyref,
-    );
+    let inner_wrapper_anyref =
+        core::unrealized_conversion_cast(ctx, location, inner_wrapper.result(ctx), types.anyref);
     ctx.push_op(body_block, inner_wrapper_anyref.op_ref());
 
     // Call indirect: resume inner continuation
-    let inner_yr = arena_func::call_indirect(
+    let inner_yr = func::call_indirect(
         ctx,
         location,
         get_fn.result(ctx),
@@ -841,7 +818,7 @@ pub(crate) fn create_chain_function(
 
     // === Check Done/Shift ===
 
-    let is_done = arena_adt::variant_is(
+    let is_done = adt::variant_is(
         ctx,
         location,
         inner_yr_val,
@@ -865,7 +842,7 @@ pub(crate) fn create_chain_function(
         types,
     );
 
-    let if_op = arena_scf::r#if(
+    let if_op = scf::r#if(
         ctx,
         location,
         is_done.result(ctx),
@@ -876,7 +853,7 @@ pub(crate) fn create_chain_function(
     ctx.push_op(body_block, if_op.op_ref());
 
     // Return
-    let ret_op = arena_func::r#return(ctx, location, [if_op.result(ctx)]);
+    let ret_op = func::r#return(ctx, location, [if_op.result(ctx)]);
     ctx.push_op(body_block, ret_op.op_ref());
 
     let body_region = ctx.create_region(RegionData {
@@ -914,7 +891,7 @@ fn build_chain_done_branch(
     });
 
     // Extract value from inner YieldResult::Done
-    let get_val = arena_adt::variant_get(
+    let get_val = adt::variant_get(
         ctx,
         location,
         inner_yr,
@@ -927,7 +904,7 @@ fn build_chain_done_branch(
 
     // Cast to original call result type
     let unwrapped = if spec.call_result_type != types.anyref {
-        let cast = arena_core::unrealized_conversion_cast(
+        let cast = core::unrealized_conversion_cast(
             ctx,
             location,
             get_val.result(ctx),
@@ -1016,7 +993,7 @@ fn build_chain_done_branch(
     let has_yield = {
         let ops = ctx.block(block).ops.to_vec();
         ops.last()
-            .map(|&op| arena_scf::Yield::from_op(ctx, op).is_ok())
+            .map(|&op| scf::Yield::from_op(ctx, op).is_ok())
             .unwrap_or(false)
     };
 
@@ -1048,7 +1025,7 @@ fn build_chain_shift_branch(
     });
 
     // Extract new ShiftInfo from inner YieldResult::Shift
-    let get_info = arena_adt::variant_get(
+    let get_info = adt::variant_get(
         ctx,
         location,
         inner_yr,
@@ -1061,7 +1038,7 @@ fn build_chain_shift_branch(
     let new_shift_info = get_info.result(ctx);
 
     // Extract new inner continuation (field 3)
-    let get_new_inner = arena_adt::struct_get(
+    let get_new_inner = adt::struct_get(
         ctx,
         location,
         new_shift_info,
@@ -1075,12 +1052,12 @@ fn build_chain_shift_branch(
     // Build new chain state: [new_inner_cont, live_var_0, live_var_1, ...]
     let mut new_state_values: Vec<ValueRef> = vec![new_inner_cont];
     for &lv in restored_live_vars {
-        let anyref_val = arena_core::unrealized_conversion_cast(ctx, location, lv, types.anyref);
+        let anyref_val = core::unrealized_conversion_cast(ctx, location, lv, types.anyref);
         ctx.push_op(block, anyref_val.op_ref());
         new_state_values.push(anyref_val.result(ctx));
     }
 
-    let new_state = arena_adt::struct_new(
+    let new_state = adt::struct_new(
         ctx,
         location,
         new_state_values,
@@ -1090,16 +1067,16 @@ fn build_chain_shift_branch(
     ctx.push_op(block, new_state.op_ref());
 
     let new_state_anyref =
-        arena_core::unrealized_conversion_cast(ctx, location, new_state.result(ctx), types.anyref);
+        core::unrealized_conversion_cast(ctx, location, new_state.result(ctx), types.anyref);
     ctx.push_op(block, new_state_anyref.op_ref());
 
     // Self-reference: func.constant @__chain_N
     let self_name = Symbol::from_dynamic(&spec.name);
-    let chain_fn = arena_func::constant(ctx, location, types.ptr, self_name);
+    let chain_fn = func::constant(ctx, location, types.ptr, self_name);
     ctx.push_op(block, chain_fn.op_ref());
 
     // Build new Continuation
-    let new_cont = arena_adt::struct_new(
+    let new_cont = adt::struct_new(
         ctx,
         location,
         vec![chain_fn.result(ctx), new_state_anyref.result(ctx)],
@@ -1109,11 +1086,11 @@ fn build_chain_shift_branch(
     ctx.push_op(block, new_cont.op_ref());
 
     let new_cont_anyref =
-        arena_core::unrealized_conversion_cast(ctx, location, new_cont.result(ctx), types.anyref);
+        core::unrealized_conversion_cast(ctx, location, new_cont.result(ctx), types.anyref);
     ctx.push_op(block, new_cont_anyref.op_ref());
 
     // Build new ShiftInfo: copy value/prompt/op_idx, replace continuation
-    let get_sv = arena_adt::struct_get(
+    let get_sv = adt::struct_get(
         ctx,
         location,
         new_shift_info,
@@ -1122,7 +1099,7 @@ fn build_chain_shift_branch(
         0,
     );
     ctx.push_op(block, get_sv.op_ref());
-    let get_prompt = arena_adt::struct_get(
+    let get_prompt = adt::struct_get(
         ctx,
         location,
         new_shift_info,
@@ -1131,7 +1108,7 @@ fn build_chain_shift_branch(
         1,
     );
     ctx.push_op(block, get_prompt.op_ref());
-    let get_op_idx = arena_adt::struct_get(
+    let get_op_idx = adt::struct_get(
         ctx,
         location,
         new_shift_info,
@@ -1141,7 +1118,7 @@ fn build_chain_shift_branch(
     );
     ctx.push_op(block, get_op_idx.op_ref());
 
-    let rebuilt_info = arena_adt::struct_new(
+    let rebuilt_info = adt::struct_new(
         ctx,
         location,
         vec![
@@ -1156,7 +1133,7 @@ fn build_chain_shift_branch(
     ctx.push_op(block, rebuilt_info.op_ref());
 
     // YieldResult::Shift
-    let yr = arena_adt::variant_new(
+    let yr = adt::variant_new(
         ctx,
         location,
         [rebuilt_info.result(ctx)],
@@ -1166,7 +1143,7 @@ fn build_chain_shift_branch(
     );
     ctx.push_op(block, yr.op_ref());
 
-    let yield_op = arena_scf::r#yield(ctx, location, [yr.result(ctx)]);
+    let yield_op = scf::r#yield(ctx, location, [yr.result(ctx)]);
     ctx.push_op(block, yield_op.op_ref());
 
     ctx.create_region(RegionData {
@@ -1184,9 +1161,9 @@ fn build_chain_shift_branch(
 ///
 /// Matches both `func.call` (direct) and `func.call_indirect` (indirect/closure).
 fn is_effectful_call(ctx: &IrContext, op: OpRef, effectful_funcs: &HashSet<Symbol>) -> bool {
-    if let Ok(call) = arena_func::Call::from_op(ctx, op) {
+    if let Ok(call) = func::Call::from_op(ctx, op) {
         effectful_funcs.contains(&call.callee(ctx)) && !ctx.op_results(op).is_empty()
-    } else if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+    } else if func::CallIndirect::from_op(ctx, op).is_ok() {
         let operands = ctx.op_operands(op).to_vec();
         if let Some(&callee) = operands.first() {
             super::analysis::has_effectful_type(ctx, ctx.value_ty(callee))
@@ -1210,7 +1187,7 @@ pub(crate) fn get_callee_original_result_type(
     module_body: RegionRef,
 ) -> Option<TypeRef> {
     // Direct call: look up callee function definition
-    if let Ok(call) = arena_func::Call::from_op(ctx, call_op) {
+    if let Ok(call) = func::Call::from_op(ctx, call_op) {
         let callee = call.callee(ctx);
         if !effectful_funcs.contains(&callee) {
             return None;
@@ -1218,7 +1195,7 @@ pub(crate) fn get_callee_original_result_type(
         return super::truncate::find_original_result_type(ctx, module_body, callee);
     }
     // Indirect call: extract return type from callee value's core.func type
-    if arena_func::CallIndirect::from_op(ctx, call_op).is_ok() {
+    if func::CallIndirect::from_op(ctx, call_op).is_ok() {
         let operands = ctx.op_operands(call_op).to_vec();
         if let Some(&callee_value) = operands.first() {
             let callee_ty = ctx.value_ty(callee_value);
@@ -1302,12 +1279,12 @@ fn yield_value_or_done(
 ) {
     let val_ty = ctx.value_ty(value);
     if is_yield_result_type(ctx, val_ty) {
-        let yield_op = arena_scf::r#yield(ctx, location, [value]);
+        let yield_op = scf::r#yield(ctx, location, [value]);
         ctx.push_op(block, yield_op.op_ref());
     } else {
-        let anyref_val = arena_core::unrealized_conversion_cast(ctx, location, value, types.anyref);
+        let anyref_val = core::unrealized_conversion_cast(ctx, location, value, types.anyref);
         ctx.push_op(block, anyref_val.op_ref());
-        let done_op = arena_adt::variant_new(
+        let done_op = adt::variant_new(
             ctx,
             location,
             [anyref_val.result(ctx)],
@@ -1316,7 +1293,7 @@ fn yield_value_or_done(
             Symbol::new("Done"),
         );
         ctx.push_op(block, done_op.op_ref());
-        let yield_op = arena_scf::r#yield(ctx, location, [done_op.result(ctx)]);
+        let yield_op = scf::r#yield(ctx, location, [done_op.result(ctx)]);
         ctx.push_op(block, yield_op.op_ref());
     }
 }

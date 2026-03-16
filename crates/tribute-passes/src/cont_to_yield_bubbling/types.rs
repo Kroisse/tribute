@@ -5,10 +5,11 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
+use tribute_ir::dialect::tribute_rt;
 
 /// Cached type references for yield bubbling types.
 ///
@@ -36,8 +37,8 @@ pub(crate) struct YieldBubblingTypes {
 impl YieldBubblingTypes {
     /// Create and intern all yield bubbling types.
     pub(crate) fn new(ctx: &mut IrContext) -> Self {
-        let anyref_ty = arena_tribute_rt::anyref(ctx).as_type_ref();
-        let ptr_ty = intern_ptr(ctx);
+        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+        let ptr_ty = core::ptr(ctx).as_type_ref();
         let i32_ty = intern_i32(ctx);
         let i1_ty = intern_i1(ctx);
 
@@ -62,12 +63,6 @@ impl YieldBubblingTypes {
 // ============================================================================
 // Type Construction Helpers
 // ============================================================================
-
-/// Intern `core.ptr` (raw pointer, not RC-managed).
-fn intern_ptr(ctx: &mut IrContext) -> TypeRef {
-    ctx.types
-        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ptr")).build())
-}
 
 /// Intern `core.i32`.
 fn intern_i32(ctx: &mut IrContext) -> TypeRef {

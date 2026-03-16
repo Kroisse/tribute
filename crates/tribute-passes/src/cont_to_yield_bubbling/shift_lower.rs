@@ -8,10 +8,10 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::cont as arena_cont;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::cont;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::location::Span;
 use trunk_ir::ops::DialectOp;
@@ -67,7 +67,7 @@ pub(crate) fn state_type_name(key: StateTypeKey) -> String {
 /// Extract ability name and compute op_idx from a cont.shift operation.
 fn resolve_shift_op_idx(
     ctx: &IrContext,
-    shift_op: arena_cont::Shift,
+    shift_op: cont::Shift,
 ) -> (Option<Symbol>, Option<Symbol>, u32) {
     let ability_ref_type = shift_op.ability_ref(ctx);
     let ability_data = ctx.types.get(ability_ref_type);
@@ -113,7 +113,7 @@ impl RewritePattern for LowerShiftPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) else {
+        let Ok(shift_op) = cont::Shift::from_op(ctx, op) else {
             return false;
         };
 
@@ -162,13 +162,12 @@ impl RewritePattern for LowerShiftPattern {
         // Cast live values to anyref, then create state struct
         let mut anyref_state_values: Vec<ValueRef> = Vec::new();
         for &(val, _ty) in &shift_point_info.live_values {
-            let cast = arena_core::unrealized_conversion_cast(ctx, location, val, t.anyref);
+            let cast = core::unrealized_conversion_cast(ctx, location, val, t.anyref);
             ops.push(cast.op_ref());
             anyref_state_values.push(cast.result(ctx));
         }
 
-        let state_op =
-            arena_adt::struct_new(ctx, location, anyref_state_values, t.anyref, state_adt_ty);
+        let state_op = adt::struct_new(ctx, location, anyref_state_values, t.anyref, state_adt_ty);
         let state_val = state_op.result(ctx);
         ops.push(state_op.op_ref());
 
@@ -200,12 +199,12 @@ impl RewritePattern for LowerShiftPattern {
         });
 
         let resume_name_sym = Symbol::from_dynamic(&resume_name);
-        let const_op = arena_func::constant(ctx, location, t.ptr, resume_name_sym);
+        let const_op = func::constant(ctx, location, t.ptr, resume_name_sym);
         let resume_fn_val = const_op.result(ctx);
         ops.push(const_op.op_ref());
 
         // === 3. Build Continuation struct ===
-        let cont_op = arena_adt::struct_new(
+        let cont_op = adt::struct_new(
             ctx,
             location,
             vec![resume_fn_val, state_val],
@@ -216,23 +215,23 @@ impl RewritePattern for LowerShiftPattern {
         ops.push(cont_op.op_ref());
 
         // Cast continuation to anyref for ShiftInfo
-        let cont_anyref = arena_core::unrealized_conversion_cast(ctx, location, cont_val, t.anyref);
+        let cont_anyref = core::unrealized_conversion_cast(ctx, location, cont_val, t.anyref);
         ops.push(cont_anyref.op_ref());
 
         // === 4. Build ShiftInfo struct ===
         // shift_value: first value operand cast to anyref, or null
         let shift_value_val = if let Some(&sv) = value_operands.first() {
-            let cast = arena_core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
+            let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
             ops.push(cast.op_ref());
             cast.result(ctx)
         } else {
-            let null_op = arena_adt::ref_null(ctx, location, t.anyref, t.anyref);
+            let null_op = adt::ref_null(ctx, location, t.anyref, t.anyref);
             ops.push(null_op.op_ref());
             null_op.result(ctx)
         };
 
         // prompt tag: cast to i32
-        let prompt_val = arena_core::unrealized_conversion_cast(ctx, location, tag_operand, t.i32);
+        let prompt_val = core::unrealized_conversion_cast(ctx, location, tag_operand, t.i32);
         ops.push(prompt_val.op_ref());
 
         // op_idx constant
@@ -240,7 +239,7 @@ impl RewritePattern for LowerShiftPattern {
             trunk_ir::dialect::arith::r#const(ctx, location, t.i32, Attribute::Int(op_idx as i128));
         ops.push(op_idx_const.op_ref());
 
-        let shift_info_op = arena_adt::struct_new(
+        let shift_info_op = adt::struct_new(
             ctx,
             location,
             vec![
@@ -256,7 +255,7 @@ impl RewritePattern for LowerShiftPattern {
         ops.push(shift_info_op.op_ref());
 
         // === 5. Build YieldResult::Shift ===
-        let yr_op = arena_adt::variant_new(
+        let yr_op = adt::variant_new(
             ctx,
             location,
             [shift_info_val],
@@ -326,12 +325,12 @@ pub(crate) fn create_resume_function(
 
     // Cast wrapper to ResumeWrapper
     let wrapper_cast =
-        arena_core::unrealized_conversion_cast(ctx, location, wrapper_arg, types.resume_wrapper);
+        core::unrealized_conversion_cast(ctx, location, wrapper_arg, types.resume_wrapper);
     ctx.push_op(body_block, wrapper_cast.op_ref());
     let wrapper_val = wrapper_cast.result(ctx);
 
     // Extract resume_value from wrapper (field 1)
-    let get_rv = arena_adt::struct_get(
+    let get_rv = adt::struct_get(
         ctx,
         location,
         wrapper_val,
@@ -344,7 +343,7 @@ pub(crate) fn create_resume_function(
 
     // Cast resume_value to the original shift result type if needed
     if let Some(result_type) = spec.shift_result_type {
-        let cast = arena_core::unrealized_conversion_cast(ctx, location, resume_value, result_type);
+        let cast = core::unrealized_conversion_cast(ctx, location, resume_value, result_type);
         ctx.push_op(body_block, cast.op_ref());
         resume_value = cast.result(ctx);
     }
@@ -358,7 +357,7 @@ pub(crate) fn create_resume_function(
     let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
 
     if !spec.state_fields.is_empty() {
-        let get_state = arena_adt::struct_get(
+        let get_state = adt::struct_get(
             ctx,
             location,
             wrapper_val,
@@ -371,7 +370,7 @@ pub(crate) fn create_resume_function(
 
         // Cast anyref to state struct type
         let state_cast =
-            arena_core::unrealized_conversion_cast(ctx, location, state_anyref, spec.state_type);
+            core::unrealized_conversion_cast(ctx, location, state_anyref, spec.state_type);
         ctx.push_op(body_block, state_cast.op_ref());
         let state_val = state_cast.result(ctx);
 
@@ -381,7 +380,7 @@ pub(crate) fn create_resume_function(
             .zip(spec.original_live_values.iter())
             .enumerate()
         {
-            let get_field = arena_adt::struct_get(
+            let get_field = adt::struct_get(
                 ctx,
                 location,
                 state_val,
@@ -392,12 +391,8 @@ pub(crate) fn create_resume_function(
             ctx.push_op(body_block, get_field.op_ref());
             let anyref_value = get_field.result(ctx);
 
-            let cast = arena_core::unrealized_conversion_cast(
-                ctx,
-                location,
-                anyref_value,
-                *original_field_type,
-            );
+            let cast =
+                core::unrealized_conversion_cast(ctx, location, anyref_value, *original_field_type);
             ctx.push_op(body_block, cast.op_ref());
             mapping.map_value(*original_value, cast.result(ctx));
         }
@@ -469,7 +464,7 @@ pub(crate) fn create_resume_function(
 
     for &op in &spec.continuation_ops {
         // Skip func.return - handle final return ourselves
-        if arena_func::Return::from_op(ctx, op).is_ok() {
+        if func::Return::from_op(ctx, op).is_ok() {
             if let Some(&return_val) = ctx.op_operands(op).first() {
                 last_result = Some(mapping.lookup_value_or_default(return_val));
             }
@@ -477,7 +472,7 @@ pub(crate) fn create_resume_function(
         }
 
         // Handle cont.shift - transform to YieldResult::Shift with next resume function
-        if let Ok(shift_op) = arena_cont::Shift::from_op(ctx, op) {
+        if let Ok(shift_op) = cont::Shift::from_op(ctx, op) {
             let operands = ctx.op_operands(op).to_vec();
             let tag_operand = operands
                 .first()
@@ -517,24 +512,22 @@ pub(crate) fn create_resume_function(
             let mut anyref_vals: Vec<ValueRef> = Vec::new();
             for (v, _ty) in &next_shift_info.live_values {
                 let remapped = mapping.lookup_value_or_default(*v);
-                let cast =
-                    arena_core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
+                let cast = core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
                 ctx.push_op(body_block, cast.op_ref());
                 anyref_vals.push(cast.result(ctx));
             }
 
-            let state_op =
-                arena_adt::struct_new(ctx, location, anyref_vals, types.anyref, state_adt_ty);
+            let state_op = adt::struct_new(ctx, location, anyref_vals, types.anyref, state_adt_ty);
             ctx.push_op(body_block, state_op.op_ref());
             let state_val = state_op.result(ctx);
 
             // Resume function reference
             let resume_name_sym = Symbol::from_dynamic(next_resume_name);
-            let const_op = arena_func::constant(ctx, location, types.ptr, resume_name_sym);
+            let const_op = func::constant(ctx, location, types.ptr, resume_name_sym);
             ctx.push_op(body_block, const_op.op_ref());
 
             // Continuation struct
-            let cont_op = arena_adt::struct_new(
+            let cont_op = adt::struct_new(
                 ctx,
                 location,
                 vec![const_op.result(ctx), state_val],
@@ -544,31 +537,25 @@ pub(crate) fn create_resume_function(
             ctx.push_op(body_block, cont_op.op_ref());
 
             // Cast continuation to anyref
-            let cont_anyref = arena_core::unrealized_conversion_cast(
-                ctx,
-                location,
-                cont_op.result(ctx),
-                types.anyref,
-            );
+            let cont_anyref =
+                core::unrealized_conversion_cast(ctx, location, cont_op.result(ctx), types.anyref);
             ctx.push_op(body_block, cont_anyref.op_ref());
 
             // Shift value
             let sv = if let Some(sv_operand) = shift_value_operand {
                 let remapped = mapping.lookup_value_or_default(sv_operand);
-                let cast =
-                    arena_core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
+                let cast = core::unrealized_conversion_cast(ctx, location, remapped, types.anyref);
                 ctx.push_op(body_block, cast.op_ref());
                 cast.result(ctx)
             } else {
-                let null_op = arena_adt::ref_null(ctx, location, types.anyref, types.anyref);
+                let null_op = adt::ref_null(ctx, location, types.anyref, types.anyref);
                 ctx.push_op(body_block, null_op.op_ref());
                 null_op.result(ctx)
             };
 
             // Prompt tag
             let tag_val = mapping.lookup_value_or_default(tag_operand);
-            let prompt_val =
-                arena_core::unrealized_conversion_cast(ctx, location, tag_val, types.i32);
+            let prompt_val = core::unrealized_conversion_cast(ctx, location, tag_val, types.i32);
             ctx.push_op(body_block, prompt_val.op_ref());
 
             // Op idx
@@ -581,7 +568,7 @@ pub(crate) fn create_resume_function(
             ctx.push_op(body_block, op_idx_const.op_ref());
 
             // ShiftInfo
-            let shift_info = arena_adt::struct_new(
+            let shift_info = adt::struct_new(
                 ctx,
                 location,
                 vec![
@@ -596,7 +583,7 @@ pub(crate) fn create_resume_function(
             ctx.push_op(body_block, shift_info.op_ref());
 
             // YieldResult::Shift
-            let yr = arena_adt::variant_new(
+            let yr = adt::variant_new(
                 ctx,
                 location,
                 [shift_info.result(ctx)],
@@ -606,7 +593,7 @@ pub(crate) fn create_resume_function(
             );
             ctx.push_op(body_block, yr.op_ref());
 
-            let ret = arena_func::r#return(ctx, location, [yr.result(ctx)]);
+            let ret = func::r#return(ctx, location, [yr.result(ctx)]);
             ctx.push_op(body_block, ret.op_ref());
 
             encountered_shift = true;
@@ -627,10 +614,10 @@ pub(crate) fn create_resume_function(
         let final_value = last_result.unwrap_or(resume_value);
         // Cast to anyref
         let final_anyref =
-            arena_core::unrealized_conversion_cast(ctx, location, final_value, types.anyref);
+            core::unrealized_conversion_cast(ctx, location, final_value, types.anyref);
         ctx.push_op(body_block, final_anyref.op_ref());
 
-        let done_op = arena_adt::variant_new(
+        let done_op = adt::variant_new(
             ctx,
             location,
             [final_anyref.result(ctx)],
@@ -640,7 +627,7 @@ pub(crate) fn create_resume_function(
         );
         ctx.push_op(body_block, done_op.op_ref());
 
-        let ret = arena_func::r#return(ctx, location, [done_op.result(ctx)]);
+        let ret = func::r#return(ctx, location, [done_op.result(ctx)]);
         ctx.push_op(body_block, ret.op_ref());
     }
 
