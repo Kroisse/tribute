@@ -349,18 +349,12 @@ fn build_lifted_body(
 /// Walk up the parent chain to find the enclosing `func.func` and return its `sym_name`.
 fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
     let mut current_op = op;
-    loop {
-        let block = match ctx.op(current_op).parent_block {
-            Some(b) => b,
-            None => break,
+    while let Some(block) = ctx.op(current_op).parent_block {
+        let Some(region) = ctx.block(block).parent_region else {
+            break;
         };
-        let region = match ctx.block(block).parent_region {
-            Some(r) => r,
-            None => break,
-        };
-        let parent = match ctx.region(region).parent_op {
-            Some(p) => p,
-            None => break,
+        let Some(parent) = ctx.region(region).parent_op else {
+            break;
         };
         if let Ok(f) = func::Func::from_op(ctx, parent) {
             return f.sym_name(ctx).with_str(|s| s.to_string());
