@@ -150,6 +150,74 @@ mod tests {
     }
 
     #[test]
+    fn test_closure_lambda_round_trip() {
+        use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+        use trunk_ir::dialect::func as arena_func;
+
+        let mut ctx = IrContext::new();
+        let loc = dummy_location();
+        let i32_ty = make_i32_type(&mut ctx.types);
+        let closure_ty = make_closure_type(&mut ctx.types);
+
+        // Create a capture value
+        let cap_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(7));
+        let cap_val = cap_op.result(&ctx);
+
+        // Build body region: ^bb0(%x: i32): func.return %x
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![BlockArgData {
+                ty: i32_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let x_val = ctx.block_arg(entry, 0);
+        let ret_op = arena_func::r#return(&mut ctx, loc, [x_val]);
+        ctx.push_op(entry, ret_op.op_ref());
+
+        let body_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![entry],
+            parent_op: None,
+        });
+
+        // Create closure.lambda [%cap] { body } -> closure_ty
+        let lambda_op = super::lambda(&mut ctx, loc, vec![cap_val], closure_ty, body_region);
+
+        // Verify from_op round-trip
+        let lambda_op2 =
+            super::Lambda::from_op(&ctx, lambda_op.op_ref()).expect("should match closure.lambda");
+        assert_eq!(lambda_op.op_ref(), lambda_op2.op_ref());
+
+        // Verify matches
+        assert!(super::Lambda::matches(&ctx, lambda_op.op_ref()));
+        assert!(!super::New::matches(&ctx, lambda_op.op_ref()));
+
+        // Verify result type
+        let result = lambda_op.result(&ctx);
+        assert_eq!(ctx.value_ty(result), closure_ty);
+
+        // Verify body region exists
+        let body = lambda_op.body(&ctx);
+        let body_blocks = &ctx.region(body).blocks;
+        assert_eq!(body_blocks.len(), 1);
+        let body_entry = body_blocks[0];
+        assert_eq!(ctx.block(body_entry).args.len(), 1);
+        assert_eq!(ctx.block(body_entry).args[0].ty, i32_ty);
+
+        // Verify captures (operands)
+        let operands = ctx.op_operands(lambda_op.op_ref());
+        assert_eq!(operands.len(), 1);
+        assert_eq!(operands[0], cap_val);
+
+        // Verify dialect and op name constants
+        assert_eq!(super::Lambda::DIALECT_NAME, "closure");
+        assert_eq!(super::Lambda::OP_NAME, "lambda");
+    }
+
+    #[test]
     fn test_closure_from_op_wrong_dialect() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();

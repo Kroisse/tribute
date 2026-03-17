@@ -123,9 +123,11 @@ fn lower_single_lambda(
         .map(|i| ctx.block(orig_entry).args[i].ty)
         .collect();
 
-    // Determine function return type from the closure result type.
+    // Determine function return type and effect from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let func_result_ty = extract_return_type_from_closure(ctx, result_ty).unwrap_or(anyref_ty);
+    let closure_sig = extract_func_sig_from_closure(ctx, result_ty);
+    let func_result_ty = closure_sig.return_ty;
+    let func_effect = closure_sig.effect;
     let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
@@ -159,8 +161,13 @@ fn lower_single_lambda(
     // Function type: (evidence, env, params...) -> result
     let mut all_param_tys = vec![evidence_ty, anyref_ty];
     all_param_tys.extend_from_slice(&orig_param_types);
-    let func_ty =
-        core::func(ctx, func_result_ty, all_param_tys.iter().copied(), None).as_type_ref();
+    let func_ty = core::func(
+        ctx,
+        func_result_ty,
+        all_param_tys.iter().copied(),
+        func_effect,
+    )
+    .as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
     ctx.push_op(module_block, func_op.op_ref());
@@ -184,8 +191,13 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty =
-        core::func(ctx, func_result_ty, orig_param_types.iter().copied(), None).as_type_ref();
+    let closure_func_ty = core::func(
+        ctx,
+        func_result_ty,
+        orig_param_types.iter().copied(),
+        func_effect,
+    )
+    .as_type_ref();
     let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
@@ -332,20 +344,44 @@ fn build_lifted_body(
 // Helpers
 // ============================================================================
 
-/// Extract return type from `closure.closure<core.func<Return, Params...>>`.
-fn extract_return_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
+/// Extracted function signature from `closure.closure<core.func<Return, Params...>>`.
+struct ClosureFuncSig {
+    return_ty: TypeRef,
+    effect: Option<TypeRef>,
+}
+
+/// Extract return type and effect from `closure.closure<core.func<Return, Params...>>`.
+fn extract_func_sig_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> ClosureFuncSig {
     let data = ctx.types.get(closure_ty);
-    if data.dialect != Symbol::new("closure") || data.name != Symbol::new("closure") {
-        return None;
-    }
-    // closure.closure has one type param: the func type
-    let func_ty = *data.params.first()?;
+    assert!(
+        data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"),
+        "closure.lambda result type must be closure.closure, got {}.{}",
+        data.dialect.with_str(|s| s.to_string()),
+        data.name.with_str(|s| s.to_string()),
+    );
+    let func_ty = *data
+        .params
+        .first()
+        .expect("closure.closure must have a func type parameter");
     let func_data = ctx.types.get(func_ty);
-    if func_data.dialect != Symbol::new("core") || func_data.name != Symbol::new("func") {
-        return None;
-    }
-    // core.func params[0] = return type
-    func_data.params.first().copied()
+    assert!(
+        func_data.dialect == Symbol::new("core") && func_data.name == Symbol::new("func"),
+        "closure.closure type parameter must be core.func, got {}.{}",
+        func_data.dialect.with_str(|s| s.to_string()),
+        func_data.name.with_str(|s| s.to_string()),
+    );
+    let return_ty = *func_data
+        .params
+        .first()
+        .expect("core.func must have a return type parameter");
+    let effect = func_data
+        .attrs
+        .get(&Symbol::new("effect"))
+        .and_then(|attr| match attr {
+            Attribute::Type(ty) => Some(*ty),
+            _ => None,
+        });
+    ClosureFuncSig { return_ty, effect }
 }
 
 /// Create an `adt.struct` type with name and fields.
