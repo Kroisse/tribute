@@ -415,7 +415,7 @@ ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
              | '->' '{' EffectRow? '}' Type   // 명시적 effect
 
 EffectRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
-EffectItem ::= TypeId TypeArgs?
+EffectItem ::= TypePath TypeArgs?
 EffectTail ::= ',' LowerIdentifier            // row variable
 ```
 
@@ -637,11 +637,13 @@ PrimaryExpr ::= Literal
               | Lambda
               | CaseExpr
               | HandleExpr
+              | ResumeExpr
 
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
              | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
+ResumeExpr ::= 'resume' '(' Expression? ')'   // op handler body 전용 (affine)
 ```
 
 ### Block Expression
@@ -1108,6 +1110,7 @@ fn main() ->{Console} Nil {
 | `a <> b`                | Concatenation          |
 | `a T::<> b`             | Qualified operator     |
 | `(+)`, `(T::<>)`        | Operator as function   |
+| `resume(expr)`          | Continuation 재개      |
 
 ### Patterns
 
