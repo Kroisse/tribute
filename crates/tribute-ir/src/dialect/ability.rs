@@ -19,6 +19,36 @@ mod ability {
         #[region(funcs)]
         {}
     }
+
+    /// Perform an ability operation with an explicit continuation closure.
+    ///
+    /// CPS replacement for `cont.shift`. The continuation closure captures
+    /// the rest of the computation after the effect point.
+    ///
+    /// ```text
+    /// %yr = ability.perform %continuation, [%args...]
+    ///   { ability_ref: @State, op_name: @get }
+    /// ```
+    ///
+    /// Lowered to: evidence lookup → ShiftInfo construction → YieldResult::Shift.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn perform(continuation: (), #[rest] values: ()) -> result {}
+
+    /// Handler dispatch loop over a YieldResult value.
+    ///
+    /// CPS replacement for `cont.handler_dispatch`. Matches the prompt tag
+    /// and dispatches to the appropriate handler arm in the body region.
+    ///
+    /// ```text
+    /// %result = ability.handle_dispatch %yield_result
+    ///   { tag: 0, result_type: anyref }
+    ///   body { ... handler arms ... }
+    /// ```
+    #[attr(tag: u32, result_type: Type)]
+    fn handle_dispatch(value: ()) -> result {
+        #[region(body)]
+        {}
+    }
 }
 
 // === Pure operation registrations ===
