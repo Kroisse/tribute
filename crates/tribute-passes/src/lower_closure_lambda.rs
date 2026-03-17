@@ -10,8 +10,8 @@
 //!     func.return %r
 //! }
 //!
-//! // After:
-//! func.func @__clam_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
+//! // After (inside func.func @foo):
+//! func.func @foo::__clam_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
 //!   %env_cast = adt.ref_cast %env : env_struct
 //!   %x = adt.struct_get %env_cast, 0
 //!   %y = adt.struct_get %env_cast, 1
@@ -19,8 +19,10 @@
 //!   func.return %r
 //! }
 //! %env = adt.struct_new(%x, %y)
-//! %k = closure.new @__clam_0, %env
+//! %k = closure.new @foo::__clam_0, %env
 //! ```
+
+use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -42,7 +44,7 @@ pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         None => return,
     };
 
-    let mut counter: u32 = 0;
+    let mut namer = LambdaNamer::new();
 
     // Iterate until no more closure.lambda ops remain.
     // Multiple iterations handle nested lambdas: the first pass converts
@@ -55,7 +57,7 @@ pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         }
 
         for lambda_ref in lambdas {
-            lower_single_lambda(ctx, module_block, lambda_ref, &mut counter);
+            lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
         }
     }
 }
@@ -97,7 +99,7 @@ fn lower_single_lambda(
     ctx: &mut IrContext,
     module_block: BlockRef,
     lambda_ref: OpRef,
-    counter: &mut u32,
+    namer: &mut LambdaNamer,
 ) {
     let Ok(lambda_op) = arena_closure::Lambda::from_op(ctx, lambda_ref) else {
         return;
@@ -112,9 +114,9 @@ fn lower_single_lambda(
 
     let body_region = lambda_op.body(ctx);
 
-    // Generate unique lifted name.
-    let lifted_name = Symbol::from_dynamic(&format!("__clam_{}", *counter));
-    *counter += 1;
+    // Generate unique lifted name derived from the enclosing function.
+    let parent_name = find_enclosing_func_name(ctx, lambda_ref);
+    let lifted_name = namer.next_name(&parent_name);
 
     // Original entry block args = lambda formal parameters.
     let orig_entry = ctx.region(body_region).blocks[0];
@@ -344,6 +346,50 @@ fn build_lifted_body(
 // Helpers
 // ============================================================================
 
+/// Walk up the parent chain to find the enclosing `func.func` and return its `sym_name`.
+fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
+    let mut current_op = op;
+    loop {
+        let block = match ctx.op(current_op).parent_block {
+            Some(b) => b,
+            None => break,
+        };
+        let region = match ctx.block(block).parent_region {
+            Some(r) => r,
+            None => break,
+        };
+        let parent = match ctx.region(region).parent_op {
+            Some(p) => p,
+            None => break,
+        };
+        if let Ok(f) = func::Func::from_op(ctx, parent) {
+            return f.sym_name(ctx).with_str(|s| s.to_string());
+        }
+        current_op = parent;
+    }
+    "<anon>".to_string()
+}
+
+/// Generates unique lifted lambda names, scoped by parent function.
+struct LambdaNamer {
+    counters: HashMap<String, u32>,
+}
+
+impl LambdaNamer {
+    fn new() -> Self {
+        Self {
+            counters: HashMap::new(),
+        }
+    }
+
+    fn next_name(&mut self, parent: &str) -> Symbol {
+        let count = self.counters.entry(parent.to_string()).or_insert(0);
+        let name = format!("{parent}::__clam_{count}");
+        *count += 1;
+        Symbol::from_dynamic(&name)
+    }
+}
+
 /// Extracted function signature from `closure.closure<core.func<Return, Params...>>`.
 struct ClosureFuncSig {
     return_ty: TypeRef,
@@ -559,7 +605,10 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(lifted.sym_name(&ctx), Symbol::from_dynamic("__clam_0"));
+        assert_eq!(
+            lifted.sym_name(&ctx),
+            Symbol::from_dynamic("test_fn::__clam_0")
+        );
 
         // Lifted function should have 3 params: evidence, env, x
         let lifted_ty = lifted.r#type(&ctx);
