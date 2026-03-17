@@ -60,8 +60,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 ```
 
-`resume`은 키워드이므로 값으로 저장하거나 스코프 밖으로 전달할 수 없다.
-Continuation 탈출은 문법적으로 불가능하며, 별도의 검사가 필요 없다.
+`resume`은 키워드이므로 단독으로 값이 될 수 없고, 호출 위치(`resume expr`)에서만
+사용할 수 있다. 다만 `fn() resume state`처럼 람다 안에서 호출하는 것은 가능하며,
+이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장해야 한다.
 
 ---
 

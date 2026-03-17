@@ -1153,6 +1153,42 @@ fn main() {
 }
 
 // =============================================================================
+// Tail-Resumptive (fn) Handler Arm Tests
+// =============================================================================
+
+/// Test `fn` handler arm (tail-resumptive) compiles and runs.
+///
+/// `Ask::ask()` is declared as `fn`, so the handler arm uses `fn` keyword.
+/// Currently `fn` arms are lowered identically to `op` arms (no automatic
+/// resume from body return value yet). This test verifies the `fn` handler
+/// arm path through parsing, resolution, and lowering.
+///
+/// Note: When tail-resumptive optimization is implemented, the body's return
+/// value will automatically become the resume value without explicit `resume`.
+#[test]
+fn test_fn_handler_arm() {
+    let code = r#"ability Ask {
+    fn ask() -> Nat
+}
+
+fn use_ask() ->{Ask} Nat {
+    Ask::ask()
+}
+
+fn main() {
+    let result = handle use_ask() {
+        do result { result }
+        fn Ask::ask() { 42 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    // fn arm body returns 42; since tail-resumptive auto-resume is not yet
+    // implemented, this acts like an early return with value 42.
+    assert_native_output("fn_handler_arm.trb", code, "42");
+}
+
+// =============================================================================
 // Handler Result Transformation Tests
 // =============================================================================
 

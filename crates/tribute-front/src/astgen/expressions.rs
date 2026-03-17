@@ -765,8 +765,10 @@ fn lower_handler_operation_path(
         } else {
             let ability_name = parent.last_segment();
             let module_path = parent.parent_path().unwrap();
-            let segments: SymbolVec =
-                module_path.with_str(|s| s.split("::").map(Symbol::from_dynamic).collect());
+            // Collect the string first to avoid deadlock:
+            // with_str holds a read lock, Symbol::from_dynamic needs a write lock.
+            let path_str = module_path.to_string();
+            let segments: SymbolVec = path_str.split("::").map(Symbol::from_dynamic).collect();
             UnresolvedName::qualified(segments, ability_name, ability_id)
         };
         let op = op_symbol.last_segment();
