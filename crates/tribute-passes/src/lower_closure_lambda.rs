@@ -24,7 +24,6 @@
 
 use std::collections::HashMap;
 
-
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
@@ -188,8 +187,13 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty =
-        core::func(ctx, func_result_ty, orig_param_types.iter().copied(), effect).as_type_ref();
+    let closure_func_ty = core::func(
+        ctx,
+        func_result_ty,
+        orig_param_types.iter().copied(),
+        effect,
+    )
+    .as_type_ref();
     let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
