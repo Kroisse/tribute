@@ -19,6 +19,7 @@ use crate::ast::{CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme};
 
 /// Information about a captured variable.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct CaptureInfo {
     /// Variable name.
     pub name: Symbol,

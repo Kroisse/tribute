@@ -28,7 +28,10 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
-    tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed")
+    let (mut ctx, m) =
+        tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed");
+    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
+    (ctx, m)
 }
 
 /// Helper to get all function names and their effectful status.
@@ -114,7 +117,7 @@ fn main() { }
 
         // main and apply are pure, lifted lambda should also be pure
         assert!(
-            !effectful.iter().any(|n| n.contains("lambda")),
+            !effectful.iter().any(|n| n.contains("clam")),
             "Pure lambda should not be effectful. Effectful functions: {:?}",
             effectful
         );
@@ -157,7 +160,7 @@ fn main() { }
         // Find the lifted lambda function
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         assert!(
@@ -225,7 +228,7 @@ fn main() { }
         // The lambda calling counter() should also be effectful
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         let effectful_lambdas: Vec<_> = lambda_functions
@@ -346,7 +349,7 @@ fn main() { }
         // The run lambda `fn() { counter(); counter(); counter() }` should be effectful
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         eprintln!("\n=== Lambda functions ===");
@@ -432,7 +435,7 @@ fn main() { }
         let mut checked = 0;
         for name in effectful_before.iter() {
             let name_str = name.to_string();
-            if name_str.contains("lambda") {
+            if name_str.contains("clam") {
                 let before_count = before_counts
                     .iter()
                     .find(|(n, _)| n == &name_str)

@@ -417,7 +417,7 @@ fn main() { }
                     op_data.attributes.get(&Symbol::new("sym_name"))
                 {
                     name.last_segment()
-                        .with_str(|s: &str| s.starts_with("__lambda_"))
+                        .with_str(|s: &str| s.starts_with("__clam_"))
                 } else {
                     false
                 }
