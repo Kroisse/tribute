@@ -18,14 +18,13 @@ core.module @test {
             ^bb3(%4: tribute_rt.anyref):
               scf.yield %4
           }
-          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb4(%5: cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref), %6: tribute_rt.anyref):
-              %7 = arith.const {value = 99} : core.i32
-              %8 = cont.resume %5, %7 : tribute_rt.anyref
-              scf.yield %8
-          }
       }
-      %9 = core.unrealized_conversion_cast %3 : core.i32
+      %5 = core.unrealized_conversion_cast %3 : core.i32
+      %6 = arith.const {value = 4294967295} : cont.prompt_tag
+      %7 = cont.shift %6 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.i32 {
+      }
+      %8 = arith.const {value = 99} : core.i32
+      %9 = arith.const {value = unit} : core.nil
       func.return %9
   }
   func.func @apply_thunk(%0: core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1001}}) -> core.i32 {

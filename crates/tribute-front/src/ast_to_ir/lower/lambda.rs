@@ -95,6 +95,13 @@ fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<Lo
                 collect_free_vars(&handler.body, free_vars);
             }
         }
+        ExprKind::Resume { arg, local_id } => {
+            collect_free_vars(arg, free_vars);
+            // The continuation value must be captured by lambdas
+            if let Some(id) = local_id {
+                free_vars.insert(*id);
+            }
+        }
         ExprKind::List(elements) => {
             for elem in elements {
                 collect_free_vars(elem, free_vars);

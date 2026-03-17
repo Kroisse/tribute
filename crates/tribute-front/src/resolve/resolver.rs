@@ -28,6 +28,8 @@ pub struct Resolver<'db> {
     local_id_gen: LocalIdGen,
     /// Span map for emitting diagnostics with source locations.
     span_map: SpanMap,
+    /// Stack of LocalIds for `resume` in `op` handler arms.
+    resume_local_id_stack: Vec<LocalId>,
 }
 
 impl<'db> Resolver<'db> {
@@ -38,6 +40,7 @@ impl<'db> Resolver<'db> {
             env,
             local_scopes: vec![HashMap::new()],
             local_id_gen: LocalIdGen::new(),
+            resume_local_id_stack: Vec::new(),
             span_map,
         }
     }
@@ -353,6 +356,12 @@ impl<'db> Resolver<'db> {
                 ExprKind::Handle { body, handlers }
             }
 
+            ExprKind::Resume { arg, .. } => {
+                let arg = self.resolve_expr(arg);
+                let local_id = self.resume_local_id_stack.last().copied();
+                ExprKind::Resume { arg, local_id }
+            }
+
             ExprKind::Tuple(exprs) => {
                 let exprs = exprs.into_iter().map(|e| self.resolve_expr(e)).collect();
                 ExprKind::Tuple(exprs)
@@ -424,53 +433,71 @@ impl<'db> Resolver<'db> {
         self.push_scope();
 
         let kind = match handler.kind {
-            HandlerKind::Result { binding } => {
+            HandlerKind::Do { binding } => {
                 let binding = self.resolve_pattern_with_bindings(binding);
-                HandlerKind::Result { binding }
+                HandlerKind::Do { binding }
             }
-            HandlerKind::Effect {
+            HandlerKind::Fn {
                 ability,
                 op,
                 params,
-                continuation,
-                continuation_local_id: _, // Ignored, will be assigned here
             } => {
-                // Resolve ability reference, but skip "_" placeholder (unqualified ops).
-                // The "_" placeholder means the ability will be inferred later.
-                let resolved_ability = if ability.name == Symbol::new("_") {
-                    // Return unresolved marker without emitting diagnostic
-                    ResolvedRef::local(LocalId::UNRESOLVED, ability.name)
-                } else {
-                    self.resolve_name(&ability)
-                };
-
-                // Bind pattern params
+                let resolved_ability = self.resolve_handler_ability(&ability);
                 let resolved_params = params
                     .into_iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
-
-                // Bind continuation if present and capture the LocalId
-                let continuation_local_id =
-                    continuation.map(|cont_name| self.bind_local(cont_name));
-
-                HandlerKind::Effect {
+                HandlerKind::Fn {
                     ability: resolved_ability,
                     op,
                     params: resolved_params,
-                    continuation,
-                    continuation_local_id,
+                }
+            }
+            HandlerKind::Op {
+                ability,
+                op,
+                params,
+                ..
+            } => {
+                let resolved_ability = self.resolve_handler_ability(&ability);
+                let resolved_params = params
+                    .into_iter()
+                    .map(|p| self.resolve_pattern_with_bindings(p))
+                    .collect();
+                // Allocate a synthetic LocalId for `resume` so that lambda
+                // capture analysis can track the continuation value.
+                let resume_id = self.local_id_gen.fresh();
+                self.resume_local_id_stack.push(resume_id);
+                HandlerKind::Op {
+                    ability: resolved_ability,
+                    op,
+                    params: resolved_params,
+                    resume_local_id: Some(resume_id),
                 }
             }
         };
 
+        let is_op = matches!(kind, HandlerKind::Op { .. });
         let body = self.resolve_expr(handler.body);
+        if is_op {
+            self.resume_local_id_stack.pop();
+        }
         self.pop_scope();
 
         HandlerArm {
             id: handler.id,
             kind,
             body,
+        }
+    }
+
+    /// Resolve ability reference in a handler arm.
+    /// Skips "_" placeholder (unqualified ops) without emitting diagnostics.
+    fn resolve_handler_ability(&mut self, ability: &UnresolvedName) -> ResolvedRef<'db> {
+        if ability.name == Symbol::new("_") {
+            ResolvedRef::local(LocalId::UNRESOLVED, ability.name)
+        } else {
+            self.resolve_name(ability)
         }
     }
 

@@ -4,8 +4,6 @@ assertion_line: 89
 expression: ir_text
 ---
 core.module @test {
-  !t0 = cont.continuation(tribute_rt.anyref, tribute_rt.anyref, tribute_rt.anyref)
-
   func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
     ^bb0:
       %1 = cont.push_prompt {tag = 0} : tribute_rt.anyref {
@@ -18,21 +16,15 @@ core.module @test {
             ^bb3(%4: tribute_rt.anyref):
               scf.yield %4
           }
-          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb4(%5: !t0, %6: tribute_rt.anyref):
-              %7 = arith.const {value = 42} : core.i32
-              %8 = cont.resume %5, %7 : tribute_rt.anyref
-              scf.yield %8
-          }
-          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
-            ^bb5(%9: !t0, %10: tribute_rt.anyref):
-              %11 = arith.const {value = unit} : core.nil
-              %12 = cont.resume %9, %11 : tribute_rt.anyref
-              scf.yield %12
-          }
       }
-      %13 = core.unrealized_conversion_cast %3 : core.i32
-      func.return %13
+      %5 = core.unrealized_conversion_cast %3 : core.i32
+      %6 = arith.const {value = 4294967295} : cont.prompt_tag
+      %7 = cont.shift %6 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.i32 {
+      }
+      %8 = arith.const {value = 42} : core.i32
+      %9 = arith.const {value = unit} : core.nil
+      %10 = arith.const {value = unit} : core.nil
+      func.return %10
   }
   func.func @"test::__lambda_0"(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
     ^bb0:

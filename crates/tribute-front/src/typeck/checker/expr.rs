@@ -325,11 +325,11 @@ impl<'db> TypeChecker<'db> {
                 let handled_ability_ids: Vec<AbilityId<'db>> = handlers
                     .iter()
                     .filter_map(|h| match &h.kind {
-                        HandlerKind::Effect { ability, .. } => {
+                        HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
                             // Get the ability ID from the ResolvedRef
                             self.extract_ability_id_from_ref(ability)
                         }
-                        HandlerKind::Result { .. } => None,
+                        HandlerKind::Do { .. } => None,
                     })
                     .collect();
 
@@ -352,7 +352,7 @@ impl<'db> TypeChecker<'db> {
                 // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
                 // row `{e, State(s)}` so it matches the expected `comp` parameter type.
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
-                    body_effect: body_effect_after,
+                    _body_effect: body_effect_after,
                 });
 
                 // The unhandled effects from the handle body should be consistent
@@ -378,6 +378,12 @@ impl<'db> TypeChecker<'db> {
                     ctx.constrain_eq(ty, elem_ty);
                 }
                 ctx.named_type(Symbol::new("List"), vec![elem_ty])
+            }
+            ExprKind::Resume { arg, .. } => {
+                let _arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+                // Resume returns a fresh type variable; the actual type
+                // depends on the continuation context.
+                ctx.fresh_type_var()
             }
             ExprKind::Error => ctx.error_type(),
         };
@@ -1061,6 +1067,10 @@ impl<'db> TypeChecker<'db> {
                         .collect(),
                 }
             }
+            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
+                arg: self.check_expr_with_ctx(ctx, arg, Mode::Infer),
+                local_id,
+            },
             ExprKind::Tuple(elements) => ExprKind::Tuple(
                 elements
                     .into_iter()
@@ -1576,54 +1586,38 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
-        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+        _handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
-            HandlerKind::Result { binding } => HandlerKind::Result {
+            HandlerKind::Do { binding } => HandlerKind::Do {
                 binding: self.convert_pattern_with_ctx(ctx, binding),
             },
-            HandlerKind::Effect {
+            HandlerKind::Fn {
                 ability,
                 op,
                 params,
-                continuation,
-                continuation_local_id,
-            } => {
-                // Bind continuation variable with Continuation type if named
-                if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
-                    // Create a Continuation type for the continuation variable.
-                    // The arg type is the type passed when resuming (effect operation's return type),
-                    // and the result type is the handler's result type.
-                    // Use the handle body's effect row so that continuation calls
-                    // propagate the correct effects.
-                    let arg_ty = ctx.fresh_type_var();
-                    let result_ty = ctx.fresh_type_var();
-                    let cont_effect = handle_ctx
-                        .map(|hc| hc.body_effect)
-                        .unwrap_or_else(|| ctx.fresh_effect_row());
-                    let cont_ty = Type::new(
-                        self.db(),
-                        TypeKind::Continuation {
-                            arg: arg_ty,
-                            result: result_ty,
-                            effect: cont_effect,
-                        },
-                    );
-                    ctx.bind_local(k_local_id, cont_ty);
-                    ctx.bind_local_by_name(k_name, cont_ty);
-                }
-
-                HandlerKind::Effect {
-                    ability: self.convert_ref_with_ctx(ctx, ability),
-                    op,
-                    params: params
-                        .into_iter()
-                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                        .collect(),
-                    continuation,
-                    continuation_local_id,
-                }
-            }
+            } => HandlerKind::Fn {
+                ability: self.convert_ref_with_ctx(ctx, ability),
+                op,
+                params: params
+                    .into_iter()
+                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                    .collect(),
+            },
+            HandlerKind::Op {
+                ability,
+                op,
+                params,
+                resume_local_id,
+            } => HandlerKind::Op {
+                ability: self.convert_ref_with_ctx(ctx, ability),
+                op,
+                params: params
+                    .into_iter()
+                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                    .collect(),
+                resume_local_id,
+            },
         };
         HandlerArm {
             id: arm.id,
