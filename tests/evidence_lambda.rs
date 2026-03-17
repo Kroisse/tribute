@@ -117,7 +117,7 @@ fn main() { }
 
         // main and apply are pure, lifted lambda should also be pure
         assert!(
-            !effectful.iter().any(|n| n.contains("lambda")),
+            !effectful.iter().any(|n| n.contains("clam")),
             "Pure lambda should not be effectful. Effectful functions: {:?}",
             effectful
         );
@@ -160,7 +160,7 @@ fn main() { }
         // Find the lifted lambda function
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         assert!(
@@ -228,7 +228,7 @@ fn main() { }
         // The lambda calling counter() should also be effectful
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         let effectful_lambdas: Vec<_> = lambda_functions
@@ -349,7 +349,7 @@ fn main() { }
         // The run lambda `fn() { counter(); counter(); counter() }` should be effectful
         let lambda_functions: Vec<_> = functions
             .iter()
-            .filter(|(name, _)| name.contains("lambda"))
+            .filter(|(name, _)| name.contains("clam"))
             .collect();
 
         eprintln!("\n=== Lambda functions ===");
@@ -435,7 +435,7 @@ fn main() { }
         let mut checked = 0;
         for name in effectful_before.iter() {
             let name_str = name.to_string();
-            if name_str.contains("lambda") {
+            if name_str.contains("clam") {
                 let before_count = before_counts
                     .iter()
                     .find(|(n, _)| n == &name_str)
