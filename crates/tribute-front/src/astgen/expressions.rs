@@ -756,9 +756,19 @@ fn lower_handler_operation_path(
         Some((ability, op_symbol))
     } else {
         // Qualified path: State::get -> ability=State, op=get
-        let ability_name = op_symbol.parent_path().unwrap();
+        // For module-qualified paths like std::io::State::get,
+        // parent = "std::io::State", which splits into module_path=["std","io"], name="State"
+        let parent = op_symbol.parent_path().unwrap();
         let ability_id = ctx.fresh_id_with_span(&op_node);
-        let ability = UnresolvedName::simple(ability_name, ability_id);
+        let ability = if parent.is_simple() {
+            UnresolvedName::simple(parent, ability_id)
+        } else {
+            let ability_name = parent.last_segment();
+            let module_path = parent.parent_path().unwrap();
+            let segments: SymbolVec =
+                module_path.with_str(|s| s.split("::").map(Symbol::from_dynamic).collect());
+            UnresolvedName::qualified(segments, ability_name, ability_id)
+        };
         let op = op_symbol.last_segment();
         Some((ability, op))
     }

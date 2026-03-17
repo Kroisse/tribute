@@ -1095,6 +1095,63 @@ fn main() {
     assert_native_output("handler_early_return.trb", code, "99");
 }
 
+/// Test handler with `op -> Never` (abort pattern).
+///
+/// When an operation is declared as `op fail() -> Never`, the handler cannot
+/// call `resume` and no continuation is captured — this exercises the
+/// non-resuming type-checking and lowering path.
+#[test]
+fn test_handler_op_never_abort() {
+    let code = r#"ability FailNever {
+    op fail() -> Never
+}
+
+fn might_fail() ->{FailNever} Nat {
+    FailNever::fail()
+}
+
+fn main() {
+    let result = handle might_fail() {
+        do(result) { result }
+        op FailNever::fail() { 99 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_op_never_abort.trb", code, "99");
+}
+
+/// Test handling an ability declared inside a module.
+///
+/// The handler arm uses a module-qualified path (MyMod::Counter::inc)
+/// to reference the operation. Currently module-qualified ability paths
+/// are not yet supported in name resolution (#530).
+#[test]
+#[ignore = "module-qualified ability paths not yet supported in name resolution"]
+fn test_handler_ability_in_module() {
+    let code = r#"mod MyMod {
+    pub ability Counter {
+        op inc() -> Nat
+    }
+}
+
+fn count() ->{MyMod::Counter} Nat {
+    let a = MyMod::Counter::inc()
+    let b = MyMod::Counter::inc()
+    a + b
+}
+
+fn main() {
+    let result = handle count() {
+        do(result) { result }
+        op MyMod::Counter::inc() { resume(1) }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_ability_in_module.trb", code, "2");
+}
+
 // =============================================================================
 // Handler Result Transformation Tests
 // =============================================================================
