@@ -352,7 +352,7 @@ impl<'db> TypeChecker<'db> {
                 // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
                 // row `{e, State(s)}` so it matches the expected `comp` parameter type.
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
-                    body_effect: body_effect_after,
+                    _body_effect: body_effect_after,
                 });
 
                 // The unhandled effects from the handle body should be consistent
@@ -1586,7 +1586,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
-        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+        _handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Do { binding } => HandlerKind::Do {
