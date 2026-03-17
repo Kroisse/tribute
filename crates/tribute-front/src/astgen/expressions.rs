@@ -790,6 +790,11 @@ fn lower_resume_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
         }
     }
 
+    if args.len() > 1 {
+        // resume takes exactly one argument
+        return ExprKind::Error;
+    }
+
     let arg = args.into_iter().next().unwrap_or_else(|| {
         let id = ctx.fresh_id_with_span(&node);
         Expr {

@@ -457,8 +457,9 @@ Ability operation은 두 종류로 선언한다:
 
 - **`fn`**: Tail-resumptive. Handler에서 반환값이 자동으로 resume 값이 된다.
   Continuation을 캡처하지 않는다.
-- **`op`**: General. Handler에서 continuation `k`를 바인딩하여 명시적으로
-  resume한다. `-> Never`를 반환하면 절대 resume하지 않는 abort 패턴을 표현한다.
+- **`op`**: General. Handler에서 `resume` 키워드를 사용하여 명시적으로
+  continuation을 호출한다. `-> Never`를 반환하면 절대 resume하지 않는
+  abort 패턴을 표현한다.
 
 **예시:**
 
