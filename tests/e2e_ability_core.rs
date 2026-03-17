@@ -9,7 +9,7 @@
 //! - Ability definitions with type parameters (`ability State(s) { ... }`)
 //! - Effect annotations in function signatures (`->{State(Nat)}`)
 //! - Handler expressions (`handle ... { ... }`)
-//! - Handler arms (`do(result) { ... }`, `op State::get() { resume(...) }`)
+//! - Handler arms (`do result { ... }`, `op State::get() { resume ... }`)
 //!
 //! ## Test Strategy
 //!
@@ -142,7 +142,7 @@ fn get_state() ->{State(Int)} Int {
 
 fn run() -> Int {
     handle get_state() {
-        do(result) { result }
+        do result { result }
         op State::get() { 42 }
         op State::set(v) { 0 }
     }
@@ -191,9 +191,9 @@ fn counter() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -503,9 +503,9 @@ fn get_state() ->{State(Int)} Int {
 
 fn main() {
     let _ = handle get_state() {
-        do(result) { result }
-        op State::get() { resume(+42) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume +42 }
+        op State::set(v) { resume Nil }
     }
 }
 "#;
@@ -533,9 +533,9 @@ fn set_then_get() ->{State(Int)} Int {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -574,9 +574,9 @@ fn double_increment() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -619,9 +619,9 @@ fn triple_increment() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -652,9 +652,9 @@ fn no_effects() ->{State(Int)} Int {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -698,9 +698,9 @@ fn use_state() ->{State(Nat)} Nat {
 
 fn run() -> Nat {
     handle use_state() {
-        do(result) { result }
-        op State::get() { resume(42) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 42 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -782,9 +782,9 @@ fn wrapper() ->{State(Int)} Int {
 
 fn run() -> Int {
     handle wrapper() {
-        do(result) { result }
-        op State::get() { resume(42) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 42 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -821,9 +821,9 @@ fn use_state_int() ->{State(Int)} Int {
 
 fn run() -> Int {
     handle use_state_int() {
-        do(result) { result }
-        op State::get() { resume(100) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 100 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -888,9 +888,9 @@ fn use_state() ->{State(Nat)} Nat {
 
 fn run() -> Nat {
     handle use_state() {
-        do(result) { result }
-        op State::get() { resume(42) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 42 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -966,16 +966,16 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op Reader::ask() { run_reader(fn() { resume(value) }, value) }
+        do result { result }
+        op Reader::ask() { run_reader(fn() { resume value }, value) }
     }
 }
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1002,9 +1002,9 @@ fn test_same_ability_different_type_params_nested() {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1053,10 +1053,10 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
 
 fn main() {
     let result = handle use_both() {
-        do(result) { result }
-        op State::get() { resume(+0) }
-        op State::set(v) { resume(Nil) }
-        op Reader::ask() { resume(10) }
+        do result { result }
+        op State::get() { resume +0 }
+        op State::set(v) { resume Nil }
+        op Reader::ask() { resume 10 }
     }
     __tribute_print_nat(result)
 }
@@ -1085,7 +1085,7 @@ fn might_fail() ->{Fail} Nat {
 
 fn main() {
     let result = handle might_fail() {
-        do(result) { result }
+        do result { result }
         op Fail::fail() { 99 }
     }
     __tribute_print_nat(result)
@@ -1112,7 +1112,7 @@ fn might_fail() ->{FailNever} Nat {
 
 fn main() {
     let result = handle might_fail() {
-        do(result) { result }
+        do result { result }
         op FailNever::fail() { 99 }
     }
     __tribute_print_nat(result)
@@ -1143,8 +1143,8 @@ fn count() ->{MyMod::Counter} Nat {
 
 fn main() {
     let result = handle count() {
-        do(result) { result }
-        op MyMod::Counter::inc() { resume(1) }
+        do result { result }
+        op MyMod::Counter::inc() { resume 1 }
     }
     __tribute_print_nat(result)
 }
@@ -1172,8 +1172,8 @@ fn pure_value() ->{Ask} Nat {
 
 fn main() {
     let result = handle pure_value() {
-        do(result) { result }
-        op Ask::ask() { resume(0) }
+        do result { result }
+        op Ask::ask() { resume 0 }
     }
     __tribute_print_nat(result)
 }
@@ -1194,8 +1194,8 @@ fn pure_value() ->{Ask} Nat {
 
 fn main() {
     let result = handle pure_value() {
-        do(result) { 42 }
-        op Ask::ask() { resume(0) }
+        do result { 42 }
+        op Ask::ask() { resume 0 }
     }
     __tribute_print_nat(result)
 }
@@ -1220,9 +1220,9 @@ fn pure_value() ->{State(Nat)} Nat {
 
 fn main() {
     let result = handle pure_value() {
-        do(result) { result + result }
-        op State::get() { resume(0) }
-        op State::set(v) { resume(Nil) }
+        do result { result + result }
+        op State::get() { resume 0 }
+        op State::set(v) { resume Nil }
     }
     __tribute_print_nat(result)
 }
@@ -1253,9 +1253,9 @@ fn counter() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1285,9 +1285,9 @@ fn counter() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1332,23 +1332,23 @@ fn use_all() ->{State(Nat), Reader(Nat), Writer(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
 fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op Reader::ask() { run_reader(fn() { resume(value) }, value) }
+        do result { result }
+        op Reader::ask() { run_reader(fn() { resume value }, value) }
     }
 }
 
 fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op Writer::tell(v) { run_writer(fn() { resume(Nil) }) }
+        do result { result }
+        op Writer::tell(v) { run_writer(fn() { resume Nil }) }
     }
 }
 
@@ -1387,9 +1387,9 @@ fn mutate() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -1421,9 +1421,9 @@ fn compute() ->{State(Nat)} Nat {
 
 fn main() {
     let result = handle compute() {
-        do(result) { result + 1 }
-        op State::get() { resume(5) }
-        op State::set(v) { resume(Nil) }
+        do result { result + 1 }
+        op State::get() { resume 5 }
+        op State::set(v) { resume Nil }
     }
     __tribute_print_nat(result)
 }
@@ -1454,9 +1454,9 @@ fn apply(f: fn() ->{State(Nat)} Nat) ->{State(Nat)} Nat {
 
 fn run() -> Nat {
     handle apply(fn() { State::get() }) {
-        do(result) { result }
-        op State::get() { resume(42) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 42 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -1495,9 +1495,9 @@ fn compute() ->{State(Nat)} Nat {
 
 fn main() {
     let result = handle compute() {
-        do(result) { result }
-        op State::get() { resume(5) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 5 }
+        op State::set(v) { resume Nil }
     }
     __tribute_print_nat(result)
 }
@@ -1525,9 +1525,9 @@ fn compute() ->{State(Nat)} Nat {
 
 fn main() {
     let result = handle compute() {
-        do(result) { result }
-        op State::get() { resume(7) }
-        op State::set(v) { resume(Nil) }
+        do result { result }
+        op State::get() { resume 7 }
+        op State::set(v) { resume Nil }
     }
     __tribute_print_nat(result)
 }

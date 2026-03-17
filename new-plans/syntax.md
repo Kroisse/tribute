@@ -491,7 +491,7 @@ HandleExpr ::= 'handle' Expression '{' HandlerArm+ '}'
 
 HandlerArm ::= CompletionArm | FnHandlerArm | OpHandlerArm
 
-CompletionArm  ::= 'do' '(' Identifier ')' Block                // do(result) { body }
+CompletionArm  ::= 'do' Identifier Block                        // do result { body }
 FnHandlerArm   ::= 'fn' Path '(' PatternList? ')' Block        // fn Op(args) { body }
 OpHandlerArm   ::= 'op' Path '(' PatternList? ')' Block        // op Op(args) { body }
 ```
@@ -503,7 +503,7 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
-| `do(value) { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
+| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
 | `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
 | `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume |
 
@@ -512,8 +512,8 @@ operation을 정의하듯, handler에서도 같은 키워드로 각 operation의
 Body의 반환값이 곧 resume 값. `resume` 사용 불가:
 
 ```rust
-fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume(Nil)
-fn Console::read() { IO::read(stdin) }              // Text 반환 → resume(input)
+fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume Nil
+fn Console::read() { IO::read(stdin) }              // Text 반환 → resume input
 ```
 
 **`op` handler arm과 `resume`:**
@@ -523,8 +523,8 @@ fn Console::read() { IO::read(stdin) }              // Text 반환 → resume(in
 호출하지 않으면 continuation은 암묵적으로 drop된다:
 
 ```rust
-op State::get() { resume(current_state) }
-op State::set(v) { resume(Nil) }
+op State::get() { resume current_state }
+op State::set(v) { resume Nil }
 ```
 
 항상 resume하지 않는 operation은 `-> Never`로 선언하면
@@ -543,15 +543,15 @@ op Fail::fail(msg) { None }
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() resume(state), state) }
-        op State::set(v) { run_state(fn() resume(Nil), v) }
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
+        op State::set(v) { run_state(fn() resume Nil, v) }
     }
 }
 
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        do(result) { result }
+        do result { result }
         fn Console::print(msg) { IO::write(stdout, msg) }
         fn Console::read() { IO::read(stdin) }
     }
@@ -559,7 +559,7 @@ fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        do(result) { Some(result) }
+        do result { Some(result) }
         op Fail::fail(msg) { None }
     }
 }
@@ -643,7 +643,7 @@ ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
              | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
-ResumeExpr ::= 'resume' '(' Expression? ')'   // op handler body 전용 (affine)
+ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine, 생략 시 Nil)
 ```
 
 ### Block Expression
@@ -1043,7 +1043,7 @@ fn process(users: List(User)) ->{Logger} List(Text) {
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
-        do(result) { result }
+        do result { result }
         fn Logger::log(msg) { Console::print("[LOG] " <> msg) }
     }
 }
@@ -1110,7 +1110,7 @@ fn main() ->{Console} Nil {
 | `a <> b`                | Concatenation          |
 | `a T::<> b`             | Qualified operator     |
 | `(+)`, `(T::<>)`        | Operator as function   |
-| `resume(expr)`          | Continuation 재개      |
+| `resume expr`           | Continuation 재개      |
 
 ### Patterns
 
@@ -1131,6 +1131,6 @@ fn main() ->{Console} Nil {
 
 | arm                       | 의미                                    |
 | ------------------------- | --------------------------------------- |
-| `do(result) { expr }`     | Completion (생략 시 identity)           |
+| `do result { expr }`      | Completion (생략 시 identity)           |
 | `fn Op(x) { body }`       | `fn` operation (tail-resumptive)        |
 | `op Op(x) { body }`       | `op` operation (explicit `resume`)      |

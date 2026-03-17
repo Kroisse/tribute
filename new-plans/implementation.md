@@ -54,8 +54,8 @@ Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() resume(state), state) }
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
     }
 }
 ```
@@ -279,8 +279,8 @@ Console, Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언�
 
 ```rust
 // 원본: 재귀적 handler 재설치
-op State::get() { run_state(fn() resume(state), state) }
-op State::set(v) { run_state(fn() resume(Nil), v) }
+op State::get() { run_state(fn() resume state, state) }
+op State::set(v) { run_state(fn() resume Nil, v) }
 
 // 컴파일러 변환 (개념적): 루프 + mutable state
 fn run_state_optimized(comp, init_state) {
@@ -348,10 +348,10 @@ fn nested_state_example() -> Int {
             State::get()                 // ability_id = STATE_ID
             // → evidence에서 STATE_ID로 조회하면 가장 안쪽(P2)의 marker 반환
         } {
-            op State::get() { resume(10) }
+            op State::get() { resume 10 }
         }
     } {
-        op State::get() { resume(20) }
+        op State::get() { resume 20 }
     }
 }
 ```
@@ -387,7 +387,7 @@ shift(tag, fn(k) handler_body)
 호출하지 않으면 continuation은 암묵적으로 drop된다:
 
 ```rust
-op State::get() { resume(current_state) }   // 1회: 정상 resume
+op State::get() { resume current_state }    // 1회: 정상 resume
 op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 ```
 

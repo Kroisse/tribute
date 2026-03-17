@@ -127,7 +127,7 @@ where
         handlers: Vec<HandlerArm<V>>,
     },
 
-    /// Resume expression: `resume(value)` — only valid inside `op` handler arms.
+    /// Resume expression: `resume value` — only valid inside `op` handler arms.
     Resume {
         arg: Expr<V>,
         /// LocalId for the continuation binding, assigned during name resolution.
@@ -206,7 +206,7 @@ pub enum HandlerKind<V>
 where
     V: salsa::Update,
 {
-    /// Completion handler: `do(result) { body }`
+    /// Completion handler: `do result { body }`
     Do { binding: Pattern<V> },
 
     /// Tail-resumptive handler: `fn Op(args) { body }`

@@ -11,9 +11,9 @@ fn counter() ->{State(Nat)} Nat {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() { resume(init) }, init) }
-        op State::set(v) { run_state(fn() { resume(Nil) }, v) }
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 

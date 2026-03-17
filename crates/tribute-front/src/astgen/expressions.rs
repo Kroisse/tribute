@@ -678,7 +678,7 @@ fn lower_handler_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<
     None
 }
 
-/// Lower `do(result) { body }` handler arm.
+/// Lower `do result { body }` handler arm.
 fn lower_completion_handler(
     ctx: &mut AstLoweringCtx,
     node: Node,
@@ -789,29 +789,18 @@ fn lower_handler_params(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<Unr
     patterns
 }
 
-/// Lower `resume(value)` expression.
+/// Lower `resume expr` expression.
 fn lower_resume_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
-    // resume_expression children: keyword_resume, optional argument_list
-    let mut args = Vec::new();
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        if child.kind() == "argument_list" {
-            args = lower_argument_list(ctx, child);
+    let arg = match node.child_by_field_name("value") {
+        Some(value_node) => lower_expr(ctx, value_node),
+        None => {
+            let id = ctx.fresh_id_with_span(&node);
+            Expr {
+                id,
+                kind: Box::new(ExprKind::Nil),
+            }
         }
-    }
-
-    if args.len() > 1 {
-        // resume takes exactly one argument
-        return ExprKind::Error;
-    }
-
-    let arg = args.into_iter().next().unwrap_or_else(|| {
-        let id = ctx.fresh_id_with_span(&node);
-        Expr {
-            id,
-            kind: Box::new(ExprKind::Nil),
-        }
-    });
+    };
 
     ExprKind::Resume {
         arg,

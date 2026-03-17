@@ -221,22 +221,22 @@ operation을 정의하듯, handler에서도 `fn`/`op` 키워드로 각 operation
 
 ```rust
 handle computation() {
-    do(result) { result }
+    do result { result }
     fn Console::print(msg) { IO::write(stdout, msg) }
-    op State::get() { run_state(fn() resume(state), state) }
+    op State::get() { run_state(fn() resume state, state) }
 }
 ```
 
 computation의 실행 결과는 두 가지 중 하나:
 
-- **완료**: computation이 값을 반환함 → `do(value) { expr }` 매칭
+- **완료**: computation이 값을 반환함 → `do value { expr }` 매칭
 - **Suspend**: ability operation에서 멈춤 → `fn`/`op` handler arm 매칭
 
 ### Handler Arm 종류
 
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
-| `do(value) { expr }` | completion | Computation 완료, 결과값 바인딩 |
+| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
 | `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
 | `op Op(args) { body }` | `op` operation | body에서 `resume`으로 명시적 resume |
 
@@ -257,9 +257,9 @@ ability Console {
 // handler (구현)
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        do(result) { result }
-        fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume(Nil)
-        fn Console::read() { IO::read(stdin) }              // Text 반환 → resume(input)
+        do result { result }
+        fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume Nil
+        fn Console::read() { IO::read(stdin) }              // Text 반환 → resume input
     }
 }
 ```
@@ -272,8 +272,8 @@ fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
 `resume`은 일반 함수처럼 호출한다:
 
 ```rust
-op State::get() { resume(current_state) }    // resume with value
-op State::set(v) { resume(Nil) }             // resume with unit
+op State::get() { resume current_state }     // resume with value
+op State::set(v) { resume Nil }              // resume with unit
 ```
 
 #### `resume`의 사용 규칙
@@ -283,7 +283,7 @@ op State::set(v) { resume(Nil) }             // resume with unit
 
 ```rust
 // 1회 호출: 정상 resume
-op State::get() { resume(state) }
+op State::get() { resume state }
 
 // 0회 호출: continuation 암묵적 drop (abort)
 op SomeOp::cancel() { fallback_value }
@@ -297,9 +297,9 @@ op SomeOp::cancel() { fallback_value }
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() resume(state), state) }
-        op State::set(v) { run_state(fn() resume(Nil), v) }
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
+        op State::set(v) { run_state(fn() resume Nil, v) }
     }
 }
 ```
@@ -316,7 +316,7 @@ ability Fail {
 
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        do(result) { Some(result) }
+        do result { Some(result) }
         op Fail::fail(msg) { None }   // resume 없음, drop 불필요
     }
 }
@@ -329,7 +329,7 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ```rust
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        do(result) { result }
+        do result { result }
         fn Console::print(msg) { IO::write(stdout, msg) }
         fn Console::read() { IO::read(stdin) }
     }
@@ -357,15 +357,15 @@ fn counter() ->{Console, State(Int)} Nil {
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do(result) { result }
-        op State::get() { run_state(fn() resume(state), state) }
-        op State::set(v) { run_state(fn() resume(Nil), v) }
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
+        op State::set(v) { run_state(fn() resume Nil, v) }
     }
 }
 
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        do(result) { result }
+        do result { result }
         fn Console::print(msg) { IO::write(stdout, msg) }
         fn Console::read() { IO::read(stdin) }
     }
@@ -404,6 +404,6 @@ fn main() ->{IO} Nil {
 | `{ ... }` | block expression |
 | `fn(x) expr` | 람다 |
 | `handle expr { ... }` | effect handling |
-| `do(value) { expr }` | completion arm (handle 내) |
+| `do value { expr }` | completion arm (handle 내) |
 | `fn Op(args) { body }` | `fn` operation handler (handle 내) |
 | `op Op(args) { body }` | `op` operation handler (handle 내) |
