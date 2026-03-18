@@ -4,6 +4,7 @@
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::closure as arena_closure;
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
@@ -131,25 +132,24 @@ impl<'db> IrLoweringCtx<'db> {
         Location::new(self.path, span)
     }
 
-    /// Enter a new scope.
+    /// Enter a new scope, returning a guard that exits on drop.
+    ///
+    /// The guard dereferences to `IrLoweringCtx`, so callers can use it
+    /// in place of `self`/`ctx`. The scope is automatically exited when
+    /// the guard is dropped, even on early returns or `?`.
+    pub fn scope(&mut self) -> ScopeGuard<'_, 'db> {
+        self.scopes.push(HashMap::new());
+        ScopeGuard { ctx: self }
+    }
+
+    /// Enter a new scope (non-guard version — prefer `scope()` instead).
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
-    /// Exit the current scope.
+    /// Exit the current scope (non-guard version — prefer `scope()` instead).
     pub fn exit_scope(&mut self) {
         self.scopes.pop();
-    }
-
-    /// Execute a closure with a new scope, automatically entering and exiting.
-    pub fn scoped<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.enter_scope();
-        let result = f(self);
-        self.exit_scope();
-        result
     }
 
     /// Bind a local variable to an SSA value.
@@ -605,6 +605,33 @@ impl<'db> IrLoweringCtx<'db> {
         } else {
             0
         }
+    }
+}
+
+/// RAII guard that exits a scope on drop.
+///
+/// Created by [`IrLoweringCtx::scope()`]. Dereferences to `IrLoweringCtx`
+/// so it can be used as a drop-in replacement for `&mut ctx`.
+pub struct ScopeGuard<'a, 'db> {
+    ctx: &'a mut IrLoweringCtx<'db>,
+}
+
+impl<'db> Deref for ScopeGuard<'_, 'db> {
+    type Target = IrLoweringCtx<'db>;
+    fn deref(&self) -> &Self::Target {
+        self.ctx
+    }
+}
+
+impl<'db> DerefMut for ScopeGuard<'_, 'db> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ctx
+    }
+}
+
+impl Drop for ScopeGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.ctx.exit_scope();
     }
 }
 

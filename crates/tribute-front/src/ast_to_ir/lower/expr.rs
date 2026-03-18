@@ -759,7 +759,9 @@ fn lower_block_cps<'db>(
     stmts: Vec<Stmt<TypedRef<'db>>>,
     value: Expr<TypedRef<'db>>,
 ) -> Option<(ValueRef, bool)> {
-    builder.ctx.enter_scope();
+    let mut scope = builder.ctx.scope();
+    // Reborrow builder fields through the scope guard.
+    let builder = &mut IrBuilder::new(&mut scope, builder.ir, builder.block);
 
     let mut stmts_iter = stmts.into_iter().peekable();
 
@@ -767,12 +769,7 @@ fn lower_block_cps<'db>(
         if is_direct_ability_op_stmt(stmt) {
             let stmt = stmts_iter.next().unwrap();
             let remaining: Vec<_> = stmts_iter.collect();
-            let Some(result) = lower_cps_ability_op(builder, stmt, remaining, value) else {
-                builder.ctx.exit_scope();
-                return None;
-            };
-            builder.ctx.exit_scope();
-            return Some((result, true));
+            return lower_cps_ability_op(builder, stmt, remaining, value).map(|r| (r, true));
         }
 
         let stmt = stmts_iter.next().unwrap();
@@ -781,16 +778,10 @@ fn lower_block_cps<'db>(
 
     // Check if the value expression is a direct ability op call
     if let Some(result) = try_lower_value_ability_op(builder, &value) {
-        builder.ctx.exit_scope();
         return Some((result, true));
     }
 
-    let Some(result) = lower_expr(builder, value) else {
-        builder.ctx.exit_scope();
-        return None;
-    };
-    builder.ctx.exit_scope();
-    Some((result, false))
+    lower_expr(builder, value).map(|r| (r, false))
 }
 
 /// Try to CPS-transform a value expression that is a direct ability op call.
