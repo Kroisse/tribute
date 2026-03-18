@@ -34,7 +34,7 @@ core.module @test {
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1000}}) {
-          %1 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
+          %1 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
               %2 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
                 ^bb3(%3: tribute_rt.anyref):
                   func.return %3

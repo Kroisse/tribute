@@ -549,11 +549,17 @@ pub(super) fn lower_expr<'db>(
                     } else {
                         Some(*effect)
                     };
-                    // In the CPS effect handling path, the function's declared
-                    // return type is preserved. `lower_ability_perform` inserts
-                    // an `unrealized_conversion_cast` from anyref to the return
-                    // type, so callers see the expected type.
-                    let rir = builder.ctx.convert_type(builder.ir, *result);
+                    // Effectful lambdas with concrete abilities use anyref as
+                    // their return type. This ensures the CPS handler chain
+                    // (which passes boxed values) has consistent types.
+                    // Call sites using these closures via func.call_indirect
+                    // will get anyref and must cast to the expected type.
+                    let has_concrete_abilities = !effect.effects(db).is_empty();
+                    let rir = if has_concrete_abilities {
+                        builder.ctx.anyref_type(builder.ir)
+                    } else {
+                        builder.ctx.convert_type(builder.ir, *result)
+                    };
                     (eff, pir, rir)
                 }
                 _ => {

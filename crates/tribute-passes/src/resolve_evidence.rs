@@ -481,6 +481,12 @@ fn transform_handler_roots(
 
         polymorphic_roots.insert(func_name);
 
+        // Skip if evidence param was already added by add_evidence_params.
+        if crate::evidence::has_evidence_first_param(ctx, func_ty) {
+            fns_with_evidence.insert(func_name);
+            continue;
+        }
+
         // Add evidence param to function signature
         let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
         let new_func_ty = crate::evidence::build_func_type_with_evidence(ctx, func_ty, evidence_ty);

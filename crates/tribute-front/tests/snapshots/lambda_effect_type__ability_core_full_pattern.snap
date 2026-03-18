@@ -53,15 +53,16 @@ core.module @test {
       func.return %17
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3}}) {
+      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3}}) {
           %1 = func.call {callee = @counter} : core.i32
           %2 = func.call {callee = @counter} : core.i32
           %3 = func.call {callee = @counter} : core.i32
-          func.return %3
+          %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+          func.return %4
       }
-      %4 = arith.const {value = 0} : core.i32
-      %5 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %6 = func.call %0, %5 {callee = @run_state} : tribute_rt.anyref
-      func.return %6
+      %5 = arith.const {value = 0} : core.i32
+      %6 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
+      %7 = func.call %0, %6 {callee = @run_state} : tribute_rt.anyref
+      func.return %7
   }
 }

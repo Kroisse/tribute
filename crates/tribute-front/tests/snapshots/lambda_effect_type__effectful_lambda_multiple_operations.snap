@@ -31,7 +31,7 @@ core.module @test {
       func.return %15
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
+      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
           %1 = closure.lambda : !t0 {
             ^bb2(%2: tribute_rt.anyref):
               %3 = core.unrealized_conversion_cast %2 : core.i32
