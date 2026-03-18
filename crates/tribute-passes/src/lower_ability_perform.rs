@@ -63,12 +63,9 @@ pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
 /// Find the evidence parameter in a block's arguments.
 fn find_evidence_arg(ctx: &IrContext, block: BlockRef) -> Option<ValueRef> {
     let args = ctx.block_args(block);
-    for &arg in args {
-        if arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(arg)) {
-            return Some(arg);
-        }
-    }
-    None
+    args.iter()
+        .find(|&&arg| arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(arg)))
+        .copied()
 }
 
 /// Lower all `ability.perform` ops in the given blocks.
