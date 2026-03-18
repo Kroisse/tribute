@@ -40,6 +40,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncCallIndirectPattern)
         .add_pattern(FuncReturnPattern)
         .add_pattern(FuncTailCallPattern)
+        .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
         .add_pattern(FuncConstantPattern);
     applicator.apply_partial(ctx, module);
@@ -298,6 +299,46 @@ impl RewritePattern for FuncTailCallPattern {
         ctx.op_mut(new_op)
             .attributes
             .insert(Symbol::new("callee"), Attribute::Symbol(callee));
+        rewriter.replace_op(new_op);
+        true
+    }
+}
+
+/// Pattern: `func.tail_call_indirect` -> `clif.return_call_indirect`
+struct FuncTailCallIndirectPattern;
+
+impl RewritePattern for FuncTailCallIndirectPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if arena_func::TailCallIndirect::from_op(ctx, op).is_err() {
+            return false;
+        }
+
+        let operands = ctx.op_operands(op).to_vec();
+        if operands.is_empty() {
+            return false;
+        }
+
+        // Collect arg types (skip operand 0 = callee).
+        let param_types: Vec<TypeRef> = operands[1..].iter().map(|&v| ctx.value_ty(v)).collect();
+
+        // Tail calls have no result — use nil return type.
+        let ret_ty = arena_core::nil(ctx).as_type_ref();
+        let sig_ty = arena_core::func(ctx, ret_ty, param_types.iter().copied(), None).as_type_ref();
+
+        let new_op = crate::passes::cf_to_clif::rebuild_op_as(
+            ctx,
+            op,
+            Symbol::new("clif"),
+            Symbol::new("return_call_indirect"),
+        );
+        ctx.op_mut(new_op)
+            .attributes
+            .insert(Symbol::new("sig"), Attribute::Type(sig_ty));
         rewriter.replace_op(new_op);
         true
     }
