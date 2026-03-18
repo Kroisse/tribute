@@ -56,7 +56,7 @@ pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
         let entry = blocks[0];
         let evidence_val = find_evidence_arg(ctx, entry);
 
-        lower_performs_in_blocks(ctx, &blocks, evidence_val, &types);
+        lower_performs_in_blocks(ctx, &blocks, evidence_val, &types, true);
     }
 }
 
@@ -72,25 +72,44 @@ fn find_evidence_arg(ctx: &IrContext, block: BlockRef) -> Option<ValueRef> {
 }
 
 /// Lower all `ability.perform` ops in the given blocks.
+///
+/// Only performs in tail position of a function body are lowered (the CPS
+/// transform is expected to have placed them there). Performs found inside
+/// nested scf/handler regions are skipped — they should not exist after CPS
+/// conversion and indicate a pipeline bug if encountered.
 fn lower_performs_in_blocks(
     ctx: &mut IrContext,
     blocks: &[BlockRef],
     evidence_val: Option<ValueRef>,
     types: &YieldBubblingTypes,
+    in_function_body: bool,
 ) {
     for &block in blocks {
         // Collect perform ops in this block (snapshot, since we'll mutate).
         let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
+        for (i, op) in ops.iter().enumerate() {
+            let op = *op;
             if arena_ability::Perform::matches(ctx, op) {
+                let is_last_op = i == ops.len() - 1;
+                assert!(
+                    in_function_body && is_last_op,
+                    "ability.perform must be in tail position of a function body; \
+                     found in {} position of a {} region",
+                    if is_last_op { "tail" } else { "non-tail" },
+                    if in_function_body {
+                        "function"
+                    } else {
+                        "non-function"
+                    },
+                );
                 lower_single_perform(ctx, block, op, evidence_val, types);
             }
 
-            // Recurse into nested regions.
+            // Recurse into nested regions (these are NOT function bodies).
             let regions: Vec<_> = ctx.op(op).regions.to_vec();
             for region in regions {
                 let inner_blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-                lower_performs_in_blocks(ctx, &inner_blocks, evidence_val, types);
+                lower_performs_in_blocks(ctx, &inner_blocks, evidence_val, types, false);
             }
         }
     }
@@ -121,17 +140,18 @@ fn lower_single_perform(
     let mut new_ops: Vec<OpRef> = Vec::new();
 
     // === 1. Evidence lookup → marker ===
-    let marker_ty = arena_ability::marker_adt_type_ref(ctx);
-    let marker_val = if let Some(ev) = evidence_val {
-        let lookup = arena_ability::evidence_lookup(ctx, location, ev, marker_ty, ability_ref_type);
-        new_ops.push(lookup.op_ref());
-        lookup.result(ctx)
-    } else {
-        // No evidence available — create null marker.
-        let null_op = adt::ref_null(ctx, location, marker_ty, marker_ty);
-        new_ops.push(null_op.op_ref());
-        null_op.result(ctx)
+    let Some(ev) = evidence_val else {
+        // No evidence parameter in the enclosing function — this is a bug.
+        // Every function containing ability.perform must receive evidence.
+        panic!(
+            "ability.perform requires evidence parameter but enclosing function has none (at {:?})",
+            location
+        );
     };
+    let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+    let lookup = arena_ability::evidence_lookup(ctx, location, ev, marker_ty, ability_ref_type);
+    new_ops.push(lookup.op_ref());
+    let marker_val = lookup.result(ctx);
 
     // === 2. Extract prompt tag from marker (field index 1) ===
     let prompt_get = adt::struct_get(ctx, location, marker_val, t.i32, marker_ty, 1);
@@ -150,6 +170,13 @@ fn lower_single_perform(
     new_ops.push(op_idx_const.op_ref());
 
     // === 4. Build shift value (pack args or null) ===
+    // Currently ability operations support at most one payload value.
+    // Assert so we catch any future multi-operand cases rather than silently dropping them.
+    assert!(
+        value_operands.len() <= 1,
+        "ability.perform with multiple payload operands is not yet supported (got {})",
+        value_operands.len()
+    );
     let shift_value_val = if let Some(&sv) = value_operands.first() {
         let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
         new_ops.push(cast.op_ref());

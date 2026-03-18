@@ -127,7 +127,8 @@ fn lower_single_lambda(
 
     // Determine function return type and effect from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let func_result_ty = extract_return_type_from_closure(ctx, result_ty).unwrap_or(anyref_ty);
+    let func_result_ty = extract_return_type_from_closure(ctx, result_ty)
+        .expect("closure.lambda result type must be closure.closure<core.func<...>>");
     let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
