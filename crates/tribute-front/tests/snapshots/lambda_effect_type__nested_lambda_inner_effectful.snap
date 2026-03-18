@@ -3,26 +3,46 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+
   func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
     ^bb0:
-      %1 = cont.push_prompt {tag = 0} : tribute_rt.anyref {
+      %1 = closure.lambda %0 : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref() {name = @State}) {tail_var_id = 0}}) {
           %2 = func.call_indirect %0 : core.i32
-          scf.yield %2
-      } {
+          %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
+          func.return %3
       }
-      %3 = cont.handler_dispatch %1 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %4 = func.call_indirect %1 : tribute_rt.anyref
+      %5 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)) {
+        ^bb2(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref):
+          %9 = arith.const {value = 1} : core.i1
+          %10 = scf.if %9 : tribute_rt.anyref {
+              %11 = arith.const {value = 99} : core.i32
+              %12 = core.unrealized_conversion_cast %6 : !t0
+              %13 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
+              %14 = func.call_indirect %12, %13 : tribute_rt.anyref
+              scf.yield %14
+          } {
+              func.unreachable
+          }
+          func.return %10
+      }
+      %15 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           cont.done {
-            ^bb3(%4: tribute_rt.anyref):
-              scf.yield %4
+            ^bb6(%16: tribute_rt.anyref):
+              scf.yield %16
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+            ^bb7(%17: tribute_rt.anyref, %18: tribute_rt.anyref):
+              %19 = arith.const {value = 99} : core.i32
+              %20 = core.unrealized_conversion_cast %17 : !t0
+              %21 = core.unrealized_conversion_cast %19 : tribute_rt.anyref
+              %22 = func.call_indirect %20, %21 : tribute_rt.anyref
+              scf.yield %22
           }
       }
-      %5 = core.unrealized_conversion_cast %3 : core.i32
-      %6 = arith.const {value = 4294967295} : cont.prompt_tag
-      %7 = cont.shift %6 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : core.i32 {
-      }
-      %8 = arith.const {value = 99} : core.i32
-      %9 = arith.const {value = unit} : core.nil
-      func.return %9
+      %23 = core.unrealized_conversion_cast %15 : core.i32
+      func.return %23
   }
   func.func @apply_thunk(%0: core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1001}}) -> core.i32 {
     ^bb0:
@@ -32,15 +52,16 @@ core.module @test {
   func.func @main() -> core.i32 {
       %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1000}}) {
           %1 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
-              %2 = arith.const {value = 4294967295} : cont.prompt_tag
-              %3 = cont.shift %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref {
+              %2 = closure.lambda : !t0 {
+                ^bb3(%3: tribute_rt.anyref):
+                  func.return %3
               }
-              func.return %3
+              %4 = ability.perform %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           }
-          %4 = func.call %1 {callee = @run_with_state} : core.i32
-          func.return %4
+          %5 = func.call %1 {callee = @run_with_state} : core.i32
+          func.return %5
       }
-      %5 = func.call %0 {callee = @apply_thunk} : core.i32
-      func.return %5
+      %6 = func.call %0 {callee = @apply_thunk} : core.i32
+      func.return %6
   }
 }

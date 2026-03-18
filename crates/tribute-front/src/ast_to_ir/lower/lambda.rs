@@ -22,7 +22,7 @@ use super::super::context::{CaptureInfo, IrLoweringCtx};
 use super::IrBuilder;
 
 /// Collect all local variable references in an expression.
-fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<LocalId>) {
+pub(super) fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<LocalId>) {
     match &*expr.kind {
         ExprKind::Var(typed_ref) => {
             if let ResolvedRef::Local { id, .. } = &typed_ref.resolved {
@@ -96,19 +96,56 @@ fn collect_free_vars<'db>(expr: &Expr<TypedRef<'db>>, free_vars: &mut HashSet<Lo
                 collect_free_vars(&handler.body, free_vars);
             }
         }
-        ExprKind::Resume { arg, local_id } => {
-            collect_free_vars(arg, free_vars);
-            // The continuation value must be captured by lambdas
-            if let Some(id) = local_id {
-                free_vars.insert(*id);
-            }
-        }
         ExprKind::List(elements) => {
             for elem in elements {
                 collect_free_vars(elem, free_vars);
             }
         }
     }
+}
+
+/// Collect all local variable references in a block (statements + value expression).
+pub(super) fn collect_free_vars_in_block<'db>(
+    stmts: &[Stmt<TypedRef<'db>>],
+    value: &Expr<TypedRef<'db>>,
+    free_vars: &mut HashSet<LocalId>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::Let { value: v, .. } => collect_free_vars(v, free_vars),
+            Stmt::Expr { expr, .. } => collect_free_vars(expr, free_vars),
+        }
+    }
+    collect_free_vars(value, free_vars);
+}
+
+/// Analyze captures for a CPS continuation (remaining stmts + value).
+///
+/// Finds all variables from the current scope that are referenced in the
+/// remaining computation. `excluded_ids` contains IDs that should not be
+/// captured (e.g., the continuation parameter).
+pub(super) fn analyze_continuation_captures<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    remaining_stmts: &[Stmt<TypedRef<'db>>],
+    value: &Expr<TypedRef<'db>>,
+    excluded_ids: &HashSet<LocalId>,
+) -> Vec<CaptureInfo> {
+    let mut free_vars = HashSet::new();
+    collect_free_vars_in_block(remaining_stmts, value, &mut free_vars);
+
+    let mut captures = Vec::new();
+    for (local_id, name, value) in ctx.all_bindings() {
+        if free_vars.contains(&local_id) && !excluded_ids.contains(&local_id) {
+            captures.push(CaptureInfo {
+                name,
+                local_id,
+                ty: ir.value_ty(value),
+                value,
+            });
+        }
+    }
+    captures
 }
 
 /// Analyze captures for a lambda expression.
@@ -193,8 +230,34 @@ pub(super) fn lower_lambda<'db>(
     // The closure.lambda body is NOT isolated from above, so parent-scope
     // ValueRefs are valid inside the body region.
 
-    // Lower the lambda body
-    {
+    // Lower the lambda body.
+    // For effectful lambdas, use CPS so that ability ops produce
+    // ability.perform (not cont.shift), consistent with CPS handle dispatch.
+    if effect.is_some() {
+        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
+        match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
+            Some((_result, true)) => {
+                // CPS result: lower_ability_perform will add func.return
+            }
+            Some((result, false)) => {
+                // Pure result in an effectful lambda: just return it.
+                // cont_to_yield_bubbling will handle return wrapping if needed.
+                let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
+                let ret_op = func::r#return(inner_builder.ir, location, [result]);
+                inner_builder
+                    .ir
+                    .push_op(inner_builder.block, ret_op.op_ref());
+            }
+            None => {
+                let nil = inner_builder.emit_nil(location);
+                let ret_op = func::r#return(inner_builder.ir, location, [nil]);
+                inner_builder
+                    .ir
+                    .push_op(inner_builder.block, ret_op.op_ref());
+            }
+        }
+    } else {
+        // Pure lambda: standard lowering
         let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
         if let Some(result) = super::expr::lower_expr(&mut inner_builder, body.clone()) {
             let result = inner_builder.cast_if_needed(location, result, result_ir_ty);

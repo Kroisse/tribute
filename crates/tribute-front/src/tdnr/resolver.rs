@@ -449,11 +449,6 @@ impl<'db> TdnrResolver<'db> {
                     .collect(),
             },
 
-            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.resolve_expr(arg),
-                local_id,
-            },
-
             ExprKind::Tuple(elements) => {
                 ExprKind::Tuple(elements.into_iter().map(|e| self.resolve_expr(e)).collect())
             }
@@ -705,34 +700,24 @@ impl<'db> TdnrResolver<'db> {
     /// Resolve method calls in a handler arm.
     fn resolve_handler_arm(&mut self, arm: HandlerArm<TypedRef<'db>>) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
-            HandlerKind::Do { binding } => HandlerKind::Do {
+            HandlerKind::Result { binding } => HandlerKind::Result {
                 binding: self.resolve_pattern(binding),
             },
-            HandlerKind::Fn {
+            HandlerKind::Effect {
                 ability,
                 op,
                 params,
-            } => HandlerKind::Fn {
+                continuation,
+                continuation_local_id,
+            } => HandlerKind::Effect {
                 ability,
                 op,
                 params: params
                     .into_iter()
                     .map(|p| self.resolve_pattern(p))
                     .collect(),
-            },
-            HandlerKind::Op {
-                ability,
-                op,
-                params,
-                resume_local_id,
-            } => HandlerKind::Op {
-                ability,
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.resolve_pattern(p))
-                    .collect(),
-                resume_local_id,
+                continuation,
+                continuation_local_id,
             },
         };
         HandlerArm {

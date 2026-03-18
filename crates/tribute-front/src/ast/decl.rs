@@ -203,25 +203,12 @@ pub struct AbilityDecl {
 pub struct OpDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
-    /// Whether this is a `fn` (tail-resumptive) or `op` (general) operation.
-    pub kind: OpDeclKind,
     /// Operation name.
     pub name: Symbol,
     /// Operation parameters.
     pub params: Vec<ParamDecl>,
     /// Return type.
     pub return_ty: TypeAnnotation,
-}
-
-/// The kind of ability operation declaration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub enum OpDeclKind {
-    /// Tail-resumptive: handler returns a value that is used to resume.
-    /// No continuation capture.
-    Fn,
-    /// General: handler uses `resume` keyword explicitly.
-    /// Continuation is captured (unless `-> Never`).
-    Op,
 }
 
 /// Import declaration: `use path::to::item` or `use path::to::item as alias`
