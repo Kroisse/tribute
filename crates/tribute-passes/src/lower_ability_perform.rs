@@ -87,6 +87,7 @@ impl RewritePattern for LowerPerformPattern {
         let marker_val = lookup.result(ctx);
 
         // === 2. Extract handler_dispatch from marker (field index 3) ===
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let handler_get = adt::struct_get(ctx, location, marker_val, t.anyref, marker_ty, 3);
         rewriter.insert_op(handler_get.op_ref());
         let handler_dispatch_val = handler_get.result(ctx);
@@ -118,7 +119,6 @@ impl RewritePattern for LowerPerformPattern {
         rewriter.insert_op(cont_anyref.op_ref());
 
         // === 6. Decompose handler_dispatch closure and call ===
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let fn_ptr_get = adt::struct_get(ctx, location, handler_dispatch_val, t.i32, closure_ty, 0);
         rewriter.insert_op(fn_ptr_get.op_ref());
         let fn_ptr = fn_ptr_get.result(ctx);

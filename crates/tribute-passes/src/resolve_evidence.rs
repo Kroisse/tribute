@@ -897,6 +897,8 @@ fn transform_shifts_in_block(
             let tag = dispatch_op.tag(ctx);
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
 
+            let mut current_ev = ev_value;
+
             if !abilities.is_empty() {
                 let i32_ty = i32_type_ref(ctx);
                 let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
@@ -936,7 +938,6 @@ fn transform_shifts_in_block(
                 };
 
                 // Extend evidence for each ability
-                let mut current_ev = ev_value;
                 for &ability_ref in &abilities {
                     let ability_id = compute_ability_id(ctx, ability_ref);
                     let ability_id_const =
@@ -1005,17 +1006,18 @@ fn transform_shifts_in_block(
                         break;
                     }
                 }
-
-                // Transform handler body region with extended evidence
-                let handler_body = dispatch_op.body(ctx);
-                transform_shifts_in_region(
-                    ctx,
-                    handler_body,
-                    current_ev,
-                    fns_with_evidence,
-                    prepend_evidence,
-                );
             }
+
+            // Always transform handler body region, even when abilities is
+            // empty, so that any shifts inside are properly resolved.
+            let handler_body = dispatch_op.body(ctx);
+            transform_shifts_in_region(
+                ctx,
+                handler_body,
+                current_ev,
+                fns_with_evidence,
+                prepend_evidence,
+            );
             continue;
         }
 

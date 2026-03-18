@@ -203,13 +203,12 @@ fn test_multi_arg_ability_op(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
         "test.trb",
         r#"
-ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+ability KV(k, v) {
+    fn put(key: k, value: v) -> Nil
 }
 
-fn update() ->{State(Int)} Nil {
-    State::set(+10)
+fn store() ->{KV(Int, Int)} Nil {
+    KV::put(+1, +2)
 }
 
 fn main() { }
