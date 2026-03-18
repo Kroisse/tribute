@@ -1354,4 +1354,9 @@ mod tests {
         // Same ability name but different type params should produce different IDs
         assert_ne!(id_with_params, id_no_params);
     }
+
+    // Note: CPS-specific evidence resolution (ability.evidence_lookup,
+    // ability.handle_dispatch evidence extension) requires full pipeline
+    // context (add_evidence_params must run first). These paths are covered
+    // by e2e_ability_core integration tests.
 }
