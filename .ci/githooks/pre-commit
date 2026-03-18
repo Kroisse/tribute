@@ -10,7 +10,9 @@ echo "Running pre-commit checks..."
 
 echo "Running tests..."
 # Use nextest for faster test execution
-if ! cargo nextest run --workspace; then
+# --status-level=fail: only print failing tests (suppress 1000+ PASS lines)
+# --final-status-level=fail: summary shows only failures
+if ! cargo nextest run --workspace --status-level=fail --final-status-level=flaky; then
     echo ""
     echo "❌ Tests failed."
     echo "   Run 'cargo nextest run --workspace' to see detailed test output."

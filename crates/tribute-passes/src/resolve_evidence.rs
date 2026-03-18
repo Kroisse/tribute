@@ -926,17 +926,13 @@ fn transform_shifts_in_block(
                 // Extract handler_fn from handle_dispatch operand[1]
                 let handler_dispatch_val = {
                     let operands = ctx.op_operands(op).to_vec();
-                    if operands.len() >= 2 {
-                        let handler_val = operands[1];
-                        let cast =
-                            arena_core::unrealized_conversion_cast(ctx, loc, handler_val, ptr_ty);
-                        ctx.insert_op_before(block, op, cast.op_ref());
-                        cast.result(ctx)
-                    } else {
-                        let null_handler = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
-                        ctx.insert_op_before(block, op, null_handler.op_ref());
-                        null_handler.result(ctx)
-                    }
+                    let handler_val = operands
+                        .get(1)
+                        .expect("handle_dispatch must have operand[1] (handler closure)");
+                    let cast =
+                        arena_core::unrealized_conversion_cast(ctx, loc, *handler_val, ptr_ty);
+                    ctx.insert_op_before(block, op, cast.op_ref());
+                    cast.result(ctx)
                 };
 
                 // Extend evidence for each ability

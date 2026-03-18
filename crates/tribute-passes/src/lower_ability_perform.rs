@@ -77,15 +77,14 @@ impl RewritePattern for LowerPerformPattern {
 
         // === 1. Evidence lookup → marker ===
         let marker_ty = ability::marker_adt_type_ref(ctx);
-        let marker_val = if let Some(ev) = evidence_val {
-            let lookup = ability::evidence_lookup(ctx, location, ev, marker_ty, ability_ref_type);
-            rewriter.insert_op(lookup.op_ref());
-            lookup.result(ctx)
-        } else {
-            let null_op = adt::ref_null(ctx, location, marker_ty, marker_ty);
-            rewriter.insert_op(null_op.op_ref());
-            null_op.result(ctx)
-        };
+        let evidence_val = evidence_val.expect(
+            "ability.perform requires evidence parameter; \
+             enclosing function is missing evidence (was add_evidence_params skipped?)",
+        );
+        let lookup =
+            ability::evidence_lookup(ctx, location, evidence_val, marker_ty, ability_ref_type);
+        rewriter.insert_op(lookup.op_ref());
+        let marker_val = lookup.result(ctx);
 
         // === 2. Extract handler_dispatch from marker (field index 3) ===
         let handler_get = adt::struct_get(ctx, location, marker_val, t.anyref, marker_ty, 3);
@@ -129,13 +128,7 @@ impl RewritePattern for LowerPerformPattern {
         let env_val = env_get.result(ctx);
 
         // Placeholder evidence for resolve_evidence to replace later.
-        let placeholder_ev = if let Some(ev) = evidence_val {
-            ev
-        } else {
-            let null_ev = adt::ref_null(ctx, location, t.anyref, t.anyref);
-            rewriter.insert_op(null_ev.op_ref());
-            null_ev.result(ctx)
-        };
+        let placeholder_ev = evidence_val;
 
         let call_op = func::call_indirect(
             ctx,
@@ -178,11 +171,18 @@ impl RewritePattern for LowerPerformPattern {
         rewriter.erase_op(vec![call_op.result(ctx)]);
 
         // Remove dead code after the perform op in the same block.
-        // After lowering, func.return terminates the block; any ops that
-        // followed perform (e.g., a previous func.return) are now dead.
-        let block_ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        if let Some(idx) = block_ops.iter().position(|&o| o == op) {
-            for &dead_op in &block_ops[idx + 1..] {
+        // Only do this when we inserted a func.return terminator (i.e., in
+        // func body); in other regions (scf.if, etc.) the existing terminator
+        // (scf.yield) must be preserved.
+        if is_in_func_body(ctx, block) {
+            let dead_ops: Vec<OpRef> = {
+                let ops = &ctx.block(block).ops;
+                let Some(idx) = ops.iter().position(|&o| o == op) else {
+                    return true;
+                };
+                ops[idx + 1..].to_vec()
+            };
+            for dead_op in dead_ops {
                 ctx.remove_op_from_block(block, dead_op);
             }
         }
@@ -260,20 +260,28 @@ mod tests {
         YieldBubblingTypes::new(ctx);
     }
 
+    /// Build the canonical evidence type string for use in test IR.
+    fn evidence_type_str() -> &'static str {
+        "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})"
+    }
+
     #[test]
     fn test_lower_perform_basic() {
         let mut ctx = IrContext::new();
         init_yield_result_types(&mut ctx);
+        let ev_ty = evidence_type_str();
 
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
-  func.func @test_fn(%ev: ability.evidence()) -> tribute_rt.anyref {
-    %k = arith.const {value = 0} : tribute_rt.anyref
-    %yr = ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+            &format!(
+                r#"core.module @test {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %k = arith.const {{value = 0}} : tribute_rt.anyref
+    %yr = ability.perform %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
     func.return %yr
-  }
-}"#,
+  }}
+}}"#
+            ),
         );
 
         lower_ability_perform(&mut ctx, module);
@@ -286,17 +294,20 @@ mod tests {
     fn test_lower_perform_with_args() {
         let mut ctx = IrContext::new();
         init_yield_result_types(&mut ctx);
+        let ev_ty = evidence_type_str();
 
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
-  func.func @test_fn(%ev: ability.evidence()) -> tribute_rt.anyref {
-    %val = arith.const {value = 42} : core.i32
-    %k = arith.const {value = 0} : tribute_rt.anyref
-    %yr = ability.perform %k, %val {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+            &format!(
+                r#"core.module @test {{
+  func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref {{
+    %val = arith.const {{value = 42}} : core.i32
+    %k = arith.const {{value = 0}} : tribute_rt.anyref
+    %yr = ability.perform %k, %val {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}} : tribute_rt.anyref
     func.return %yr
-  }
-}"#,
+  }}
+}}"#
+            ),
         );
 
         lower_ability_perform(&mut ctx, module);
@@ -306,11 +317,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "ability.perform requires evidence parameter")]
     fn test_lower_perform_no_evidence() {
         let mut ctx = IrContext::new();
         init_yield_result_types(&mut ctx);
 
-        // Function without evidence parameter — should use null fallback.
+        // Function without evidence parameter — should panic.
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
@@ -323,8 +335,5 @@ mod tests {
         );
 
         lower_ability_perform(&mut ctx, module);
-
-        let ir_text = print_module(&ctx, module.op());
-        assert_snapshot!(ir_text);
     }
 }
