@@ -525,7 +525,7 @@ mod tests {
         // === Pass 1: lower_closure_lambda ===
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (foo + __lambda_0)
+        // Verify: module should now have 2 functions (foo + __clam_0)
         let ops_after_lambda = module.ops(&ctx);
         assert_eq!(
             ops_after_lambda.len(),
@@ -574,12 +574,12 @@ mod tests {
             "should have func.call_indirect for handler dispatch"
         );
 
-        // The lifted lambda function should exist as __lambda_0
+        // The lifted lambda function should exist as foo::__clam_0
         let lifted = func::Func::from_op(&ctx, ops_after_perform[1]).unwrap();
         let lifted_name = lifted.sym_name(&ctx).to_string();
         assert!(
-            lifted_name.contains("__lambda_"),
-            "lifted function should be __lambda_N, got: {}",
+            lifted_name.contains("__clam_"),
+            "lifted function should be scope::__clam_N, got: {}",
             lifted_name
         );
     }
