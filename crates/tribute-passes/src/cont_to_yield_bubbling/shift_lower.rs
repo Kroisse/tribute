@@ -21,7 +21,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use super::types::{YieldBubblingTypes, adt_struct_type};
 use super::{ResumeCounter, ResumeFuncSpec, ResumeSpecs, ShiftAnalysis};
-use tribute_ir::dialect::ability::compute_op_idx;
+use crate::cont_util::compute_op_idx;
 
 // ============================================================================
 // Resume Function Helpers

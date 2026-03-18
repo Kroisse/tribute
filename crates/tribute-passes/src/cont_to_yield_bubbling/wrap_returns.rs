@@ -9,37 +9,12 @@ use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, ValueDef, ValueRef};
+use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
 use super::types::{YieldBubblingTypes, is_yield_result_type};
-
-/// Check if a value is YieldResult-typed, tracing through unrealized_conversion_cast.
-///
-/// In CPS paths, effectful function calls return YieldResult which may be cast
-/// to anyref. This function traces through such casts to detect the underlying
-/// YieldResult type and avoid double-wrapping.
-fn value_is_yield_result_through_casts(ctx: &IrContext, value: ValueRef) -> bool {
-    let mut current = value;
-    loop {
-        if is_yield_result_type(ctx, ctx.value_ty(current)) {
-            return true;
-        }
-        // Trace through unrealized_conversion_cast
-        if let ValueDef::OpResult(def_op, _) = ctx.value_def(current)
-            && core::UnrealizedConversionCast::from_op(ctx, def_op).is_ok()
-        {
-            let operands = ctx.op_operands(def_op);
-            if let Some(&input) = operands.first() {
-                current = input;
-                continue;
-            }
-        }
-        return false;
-    }
-}
 
 // ============================================================================
 // Pattern: Wrap returns in effectful functions with YieldResult::Done
@@ -83,13 +58,11 @@ impl RewritePattern for WrapReturnsPattern {
             return false;
         }
 
-        // Check if return value is already YieldResult (possibly through casts).
-        // In CPS paths, effectful calls return YieldResult which may be cast
-        // to anyref by the original code. We trace through casts to detect this.
+        // Check if return value is already YieldResult
         let Some(&value) = ctx.op_operands(op).first() else {
             return false;
         };
-        if value_is_yield_result_through_casts(ctx, value) {
+        if is_yield_result_type(ctx, ctx.value_ty(value)) {
             return false;
         }
 
