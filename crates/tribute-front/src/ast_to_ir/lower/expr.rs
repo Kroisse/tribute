@@ -767,7 +767,10 @@ fn lower_block_cps<'db>(
         if is_direct_ability_op_stmt(stmt) {
             let stmt = stmts_iter.next().unwrap();
             let remaining: Vec<_> = stmts_iter.collect();
-            let result = lower_cps_ability_op(builder, stmt, remaining, value)?;
+            let Some(result) = lower_cps_ability_op(builder, stmt, remaining, value) else {
+                builder.ctx.exit_scope();
+                return None;
+            };
             builder.ctx.exit_scope();
             return Some((result, true));
         }
@@ -782,7 +785,10 @@ fn lower_block_cps<'db>(
         return Some((result, true));
     }
 
-    let result = lower_expr(builder, value)?;
+    let Some(result) = lower_expr(builder, value) else {
+        builder.ctx.exit_scope();
+        return None;
+    };
     builder.ctx.exit_scope();
     Some((result, false))
 }
@@ -904,6 +910,16 @@ fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
         }
         ExprKind::BinOp { lhs, rhs, .. } => contains_ability_op(lhs) || contains_ability_op(rhs),
         ExprKind::Tuple(elems) => elems.iter().any(contains_ability_op),
+        ExprKind::Block { stmts, value } => {
+            stmts.iter().any(|s| match s {
+                Stmt::Let { value, .. } => contains_ability_op(value),
+                Stmt::Expr { expr, .. } => contains_ability_op(expr),
+            }) || contains_ability_op(value)
+        }
+        ExprKind::Case { scrutinee, arms } => {
+            contains_ability_op(scrutinee) || arms.iter().any(|a| contains_ability_op(&a.body))
+        }
+        ExprKind::Record { fields, .. } => fields.iter().any(|(_, v)| contains_ability_op(v)),
         _ => false,
     }
 }

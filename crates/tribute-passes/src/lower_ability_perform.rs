@@ -103,6 +103,12 @@ impl RewritePattern for LowerPerformPattern {
         rewriter.insert_op(op_idx_const.op_ref());
 
         // === 4. Build shift value (pack args or null) ===
+        assert!(
+            value_operands.len() <= 1,
+            "ability.perform expects at most 1 value operand (multi-arg should be tuple-packed), \
+             got {}",
+            value_operands.len()
+        );
         let shift_value_val = if let Some(&sv) = value_operands.first() {
             let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
             rewriter.insert_op(cast.op_ref());
