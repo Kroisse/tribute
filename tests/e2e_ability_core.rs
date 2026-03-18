@@ -520,7 +520,6 @@ fn main() {
 
 /// Test State::set followed by State::get.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_state_set_then_get() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -556,7 +555,6 @@ fn main() {
 
 /// Test nested handler calls.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_nested_state_calls() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -601,7 +599,6 @@ fn main() {
 /// Stresses the runtime tag uniqueness mechanism more than
 /// `test_nested_state_calls` (5 yields × 3 increments = 15+ prompt frames).
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_nested_state_triple_increment() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -643,7 +640,6 @@ fn main() {
 
 /// Test direct result path (no effect operations).
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_handler_direct_result() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -952,7 +948,6 @@ fn main() { }
 /// Outer handler provides Reader(42), inner handler runs State starting at 0.
 /// Expected: Reader::ask() returns 42, State::set(42), State::get() returns 42.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_two_abilities_nested_handlers() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -999,7 +994,6 @@ fn main() {
 /// with a Bool initial value, then get() → 7. Verifies each handler dispatches to
 /// the correct prompt with distinct type parameters.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_same_ability_different_type_params_nested() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -1281,7 +1275,6 @@ fn main() {
 /// counter() does get → set(n+1) → return n.
 /// Starting from 0: counter()=0 (state→1). Returns 0.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_counter_returns_correct_value() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -1314,7 +1307,6 @@ fn main() {
 ///
 /// Starting from 10: counter()=10 (state→11). Returns 10.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_counter_nonzero_initial() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -1353,7 +1345,6 @@ fn main() {
 /// Handlers: Reader provides 5, Writer is no-op, State starts at 0.
 /// Expected: 5.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_three_abilities_nested_handlers() {
     let code = r#"ability State(s) {
     op get() -> s
@@ -1417,7 +1408,6 @@ fn main() {
 ///
 /// Performs: set(3), set(get()+10) → set(13), get() → 13.
 #[test]
-#[ignore = "CPS effect handling migration in progress"]
 fn test_state_multiple_mutations() {
     let code = r#"ability State(s) {
     op get() -> s
