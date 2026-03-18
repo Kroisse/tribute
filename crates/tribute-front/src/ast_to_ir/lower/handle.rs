@@ -425,7 +425,7 @@ fn build_cps_suspend_handler_region<'db>(
     ir: &mut IrContext,
     location: Location,
     handler: &HandlerArm<TypedRef<'db>>,
-    yr_ty: TypeRef,
+    _yr_ty: TypeRef,
 ) -> trunk_ir::refs::RegionRef {
     let HandlerKind::Effect {
         params,
@@ -755,7 +755,7 @@ fn build_handler_arm_for_dispatch<'db>(
     k_val: ValueRef,
     value_val: ValueRef,
     anyref_ty: TypeRef,
-    yr_ty: TypeRef,
+    _yr_ty: TypeRef,
 ) -> trunk_ir::refs::RegionRef {
     let HandlerKind::Effect {
         params,
