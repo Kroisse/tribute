@@ -10,8 +10,8 @@
 //!     func.return %r
 //! }
 //!
-//! // After (inside func.func @foo):
-//! func.func @foo::__clam_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
+//! // After:
+//! func.func @__lambda_0(%ev: Evidence, %env: anyref, %param: anyref) -> anyref {
 //!   %env_cast = adt.ref_cast %env : env_struct
 //!   %x = adt.struct_get %env_cast, 0
 //!   %y = adt.struct_get %env_cast, 1
@@ -19,10 +19,8 @@
 //!   func.return %r
 //! }
 //! %env = adt.struct_new(%x, %y)
-//! %k = closure.new @foo::__clam_0, %env
+//! %k = closure.new @__lambda_0, %env
 //! ```
-
-use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -44,7 +42,7 @@ pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         None => return,
     };
 
-    let mut namer = LambdaNamer::new();
+    let mut counter: u32 = 0;
 
     // Iterate until no more closure.lambda ops remain.
     // Multiple iterations handle nested lambdas: the first pass converts
@@ -57,7 +55,7 @@ pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         }
 
         for lambda_ref in lambdas {
-            lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
+            lower_single_lambda(ctx, module_block, lambda_ref, &mut counter);
         }
     }
 }
@@ -99,7 +97,7 @@ fn lower_single_lambda(
     ctx: &mut IrContext,
     module_block: BlockRef,
     lambda_ref: OpRef,
-    namer: &mut LambdaNamer,
+    counter: &mut u32,
 ) {
     let Ok(lambda_op) = arena_closure::Lambda::from_op(ctx, lambda_ref) else {
         return;
@@ -114,9 +112,9 @@ fn lower_single_lambda(
 
     let body_region = lambda_op.body(ctx);
 
-    // Generate unique lifted name derived from the enclosing function.
-    let parent_name = find_enclosing_func_name(ctx, lambda_ref);
-    let lifted_name = namer.next_name(&parent_name);
+    // Generate unique lifted name.
+    let lifted_name = Symbol::from_dynamic(&format!("__lambda_{}", *counter));
+    *counter += 1;
 
     // Original entry block args = lambda formal parameters.
     let orig_entry = ctx.region(body_region).blocks[0];
@@ -125,10 +123,9 @@ fn lower_single_lambda(
         .map(|i| ctx.block(orig_entry).args[i].ty)
         .collect();
 
-    // Determine function return type and effect from the closure result type.
+    // Determine function return type from the closure result type.
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let func_result_ty = extract_return_type_from_closure(ctx, result_ty)
-        .expect("closure.lambda result type must be closure.closure<core.func<...>>");
+    let func_result_ty = extract_return_type_from_closure(ctx, result_ty).unwrap_or(anyref_ty);
     let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
 
     // Build env struct type for captures.
@@ -188,13 +185,8 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty = core::func(
-        ctx,
-        func_result_ty,
-        orig_param_types.iter().copied(),
-        effect,
-    )
-    .as_type_ref();
+    let closure_func_ty =
+        core::func(ctx, func_result_ty, orig_param_types.iter().copied(), None).as_type_ref();
     let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
@@ -340,44 +332,6 @@ fn build_lifted_body(
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Walk up the parent chain to find the enclosing `func.func` and return its `sym_name`.
-fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
-    let mut current_op = op;
-    while let Some(block) = ctx.op(current_op).parent_block {
-        let Some(region) = ctx.block(block).parent_region else {
-            break;
-        };
-        let Some(parent) = ctx.region(region).parent_op else {
-            break;
-        };
-        if let Ok(f) = func::Func::from_op(ctx, parent) {
-            return f.sym_name(ctx).with_str(|s| s.to_string());
-        }
-        current_op = parent;
-    }
-    "<anon>".to_string()
-}
-
-/// Generates unique lifted lambda names, scoped by parent function.
-struct LambdaNamer {
-    counters: HashMap<String, u32>,
-}
-
-impl LambdaNamer {
-    fn new() -> Self {
-        Self {
-            counters: HashMap::new(),
-        }
-    }
-
-    fn next_name(&mut self, parent: &str) -> Symbol {
-        let count = self.counters.entry(parent.to_string()).or_insert(0);
-        let name = format!("{parent}::__clam_{count}");
-        *count += 1;
-        Symbol::from_dynamic(&name)
-    }
-}
 
 /// Extract return type from `closure.closure<core.func<Return, Params...>>`.
 fn extract_return_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
@@ -566,7 +520,7 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (test_fn + test_fn::__clam_0).
+        // Verify: module should now have 2 functions (test_fn + __lambda_0).
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 2, "expected 2 top-level ops after lowering");
 
@@ -586,10 +540,7 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(
-            lifted.sym_name(&ctx),
-            Symbol::from_dynamic("test_fn::__clam_0")
-        );
+        assert_eq!(lifted.sym_name(&ctx), Symbol::from_dynamic("__lambda_0"));
 
         // Lifted function should have 3 params: evidence, env, x
         let lifted_ty = lifted.r#type(&ctx);

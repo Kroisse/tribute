@@ -38,7 +38,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 use crate::evidence::collect_effectful_functions;
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
-fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
+pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());

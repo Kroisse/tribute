@@ -72,6 +72,15 @@ pub(crate) fn truncate_after_shift(
     for func_op in func_ops {
         truncate_func_after_shift(ctx, func_op, effectful_funcs, types);
     }
+
+    // After truncation changed effectful function return types to YieldResult,
+    // update call/call_indirect ops whose result feeds into func.return.
+    // Without this, call sites retain the old result type (e.g., anyref),
+    // causing wrap_returns to double-wrap YieldResult values in Done.
+    let all_func_ops = collect_func_ops(ctx, module_body, |name| effectful_funcs.contains(&name));
+    for func_op in all_func_ops {
+        update_call_result_types_before_return(ctx, func_op, types);
+    }
 }
 
 /// Truncate a single function's body after the first effect point.
@@ -302,6 +311,71 @@ fn truncate_block_after_shift(
         if !already_has_return {
             let return_op = func::r#return(ctx, location, [result]);
             ctx.push_op(block, return_op.op_ref());
+        }
+    }
+}
+
+// ============================================================================
+// Update call result types that feed into func.return
+// ============================================================================
+
+/// Update call/call_indirect result types to YieldResult when they feed
+/// directly into a func.return in an effectful function.
+///
+/// After truncation changes effectful function return types to YieldResult,
+/// call sites within those functions may still have the old result type
+/// (e.g., anyref). If a call result feeds into func.return (possibly through
+/// unrealized_conversion_cast), the call's result type should be YieldResult
+/// to prevent wrap_returns from double-wrapping.
+fn update_call_result_types_before_return(
+    ctx: &mut IrContext,
+    func_op: OpRef,
+    types: &YieldBubblingTypes,
+) {
+    let Ok(func) = func::Func::from_op(ctx, func_op) else {
+        return;
+    };
+    let body = func.body(ctx);
+    let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
+
+    for block in blocks {
+        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        for &op in &ops {
+            if func::Return::from_op(ctx, op).is_err() {
+                continue;
+            }
+            let Some(&ret_val) = ctx.op_operands(op).first() else {
+                continue;
+            };
+            if is_yield_result_type(ctx, ctx.value_ty(ret_val)) {
+                continue;
+            }
+
+            // Trace back through casts to find the defining call op
+            let mut current = ret_val;
+            loop {
+                if let ValueDef::OpResult(def_op, _) = ctx.value_def(current)
+                    && core::UnrealizedConversionCast::from_op(ctx, def_op).is_ok()
+                {
+                    let operands = ctx.op_operands(def_op);
+                    if let Some(&input) = operands.first() {
+                        current = input;
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            // If the underlying value comes from a call/call_indirect,
+            // update its result type to YieldResult
+            if let ValueDef::OpResult(call_op, idx) = ctx.value_def(current) {
+                let is_call = func::Call::from_op(ctx, call_op).is_ok()
+                    || func::CallIndirect::from_op(ctx, call_op).is_ok();
+                if is_call && !is_yield_result_type(ctx, ctx.value_ty(current)) {
+                    ctx.set_op_result_type(call_op, idx, types.yield_result);
+                    tracing::debug!("update_call_result_types: updated call result to YieldResult");
+                }
+            }
         }
     }
 }

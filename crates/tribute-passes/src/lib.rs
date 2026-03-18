@@ -20,6 +20,7 @@ pub mod evidence;
 pub mod live_vars;
 pub mod lower_ability_perform;
 pub mod lower_closure_lambda;
+pub mod lower_handle_dispatch;
 pub mod native;
 pub mod resolve_evidence;
 pub mod tail_resumptive;

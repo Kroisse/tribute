@@ -57,12 +57,14 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
 
     let mut has_evidence_empty = false;
     let mut has_lookup_tr = false;
+    let mut has_lookup_handler = false;
     let mut stubs_to_replace: Vec<(OpRef, &'static str)> = Vec::new();
 
     let lookup_sym = Symbol::new("__tribute_evidence_lookup");
     let extend_sym = Symbol::new("__tribute_evidence_extend");
     let empty_sym = Symbol::new("__tribute_evidence_empty");
     let lookup_tr_sym = Symbol::new("__tribute_evidence_lookup_tr");
+    let lookup_handler_sym = Symbol::new("__tribute_evidence_lookup_handler");
 
     for &op in &ops {
         if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
@@ -75,6 +77,8 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
                 has_evidence_empty = true;
             } else if name == lookup_tr_sym {
                 has_lookup_tr = true;
+            } else if name == lookup_handler_sym {
+                has_lookup_handler = true;
             }
         }
     }
@@ -123,6 +127,18 @@ fn replace_stubs_and_add_empty(ctx: &mut IrContext, module: Module) {
             ctx.insert_op_before(first_block, first_op, lookup_tr_op);
         }
     }
+
+    // Add __tribute_evidence_lookup_handler if missing
+    if !has_lookup_handler {
+        let lookup_handler_op = make_evidence_lookup_handler_extern(ctx, loc, ptr_ty, i32_ty);
+        let block_ops = &ctx.block(first_block).ops;
+        if block_ops.is_empty() {
+            ctx.push_op(first_block, lookup_handler_op);
+        } else {
+            let first_op = block_ops[0];
+            ctx.insert_op_before(first_block, first_op, lookup_handler_op);
+        }
+    }
 }
 
 /// Build extern `fn __tribute_evidence_empty() -> ptr`
@@ -146,7 +162,7 @@ fn make_evidence_lookup_extern(
     )
 }
 
-/// Build extern `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr) -> ptr`
+/// Build extern `fn __tribute_evidence_extend(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr) -> ptr`
 fn make_evidence_extend_extern(
     ctx: &mut IrContext,
     loc: Location,
@@ -157,7 +173,7 @@ fn make_evidence_extend_extern(
         ctx,
         loc,
         "__tribute_evidence_extend",
-        &[ptr_ty, i32_ty, i32_ty, ptr_ty],
+        &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty],
         ptr_ty,
     )
 }
@@ -178,6 +194,22 @@ fn make_evidence_lookup_tr_extern(
     )
 }
 
+/// Build extern `fn __tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr`
+fn make_evidence_lookup_handler_extern(
+    ctx: &mut IrContext,
+    loc: Location,
+    ptr_ty: TypeRef,
+    i32_ty: TypeRef,
+) -> OpRef {
+    super::build_extern_func(
+        ctx,
+        loc,
+        "__tribute_evidence_lookup_handler",
+        &[ptr_ty, i32_ty],
+        ptr_ty,
+    )
+}
+
 // =============================================================================
 // Phase 2: Rewrite evidence ops inside function bodies
 // =============================================================================
@@ -187,6 +219,7 @@ fn is_evidence_runtime_fn(name: Symbol) -> bool {
         || name == Symbol::new("__tribute_evidence_extend")
         || name == Symbol::new("__tribute_evidence_empty")
         || name == Symbol::new("__tribute_evidence_lookup_tr")
+        || name == Symbol::new("__tribute_evidence_lookup_handler")
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {
@@ -406,6 +439,21 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) {
                             );
                             let new_result = tr_call.result(ctx);
                             ctx.insert_op_before(block, op, tr_call.op_ref());
+                            ctx.replace_all_uses(old_result, new_result);
+                            ops_to_erase.push(op);
+                        }
+                        3 => {
+                            // Field 3: handler_dispatch (ptr) — call __tribute_evidence_lookup_handler
+                            let old_result = ctx.op_result(op, 0);
+                            let handler_call = arena_func::call(
+                                ctx,
+                                loc,
+                                [ev_val, ability_id_val],
+                                ptr_ty,
+                                Symbol::new("__tribute_evidence_lookup_handler"),
+                            );
+                            let new_result = handler_call.result(ctx);
+                            ctx.insert_op_before(block, op, handler_call.op_ref());
                             ctx.replace_all_uses(old_result, new_result);
                             ops_to_erase.push(op);
                         }
