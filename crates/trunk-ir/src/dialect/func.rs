@@ -20,8 +20,6 @@ mod func {
     #[attr(callee: Symbol)]
     fn tail_call(#[rest] args: ()) {}
 
-    fn tail_call_indirect(callee: (), #[rest] args: ()) {}
-
     fn r#return(#[rest] values: ()) {}
 
     #[attr(func_ref: Symbol)]
