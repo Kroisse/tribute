@@ -184,8 +184,12 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
                 mutable: false,
             },
         ]),
-        // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+        // Index 5: Marker - struct { ability_id: i32, prompt_tag: i32, op_table_index: i32, handler_dispatch: i32 }
         GcTypeDef::Struct(vec![
+            FieldType {
+                element_type: StorageType::Val(ValType::I32),
+                mutable: false,
+            },
             FieldType {
                 element_type: StorageType::Val(ValType::I32),
                 mutable: false,
@@ -260,7 +264,7 @@ mod tests {
         // ClosureStruct
         assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 2));
         // Marker (3 fields: ability_id, prompt_tag, op_table_index)
-        assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 3));
+        assert!(matches!(&builtins[5], GcTypeDef::Struct(fields) if fields.len() == 4));
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[6], GcTypeDef::Array(_)));
         // Continuation (4 fields: resume_fn, state, tag, shift_value)
@@ -338,14 +342,14 @@ mod tests {
     }
 
     #[test]
-    fn test_marker_struct_has_three_i32_fields() {
-        // Marker struct: { ability_id: i32, prompt_tag: i32, op_table_index: i32 }
+    fn test_marker_struct_has_four_i32_fields() {
+        // Marker struct: { ability_id: i32, prompt_tag: i32, op_table_index: i32, handler_dispatch: i32 }
         let builtins = builtin_types();
         let marker_def = &builtins[MARKER_IDX as usize];
 
         match marker_def {
             GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 3, "Marker should have 3 fields");
+                assert_eq!(fields.len(), 4, "Marker should have 4 fields");
                 for (i, field) in fields.iter().enumerate() {
                     assert!(
                         matches!(field.element_type, StorageType::Val(ValType::I32)),
