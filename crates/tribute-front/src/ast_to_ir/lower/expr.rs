@@ -13,7 +13,7 @@ use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{BinOpKind, Expr, ExprKind, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 
-use tribute_ir::dialect::{ability as arena_ability, closure as arena_closure};
+use tribute_ir::dialect::{ability, closure};
 
 use super::case::bind_pattern_fields;
 use super::{
@@ -816,7 +816,7 @@ fn try_lower_value_ability_op<'db>(
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     // No captures needed for identity continuation
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         Vec::<ValueRef>::new(),
@@ -830,7 +830,7 @@ fn try_lower_value_ability_op<'db>(
     let ability_name = Symbol::from_dynamic(&ability.qualified_name(builder.db()).to_string());
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
 
-    let perform_op = arena_ability::perform(
+    let perform_op = ability::perform(
         builder.ir,
         location,
         continuation,
@@ -983,7 +983,7 @@ fn lower_cps_ability_op<'db>(
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    let perform_op = arena_ability::perform(
+    let perform_op = ability::perform(
         builder.ir,
         location,
         continuation,
@@ -1092,7 +1092,7 @@ fn build_cps_continuation<'db>(
 
     // Emit closure.lambda
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         capture_values,

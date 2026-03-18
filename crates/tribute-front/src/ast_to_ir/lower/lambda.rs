@@ -14,7 +14,7 @@ use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::TypeKind;
 
-use tribute_ir::dialect::{ability as arena_ability, closure as arena_closure};
+use tribute_ir::dialect::{ability, closure};
 
 use crate::ast::{Expr, ExprKind, LocalId, Param, ResolvedRef, Stmt, TypedRef};
 
@@ -296,7 +296,7 @@ pub(super) fn lower_lambda<'db>(
             .func_type_with_effect(builder.ir, param_ir_types, result_ir_ty, effect);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         capture_values,
@@ -320,7 +320,7 @@ pub(super) fn wrap_func_as_closure(
     result_ir_ty: TypeRef,
 ) -> ValueRef {
     let any_ty = builder.ctx.anyref_type(builder.ir);
-    let evidence_ty = arena_ability::evidence_adt_type_ref(builder.ir);
+    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
 
     // Generate unique wrapper name
     let wrapper_name = builder.ctx.gen_lambda_name();
@@ -442,7 +442,7 @@ pub(super) fn wrap_func_as_closure(
         .ctx
         .func_type(builder.ir, param_ir_types, result_ir_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let closure_op = arena_closure::new(builder.ir, location, null_env, closure_ty, wrapper_name);
+    let closure_op = closure::new(builder.ir, location, null_env, closure_ty, wrapper_name);
     builder.ir.push_op(builder.block, closure_op.op_ref());
     closure_op.result(builder.ir)
 }

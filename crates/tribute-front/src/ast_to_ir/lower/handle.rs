@@ -18,7 +18,7 @@ use trunk_ir::dialect::{adt, arith, cont, core, func, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use tribute_ir::dialect::{ability as arena_ability, closure as arena_closure};
+use tribute_ir::dialect::{ability, closure};
 
 use crate::ast::{Expr, HandlerArm, HandlerKind, ResolvedRef, TypedRef};
 
@@ -79,7 +79,7 @@ pub(super) fn lower_ability_op_call<'db>(
             .ctx
             .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         Vec::<ValueRef>::new(),
@@ -90,7 +90,7 @@ pub(super) fn lower_ability_op_call<'db>(
     let continuation = lambda_op.result(builder.ir);
 
     // Emit ability.perform
-    let perform_op = arena_ability::perform(
+    let perform_op = ability::perform(
         builder.ir,
         location,
         continuation,
@@ -173,7 +173,7 @@ pub(super) fn lower_handle<'db>(
         build_handler_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
 
     // 4. Emit ability.handle_dispatch
-    let dispatch_op = arena_ability::handle_dispatch(
+    let dispatch_op = ability::handle_dispatch(
         builder.ir,
         location,
         body_yr,
@@ -259,7 +259,7 @@ fn build_cps_body<'db>(
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         capture_values,
@@ -625,7 +625,7 @@ fn build_handler_dispatch_closure<'db>(
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
-    let lambda_op = arena_closure::lambda(
+    let lambda_op = closure::lambda(
         builder.ir,
         location,
         capture_values,
