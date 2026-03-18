@@ -379,11 +379,21 @@ impl<'db> TypeChecker<'db> {
                 }
                 ctx.named_type(Symbol::new("List"), vec![elem_ty])
             }
-            ExprKind::Resume { arg, .. } => {
-                let _arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
-                // Resume returns a fresh type variable; the actual type
-                // depends on the continuation context.
-                ctx.fresh_type_var()
+            ExprKind::Resume { arg, local_id } => {
+                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+                if let Some(lid) = local_id
+                    && let Some(cont_ty) = ctx.lookup_local(*lid)
+                    && let TypeKind::Continuation {
+                        arg: cont_arg,
+                        result: cont_result,
+                        ..
+                    } = cont_ty.kind(self.db())
+                {
+                    ctx.constrain_eq(arg_ty, *cont_arg);
+                    *cont_result
+                } else {
+                    ctx.fresh_type_var()
+                }
             }
             ExprKind::Error => ctx.error_type(),
         };
