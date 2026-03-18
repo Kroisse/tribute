@@ -689,6 +689,21 @@ pub(super) fn lower_block_cps_for_expr<'db>(
             if let Some(result) = super::expr::try_lower_value_ability_op(builder, &expr) {
                 return Some((result, true));
             }
+            // Reject nested ability-op subexpressions that would bypass CPS.
+            // Full expression-level CPS lifting is not yet implemented.
+            if contains_nested_ability_op(&expr) {
+                let location = builder.location(expr.id);
+                Diagnostic {
+                    message:
+                        "ability operation in nested expression position is not yet supported; \
+                              extract to a let binding"
+                            .to_string(),
+                    span: location.span,
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::Lowering,
+                }
+                .accumulate(builder.db());
+            }
             let result = lower_expr(builder, expr)?;
             Some((result, false))
         }
@@ -840,6 +855,59 @@ fn try_lower_value_ability_op<'db>(
     builder.ir.push_op(builder.block, perform_op.op_ref());
 
     Some(perform_op.result(builder.ir))
+}
+
+/// Check if an expression contains a nested ability op call (not at the top level).
+///
+/// Returns true if any subexpression (argument, operand, etc.) is a call to
+/// an ability operation. Direct top-level ability op calls are handled by
+/// `try_lower_value_ability_op`; this catches the cases that bypass CPS.
+fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
+    match &*expr.kind {
+        ExprKind::Call { callee, args } => {
+            // Check args (not callee — a direct call is fine, handled elsewhere)
+            let callee_is_ability_op = matches!(
+                &*callee.kind,
+                ExprKind::Var(tr) if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
+            );
+            if !callee_is_ability_op {
+                // Non-ability-op call: check if any arg contains an ability op
+                args.iter().any(contains_ability_op)
+            } else {
+                // Direct ability op call at top level — not "nested"
+                false
+            }
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => contains_ability_op(lhs) || contains_ability_op(rhs),
+        ExprKind::Tuple(elems) => elems.iter().any(contains_ability_op),
+        _ => false,
+    }
+}
+
+/// Check if an expression IS or CONTAINS an ability op call.
+fn contains_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
+    match &*expr.kind {
+        ExprKind::Call { callee, args } => {
+            if let ExprKind::Var(tr) = &*callee.kind
+                && matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
+            {
+                return true;
+            }
+            contains_ability_op(callee) || args.iter().any(contains_ability_op)
+        }
+        ExprKind::BinOp { lhs, rhs, .. } => contains_ability_op(lhs) || contains_ability_op(rhs),
+        ExprKind::Block { stmts, value } => {
+            stmts.iter().any(|s| match s {
+                Stmt::Let { value, .. } => contains_ability_op(value),
+                Stmt::Expr { expr, .. } => contains_ability_op(expr),
+            }) || contains_ability_op(value)
+        }
+        ExprKind::Tuple(elems) => elems.iter().any(contains_ability_op),
+        ExprKind::Case { scrutinee, arms } => {
+            contains_ability_op(scrutinee) || arms.iter().any(|a| contains_ability_op(&a.body))
+        }
+        _ => false,
+    }
 }
 
 /// Check if a statement contains a direct ability op call.
