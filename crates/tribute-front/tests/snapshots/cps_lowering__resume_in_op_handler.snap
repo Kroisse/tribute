@@ -3,6 +3,8 @@ source: crates/tribute-front/tests/cps_lowering.rs
 expression: ir_text
 ---
 core.module @test {
+  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+
   func.func @run() -> core.i32 {
       %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0}}) {
           %1 = arith.const {value = 42} : core.i32
@@ -10,47 +12,56 @@ core.module @test {
           func.return %2
       }
       %3 = func.call_indirect %0 : tribute_rt.anyref
-      %4 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)) {
+      %4 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref) {effect = core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0}}) {
         ^bb2(%5: tribute_rt.anyref, %6: core.i32, %7: tribute_rt.anyref):
           %8 = arith.const {value = 1972422014} : core.i32
           %9 = arith.cmp_eq %6, %8 : core.i1
           %10 = scf.if %9 : tribute_rt.anyref {
               %11 = arith.const {value = 0} : core.i32
-              %12 = func.call_indirect %5, %11 : tribute_rt.anyref
-              scf.yield %12
+              %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
+              %13 = core.unrealized_conversion_cast %5 : !t0
+              %14 = func.call_indirect %13, %12 : tribute_rt.anyref
+              scf.yield %14
           } {
-              %13 = arith.const {value = 1} : core.i1
-              %14 = scf.if %13 : tribute_rt.anyref {
-                  %15 = arith.const {value = unit} : core.nil
-                  %16 = func.call_indirect %5, %15 : tribute_rt.anyref
-                  scf.yield %16
+              %15 = arith.const {value = 1} : core.i1
+              %16 = scf.if %15 : tribute_rt.anyref {
+                  %17 = arith.const {value = unit} : core.nil
+                  %18 = core.unrealized_conversion_cast %17 : tribute_rt.anyref
+                  %19 = core.unrealized_conversion_cast %5 : !t0
+                  %20 = func.call_indirect %19, %18 : tribute_rt.anyref
+                  scf.yield %20
               } {
                   func.unreachable
               }
-              scf.yield %14
+              scf.yield %16
           }
           func.return %10
       }
-      %17 = ability.handle_dispatch %3, %4 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %21 = ability.handle_dispatch %3, %4 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           cont.done {
-            ^bb8(%18: tribute_rt.anyref):
-              scf.yield %18
+            ^bb8(%22: tribute_rt.anyref):
+              %23 = core.unrealized_conversion_cast %22 : core.i32
+              scf.yield %23
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb9(%19: tribute_rt.anyref, %20: tribute_rt.anyref):
-              %21 = arith.const {value = 0} : core.i32
-              %22 = func.call_indirect %19, %21 : tribute_rt.anyref
-              scf.yield %22
+            ^bb9(%24: tribute_rt.anyref, %25: tribute_rt.anyref):
+              %26 = arith.const {value = 0} : core.i32
+              %27 = core.unrealized_conversion_cast %26 : tribute_rt.anyref
+              %28 = core.unrealized_conversion_cast %24 : !t0
+              %29 = func.call_indirect %28, %27 : tribute_rt.anyref
+              scf.yield %29
           }
           cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
-            ^bb10(%23: tribute_rt.anyref, %24: tribute_rt.anyref):
-              %25 = arith.const {value = unit} : core.nil
-              %26 = func.call_indirect %23, %25 : tribute_rt.anyref
-              scf.yield %26
+            ^bb10(%30: tribute_rt.anyref, %31: tribute_rt.anyref):
+              %32 = arith.const {value = unit} : core.nil
+              %33 = core.unrealized_conversion_cast %32 : tribute_rt.anyref
+              %34 = core.unrealized_conversion_cast %30 : !t0
+              %35 = func.call_indirect %34, %33 : tribute_rt.anyref
+              scf.yield %35
           }
       }
-      %27 = core.unrealized_conversion_cast %17 : core.i32
-      func.return %27
+      %36 = core.unrealized_conversion_cast %21 : core.i32
+      func.return %36
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

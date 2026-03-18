@@ -157,18 +157,20 @@ impl RewritePattern for LowerPerformPattern {
         if is_in_func_body(ctx, block) {
             let result_val = call_op.result(ctx);
             let func_ret_ty = find_enclosing_func_return_type(ctx, block);
-            let casted = if let Some(ret_ty) = func_ret_ty {
-                if ret_ty != t.anyref {
+            let ret_op = if let Some(ret_ty) = func_ret_ty {
+                if is_nil_type(ctx, ret_ty) {
+                    // Nil return type = void in Cranelift; return with no args.
+                    func::r#return(ctx, location, std::iter::empty::<ValueRef>())
+                } else if ret_ty != t.anyref {
                     let cast = core::unrealized_conversion_cast(ctx, location, result_val, ret_ty);
                     rewriter.insert_op(cast.op_ref());
-                    cast.result(ctx)
+                    func::r#return(ctx, location, [cast.result(ctx)])
                 } else {
-                    result_val
+                    func::r#return(ctx, location, [result_val])
                 }
             } else {
-                result_val
+                func::r#return(ctx, location, [result_val])
             };
-            let ret_op = func::r#return(ctx, location, [casted]);
             rewriter.insert_op(ret_op.op_ref());
         }
 
@@ -192,6 +194,12 @@ impl RewritePattern for LowerPerformPattern {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Check if a TypeRef is `core.nil` (void return type in Cranelift).
+fn is_nil_type(ctx: &IrContext, ty: trunk_ir::TypeRef) -> bool {
+    let td = ctx.types.get(ty);
+    td.dialect == Symbol::new("core") && td.name == Symbol::new("nil")
+}
 
 /// Find the return type of the enclosing `func.func`.
 fn find_enclosing_func_return_type(ctx: &IrContext, block: BlockRef) -> Option<trunk_ir::TypeRef> {

@@ -18,17 +18,18 @@ core.module @test {
       %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           cont.done {
             ^bb4(%10: tribute_rt.anyref):
-              scf.yield %10
+              %11 = core.unrealized_conversion_cast %10 : core.i32
+              scf.yield %11
           }
       }
-      %11 = core.unrealized_conversion_cast %9 : core.i32
-      %12 = arith.const {value = 42} : core.i32
-      %13 = arith.const {value = unit} : core.nil
+      %12 = core.unrealized_conversion_cast %9 : core.i32
+      %13 = arith.const {value = 42} : core.i32
       %14 = arith.const {value = unit} : core.nil
-      func.return %14
+      %15 = arith.const {value = unit} : core.nil
+      func.return %15
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
+      %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
           %1 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
             ^bb2(%2: tribute_rt.anyref):
               func.return %2

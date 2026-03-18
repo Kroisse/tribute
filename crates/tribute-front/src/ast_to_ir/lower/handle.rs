@@ -158,6 +158,12 @@ pub(super) fn lower_handle<'db>(
     // Handlers are lowered with the outer prompt active.
     builder.ctx.pop_prompt_tag();
 
+    // Compute the body's logical result type for the done handler cast.
+    let logical_result_ty = builder
+        .ctx
+        .get_node_type(body.id)
+        .map(|ty| builder.ctx.convert_type(builder.ir, *ty));
+
     // 2. Build handler dispatch body region (cont.done + cont.suspend ops)
     let handler_dispatch_body = build_cps_handler_dispatch_body(
         builder.ctx,
@@ -166,11 +172,13 @@ pub(super) fn lower_handle<'db>(
         handlers,
         anyref_ty,
         anyref_ty,
+        logical_result_ty,
     );
 
     // 3. Build handler_dispatch closure: (k, op_idx, value) -> anyref
-    let handler_fn_val =
-        build_handler_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
+    let handler_fn_val = build_handler_dispatch_closure(
+        builder, location, handlers, anyref_ty, anyref_ty, effect_ty,
+    );
 
     // 4. Emit ability.handle_dispatch
     let dispatch_op = ability::handle_dispatch(
@@ -284,6 +292,7 @@ fn build_cps_handler_dispatch_body<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     result_ty: TypeRef,
     _yr_ty: TypeRef,
+    logical_result_ty: Option<TypeRef>,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -304,7 +313,14 @@ fn build_cps_handler_dispatch_body<'db>(
     }
 
     // cont.done child op
-    let done_body = build_done_handler_region(ctx, ir, location, result_handler, result_ty);
+    let done_body = build_done_handler_region(
+        ctx,
+        ir,
+        location,
+        result_handler,
+        result_ty,
+        logical_result_ty,
+    );
     let done_op = cont::done(ir, location, done_body);
     ir.push_op(block, done_op.op_ref());
 
@@ -332,6 +348,7 @@ fn build_done_handler_region<'db>(
     location: Location,
     result_handler: Option<&HandlerArm<TypedRef<'db>>>,
     result_ty: TypeRef,
+    logical_result_ty: Option<TypeRef>,
 ) -> trunk_ir::refs::RegionRef {
     let block = ir.create_block(BlockData {
         location,
@@ -343,6 +360,20 @@ fn build_done_handler_region<'db>(
         parent_region: None,
     });
     let done_value = ir.block_arg(block, 0);
+
+    // Cast done_value from anyref to the body's logical result type so that
+    // handler body code (e.g. `result + 1`) sees the correct operand type.
+    let done_value = if let Some(logical_ty) = logical_result_ty {
+        if logical_ty != result_ty {
+            let cast = core::unrealized_conversion_cast(ir, location, done_value, logical_ty);
+            ir.push_op(block, cast.op_ref());
+            cast.result(ir)
+        } else {
+            done_value
+        }
+    } else {
+        done_value
+    };
 
     let result = if let Some(handler) = result_handler {
         ctx.enter_scope();
@@ -536,6 +567,7 @@ fn build_handler_dispatch_closure<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     anyref_ty: TypeRef,
     yr_ty: TypeRef,
+    effect_ty: Option<TypeRef>,
 ) -> ValueRef {
     let i32_ty = builder.ctx.i32_type(builder.ir);
 
@@ -617,11 +649,13 @@ fn build_handler_dispatch_closure<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn(anyref, i32, anyref) -> YieldResult
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty, i32_ty, anyref_ty], yr_ty, None);
+    // Closure type: fn(anyref, i32, anyref) ->{effect} YieldResult
+    let closure_func_ty = builder.ctx.func_type_with_effect(
+        builder.ir,
+        &[anyref_ty, i32_ty, anyref_ty],
+        yr_ty,
+        effect_ty,
+    );
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();

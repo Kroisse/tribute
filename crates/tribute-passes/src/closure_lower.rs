@@ -82,11 +82,10 @@ fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
         return true;
     }
     if arena_core::Func::matches(ctx, ty) {
-        // Only treat core.func as closure if it's a block arg (matching LowerClosureCallArena)
-        return matches!(
-            ctx.value_def(value),
-            trunk_ir::refs::ValueDef::BlockArg(_, _)
-        );
+        // core.func in func.call_indirect is always a closure value.
+        // Direct function calls use func.call; call_indirect operates on
+        // closure values (block args, env captures, etc.).
+        return true;
     }
     false
 }
@@ -292,11 +291,10 @@ impl RewritePattern for LowerClosureCallArena {
             // Already lowered closure struct
             true
         } else if arena_core::Func::matches(ctx, callee_ty) {
-            // core.func: only treat as closure if it's a block arg
-            matches!(
-                ctx.value_def(callee),
-                trunk_ir::refs::ValueDef::BlockArg(_, _)
-            )
+            // core.func in func.call_indirect is always a closure value.
+            // Direct function calls use func.call; call_indirect operates on
+            // closure values (block args, env captures, etc.).
+            true
         } else {
             // Fallback: check if result of closure.new
             if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {

@@ -18,13 +18,14 @@ core.module @test {
       %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           cont.done {
             ^bb4(%10: tribute_rt.anyref):
-              scf.yield %10
+              %11 = core.unrealized_conversion_cast %10 : core.i32
+              scf.yield %11
           }
       }
-      %11 = core.unrealized_conversion_cast %9 : core.i32
-      %12 = arith.const {value = 99} : core.i32
-      %13 = arith.const {value = unit} : core.nil
-      func.return %13
+      %12 = core.unrealized_conversion_cast %9 : core.i32
+      %13 = arith.const {value = 99} : core.i32
+      %14 = arith.const {value = unit} : core.nil
+      func.return %14
   }
   func.func @apply_thunk(%0: core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1001}}) -> core.i32 {
     ^bb0:
@@ -33,7 +34,7 @@ core.module @test {
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1000}}) {
-          %1 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
+          %1 = closure.lambda : closure.closure(core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
               %2 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
                 ^bb3(%3: tribute_rt.anyref):
                   func.return %3

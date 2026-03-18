@@ -549,20 +549,11 @@ pub(super) fn lower_expr<'db>(
                     } else {
                         Some(*effect)
                     };
-                    // Effectful lambdas are invoked through handler prompts,
-                    // which use polymorphic (boxed) types. Force the return
-                    // type to `tribute_rt.anyref` so the closure boxes its
-                    // result before returning, matching the `call_indirect`
-                    // in `__prompt_body_N`.
-                    //
-                    // Only apply this when the lambda has concrete abilities
-                    // (not just a tail variable from polymorphic inference).
-                    let has_concrete_abilities = !effect.effects(db).is_empty();
-                    let rir = if has_concrete_abilities {
-                        builder.ctx.anyref_type(builder.ir)
-                    } else {
-                        builder.ctx.convert_type(builder.ir, *result)
-                    };
+                    // In the CPS effect handling path, the function's declared
+                    // return type is preserved. `lower_ability_perform` inserts
+                    // an `unrealized_conversion_cast` from anyref to the return
+                    // type, so callers see the expected type.
+                    let rir = builder.ctx.convert_type(builder.ir, *result);
                     (eff, pir, rir)
                 }
                 _ => {
@@ -609,8 +600,34 @@ pub(super) fn lower_expr<'db>(
                 return builder.emit_unsupported(location, "resume: continuation not bound");
             };
             let anyref_ty = builder.ctx.anyref_type(builder.ir);
-            let call_op =
-                func::call_indirect(builder.ir, location, k_val, vec![arg_val], anyref_ty);
+
+            // Cast arg to anyref if needed
+            let arg_cast = if builder.ir.value_ty(arg_val) != anyref_ty {
+                let cast =
+                    core::unrealized_conversion_cast(builder.ir, location, arg_val, anyref_ty);
+                builder.ir.push_op(builder.block, cast.op_ref());
+                cast.result(builder.ir)
+            } else {
+                arg_val
+            };
+
+            // Cast k_val from anyref to closure type so closure_lower can
+            // properly decompose it (extract fn_ptr + env and add evidence).
+            let closure_func_ty =
+                builder
+                    .ctx
+                    .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+            let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+            let k_cast = core::unrealized_conversion_cast(builder.ir, location, k_val, closure_ty);
+            builder.ir.push_op(builder.block, k_cast.op_ref());
+
+            let call_op = func::call_indirect(
+                builder.ir,
+                location,
+                k_cast.result(builder.ir),
+                vec![arg_cast],
+                anyref_ty,
+            );
             builder.ir.push_op(builder.block, call_op.op_ref());
             Some(call_op.result(builder.ir))
         }
