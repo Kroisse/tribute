@@ -16,12 +16,7 @@ use trunk_ir::refs::{RegionRef, ValueRef};
 // Hash-Based Dispatch
 // ============================================================================
 
-/// Compute operation index using hash-based dispatch.
-///
-/// Delegates to `tribute_ir::dialect::ability::compute_op_idx`.
-pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
-    tribute_ir::dialect::ability::compute_op_idx(ability_ref, op_name)
-}
+pub use tribute_ir::dialect::ability::compute_op_idx;
 
 // ============================================================================
 // Handler Dispatch Utilities
