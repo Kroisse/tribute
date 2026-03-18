@@ -602,19 +602,17 @@ pub(super) fn lower_expr<'db>(
             // In CPS mode, `resume(value)` is lowered as a call to the
             // continuation closure bound by the `op` handler arm.
             let arg_val = lower_expr(builder, arg)?;
-            if let Some(lid) = local_id {
-                if let Some(k_val) = builder.ctx.lookup(lid) {
-                    let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                    let call_op =
-                        func::call_indirect(builder.ir, location, k_val, vec![arg_val], anyref_ty);
-                    builder.ir.push_op(builder.block, call_op.op_ref());
-                    Some(call_op.result(builder.ir))
-                } else {
-                    builder.emit_unsupported(location, "resume: continuation not bound")
-                }
-            } else {
-                builder.emit_unsupported(location, "resume without local_id")
-            }
+            let Some(lid) = local_id else {
+                return builder.emit_unsupported(location, "resume without local_id");
+            };
+            let Some(k_val) = builder.ctx.lookup(lid) else {
+                return builder.emit_unsupported(location, "resume: continuation not bound");
+            };
+            let anyref_ty = builder.ctx.anyref_type(builder.ir);
+            let call_op =
+                func::call_indirect(builder.ir, location, k_val, vec![arg_val], anyref_ty);
+            builder.ir.push_op(builder.block, call_op.op_ref());
+            Some(call_op.result(builder.ir))
         }
 
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
@@ -850,12 +848,13 @@ fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
         Stmt::Let { value, .. } => value,
         Stmt::Expr { expr, .. } => expr,
     };
-    if let ExprKind::Call { callee, .. } = &*call_expr.kind
-        && let ExprKind::Var(tr) = &*callee.kind
-    {
-        return matches!(&tr.resolved, ResolvedRef::AbilityOp { .. });
-    }
-    false
+    let ExprKind::Call { callee, .. } = &*call_expr.kind else {
+        return false;
+    };
+    let ExprKind::Var(tr) = &*callee.kind else {
+        return false;
+    };
+    matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
 }
 
 /// Lower a single non-CPS statement (let binding or expression statement).
