@@ -52,17 +52,29 @@ State 핸들러를 제공해야 한다. 이는 일반 함수 호출과 동일한
 Continuation은 자신을 캡처한 handler 스코프 내에서만 resume될 수 있다:
 
 ```rust
+// OK: 같은 handler 스코프 내에서 resume
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do result { result }
-        op State::get() { run_state(fn() resume state, state) }
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() k(state), state)  // OK
     }
+}
+
+// 에러: handler 스코프 밖으로 continuation 탈출
+fn escape_continuation() -> fn(Int) -> Int {
+    run_state(fn() {
+        handle some_comp() {
+            { State::get() -> k } -> k  // 컴파일 에러: k가 스코프 탈출
+        }
+    }, 0)
 }
 ```
 
-`resume`은 키워드이므로 단독으로 값이 될 수 없고, 호출 위치(`resume expr`)에서만
-사용할 수 있다. 다만 `fn() resume state`처럼 람다 안에서 호출하는 것은 가능하며,
-이 경우 continuation의 affine 사용(최대 1회 호출)은 런타임에서 보장해야 한다.
+이 제한으로 인해:
+
+- Continuation이 유효하지 않은 컨텍스트에서 호출되는 것을 방지
+- 구현이 단순해짐 (evidence 유효성 보장)
+- 대부분의 실용적 패턴은 여전히 표현 가능
 
 ---
 
@@ -252,59 +264,24 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 
 ### Tail-Resumptive Optimization
 
-두 가지 레벨에서 tail-resumptive 최적화가 적용된다:
-
-#### 1. 선언 수준 보장 (`fn` operation)
-
-`fn`으로 선언된 operation은 **호출 지점에서** continuation 캡처 코드를
-생성하지 않는다. Evidence에서 handler 함수를 조회하여 직접 호출한다:
+Handler가 항상 즉시 `k(value)`로 끝나면, continuation 캡처 없이 직접 호출로 변환:
 
 ```rust
-// fn operation 호출 → shift 없이 직접 호출
-fn console_print(msg: Text, ev: Evidence) -> Nil {
-    let idx = evidence_lookup(ev, CONSOLE_ID)
+// 원본 handler
+{ State::get() -> k } -> run_state(fn() k(state), state)
+
+// Tail-resumptive 감지 시, shift 없이:
+fn state_get_optimized(ev: Evidence) -> s {
+    let idx = evidence_lookup(ev, STATE_ID)
     let marker = adt.array_get(ev, idx)
-    let op_idx = adt.struct_get(marker, 2)
+    let op_idx = adt.struct_get(marker, 2)  // op_table_index (인덱스 2)
     let op_table = &OP_TABLES[op_idx as usize]
-    (op_table.print)(msg)  // 직접 호출, shift 없음
+    (op_table.get_value)()  // 직접 반환, shift 없음
 }
 ```
 
-Console, Reader, Logger 등 대부분의 실용적 ability가 `fn`으로 선언되므로,
-이 최적화가 큰 효과를 낸다.
-
-#### 2. Handler 수준 분석 (`op` operation)
-
-`op`로 선언된 operation이라도, 특정 handler가 `resume`을 항상 tail position에서
-1회 호출하면 컴파일러가 감지하여 최적화할 수 있다:
-
-```rust
-// 원본: 재귀적 handler 재설치
-op State::get() { run_state(fn() resume state, state) }
-op State::set(v) { run_state(fn() resume Nil, v) }
-
-// 컴파일러 변환 (개념적): 루프 + mutable state
-fn run_state_optimized(comp, init_state) {
-    var state = init_state              // 컴파일러 내부 mutable
-    loop {
-        match next_suspended_op {
-            Done(result) -> return result
-            Get(resume) -> resume(state)        // shift 없이 직접 반환
-            Set(v, resume) -> {
-                state = v
-                resume(Nil)
-            }
-        }
-    }
-}
-```
-
-이 분석은 best-effort이며, 복잡한 handler에서는 적용되지 않을 수 있다.
-
-#### `op -> Never` 최적화
-
-`-> Never`를 반환하는 operation은 continuation을 캡처하지 않는다.
-Handler arm에서도 `-> k`를 사용하지 않으므로 continuation 관련 오버헤드가 없다.
+대부분의 실용적 ability (State, Reader, Writer, Console)가
+tail-resumptive이므로, 이 최적화가 큰 효과를 낸다.
 
 ---
 
@@ -344,16 +321,12 @@ Evidence 기반 디스패치에서 두 가지 핵심 식별자가 협력한다:
 ```rust
 // 같은 ability를 중첩하는 예시
 fn nested_state_example() -> Int {
-    handle {                             // prompt_tag = P1
-        handle {                         // prompt_tag = P2
-            State::get()                 // ability_id = STATE_ID
+    handle outer() {                    // prompt_tag = P1
+        handle inner() {                // prompt_tag = P2
+            State::get()                // ability_id = STATE_ID
             // → evidence에서 STATE_ID로 조회하면 가장 안쪽(P2)의 marker 반환
-        } {
-            op State::get() { resume 10 }
-        }
-    } {
-        op State::get() { resume 20 }
-    }
+        } { State::get() -> k => k(10) }
+    } { State::get() -> k => k(20) }
 }
 ```
 
@@ -382,19 +355,20 @@ shift(tag, fn(k) handler_body)
 2. `f(k)`를 실행
 3. `k`는 one-shot linear 타입 (한 번만 사용 또는 명시적 drop)
 
-### `resume` 규칙
-
-`op -> T` handler body에서 `resume`은 최대 1회 호출할 수 있다 (affine).
-호출하지 않으면 continuation은 암묵적으로 drop된다:
+### Linear Continuation
 
 ```rust
-op State::get() { resume current_state }    // 1회: 정상 resume
-op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
+// 사용: 함수처럼 호출
+{ State::get() -> k } -> k(current_state)
+
+// 버림: 명시적 drop 필요
+{ Fail::fail(msg) -> k } -> {
+    drop(k)
+    None
+}
 ```
 
-항상 resume하지 않는 operation은 `-> Never`로 선언한다.
-`-> Never`는 continuation 캡처 자체를 생략하는 최적화를 가능하게 한다.
-`op -> Never` handler body에서는 `resume`을 사용할 수 없다.
+사용하지도 버리지도 않으면 컴파일 에러.
 
 ---
 

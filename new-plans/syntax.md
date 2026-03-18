@@ -21,7 +21,7 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use case handle resume if as
+fn let const struct enum ability mod pub use case handle if as
 True False Nil
 ```
 
@@ -30,7 +30,7 @@ True False Nil
 ### Reserved (향후 사용)
 
 ```text
-type where in
+type where in do
 ```
 
 **Note:** 대부분의 제어 흐름은 algebraic effect로 처리하므로 예약어를 최소화함
@@ -415,7 +415,7 @@ ReturnType ::= '->' Type                      // 암묵적 effect polymorphic
              | '->' '{' EffectRow? '}' Type   // 명시적 effect
 
 EffectRow ::= EffectItem (',' EffectItem)* EffectTail? ','?
-EffectItem ::= TypePath TypeArgs?
+EffectItem ::= TypeId TypeArgs?
 EffectTail ::= ',' LowerIdentifier            // row variable
 ```
 
@@ -450,16 +450,7 @@ fn() ->{State(Int), e} Int    // State + row variable e
 AbilityDecl ::= 'ability' TypeId TypeParams? '{' AbilityOp* '}'
 
 AbilityOp ::= 'fn' Identifier '(' ParamList? ')' '->' Type
-            | 'op' Identifier '(' ParamList? ')' '->' Type
 ```
-
-Ability operation은 두 종류로 선언한다:
-
-- **`fn`**: Tail-resumptive. Handler에서 반환값이 자동으로 resume 값이 된다.
-  Continuation을 캡처하지 않는다.
-- **`op`**: General. Handler에서 `resume` 키워드를 사용하여 명시적으로
-  continuation을 호출한다. `-> Never`를 반환하면 절대 resume하지 않는
-  abort 패턴을 표현한다.
 
 **예시:**
 
@@ -470,17 +461,13 @@ ability Console {
 }
 
 ability State(s) {
-    op get() -> s
-    op set(value: s) -> Nil
+    fn get() -> s
+    fn set(value: s) -> Nil
 }
 
 ability Http {
     fn get(url: Text) -> Response
     fn post(url: Text, body: Text) -> Response
-}
-
-ability Fail {
-    op fail(msg: Text) -> Never
 }
 ```
 
@@ -489,53 +476,42 @@ ability Fail {
 ```ebnf
 HandleExpr ::= 'handle' Expression '{' HandlerArm+ '}'
 
-HandlerArm ::= CompletionArm | FnHandlerArm | OpHandlerArm
+HandlerArm ::= HandlerPattern '->' Expression
+             | HandlerPattern GuardedBranch+
 
-CompletionArm  ::= 'do' Identifier Block                        // do result { body }
-FnHandlerArm   ::= 'fn' Path '(' PatternList? ')' Block        // fn Op(args) { body }
-OpHandlerArm   ::= 'op' Path '(' PatternList? ')' Block        // op Op(args) { body }
+HandlerPattern ::= '{' Identifier '}'                              // completion: { result }
+                 | '{' Path '(' PatternList? ')' '->' Identifier '}'  // suspend: { Op(args) -> k }
 ```
 
 `handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다.
 
-Handler arm은 함수 정의와 대칭적인 구조를 가진다. Ability 선언에서 `fn`/`op`으로
-operation을 정의하듯, handler에서도 같은 키워드로 각 operation의 구현을 작성한다:
+**Handler pattern 종류:**
 
-| arm | 대상 | 의미 |
-| --- | ---- | ---- |
-| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 (생략 시 identity) |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
-| `op Op(args) { body }` | `op` operation | body에서 `resume` 키워드로 명시적 resume |
+| 패턴                | 의미                                                         |
+| ------------------- | ------------------------------------------------------------ |
+| `{ value }`         | Computation이 완료됨, 결과값을 `value`에 바인딩              |
+| `{ Op(args) -> k }` | Ability operation에서 suspend됨, continuation을 `k`에 바인딩 |
 
-**`fn` handler arm:**
+**Continuation:**
 
-Body의 반환값이 곧 resume 값. `resume` 사용 불가:
+Continuation `k`는 computation을 재개하는 함수다:
 
 ```rust
-fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume Nil
-fn Console::read() { IO::read(stdin) }              // Text 반환 → resume input
+{ State::get() -> k } -> k(current_state)  // resume with value
+{ State::set(v) -> k } -> k(Nil)           // resume with unit
 ```
 
-**`op` handler arm과 `resume`:**
-
-`resume`은 키워드로, computation을 재개하는 함수처럼 호출한다.
-`op -> T` handler body에서 `resume`은 최대 1회 호출할 수 있다 (affine).
-호출하지 않으면 continuation은 암묵적으로 drop된다:
+Continuation은 **linear type**이다. 반드시 한 번 사용하거나 명시적으로 버려야 한다:
 
 ```rust
-op State::get() { resume current_state }
-op State::set(v) { resume Nil }
-```
+// 사용: 함수로 호출
+{ State::get() -> k } -> k(state)
 
-항상 resume하지 않는 operation은 `-> Never`로 선언하면
-continuation 캡처 자체를 생략하는 최적화가 가능하다.
-
-**`op -> Never` (abort 패턴):**
-
-`-> Never`를 반환하는 operation의 handler body에서는 `resume`을 사용할 수 없다:
-
-```rust
-op Fail::fail(msg) { None }
+// 버림: drop 함수 사용
+{ Fail::fail(msg) -> k } -> {
+    drop(k)
+    None
+}
 ```
 
 **예시:**
@@ -543,24 +519,9 @@ op Fail::fail(msg) { None }
 ```rust
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        do result { result }
-        op State::get() { run_state(fn() resume state, state) }
-        op State::set(v) { run_state(fn() resume Nil, v) }
-    }
-}
-
-fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
-    handle comp() {
-        do result { result }
-        fn Console::print(msg) { IO::write(stdout, msg) }
-        fn Console::read() { IO::read(stdin) }
-    }
-}
-
-fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
-    handle comp() {
-        do result { Some(result) }
-        op Fail::fail(msg) { None }
+        { result } -> result
+        { State::get() -> k } -> run_state(fn() k(state), state)
+        { State::set(v) -> k } -> run_state(fn() k(Nil), v)
     }
 }
 ```
@@ -637,13 +598,11 @@ PrimaryExpr ::= Literal
               | Lambda
               | CaseExpr
               | HandleExpr
-              | ResumeExpr
 
 ListExpr ::= '[' ExprList? ']'
 TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
              | '(' QualifiedOp ')'        // (Int::+), (Text::<>)
-ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine, 생략 시 Nil)
 ```
 
 ### Block Expression
@@ -871,7 +830,7 @@ RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
 
-**Note:** Handler arm (`do`, `fn`, `op`)은 `handle`
+**Note:** Handler pattern (`{ result }`, `{ Op(args) -> k }`)은 `handle`
 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.
 
 **예시:**
@@ -1043,8 +1002,11 @@ fn process(users: List(User)) ->{Logger} List(Text) {
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e, Console} a {
     handle comp() {
-        do result { result }
-        fn Logger::log(msg) { Console::print("[LOG] " <> msg) }
+        { result } -> result
+        { Logger::log(msg) -> k } -> {
+            Console::print("[LOG] " <> msg)
+            run_logger(fn() k(Nil))
+        }
     }
 }
 
@@ -1110,7 +1072,6 @@ fn main() ->{Console} Nil {
 | `a <> b`                | Concatenation          |
 | `a T::<> b`             | Qualified operator     |
 | `(+)`, `(T::<>)`        | Operator as function   |
-| `resume expr`           | Continuation 재개      |
 
 ### Patterns
 
@@ -1127,10 +1088,9 @@ fn main() ->{Console} Nil {
 | `[h, ..t]`         | List (head + tail)             |
 | `pat as x`         | As (전체 바인딩)               |
 
-### Handler Arms (handle 전용)
+### Handler Patterns (handle 전용)
 
-| arm                       | 의미                                    |
-| ------------------------- | --------------------------------------- |
-| `do result { expr }`      | Completion (생략 시 identity)           |
-| `fn Op(x) { body }`       | `fn` operation (tail-resumptive)        |
-| `op Op(x) { body }`       | `op` operation (explicit `resume`)      |
+| 패턴               | 의미                           |
+| ------------------ | ------------------------------ |
+| `{ result }`       | Computation 완료               |
+| `{ Op(x) -> k }`   | Effect suspend + continuation  |
