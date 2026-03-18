@@ -11,7 +11,7 @@ echo "Running pre-commit checks..."
 echo "Running tests..."
 # Use nextest for faster test execution
 # --status-level=fail: only print failing tests (suppress 1000+ PASS lines)
-# --final-status-level=fail: summary shows only failures
+# --final-status-level=flaky: summary shows failures and flaky tests
 if ! cargo nextest run --workspace --status-level=fail --final-status-level=flaky; then
     echo ""
     echo "❌ Tests failed."
