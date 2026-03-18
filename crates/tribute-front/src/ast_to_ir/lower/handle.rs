@@ -125,7 +125,7 @@ pub(super) fn lower_handle<'db>(
     let handled_ability_refs: Vec<_> = handlers
         .iter()
         .filter_map(|h| match &h.kind {
-            HandlerKind::Effect { ability, .. } => {
+            HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
                 let name = match &ability.resolved {
                     ResolvedRef::Ability { id } => {
                         Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string())
@@ -298,8 +298,8 @@ fn build_cps_handler_dispatch_body<'db>(
 
     for handler in handlers {
         match &handler.kind {
-            HandlerKind::Result { .. } => result_handler = Some(handler),
-            HandlerKind::Effect { .. } => effect_handlers.push(handler),
+            HandlerKind::Do { .. } => result_handler = Some(handler),
+            HandlerKind::Fn { .. } | HandlerKind::Op { .. } => effect_handlers.push(handler),
         }
     }
 
@@ -347,7 +347,7 @@ fn build_done_handler_region<'db>(
     let result = if let Some(handler) = result_handler {
         ctx.enter_scope();
 
-        if let HandlerKind::Result { binding } = &handler.kind {
+        if let HandlerKind::Do { binding } = &handler.kind {
             bind_pattern_fields(ctx, ir, block, location, done_value, binding);
         }
 
@@ -389,8 +389,9 @@ fn extract_ability_ref_and_op_name<'db>(
     handler: &HandlerArm<TypedRef<'db>>,
 ) -> (TypeRef, Symbol) {
     let db = ctx.db;
-    let HandlerKind::Effect { ability, op, .. } = &handler.kind else {
-        unreachable!("extract_ability_ref_and_op_name called with non-effect handler");
+    let (ability, op) = match &handler.kind {
+        HandlerKind::Fn { ability, op, .. } | HandlerKind::Op { ability, op, .. } => (ability, op),
+        _ => unreachable!("extract_ability_ref_and_op_name called with non-effect handler"),
     };
 
     let ability_name = match &ability.resolved {
@@ -427,14 +428,14 @@ fn build_cps_suspend_handler_region<'db>(
     handler: &HandlerArm<TypedRef<'db>>,
     _yr_ty: TypeRef,
 ) -> trunk_ir::refs::RegionRef {
-    let HandlerKind::Effect {
-        params,
-        continuation,
-        continuation_local_id,
-        ..
-    } = &handler.kind
-    else {
-        unreachable!("build_cps_suspend_handler_region called with non-effect handler");
+    let (params, resume_local_id) = match &handler.kind {
+        HandlerKind::Op {
+            params,
+            resume_local_id,
+            ..
+        } => (params, *resume_local_id),
+        HandlerKind::Fn { params, .. } => (params, None),
+        _ => unreachable!("build_cps_suspend_handler_region called with non-effect handler"),
     };
 
     let any_ty = ctx.anyref_type(ir);
@@ -465,9 +466,9 @@ fn build_cps_suspend_handler_region<'db>(
     let prev_cps_mode = ctx.cps_handler_mode;
     ctx.cps_handler_mode = true;
 
-    // Bind continuation if named
-    if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
-        ctx.bind(*k_local_id, *k_name, cont_value);
+    // Bind resume continuation if this is an `op` arm with resume
+    if let Some(k_local_id) = resume_local_id {
+        ctx.bind(k_local_id, Symbol::new("resume"), cont_value);
     }
 
     // Bind params patterns
@@ -541,7 +542,7 @@ fn build_handler_dispatch_closure<'db>(
     // Collect effect handlers
     let effect_handlers: Vec<&HandlerArm<TypedRef<'db>>> = handlers
         .iter()
-        .filter(|h| matches!(&h.kind, HandlerKind::Effect { .. }))
+        .filter(|h| matches!(&h.kind, HandlerKind::Fn { .. } | HandlerKind::Op { .. }))
         .collect();
 
     // Analyze captures for all handler arm bodies
@@ -757,14 +758,14 @@ fn build_handler_arm_for_dispatch<'db>(
     anyref_ty: TypeRef,
     _yr_ty: TypeRef,
 ) -> trunk_ir::refs::RegionRef {
-    let HandlerKind::Effect {
-        params,
-        continuation,
-        continuation_local_id,
-        ..
-    } = &handler.kind
-    else {
-        unreachable!("build_handler_arm_for_dispatch called with non-effect handler");
+    let (params, resume_local_id) = match &handler.kind {
+        HandlerKind::Op {
+            params,
+            resume_local_id,
+            ..
+        } => (params, *resume_local_id),
+        HandlerKind::Fn { params, .. } => (params, None),
+        _ => unreachable!("build_handler_arm_for_dispatch called with non-effect handler"),
     };
 
     let block = ir.create_block(BlockData {
@@ -779,9 +780,9 @@ fn build_handler_arm_for_dispatch<'db>(
     let prev_cps_mode = ctx.cps_handler_mode;
     ctx.cps_handler_mode = true;
 
-    // Bind continuation if named
-    if let (Some(k_name), Some(k_local_id)) = (continuation, continuation_local_id) {
-        ctx.bind(*k_local_id, *k_name, k_val);
+    // Bind resume continuation if this is an `op` arm with resume
+    if let Some(k_local_id) = resume_local_id {
+        ctx.bind(k_local_id, Symbol::new("resume"), k_val);
     }
 
     // Bind params patterns

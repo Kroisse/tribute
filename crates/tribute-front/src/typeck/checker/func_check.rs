@@ -316,6 +316,10 @@ impl<'db> TypeChecker<'db> {
                     })
                     .collect(),
             },
+            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
+                arg: self.apply_subst_to_body(arg, type_subst, row_subst, var_to_index),
+                local_id,
+            },
             ExprKind::Tuple(elems) => ExprKind::Tuple(
                 elems
                     .into_iter()
@@ -414,16 +418,14 @@ impl<'db> TypeChecker<'db> {
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
-            HandlerKind::Result { binding } => HandlerKind::Result {
+            HandlerKind::Do { binding } => HandlerKind::Do {
                 binding: self.apply_subst_to_pattern(binding, type_subst, row_subst, var_to_index),
             },
-            HandlerKind::Effect {
+            HandlerKind::Fn {
                 ability,
                 op,
                 params,
-                continuation,
-                continuation_local_id,
-            } => HandlerKind::Effect {
+            } => HandlerKind::Fn {
                 ability: self.apply_subst_to_typed_ref(
                     ability,
                     type_subst,
@@ -435,8 +437,25 @@ impl<'db> TypeChecker<'db> {
                     .into_iter()
                     .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
                     .collect(),
-                continuation,
-                continuation_local_id,
+            },
+            HandlerKind::Op {
+                ability,
+                op,
+                params,
+                resume_local_id,
+            } => HandlerKind::Op {
+                ability: self.apply_subst_to_typed_ref(
+                    ability,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                ),
+                op,
+                params: params
+                    .into_iter()
+                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
+                    .collect(),
+                resume_local_id,
             },
         };
         HandlerArm {
@@ -627,10 +646,13 @@ impl<'db> TypeChecker<'db> {
                 self.collect_univars_from_body(body, type_subst, row_subst, out);
                 for handler in handlers {
                     match &handler.kind {
-                        HandlerKind::Result { binding } => {
+                        HandlerKind::Do { binding } => {
                             self.collect_univars_from_pattern(binding, type_subst, row_subst, out);
                         }
-                        HandlerKind::Effect {
+                        HandlerKind::Fn {
+                            ability, params, ..
+                        }
+                        | HandlerKind::Op {
                             ability, params, ..
                         } => {
                             type_subst.collect_univars_from_type(
@@ -646,6 +668,9 @@ impl<'db> TypeChecker<'db> {
                     }
                     self.collect_univars_from_body(&handler.body, type_subst, row_subst, out);
                 }
+            }
+            ExprKind::Resume { arg, .. } => {
+                self.collect_univars_from_body(arg, type_subst, row_subst, out);
             }
             ExprKind::Tuple(elems) | ExprKind::List(elems) => {
                 for elem in elems {

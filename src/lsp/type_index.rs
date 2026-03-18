@@ -349,6 +349,9 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                     self.collect_handler(handler);
                 }
             }
+            ExprKind::Resume { arg, .. } => {
+                self.collect_expr(arg);
+            }
             ExprKind::Tuple(elems) => {
                 for elem in elems {
                     self.collect_expr(elem);
@@ -437,10 +440,13 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
 
     fn collect_handler(&mut self, handler: &HandlerArm<TypedRef<'db>>) {
         match &handler.kind {
-            HandlerKind::Result { binding } => {
+            HandlerKind::Do { binding } => {
                 self.collect_pattern(binding);
             }
-            HandlerKind::Effect {
+            HandlerKind::Fn {
+                ability, params, ..
+            }
+            | HandlerKind::Op {
                 ability, params, ..
             } => {
                 self.add_entry(handler.id, ability.ty);

@@ -656,6 +656,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                     self.collect_handler(handler);
                 }
             }
+            ExprKind::Resume { arg, .. } => {
+                self.collect_expr(arg);
+            }
             ExprKind::Tuple(elems) | ExprKind::List(elems) => {
                 for elem in elems {
                     self.collect_expr(elem);
@@ -760,29 +763,19 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 
     fn collect_handler(&mut self, handler: &HandlerArm<TypedRef<'db>>) {
         match &handler.kind {
-            HandlerKind::Result { binding } => {
+            HandlerKind::Do { binding } => {
                 self.collect_pattern(binding);
             }
-            HandlerKind::Effect {
-                ability,
-                params,
-                continuation,
-                continuation_local_id,
-                ..
+            HandlerKind::Fn {
+                ability, params, ..
+            }
+            | HandlerKind::Op {
+                ability, params, ..
             } => {
                 let target = self.resolve_typed_ref(ability);
                 self.add_reference(handler.id, target);
                 for param in params {
                     self.collect_pattern(param);
-                }
-                if let Some(k) = continuation {
-                    // Use the LocalId assigned during name resolution
-                    self.add_definition(
-                        handler.id,
-                        *k,
-                        DefinitionKind::Local,
-                        *continuation_local_id,
-                    );
                 }
             }
         }

@@ -598,6 +598,25 @@ pub(super) fn lower_expr<'db>(
             Some(handle_val)
         }
 
+        ExprKind::Resume { arg, local_id } => {
+            // In CPS mode, `resume(value)` is lowered as a call to the
+            // continuation closure bound by the `op` handler arm.
+            let arg_val = lower_expr(builder, arg)?;
+            if let Some(lid) = local_id {
+                if let Some(k_val) = builder.ctx.lookup(lid) {
+                    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+                    let call_op =
+                        func::call_indirect(builder.ir, location, k_val, vec![arg_val], anyref_ty);
+                    builder.ir.push_op(builder.block, call_op.op_ref());
+                    Some(call_op.result(builder.ir))
+                } else {
+                    builder.emit_unsupported(location, "resume: continuation not bound")
+                }
+            } else {
+                builder.emit_unsupported(location, "resume without local_id")
+            }
+        }
+
         ExprKind::List(_) => builder.emit_unsupported(location, "list expression"),
 
         ExprKind::Error => Some(builder.emit_nil(location)),

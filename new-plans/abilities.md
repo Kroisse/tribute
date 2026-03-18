@@ -177,6 +177,14 @@ url.get.await
 
 ## Ability 정의
 
+Ability operation은 두 종류로 선언한다:
+
+- **`fn`**: Tail-resumptive operation. Handler가 값을 반환하면 자동으로 resume된다.
+  Continuation을 캡처하지 않으므로 일반 함수 호출과 동등한 성능.
+- **`op`**: General operation. Handler에서 `resume` 키워드를 통해
+  resume 여부와 시점을 제어한다. `-> Never`를 반환하면 절대 resume하지 않는
+  abort/exception 패턴을 표현한다.
+
 ```rust
 ability Http {
     fn get(url: Text) -> Response
@@ -188,13 +196,17 @@ ability Async {
 }
 
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 ability Console {
     fn print(msg: Text) -> Nil
     fn read() -> Text
+}
+
+ability Fail {
+    op fail(msg: Text) -> Never  // never resumes
 }
 ```
 
@@ -202,84 +214,110 @@ ability Console {
 
 ### `handle` 표현식
 
-`handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다:
+`handle expr { arms }`는 computation을 실행하고 handler arm으로 결과를 처리한다.
+
+Handler arm은 함수 정의와 대칭적인 구조를 가진다. Ability 선언에서 `fn`/`op`으로
+operation을 정의하듯, handler에서도 `fn`/`op` 키워드로 각 operation의 구현을 작성한다:
 
 ```rust
 handle computation() {
-    { result } -> result                    // 완료 시
-    { State::get() -> k } -> k(42)          // suspend 시
+    do result { result }
+    fn Console::print(msg) { IO::write(stdout, msg) }
+    op State::get() { run_state(fn() resume state, state) }
 }
 ```
 
 computation의 실행 결과는 두 가지 중 하나:
 
-- **완료**: computation이 값을 반환함 → `{ value }` 패턴 매칭
-- **Suspend**: ability operation에서 멈춤 → `{ Op(args) -> k }` 패턴 매칭
+- **완료**: computation이 값을 반환함 → `do value { expr }` 매칭
+- **Suspend**: ability operation에서 멈춤 → `fn`/`op` handler arm 매칭
 
-### Handler 패턴
+### Handler Arm 종류
 
-| 패턴 | 의미 |
-| ---- | ---- |
-| `{ value }` | Computation 완료, 결과값 바인딩 |
-| `{ Operation(args) -> k }` | Suspend, continuation `k` 바인딩 |
+| arm | 대상 | 의미 |
+| --- | ---- | ---- |
+| `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
+| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
+| `op Op(args) { body }` | `op` operation | body에서 `resume`으로 명시적 resume |
 
-Handler 패턴은 `handle` 표현식 내에서만 사용할 수 있다.
+Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 
-### Continuation
+### `fn` Operation Handler
 
-Continuation `k`는 일반 함수처럼 호출한다:
-
-```rust
-{ State::get() -> k } -> k(current_state)  // resume
-{ State::set(v) -> k } -> k(Nil)            // resume with unit
-```
-
-#### Linear Type
-
-Continuation은 **linear type**이다. 반드시 한 번 사용하거나 명시적으로 버려야 한다:
+`fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 곧
+resume 값이 된다. 함수 정의와 동일한 구조:
 
 ```rust
-// 사용: 함수로 호출
-{ State::get() -> k } -> k(state)
-
-// 버림: drop 함수 사용
-{ Fail::fail(msg) -> k } -> {
-    drop(k)
-    None
+// 선언
+ability Console {
+    fn print(msg: Text) -> Nil
+    fn read() -> Text
 }
-```
 
-사용하지도 버리지도 않으면 타입 에러:
-
-```rust
-// 컴파일 에러: k가 사용되지 않음
-{ Fail::fail(msg) -> k } -> None
-```
-
-### 기본 예시
-
-```rust
-fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
+// handler (구현)
+fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() k(state), state)
-        { State::set(v) -> k } -> run_state(fn() k(Nil), v)
+        do result { result }
+        fn Console::print(msg) { IO::write(stdout, msg) }  // Nil 반환 → resume Nil
+        fn Console::read() { IO::read(stdin) }              // Text 반환 → resume input
     }
 }
 ```
 
-### Abort 패턴
+`fn` handler arm에서는 `resume`을 사용할 수 **없다** (컴파일 에러).
 
-Continuation을 사용하지 않으면 명시적으로 버려야 한다:
+### `op` Operation Handler와 `resume`
+
+`op` operation의 handler body에서는 `resume` 키워드로 computation을 재개한다.
+`resume`은 일반 함수처럼 호출한다:
 
 ```rust
+op State::get() { resume current_state }     // resume with value
+op State::set(v) { resume Nil }              // resume with unit
+```
+
+#### `resume`의 사용 규칙
+
+`op -> T` handler body에서 `resume`은 **최대 1회** 호출할 수 있다 (affine).
+호출하지 않으면 continuation은 암묵적으로 drop된다:
+
+```rust
+// 1회 호출: 정상 resume
+op State::get() { resume state }
+
+// 0회 호출: continuation 암묵적 drop (abort)
+op SomeOp::cancel() { fallback_value }
+```
+
+항상 resume하지 않는 operation은 `-> Never`로 선언하는 것이 좋다.
+`-> Never`는 continuation 캡처 자체를 생략하는 최적화를 가능하게 한다.
+
+### 기본 예시: State (op)
+
+```rust
+fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
+        op State::set(v) { run_state(fn() resume Nil, v) }
+    }
+}
+```
+
+### Abort 패턴 (op -> Never)
+
+`-> Never`를 반환하는 operation은 절대 resume하지 않는다. Handler body에서
+`resume`을 사용할 수 없으며, continuation 캡처도 발생하지 않는다:
+
+```rust
+ability Fail {
+    op fail(msg: Text) -> Never
+}
+
 fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
     handle comp() {
-        { result } -> Some(result)
-        { Fail::fail(msg) -> k } -> {
-            drop(k)
-            None
-        }
+        do result { Some(result) }
+        op Fail::fail(msg) { None }   // resume 없음, drop 불필요
     }
 }
 ```
@@ -291,15 +329,9 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ```rust
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        { result } -> result
-        { Console::print(msg) -> k } -> {
-            IO::write(stdout, msg)
-            run_console(fn() k(Nil))
-        }
-        { Console::read() -> k } -> {
-            let input = IO::read(stdin)
-            run_console(fn() k(input))
-        }
+        do result { result }
+        fn Console::print(msg) { IO::write(stdout, msg) }
+        fn Console::read() { IO::read(stdin) }
     }
 }
 ```
@@ -313,8 +345,8 @@ ability Console {
 }
 
 ability State(s) {
-    fn get() -> s
-    fn set(value: s) -> Nil
+    op get() -> s
+    op set(value: s) -> Nil
 }
 
 fn counter() ->{Console, State(Int)} Nil {
@@ -325,23 +357,17 @@ fn counter() ->{Console, State(Int)} Nil {
 
 fn run_state(comp: fn() ->{e, State(s)} a, state: s) ->{e} a {
     handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() k(state), state)
-        { State::set(v) -> k } -> run_state(fn() k(Nil), v)
+        do result { result }
+        op State::get() { run_state(fn() resume state, state) }
+        op State::set(v) { run_state(fn() resume Nil, v) }
     }
 }
 
 fn run_console(comp: fn() ->{e, Console} a) ->{e, IO} a {
     handle comp() {
-        { result } -> result
-        { Console::print(msg) -> k } -> {
-            IO::write(stdout, msg)
-            run_console(fn() k(Nil))
-        }
-        { Console::read() -> k } -> {
-            let input = IO::read(stdin)
-            run_console(fn() k(input))
-        }
+        do result { result }
+        fn Console::print(msg) { IO::write(stdout, msg) }
+        fn Console::read() { IO::read(stdin) }
     }
 }
 
@@ -358,6 +384,16 @@ fn main() ->{IO} Nil {
 
 ## 요약
 
+### Operation 종류
+
+| 선언 | resume | continuation 캡처 | handler arm | 용례 |
+| ---- | ------ | ----------------- | ----------- | ---- |
+| `fn print(msg: Text) -> Nil` | 1회, 암시적 | 없음 | `fn Console::print(msg) { ... }` | Console, Reader, Logger |
+| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op State::get() { ... }` | State, Coroutine |
+| `op fail(msg: Text) -> Never` | 0회 | 없음 | `op Fail::fail(msg) { ... }` | Fail, Exception |
+
+### 전체 문법 요약
+
 | 문법 | 의미 |
 | ---- | ---- |
 | `fn(a) -> b` | `fn(a) ->{e} b` (fresh e) |
@@ -368,5 +404,6 @@ fn main() ->{IO} Nil {
 | `{ ... }` | block expression |
 | `fn(x) expr` | 람다 |
 | `handle expr { ... }` | effect handling |
-| `{ value }` | completion 패턴 (handle 내) |
-| `{ Op(args) -> k }` | suspend + continuation 패턴 (handle 내) |
+| `do value { expr }` | completion arm (handle 내) |
+| `fn Op(args) { body }` | `fn` operation handler (handle 내) |
+| `op Op(args) { body }` | `op` operation handler (handle 내) |

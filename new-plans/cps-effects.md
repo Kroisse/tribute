@@ -85,9 +85,9 @@ SSA-level code extraction을 완전히 대체.
 
 ```text
 ast_to_ir (CPS for effectful bodies, closure.lambda 생성)
-→ evidence_params → closure_lower → evidence_calls
+→ evidence_params → lower_closure_lambda → closure_lower → evidence_calls
 → tail_resumptive → ability lowering (ability.perform → YieldResult)
-→ lower_closure_lambda → lambda_flattening → dce → resolve_casts → emit
+→ lambda_flattening → dce → resolve_casts → emit
 ```
 
 ### 장점
