@@ -129,9 +129,22 @@ fn lower_single_perform(
     let op_name_sym = perform_op.op_name(ctx);
 
     // Operands: [continuation, ...values]
-    let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
-    let continuation_val = operands[0];
-    let value_operands: Vec<ValueRef> = operands[1..].to_vec();
+    // Destructure eagerly so the borrow on ctx is released before mutable use below.
+    let (continuation_val, value_operand) = {
+        let operands = ctx.op_operands(op);
+        let (&cont, rest) = operands
+            .split_first()
+            .expect("malformed ability.perform: missing continuation operand");
+        let val = match rest {
+            [] => None,
+            &[single] => Some(single),
+            _ => panic!(
+                "ability.perform with multiple payload operands is not yet supported (got {})",
+                rest.len()
+            ),
+        };
+        (cont, val)
+    };
 
     let t = types;
     let mut new_ops: Vec<OpRef> = Vec::new();
@@ -167,14 +180,7 @@ fn lower_single_perform(
     new_ops.push(op_idx_const.op_ref());
 
     // === 4. Build shift value (pack args or null) ===
-    // Currently ability operations support at most one payload value.
-    // Assert so we catch any future multi-operand cases rather than silently dropping them.
-    assert!(
-        value_operands.len() <= 1,
-        "ability.perform with multiple payload operands is not yet supported (got {})",
-        value_operands.len()
-    );
-    let shift_value_val = if let Some(&sv) = value_operands.first() {
+    let shift_value_val = if let Some(sv) = value_operand {
         let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
         new_ops.push(cast.op_ref());
         cast.result(ctx)

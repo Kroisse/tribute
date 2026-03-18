@@ -566,7 +566,7 @@ mod tests {
         // Run the pass.
         lower_closure_lambda(&mut ctx, module);
 
-        // Verify: module should now have 2 functions (test_fn + __lambda_0).
+        // Verify: module should now have 2 functions (test_fn + test_fn::__clam_0).
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 2, "expected 2 top-level ops after lowering");
 
