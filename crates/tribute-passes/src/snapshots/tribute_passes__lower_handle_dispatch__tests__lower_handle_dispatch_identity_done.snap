@@ -1,0 +1,11 @@
+---
+source: crates/tribute-passes/src/lower_handle_dispatch.rs
+expression: ir_text
+---
+core.module @test {
+  func.func @run() -> tribute_rt.anyref {
+      %0 = arith.const {value = 42} : tribute_rt.anyref
+      %1 = arith.const {value = 0} : tribute_rt.anyref
+      func.return %0
+  }
+}
