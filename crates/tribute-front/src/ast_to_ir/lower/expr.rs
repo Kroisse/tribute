@@ -726,6 +726,7 @@ pub(super) fn lower_block_cps_for_expr<'db>(
                     phase: CompilationPhase::Lowering,
                 }
                 .accumulate(builder.db());
+                return None;
             }
             let result = lower_expr(builder, expr)?;
             Some((result, false))
@@ -1145,9 +1146,13 @@ fn build_cps_continuation<'db>(
     }
 
     // Lower remaining computation inside the continuation body
-    let (body_result, is_cps) = {
+    let result = {
         let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        lower_block_cps(&mut inner_builder, remaining_stmts, value)?
+        lower_block_cps(&mut inner_builder, remaining_stmts, value)
+    };
+    let Some((body_result, is_cps)) = result else {
+        builder.ctx.exit_scope();
+        return None;
     };
 
     // Emit return: pass through result directly (no YieldResult wrapping)

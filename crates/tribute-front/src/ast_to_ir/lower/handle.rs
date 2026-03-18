@@ -152,7 +152,13 @@ pub(super) fn lower_handle<'db>(
 
     // 1. Build body as a CPS closure that returns anyref
     //    (tail calls handle effects; the final return goes to the handle frame)
-    let body_yr = build_cps_body(builder, location, body, anyref_ty, effect_ty)?;
+    let body_yr = match build_cps_body(builder, location, body, anyref_ty, effect_ty) {
+        Some(yr) => yr,
+        None => {
+            builder.ctx.pop_prompt_tag();
+            return None;
+        }
+    };
 
     // Pop the prompt tag immediately after body.
     // Handlers are lowered with the outer prompt active.
@@ -231,9 +237,13 @@ fn build_cps_body<'db>(
     });
 
     builder.ctx.enter_scope();
-    let (body_result, is_cps) = {
+    let result = {
         let mut body_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())?
+        super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
+    };
+    let Some((body_result, is_cps)) = result else {
+        builder.ctx.exit_scope();
+        return None;
     };
 
     // In the tail-call CPS design:
