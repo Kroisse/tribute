@@ -84,6 +84,35 @@ fn print_func(
         data.regions.first().copied()
     };
 
+    // Extract type decomposition: return type + effect from core.func type attribute
+    let type_info = {
+        let data = h.ctx().op(op);
+        if let Some(crate::Attribute::Type(func_ty)) =
+            data.attributes.get(&crate::Symbol::new("type"))
+        {
+            let ty_data = h.ctx().types.get(*func_ty);
+            let is_core_func = ty_data.dialect == crate::Symbol::new("core")
+                && ty_data.name == crate::Symbol::new("func");
+            if is_core_func && !ty_data.params.is_empty() {
+                let result_ty = ty_data.params[0];
+                let param_tys: Vec<crate::TypeRef> = ty_data.params[1..].to_vec();
+                let effect_ty = ty_data
+                    .attrs
+                    .get(&crate::Symbol::new("effect"))
+                    .and_then(|a| match a {
+                        crate::Attribute::Type(t) => Some(*t),
+                        _ => None,
+                    });
+                Some((result_ty, param_tys, effect_ty))
+            } else {
+                // Non-standard or empty core.func type — skip signature
+                None
+            }
+        } else {
+            None
+        }
+    };
+
     if let Some(region) = region {
         // Print entry block args as function signature
         let entry_args: Vec<_> = {
@@ -105,45 +134,31 @@ fn print_func(
             h.write_type(ty)?;
         }
         write!(h, ")")?;
-
-        // Return type and effects from func type attribute
-        // Extract type decomposition info before mutable write
-        let type_info =
-            {
-                let data = h.ctx().op(op);
-                if let Some(crate::Attribute::Type(func_ty)) =
-                    data.attributes.get(&crate::Symbol::new("type"))
-                {
-                    let ty_data = h.ctx().types.get(*func_ty);
-                    let is_core_func = ty_data.dialect == crate::Symbol::new("core")
-                        && ty_data.name == crate::Symbol::new("func");
-                    if is_core_func && !ty_data.params.is_empty() {
-                        let result_ty = ty_data.params[0];
-                        let effect_ty = ty_data.attrs.get(&crate::Symbol::new("effect")).and_then(
-                            |a| match a {
-                                crate::Attribute::Type(t) => Some(*t),
-                                _ => None,
-                            },
-                        );
-                        Some((result_ty, effect_ty))
-                    } else {
-                        // Non-standard or empty core.func type — skip signature
-                        None
-                    }
-                } else {
-                    None
-                }
-            };
-
-        if let Some((result_ty, effect_ty)) = type_info {
-            write!(h, " -> ")?;
-            h.write_type(result_ty)?;
-            if let Some(eff) = effect_ty {
-                write!(h, " effects ")?;
-                h.write_type(eff)?;
+    } else if let Some((_, ref param_tys, _)) = type_info {
+        // Body-less declaration: synthesize params from type
+        write!(h, "(")?;
+        for (i, &ty) in param_tys.iter().enumerate() {
+            if i > 0 {
+                write!(h, ", ")?;
             }
+            write!(h, "%arg{i}: ")?;
+            h.write_type(ty)?;
         }
+        write!(h, ")")?;
+    } else {
+        write!(h, "()")?;
+    }
 
+    if let Some((result_ty, _, effect_ty)) = type_info {
+        write!(h, " -> ")?;
+        h.write_type(result_ty)?;
+        if let Some(eff) = effect_ty {
+            write!(h, " effects ")?;
+            h.write_type(eff)?;
+        }
+    }
+
+    if let Some(region) = region {
         // Body
         writeln!(h, " {{")?;
         h.print_region_eliding_entry(region, indent + 2)?;

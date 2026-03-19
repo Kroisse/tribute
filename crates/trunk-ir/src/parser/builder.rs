@@ -890,6 +890,17 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_bodyless_func_decl() {
+        // Body-less func.func should still emit its full signature
+        let input = r#"core.module @test {
+  func.func @extern_add(%arg0: core.i32, %arg1: core.i32) -> core.i32
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap();
+        assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
     fn test_roundtrip_non_ascii_symbol() {
         // Non-ASCII symbol names must be quoted to survive round-trip
         // (parser only accepts ASCII alphanumeric + '_' for bare symbols)
