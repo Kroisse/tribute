@@ -7,8 +7,7 @@ core.module @test {
       %0 = arith.const {value = 1} : core.i32
       %1 = arith.const {value = 2} : core.i32
       %2 = adt.struct_new %0, %1 {type = tribute_rt.anyref} : tribute_rt.anyref
-      %3 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
-        ^bb1(%4: tribute_rt.anyref):
+      %3 = closure.lambda(%4: tribute_rt.anyref) -> tribute_rt.anyref {
           func.return %4
       }
       %5 = ability.perform %3, %2 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref

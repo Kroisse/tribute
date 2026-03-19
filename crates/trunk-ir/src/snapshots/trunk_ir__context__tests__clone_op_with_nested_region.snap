@@ -1,11 +1,9 @@
 ---
 source: crates/trunk-ir/src/context.rs
-assertion_line: 1601
 expression: output
 ---
 core.module @test {
   func.func @original(%0: core.i1) -> core.i32 {
-    ^bb0:
       %1 = scf.if %0 : core.i32 {
           %2 = arith.const {value = 1} : core.i32
           scf.yield %2
@@ -16,7 +14,6 @@ core.module @test {
       func.return %1
   }
   func.func @cloned(%0: core.i1) -> core.i32 {
-    ^bb0:
       %1 = scf.if %0 : core.i32 {
           %2 = arith.const {value = 1} : core.i32
           scf.yield %2

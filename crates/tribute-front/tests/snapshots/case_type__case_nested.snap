@@ -4,7 +4,6 @@ expression: ir_text
 ---
 core.module @test {
   func.func @nested(%0: core.i32, %1: core.i1) -> core.i32 {
-    ^bb0:
       %2 = arith.const {value = 0} : core.i32
       %3 = arith.cmp_eq %0, %2 : core.i1
       %4 = scf.if %3 : core.i32 {

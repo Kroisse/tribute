@@ -5,7 +5,7 @@
 //! arena IR.
 
 pub mod builder;
-pub(crate) mod raw;
+pub mod raw;
 
 pub use builder::{parse_module, parse_test_module};
 pub use raw::ParseError;

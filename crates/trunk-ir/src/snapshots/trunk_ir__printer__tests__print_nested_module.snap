@@ -1,12 +1,10 @@
 ---
-source: crates/trunk-ir/src/arena/printer.rs
-assertion_line: 852
+source: crates/trunk-ir/src/printer.rs
 expression: output
 ---
 core.module @test {
   core.module @Point {
     func.func @get_x(%0: core.i32) -> core.i32 {
-      ^bb0:
         func.return %0
     }
   }

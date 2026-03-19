@@ -1,6 +1,5 @@
 ---
 source: crates/trunk-ir/src/printer.rs
-assertion_line: 1578
 expression: output
 ---
 core.module @test {
@@ -10,20 +9,16 @@ core.module @test {
     !InnerOnly = adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}
 
     func.func @f1(%0: !InnerOnly) -> !InnerOnly {
-      ^bb0:
         func.return %0
     }
     func.func @f2(%0: !InnerOnly) -> !InnerOnly {
-      ^bb0:
         func.return %0
     }
   }
   func.func @g1(%0: !OuterOnly) -> !OuterOnly {
-    ^bb0:
       func.return %0
   }
   func.func @g2(%0: !OuterOnly) -> !OuterOnly {
-    ^bb0:
       func.return %0
   }
 }

@@ -4,7 +4,6 @@ expression: result
 ---
 core.module @test {
   func.func @f(%0: core.f64) -> core.ptr {
-    ^bb0:
       %1 = clif.iconst {value = 16} : core.i64
       %2 = clif.call %1 {callee = @__tribute_alloc} : core.ptr
       %3 = clif.iconst {value = 1} : core.i32

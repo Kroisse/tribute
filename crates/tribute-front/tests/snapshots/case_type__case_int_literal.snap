@@ -1,11 +1,9 @@
 ---
 source: crates/tribute-front/tests/case_type.rs
-assertion_line: 55
 expression: ir_text
 ---
 core.module @test {
   func.func @sign(%0: core.i32) -> core.i32 {
-    ^bb0:
       %1 = arith.const {value = -1} : core.i32
       %2 = arith.cmp_eq %0, %1 : core.i1
       %3 = scf.if %2 : core.i32 {

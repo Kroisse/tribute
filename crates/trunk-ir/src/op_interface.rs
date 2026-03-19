@@ -3,7 +3,8 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::LazyLock;
 
 use crate::Symbol;
@@ -262,6 +263,50 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
         }
     }
     None
+}
+
+// =============================================================================
+// OpAsmFormat — custom assembly format for operations (print + parse)
+// =============================================================================
+
+/// Custom assembly format for an operation — bundles print + parse.
+///
+/// Modeled after MLIR's `hasCustomAssemblyFormat`. Register via `inventory::submit!`
+/// at dialect definition sites. The printer/parser dispatch automatically routes to
+/// the registered format.
+pub struct OpAsmFormat {
+    /// Dialect name (e.g., "func", "closure")
+    pub dialect: &'static str,
+    /// Operation name within the dialect (e.g., "func", "lambda")
+    pub op_name: &'static str,
+    /// Custom printer. Called instead of generic printing.
+    pub print_fn: fn(&mut crate::printer::OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result,
+    /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
+    /// `results` and `sym_name` are already parsed by the generic parser.
+    pub parse_fn: for<'a> fn(
+        input: &mut &'a str,
+        results: Vec<&'a str>,
+        sym_name: Option<String>,
+    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>>,
+}
+
+inventory::collect!(OpAsmFormat);
+
+/// Global registry mapping (dialect, op_name) → OpAsmFormat, lazily built from inventory.
+static ASM_FORMAT_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpAsmFormat>> =
+    LazyLock::new(|| {
+        let mut map = HashMap::new();
+        for fmt in inventory::iter::<OpAsmFormat> {
+            let dialect = Symbol::from_dynamic(fmt.dialect);
+            let op_name = Symbol::from_dynamic(fmt.op_name);
+            map.insert((dialect, op_name), fmt);
+        }
+        map
+    });
+
+/// Look up a registered custom assembly format for the given operation.
+pub fn lookup_asm_format(dialect: Symbol, op_name: Symbol) -> Option<&'static OpAsmFormat> {
+    ASM_FORMAT_REGISTRY.get(&(dialect, op_name)).copied()
 }
 
 #[cfg(test)]
