@@ -104,7 +104,7 @@ pub(super) fn lower_expr<'db>(
             ResolvedRef::Local { id, .. } => builder.ctx.lookup(*id),
             ResolvedRef::Function { id } => {
                 let db = builder.db();
-                let func_name = Symbol::from_dynamic(&id.qualified_name(db).to_string());
+                let func_name = id.qualified(db);
                 // Extract param/result types from the function type
                 let (param_ir_types, result_ir_ty) = match typed_ref.ty.kind(db) {
                     TypeKind::Func { params, result, .. } => {
@@ -170,7 +170,7 @@ pub(super) fn lower_expr<'db>(
                 Diagnostic {
                     message: format!(
                         "ability operation `{}::{}` cannot be used as a value; it must be called directly",
-                        ability.qualified_name(builder.db()), op
+                        ability.qualified(builder.db()), op
                     ),
                     span: location.span,
                     severity: DiagnosticSeverity::Error,
@@ -200,8 +200,7 @@ pub(super) fn lower_expr<'db>(
             match *callee.kind {
                 ExprKind::Var(ref typed_ref) => match &typed_ref.resolved {
                     ResolvedRef::Function { id } => {
-                        let callee_name =
-                            Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string());
+                        let callee_name = id.qualified(builder.db());
 
                         let func_scheme = builder.ctx.lookup_function_type(callee_name);
 
@@ -326,7 +325,7 @@ pub(super) fn lower_expr<'db>(
                         Some(result)
                     }
                     ResolvedRef::AbilityOp { ability, op } => {
-                        let qualified_name = ability.qualified_name(builder.db()).to_string();
+                        let qualified_name = ability.qualified(builder.db()).to_string();
                         let ability_name = Symbol::from_dynamic(&qualified_name);
                         let result_ty = builder
                             .ctx
@@ -856,7 +855,7 @@ fn try_lower_value_ability_op<'db>(
     let continuation = lambda_op.result(builder.ir);
 
     // Emit ability.perform
-    let ability_name = Symbol::from_dynamic(&ability.qualified_name(builder.db()).to_string());
+    let ability_name = ability.qualified(builder.db());
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
 
     let perform_op = ability::perform(
@@ -1068,7 +1067,7 @@ fn lower_cps_ability_op<'db>(
     )?;
 
     // Emit ability.perform
-    let ability_name = Symbol::from_dynamic(&ability.qualified_name(builder.db()).to_string());
+    let ability_name = ability.qualified(builder.db());
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability_name, &[]);
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 

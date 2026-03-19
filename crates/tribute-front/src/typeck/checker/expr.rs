@@ -1723,11 +1723,10 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 let result_ty = self.annotation_to_type_with_ctx(ctx, result);
                 let row_var = ctx.fresh_row_var();
-                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
-                    &module_path,
+                    self.current_prefix(),
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || row_var,
                 );
@@ -1947,12 +1946,8 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::Ability { id } => Some(*id),
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
-                // Create an AbilityId with the same module path and name
-                Some(AbilityId::new(
-                    self.db(),
-                    id.module_path(self.db()).clone(),
-                    id.name(self.db()),
-                ))
+                // Create an AbilityId with the same qualified name
+                Some(AbilityId::new(self.db(), id.qualified(self.db())))
             }
             // Other reference types are not abilities
             _ => None,
@@ -1995,7 +1990,7 @@ impl<'db> TypeChecker<'db> {
 #[cfg(test)]
 mod tests {
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Symbol, SymbolVec};
+    use trunk_ir::Symbol;
 
     use crate::ast::{
         BuiltinRef, EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation,
@@ -2015,7 +2010,7 @@ mod tests {
         db: &'db dyn salsa::Database,
         env: &'a ModuleTypeEnv<'db>,
     ) -> FunctionInferenceContext<'a, 'db> {
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let func_id = FuncDefId::new(db, Symbol::new("test_func"));
         FunctionInferenceContext::new(db, env, func_id)
     }
 

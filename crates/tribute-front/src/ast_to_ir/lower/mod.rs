@@ -138,7 +138,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
 /// Derive a qualified type name from a CtorId for use as a type_map key.
 pub(super) fn qualified_type_name(db: &dyn salsa::Database, ctor_id: &CtorId<'_>) -> Symbol {
-    Symbol::from_dynamic(&ctor_id.qualified_name(db).to_string())
+    ctor_id.qualified(db)
 }
 
 /// Resolve the ADT (enum/struct) type attribute for a constructor.
@@ -161,7 +161,7 @@ pub(super) fn extract_type_name<'db>(
     resolved: &ResolvedRef<'db>,
 ) -> Symbol {
     match resolved {
-        ResolvedRef::Constructor { id, .. } => id.ctor_name(db),
+        ResolvedRef::Constructor { id, .. } => id.name(db),
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }

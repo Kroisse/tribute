@@ -181,11 +181,11 @@ mod tests {
     use super::*;
     use crate::ast::{AbilityId, EffectRow};
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Symbol, SymbolVec};
+    use trunk_ir::Symbol;
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+        AbilityId::new(db, Symbol::from_dynamic(name))
     }
 
     // =========================================================================

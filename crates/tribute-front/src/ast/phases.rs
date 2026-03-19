@@ -11,37 +11,10 @@
 use std::fmt::{self, Display, Formatter};
 
 use tribute_ir::ModulePathExt as _;
-use trunk_ir::{Symbol, SymbolVec};
+use trunk_ir::Symbol;
 
 use super::node_id::NodeId;
 use super::types::Type;
-
-// ============================================================================
-// Helper types
-// ============================================================================
-
-/// A qualified name that can be displayed efficiently without intermediate allocations.
-struct QualifiedName<'a> {
-    module_path: &'a SymbolVec,
-    name: Symbol,
-}
-
-impl Display for QualifiedName<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let mut first = true;
-        for segment in self.module_path.iter() {
-            if !first {
-                f.write_str("::")?;
-            }
-            first = false;
-            segment.with_str(|s| f.write_str(s))?;
-        }
-        if !first {
-            f.write_str("::")?;
-        }
-        self.name.with_str(|s| f.write_str(s))
-    }
-}
 
 // ============================================================================
 // Phase 1: Unresolved (after parsing)
@@ -134,55 +107,37 @@ impl LocalId {
 
 /// A unique identifier for a function definition.
 ///
-/// FuncDefId is interned (not tracked) so that the same (module_path, name)
+/// FuncDefId is interned (not tracked) so that the same qualified name
 /// always produces the same FuncDefId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
-    /// The module path (e.g., ["foo", "bar"]).
-    #[returns(ref)]
-    pub module_path: SymbolVec,
-    /// The function name.
-    pub name: Symbol,
+    /// The fully qualified name (e.g., `"foo::bar::func_name"`).
+    pub qualified: Symbol,
 }
 
 impl<'db> FuncDefId<'db> {
-    /// Build a qualified name for IR generation.
-    ///
-    /// Returns a displayable qualified name like "foo::bar::func_name".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
-        QualifiedName {
-            module_path: self.module_path(db),
-            name: self.name(db),
-        }
+    /// Returns the unqualified function name (last segment).
+    pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.qualified(db).last_segment()
     }
 }
 
 /// A unique identifier for a type definition (struct or enum).
 ///
 /// TypeDefId identifies the type definition itself, not its constructors.
-/// For example, `Option` as a type has one TypeDefId, while its constructors
-/// `Some` and `None` each have their own CtorId.
 ///
-/// TypeDefId is interned (not tracked) so that the same (module_path, name)
+/// TypeDefId is interned (not tracked) so that the same qualified name
 /// always produces the same TypeDefId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct TypeDefId<'db> {
-    /// The module path (e.g., ["std", "option"]).
-    #[returns(ref)]
-    pub module_path: SymbolVec,
-    /// The type name (enum or struct name).
-    pub name: Symbol,
+    /// The fully qualified name (e.g., `"std::option::Option"`).
+    pub qualified: Symbol,
 }
 
 impl<'db> TypeDefId<'db> {
-    /// Build a qualified name for IR generation.
-    ///
-    /// Returns a displayable qualified name like "std::option::Option".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
-        QualifiedName {
-            module_path: self.module_path(db),
-            name: self.name(db),
-        }
+    /// Returns the unqualified type name (last segment).
+    pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.qualified(db).last_segment()
     }
 }
 
@@ -192,55 +147,37 @@ impl<'db> TypeDefId<'db> {
 /// For structs, the struct name is both the type and its constructor.
 /// For enums, each variant has its own CtorId.
 ///
-/// CtorId is interned (not tracked) so that the same (module_path, ctor_name)
+/// CtorId is interned (not tracked) so that the same qualified name
 /// always produces the same CtorId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
-    /// The module path (e.g., ["std", "option"]).
-    #[returns(ref)]
-    pub module_path: SymbolVec,
-    /// The constructor name (struct name or enum variant name).
-    pub ctor_name: Symbol,
+    /// The fully qualified name (e.g., `"std::option::Some"`).
+    pub qualified: Symbol,
 }
 
 impl<'db> CtorId<'db> {
-    /// Build a qualified name for IR generation.
-    ///
-    /// Returns a displayable qualified name like "std::option::Some".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
-        QualifiedName {
-            module_path: self.module_path(db),
-            name: self.ctor_name(db),
-        }
+    /// Returns the unqualified constructor name (last segment).
+    pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.qualified(db).last_segment()
     }
 }
 
 /// A unique identifier for an ability definition.
 ///
 /// AbilityId identifies an ability (effect) definition with its module path.
-/// For example, `State` ability in module `foo::bar` would have
-/// module_path `["foo", "bar"]` and name `"State"`.
 ///
-/// AbilityId is interned (not tracked) so that the same (module_path, name)
+/// AbilityId is interned (not tracked) so that the same qualified name
 /// always produces the same AbilityId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct AbilityId<'db> {
-    /// The module path (e.g., ["std", "state"]).
-    #[returns(ref)]
-    pub module_path: SymbolVec,
-    /// The ability name.
-    pub name: Symbol,
+    /// The fully qualified name (e.g., `"std::state::State"`).
+    pub qualified: Symbol,
 }
 
 impl<'db> AbilityId<'db> {
-    /// Build a qualified name for IR generation.
-    ///
-    /// Returns a displayable qualified name like "std::state::State".
-    pub fn qualified_name(self, db: &'db dyn salsa::Database) -> impl Display + 'db {
-        QualifiedName {
-            module_path: self.module_path(db),
-            name: self.name(db),
-        }
+    /// Returns the unqualified ability name (last segment).
+    pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
+        self.qualified(db).last_segment()
     }
 }
 

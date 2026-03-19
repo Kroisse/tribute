@@ -5,13 +5,13 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::{Symbol, smallvec::SmallVec};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
     ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
-use crate::build_field_module_path;
+use crate::{push_prefix, qualified_symbol};
 
 /// TDNR resolver for AST expressions.
 ///
@@ -62,13 +62,13 @@ impl<'db> TdnrResolver<'db> {
     /// This indexes functions by their first parameter's type name,
     /// enabling efficient UFCS resolution.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
-        // Build module path from the module name (if any)
-        let module_path: Vec<Symbol> = module.name.into_iter().collect();
-        self.index_decls(&module.decls, &module_path);
+        // Build prefix from the module name (if any)
+        let mut prefix = module.name.map(|n| n.to_string()).unwrap_or_default();
+        self.index_decls(&module.decls, &mut prefix);
     }
 
     /// Recursively index declarations, including nested modules.
-    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>], module_path: &[Symbol]) {
+    fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>], prefix: &mut String) {
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
@@ -79,9 +79,9 @@ impl<'db> TdnrResolver<'db> {
 
                     let func_name = func.name;
 
-                    // Create FuncDefId with module path
-                    let path_vec = SmallVec::from_slice(module_path);
-                    let func_id = FuncDefId::new(self.db, path_vec, func_name);
+                    // Create FuncDefId with qualified name
+                    let qualified = qualified_symbol(prefix, func_name);
+                    let func_id = FuncDefId::new(self.db, qualified);
 
                     // Try to extract the type name from the first parameter's type annotation
                     let first_param = &func.params[0];
@@ -109,15 +109,17 @@ impl<'db> TdnrResolver<'db> {
 
                     let struct_name = s.name;
 
+                    // Push struct name to build qualified field accessor names
+                    let saved = push_prefix(prefix, struct_name);
+
                     for field in &s.fields {
                         let Some(field_name) = field.name else {
                             continue; // Skip unnamed fields
                         };
 
                         // Create synthetic FuncDefId for the accessor
-                        // Use module_path + struct_name to avoid collisions across modules
-                        let field_path = build_field_module_path(module_path, struct_name);
-                        let func_id = FuncDefId::new(self.db, field_path, field_name);
+                        let field_qualified = qualified_symbol(prefix, field_name);
+                        let func_id = FuncDefId::new(self.db, field_qualified);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
                         // Note: Reusing struct's NodeId for synthetic type annotation.
@@ -168,13 +170,15 @@ impl<'db> TdnrResolver<'db> {
                             .or_default()
                             .push((func_id, func_ty));
                     }
+
+                    prefix.truncate(saved);
                 }
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
                         // Build nested module path by appending current module name
-                        let mut nested_path = module_path.to_vec();
-                        nested_path.push(m.name);
-                        self.index_decls(body, &nested_path);
+                        let saved = push_prefix(prefix, m.name);
+                        self.index_decls(body, prefix);
+                        prefix.truncate(saved);
                     }
                 }
                 _ => {}
@@ -234,12 +238,11 @@ impl<'db> TdnrResolver<'db> {
 
         // TDNR builds closed rows only (no fresh row variables).
         // Lowercase names and Infer annotations are filtered out by the shared helper.
-        // We use an empty module path since TDNR works after resolution phase.
-        let empty_path = trunk_ir::SymbolVec::new();
+        // We use an empty prefix since TDNR works after resolution phase.
         crate::ast::abilities_to_effect_row(
             self.db,
             anns,
-            &empty_path,
+            "",
             &mut |ann| self.annotation_to_type(&Some(ann.clone())),
             || unreachable!("TDNR does not support open effect rows"),
         )
@@ -748,7 +751,6 @@ mod tests {
     use super::*;
     use crate::ast::{BinOpKind, CtorId, EffectRow, NodeId, ResolvedRef, TypeKind, TypedRef};
     use salsa_test_macros::salsa_test;
-    use trunk_ir::SymbolVec;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -975,7 +977,7 @@ mod tests {
             },
         );
 
-        let ctor_id = CtorId::new(db, SymbolVec::new(), option_name);
+        let ctor_id = CtorId::new(db, option_name);
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -1018,7 +1020,7 @@ mod tests {
             },
         );
 
-        let ctor_id = CtorId::new(db, SymbolVec::new(), point_name);
+        let ctor_id = CtorId::new(db, point_name);
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -1187,7 +1189,7 @@ mod tests {
 
         let type_name = Symbol::new("Foo");
         let method_name = Symbol::new("bar");
-        let func_id = FuncDefId::new(db, SymbolVec::new(), method_name);
+        let func_id = FuncDefId::new(db, method_name);
         let func_ty = Type::new(db, TypeKind::Int);
 
         resolver
@@ -1224,9 +1226,9 @@ mod tests {
         let method_name = Symbol::new("bar");
 
         // Two different functions with the same (type_name, method_name) key
-        let func_id_1 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("bar"));
+        let func_id_1 = FuncDefId::new(db, Symbol::new("bar"));
         let func_ty_1 = Type::new(db, TypeKind::Int);
-        let func_id_2 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("bar"));
+        let func_id_2 = FuncDefId::new(db, Symbol::new("bar"));
         let func_ty_2 = Type::new(db, TypeKind::Float);
 
         let candidates = resolver
@@ -1287,7 +1289,7 @@ mod tests {
 
         let type_name = Symbol::new("List");
         let method_name = Symbol::new("map");
-        let func_id = FuncDefId::new(db, SymbolVec::new(), method_name);
+        let func_id = FuncDefId::new(db, method_name);
         let func_ty = Type::new(db, TypeKind::Int);
 
         resolver

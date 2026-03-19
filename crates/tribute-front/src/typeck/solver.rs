@@ -1291,7 +1291,7 @@ impl<'db> TypeSolver<'db> {
 mod tests {
     use super::*;
     use crate::ast::{AbilityId, Effect, EffectRow, UniVarSource};
-    use trunk_ir::{Symbol, SymbolVec};
+    use trunk_ir::Symbol;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -1299,7 +1299,7 @@ mod tests {
 
     /// Create an AbilityId for testing (with empty module path).
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+        AbilityId::new(db, Symbol::from_dynamic(name))
     }
 
     /// Create a fresh type variable for testing.
