@@ -412,7 +412,7 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
     }
 }
 
-fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
+pub(crate) fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
     for ch in s.chars() {
         match ch {
             '\\' => f.write_str("\\\\")?,

@@ -62,14 +62,7 @@ fn print_func(
                 s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             if needs_quoting {
                 write!(h, "\"")?;
-                for ch in s.chars() {
-                    match ch {
-                        '\\' => write!(h, "\\\\")?,
-                        '"' => write!(h, "\\\"")?,
-                        '\n' => write!(h, "\\n")?,
-                        _ => write!(h, "{ch}")?,
-                    }
-                }
+                crate::printer::write_escaped_string(h, s)?;
                 write!(h, "\"")
             } else {
                 write!(h, "{s}")
@@ -134,8 +127,8 @@ fn print_func(
                         );
                         Some((result_ty, effect_ty))
                     } else {
-                        // Non-standard func type — print as-is
-                        Some((*func_ty, None))
+                        // Non-standard or empty core.func type — skip signature
+                        None
                     }
                 } else {
                     None
