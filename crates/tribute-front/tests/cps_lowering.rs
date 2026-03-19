@@ -129,7 +129,7 @@ fn main() { }
 /// A handle expression should produce `ability.handle_dispatch` with:
 /// - A body closure wrapping the handled computation
 /// - A handler dispatch closure with per-arm dispatch
-/// - A dispatch body region with `cont.done` and `cont.suspend` ops
+/// - A dispatch body region with `ability.done` and `ability.suspend` ops
 #[salsa_test]
 fn test_handle_with_do_and_op_arms(db: &salsa::DatabaseImpl) {
     let source = source_from_str(

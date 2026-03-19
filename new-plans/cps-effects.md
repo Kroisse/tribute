@@ -66,15 +66,15 @@ ability.handle_dispatch %yr, %tag {
 
 CPS에서 cont의 모든 역할이 대체됨:
 
-| cont op               | CPS 대체                                        |
-| --------------------- | ----------------------------------------------- |
-| cont.shift            | ability.perform + continuation closure          |
-| cont.resume           | func.call_indirect %k(%value)                   |
-| cont.drop             | closure 미호출 (RC/GC 처리)                     |
-| cont.push_prompt      | evidence extend + CPS body call                 |
-| cont.handler_dispatch | ability.handle_dispatch (scf.loop)              |
-| cont.done             | done handler가 CPS continuation closure로 변환  |
-| cont.suspend/yield    | ability.handle_dispatch의 handler arm           |
+| cont op               | CPS 대체                                          |
+| --------------------- | ------------------------------------------------- |
+| cont.shift            | ability.perform + continuation closure            |
+| cont.resume           | func.call_indirect %k(%value)                     |
+| cont.drop             | closure 미호출 (RC/GC 처리)                       |
+| cont.push_prompt      | evidence extend + CPS body call                   |
+| cont.handler_dispatch | ability.handle_dispatch (scf.loop)                |
+| cont.done             | ability.done (ability dialect로 이동)             |
+| cont.suspend/yield    | ability.suspend/yield (ability dialect로 이동)    |
 
 ## Option A: CPS at ast_to_ir (채택)
 
@@ -240,9 +240,9 @@ Heuristic 불필요 — single-use closure는 항상 flattening이 이득.
 
 ### tail_resumptive 상호작용
 
-handler 쪽 (cont.suspend → cont.yield)에서 동작 — CPS 변환과 직교.
+handler 쪽 (ability.suspend → ability.yield)에서 동작 — CPS 변환과 직교.
 
-- cont.yield arm: handler 값 함수 직접 호출 → continuation 즉시 호출
+- ability.yield arm: handler 값 함수 직접 호출 → continuation 즉시 호출
 - lambda_flattening이 즉시 호출 패턴 인라인
 
 ## 결정적 차이: 조건 분기 안의 effect

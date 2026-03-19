@@ -20,7 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use tribute_ir::dialect::ability as arena_ability;
+use tribute_ir::dialect::ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt as arena_adt;
@@ -84,9 +84,9 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     let first_existing_op = ctx.block(module_block).ops.first().copied();
 
     if !has_lookup {
-        let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(ctx);
         let i32_ty = i32_type_ref(ctx);
-        let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+        let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
         let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty], None).as_type_ref();
@@ -129,8 +129,8 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     }
 
     if !has_extend {
-        let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
-        let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(ctx);
+        let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
         let func_ty =
@@ -230,7 +230,7 @@ fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
     if params.is_empty() {
         return false;
     }
-    arena_ability::is_evidence_type_ref(ctx, params[0])
+    ability::is_evidence_type_ref(ctx, params[0])
 }
 
 /// Collect handler-root functions (contain push_prompt but no evidence param).
@@ -261,7 +261,7 @@ fn region_contains_push_prompt(ctx: &IrContext, region: RegionRef) -> bool {
             if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
                 return true;
             }
-            if arena_ability::HandleDispatch::from_op(ctx, op).is_ok() {
+            if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 return true;
             }
             for &nested in ctx.op(op).regions.iter() {
@@ -288,7 +288,7 @@ fn collect_handled_abilities_by_tag(
             map.insert(tag, abilities);
         }
         // CPS path: ability.handle_dispatch
-        if let Ok(dispatch_op) = arena_ability::HandleDispatch::from_op(ctx, op) {
+        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
             let tag = dispatch_op.tag(ctx);
             let abilities = collect_abilities_from_body_region(ctx, dispatch_op.body(ctx));
             map.insert(tag, abilities);
@@ -299,15 +299,15 @@ fn collect_handled_abilities_by_tag(
 
 /// Extract handled ability types from a handler body region.
 ///
-/// Looks for `cont.yield` and `cont.suspend` ops in the body's first block.
+/// Looks for `ability.yield` and `ability.suspend` ops in the body's first block.
 fn collect_abilities_from_body_region(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef> {
     let mut abilities = Vec::new();
     let blocks = &ctx.region(body).blocks;
     if let Some(&first_block) = blocks.first() {
         for &child_op in ctx.block(first_block).ops.iter() {
-            let ability_ref = if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, child_op) {
+            let ability_ref = if let Ok(yield_op) = ability::Yield::from_op(ctx, child_op) {
                 Some(yield_op.ability_ref(ctx))
-            } else if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
+            } else if let Ok(suspend_op) = ability::Suspend::from_op(ctx, child_op) {
                 Some(suspend_op.ability_ref(ctx))
             } else {
                 None
@@ -488,7 +488,7 @@ fn transform_handler_roots(
         }
 
         // Add evidence param to function signature
-        let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(ctx);
         let new_func_ty = crate::evidence::build_func_type_with_evidence(ctx, func_ty, evidence_ty);
 
         let body = func_op.body(ctx);
@@ -534,7 +534,7 @@ fn transform_handler_roots(
         };
 
         let loc = ctx.op(func_op_ref).location;
-        let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+        let evidence_ty = ability::evidence_adt_type_ref(ctx);
         let i32_ty = i32_type_ref(ctx);
 
         let (ev_value, prepend_evidence) = if polymorphic_roots.contains(&func_name) {
@@ -601,7 +601,7 @@ fn update_calls_to_newly_evidenced(
     newly_evidenced: &HashSet<Symbol>,
     handler_root_fns: &HashSet<Symbol>,
 ) {
-    let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
     let i32_ty = i32_type_ref(ctx);
 
     let func_ops: Vec<OpRef> = module.ops(ctx);
@@ -647,8 +647,7 @@ fn update_calls_in_region(
 
             // Check if evidence is already the first argument
             let operands = ctx.op_operands(op).to_vec();
-            if !operands.is_empty()
-                && arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(operands[0]))
+            if !operands.is_empty() && ability::is_evidence_type_ref(ctx, ctx.value_ty(operands[0]))
             {
                 continue;
             }
@@ -802,8 +801,8 @@ fn transform_shifts_in_block(
 
             // Generate evidence_extend calls for each ability
             let i32_ty = i32_type_ref(ctx);
-            let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
-            let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+            let evidence_ty = ability::evidence_adt_type_ref(ctx);
+            let marker_ty = ability::marker_adt_type_ref(ctx);
 
             // Generate a unique prompt tag at runtime (prevents TLS registry
             // collisions when the same handler is invoked recursively).
@@ -892,7 +891,7 @@ fn transform_shifts_in_block(
 
         // Handle ability.handle_dispatch (CPS path) — extend evidence before
         // the body closure call and transform the handler body region.
-        if let Ok(dispatch_op) = arena_ability::HandleDispatch::from_op(ctx, op) {
+        if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
             let loc = ctx.op(op).location;
             let tag = dispatch_op.tag(ctx);
             let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
@@ -901,8 +900,8 @@ fn transform_shifts_in_block(
 
             if !abilities.is_empty() {
                 let i32_ty = i32_type_ref(ctx);
-                let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
-                let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+                let evidence_ty = ability::evidence_adt_type_ref(ctx);
+                let marker_ty = ability::marker_adt_type_ref(ctx);
                 let ptr_ty = arena_core::ptr(ctx).as_type_ref();
 
                 // All evidence extension ops are inserted before handle_dispatch.
@@ -1028,7 +1027,7 @@ fn transform_shifts_in_block(
             let op_name = shift_op.op_name(ctx);
             let ability_id = compute_ability_id(ctx, ability_ref);
 
-            let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+            let marker_ty = ability::marker_adt_type_ref(ctx);
             let i32_ty = i32_type_ref(ctx);
             let prompt_tag_ty = arena_cont::prompt_tag(ctx).as_type_ref();
 
@@ -1179,12 +1178,12 @@ fn transform_shifts_in_block(
 
         // Handle ability.evidence_lookup (from CPS lower_ability_perform pass).
         // Replace with: func.call @__tribute_evidence_lookup(%ev, %ability_id)
-        if let Ok(lookup_op) = arena_ability::EvidenceLookup::from_op(ctx, op) {
+        if let Ok(lookup_op) = ability::EvidenceLookup::from_op(ctx, op) {
             let loc = ctx.op(op).location;
             let ability_ref = lookup_op.ability_ref(ctx);
             let ability_id = compute_ability_id(ctx, ability_ref);
 
-            let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+            let marker_ty = ability::marker_adt_type_ref(ctx);
             let i32_ty = i32_type_ref(ctx);
 
             // %ability_id_const = arith.const ability_id

@@ -29,28 +29,4 @@ mod cont {
         #[region(body)]
         {}
     }
-
-    fn done() {
-        #[region(body)]
-        {}
-    }
-
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn suspend() {
-        #[region(body)]
-        {}
-    }
-
-    /// Tail-resumptive yield: like `suspend` but guarantees no continuation capture.
-    ///
-    /// The handler body must follow the tail-resumptive pattern:
-    /// `%result = cont.resume %k, %value; scf.yield %result`
-    ///
-    /// Downstream passes can rely on the op type itself (rather than an attribute)
-    /// to decide whether continuation capture is needed.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn r#yield() {
-        #[region(body)]
-        {}
-    }
 }

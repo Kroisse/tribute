@@ -54,6 +54,24 @@ mod ability {
         #[region(body)]
         {}
     }
+
+    fn done() {
+        #[region(body)]
+        {}
+    }
+
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn suspend() {
+        #[region(body)]
+        {}
+    }
+
+    /// Tail-resumptive yield: like `suspend` but guarantees no continuation capture.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn r#yield() {
+        #[region(body)]
+        {}
+    }
 }
 
 // === Hash-Based Dispatch ===

@@ -14,7 +14,7 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, arith, cont, core, func, scf};
+use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
@@ -170,7 +170,7 @@ pub(super) fn lower_handle<'db>(
         .get_node_type(body.id)
         .map(|ty| builder.ctx.convert_type(builder.ir, *ty));
 
-    // 2. Build handler dispatch body region (cont.done + cont.suspend ops)
+    // 2. Build handler dispatch body region (ability.done + ability.suspend ops)
     let handler_dispatch_body = build_cps_handler_dispatch_body(
         builder.ctx,
         builder.ir,
@@ -322,7 +322,7 @@ fn build_cps_handler_dispatch_body<'db>(
         }
     }
 
-    // cont.done child op
+    // ability.done child op
     let done_body = build_done_handler_region(
         ctx,
         ir,
@@ -331,16 +331,16 @@ fn build_cps_handler_dispatch_body<'db>(
         result_ty,
         logical_result_ty,
     );
-    let done_op = cont::done(ir, location, done_body);
+    let done_op = ability::done(ir, location, done_body);
     ir.push_op(block, done_op.op_ref());
 
-    // cont.suspend child ops (handler arms use CPS mode for continuation calls)
+    // ability.suspend child ops (handler arms use CPS mode for continuation calls)
     for effect_handler in &effect_handlers {
         let (ability_ref_ty, op_name) =
             extract_ability_ref_and_op_name(ctx, ir, location, effect_handler);
         let suspend_body =
             build_cps_suspend_handler_region(ctx, ir, location, effect_handler, _yr_ty);
-        let suspend_op = cont::suspend(ir, location, ability_ref_ty, op_name, suspend_body);
+        let suspend_op = ability::suspend(ir, location, ability_ref_ty, op_name, suspend_body);
         ir.push_op(block, suspend_op.op_ref());
     }
 

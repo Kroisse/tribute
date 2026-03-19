@@ -38,12 +38,12 @@ core.module @test {
           func.return %10
       }
       %21 = ability.handle_dispatch %3, %4 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
-          cont.done {
+          ability.done {
             ^bb8(%22: tribute_rt.anyref):
               %23 = core.unrealized_conversion_cast %22 : core.i32
               scf.yield %23
           }
-          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
             ^bb9(%24: tribute_rt.anyref, %25: tribute_rt.anyref):
               %26 = arith.const {value = 0} : core.i32
               %27 = core.unrealized_conversion_cast %26 : tribute_rt.anyref
@@ -51,7 +51,7 @@ core.module @test {
               %29 = func.call_indirect %28, %27 : tribute_rt.anyref
               scf.yield %29
           }
-          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
             ^bb10(%30: tribute_rt.anyref, %31: tribute_rt.anyref):
               %32 = arith.const {value = unit} : core.nil
               %33 = core.unrealized_conversion_cast %32 : tribute_rt.anyref
