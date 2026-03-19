@@ -56,7 +56,7 @@ trunk-ir-cranelift-backend = { path = "crates/trunk-ir-cranelift-backend" }
 trunk-ir-wasm-backend = { path = "crates/trunk-ir-wasm-backend" }
 unsynn = "0.3.0"
 wasm-encoder = "0.245.1"
-winnow = "0.7"
+winnow = "1.0"
 zmij = "1"
 
 [package]

@@ -324,12 +324,14 @@ pub(crate) fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribut
             (ws, ']'),
         )
         .map(RawAttribute::List),
-        // Float (requires dot: 3.14, -1.0)
-        float_with_dot.map(RawAttribute::Float),
-        // Integer (42, -1)
-        integer_lit.map(RawAttribute::Int),
-        // Type (dialect.name...)
-        raw_type.map(RawAttribute::Type),
+        alt((
+            // Float (requires dot: 3.14, -1.0)
+            float_with_dot.map(RawAttribute::Float),
+            // Integer (42, -1)
+            integer_lit.map(RawAttribute::Int),
+            // Type (dialect.name...)
+            raw_type.map(RawAttribute::Type),
+        )),
     ))
     .parse_next(input)
 }
