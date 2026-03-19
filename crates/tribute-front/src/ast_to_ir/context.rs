@@ -136,6 +136,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// The guard dereferences to `IrLoweringCtx`, so callers can use it
     /// in place of `self`/`ctx`. The scope is automatically exited when
     /// the guard is dropped, even on early returns or `?`.
+    #[must_use]
     pub fn scope(&mut self) -> ScopeGuard<'_, 'db> {
         self.enter_scope();
         ScopeGuard { ctx: self }
@@ -195,6 +196,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// The guard dereferences to `IrLoweringCtx`, so callers can use it
     /// in place of `self`/`ctx`. The prompt tag is automatically popped when
     /// the guard is dropped, even on early returns or `?`.
+    #[must_use]
     pub fn prompt_tag_scope(&mut self) -> PromptTagGuard<'_, 'db> {
         let tag = self.push_prompt_tag();
         PromptTagGuard { ctx: self, tag }

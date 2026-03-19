@@ -151,10 +151,7 @@ pub(super) fn lower_handle<'db>(
         // 1. Build body as a CPS closure that returns anyref
         //    (tail calls handle effects; the final return goes to the handle frame)
         let builder = &mut IrBuilder::new(&mut prompt_scope, builder.ir, builder.block);
-        let body_yr = match build_cps_body(builder, location, body, anyref_ty, effect_ty) {
-            Some(yr) => yr,
-            None => return None, // prompt_scope drops automatically
-        };
+        let body_yr = build_cps_body(builder, location, body, anyref_ty, effect_ty)?;
 
         (tag, body_yr, effect_ty)
     };
