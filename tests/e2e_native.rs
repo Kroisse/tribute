@@ -238,3 +238,25 @@ fn main() {
         "3",
     );
 }
+
+/// Regression test for #548: Bool case expression always took the first branch.
+#[test]
+fn test_native_bool_case() {
+    assert_native_output(
+        "bool_case.trb",
+        r#"
+fn pick(b: Bool) -> Nat {
+    case b {
+        True -> 10
+        False -> 42
+    }
+}
+
+fn main() {
+    __tribute_print_nat(pick(True))
+    __tribute_print_nat(pick(False))
+}
+"#,
+        "10\n42",
+    );
+}
