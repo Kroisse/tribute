@@ -695,6 +695,35 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_type_continuation_to_any() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("test.trb".to_owned());
+        let ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+
+        let int_ty = AstType::new(&db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(&db);
+        let ty = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: int_ty,
+                effect,
+            },
+        );
+        let ir_ty = ctx.convert_type(&mut ir, ty);
+        let expected = ctx.anyref_type(&mut ir);
+        assert_eq!(ir_ty, expected);
+    }
+
+    #[test]
     fn test_convert_type_func_with_bound_vars() {
         let db = test_db();
         let mut ir = IrContext::new();
