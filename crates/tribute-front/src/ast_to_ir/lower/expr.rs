@@ -812,12 +812,7 @@ fn try_lower_value_ability_op<'db>(
     let mut arg_values = builder.collect_args(args)?;
 
     // Pack multiple arguments into a tuple if needed
-    if arg_values.len() > 1 {
-        let any_ty = builder.ctx.anyref_type(builder.ir);
-        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, any_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        arg_values = vec![tuple_op.result(builder.ir)];
-    }
+    arg_values = pack_ability_args(builder, location, arg_values);
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
@@ -892,8 +887,9 @@ fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
                 ExprKind::Var(tr) if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
             );
             if !callee_is_ability_op {
-                // Non-ability-op call: check if any arg contains an ability op
-                args.iter().any(contains_ability_op)
+                // Non-ability-op call: check callee (e.g. foo(bar)(emit()))
+                // and args for nested ability ops
+                contains_ability_op(callee) || args.iter().any(contains_ability_op)
             } else {
                 // Direct ability op call at top level — not "nested"
                 false
@@ -1046,12 +1042,7 @@ fn lower_cps_ability_op<'db>(
     let mut arg_values = builder.collect_args(args)?;
 
     // Pack multiple arguments into a tuple if needed (matching lower_ability_op_call)
-    if arg_values.len() > 1 {
-        let any_ty = builder.ctx.anyref_type(builder.ir);
-        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, any_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        arg_values = vec![tuple_op.result(builder.ir)];
-    }
+    arg_values = pack_ability_args(builder, location, arg_values);
 
     // Determine the logical result type of the ability op (for casting inside continuation)
     let logical_result_ty = builder
@@ -1203,4 +1194,20 @@ fn build_cps_continuation<'db>(
     );
     builder.ir.push_op(builder.block, lambda_op.op_ref());
     Some(lambda_op.result(builder.ir))
+}
+
+/// Pack multiple ability op arguments into a single anyref tuple if needed.
+fn pack_ability_args(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    arg_values: Vec<ValueRef>,
+) -> Vec<ValueRef> {
+    if arg_values.len() > 1 {
+        let any_ty = builder.ctx.anyref_type(builder.ir);
+        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, any_ty);
+        builder.ir.push_op(builder.block, tuple_op.op_ref());
+        vec![tuple_op.result(builder.ir)]
+    } else {
+        arg_values
+    }
 }
