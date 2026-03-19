@@ -72,6 +72,8 @@ mod ability {
         #[region(body)]
         {}
     }
+
+    fn resume(continuation: (), value: ()) -> result {}
 }
 
 // === Hash-Based Dispatch ===

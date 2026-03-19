@@ -3,7 +3,7 @@
 //! Lowers `handle` expressions using CPS-based effect handling:
 //! - Body is wrapped in a `closure.lambda` that returns `YieldResult`
 //! - Handler dispatch uses `ability.handle_dispatch`
-//! - Continuation calls use `func.call_indirect` (not `cont.resume`)
+//! - Continuation calls use `func.call_indirect` (not `ability.resume`)
 //!
 //! Also lowers ability operation calls to `cont.shift` (fallback for
 //! non-CPS contexts).
@@ -460,7 +460,7 @@ fn extract_ability_ref_and_op_name<'db>(
 /// Build a CPS suspend handler region (effect handler).
 ///
 /// In CPS mode, continuation calls use `func.call_indirect` instead of
-/// `cont.resume`, and handler arm results are wrapped in `YieldResult::Done`
+/// `ability.resume`, and handler arm results are wrapped in `YieldResult::Done`
 /// if not already a `YieldResult`.
 fn build_cps_suspend_handler_region<'db>(
     ctx: &mut IrLoweringCtx<'db>,

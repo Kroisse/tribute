@@ -8,11 +8,10 @@
 //!
 //! A `ability.suspend` body is tail-resumptive when:
 //! 1. `%k` (block arg 0) is used exactly once
-//! 2. That single use is a `cont.resume %k, %value` operation
-//! 3. The result of `cont.resume` flows directly to `scf.yield` (tail position)
+//! 2. That single use is a `ability.resume %k, %value` operation
+//! 3. The result of `ability.resume` flows directly to `scf.yield` (tail position)
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::scf as arena_scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
@@ -24,9 +23,9 @@ use tribute_ir::dialect::ability;
 
 /// Information about a tail-resumptive suspend body.
 pub struct TailResumptiveInfo {
-    /// The `cont.resume` operation in the body.
+    /// The `ability.resume` operation in the body.
     pub resume_op: OpRef,
-    /// The value passed to `cont.resume` (i.e., the value to yield directly).
+    /// The value passed to `ability.resume` (i.e., the value to yield directly).
     pub resume_value: ValueRef,
 }
 
@@ -36,7 +35,7 @@ pub struct TailResumptiveInfo {
 /// ```text
 /// ^bb0(%k: continuation, %shift_args: any):
 ///     // ... ops that don't use %k ...
-///     %result = cont.resume %k, %value
+///     %result = ability.resume %k, %value
 ///     scf.yield %result
 /// ```
 pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<TailResumptiveInfo> {
@@ -56,9 +55,9 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
         return None;
     }
 
-    // Check: the single use is a `cont.resume` operation
+    // Check: the single use is a `ability.resume` operation
     let use_op = uses[0].user;
-    let resume = arena_cont::Resume::from_op(ctx, use_op).ok()?;
+    let resume = ability::Resume::from_op(ctx, use_op).ok()?;
 
     // Verify the continuation operand is indeed %k
     if resume.continuation(ctx) != k {
@@ -68,7 +67,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
     let resume_value = resume.value(ctx);
     let resume_result = resume.result(ctx);
 
-    // Check: cont.resume result flows directly to scf.yield (tail position)
+    // Check: ability.resume result flows directly to scf.yield (tail position)
     let resume_uses = ctx.uses(resume_result);
     if resume_uses.len() != 1 {
         return None;
@@ -86,7 +85,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
         return None;
     }
 
-    // Verify: cont.resume is the second-to-last op
+    // Verify: ability.resume is the second-to-last op
     if block_ops.len() < 2 {
         return None;
     }
@@ -200,7 +199,7 @@ mod tests {
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
     }
@@ -277,8 +276,8 @@ mod tests {
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r1 = cont.resume %k, %sv : core.ptr
-          %r2 = cont.resume %k, %r1 : core.ptr
+          %r1 = ability.resume %k, %sv : core.ptr
+          %r2 = ability.resume %k, %r1 : core.ptr
           scf.yield %r2
       }
     }
@@ -299,7 +298,7 @@ mod tests {
 
     #[test]
     fn k_in_non_resume_is_not_tr() {
-        // %k used in a func.call instead of cont.resume
+        // %k used in a func.call instead of ability.resume
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -341,7 +340,7 @@ mod tests {
 
     #[test]
     fn resume_not_in_tail_position_is_not_tr() {
-        // cont.resume is not in tail position (extra ops after)
+        // ability.resume is not in tail position (extra ops after)
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -359,7 +358,7 @@ mod tests {
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           %c = arith.const {value = 1} : core.i32
           %cast = core.unrealized_conversion_cast %c : core.ptr
           scf.yield %cast
@@ -403,7 +402,7 @@ mod tests {
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
     }
@@ -495,7 +494,7 @@ mod tests {
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
       ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {

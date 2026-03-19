@@ -20,8 +20,6 @@ mod cont {
         {}
     }
 
-    fn resume(continuation: (), value: ()) -> result {}
-
     fn drop(continuation: ()) {}
 
     #[attr(tag: u32, result_type: Type)]
