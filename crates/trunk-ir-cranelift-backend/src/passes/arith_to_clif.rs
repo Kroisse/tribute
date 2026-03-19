@@ -139,18 +139,16 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match category {
             "f32" => {
-                if let Attribute::FloatBits(v) = value {
-                    arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
-                } else {
-                    arena_clif::f32const(ctx, loc, result_ty, 0.0).op_ref()
-                }
+                let Attribute::FloatBits(v) = value else {
+                    return false;
+                };
+                arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                if let Attribute::FloatBits(v) = value {
-                    arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
-                } else {
-                    arena_clif::f64const(ctx, loc, result_ty, 0.0).op_ref()
-                }
+                let Attribute::FloatBits(v) = value else {
+                    return false;
+                };
+                arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
             }
             _ => match value {
                 Attribute::Int(v) => {
@@ -162,7 +160,7 @@ impl RewritePattern for ArithConstPattern {
                 Attribute::Bool(b) => {
                     arena_clif::iconst(ctx, loc, result_ty, if b { 1 } else { 0 }).op_ref()
                 }
-                _ => arena_clif::iconst(ctx, loc, result_ty, 0).op_ref(),
+                _ => return false,
             },
         };
 
