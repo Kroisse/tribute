@@ -561,13 +561,13 @@ impl<'db> IrLoweringCtx<'db> {
     /// Layout: `adt.enum @YieldResult { Done(anyref), Shift(ShiftInfo) }`
     /// where ShiftInfo is `adt.struct @ShiftInfo { value, prompt, op_idx, continuation }`.
     ///
-    /// This creates the same interned types as `YieldBubblingTypes::new()` in
-    /// tribute-passes, ensuring type compatibility across the pipeline.
+    /// These types must match the definitions used by tribute-passes,
+    /// ensuring type compatibility across the pipeline.
     pub fn yield_result_type(&self, ir: &mut IrContext) -> TypeRef {
         let anyref = self.anyref_type(ir);
         let i32_ty = self.i32_type(ir);
 
-        // ShiftInfo struct (must match cont_to_yield_bubbling/types.rs)
+        // ShiftInfo struct
         let shift_info_ty = self.adt_struct_type(
             ir,
             Symbol::new("@ShiftInfo"),
