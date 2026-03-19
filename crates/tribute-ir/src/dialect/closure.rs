@@ -124,9 +124,9 @@ fn print_closure_lambda(
     }
 
     // " { body }" — entry label elided
-    write!(h, " {{\n")?;
+    writeln!(h, " {{")?;
     h.print_region_eliding_entry(region, indent + 2)?;
-    write!(h, "{indent_str}}}\n")
+    writeln!(h, "{indent_str}}}")
 }
 
 /// Parse closure.lambda custom format back into a RawOperation.
@@ -175,7 +175,7 @@ fn parse_closure_lambda<'a>(
         // Inject formal params into entry block args
         if !params.is_empty() && !region.blocks.is_empty() {
             let mut merged = params.clone();
-            merged.extend(region.blocks[0].args.drain(..));
+            merged.append(&mut region.blocks[0].args);
             region.blocks[0].args = merged;
         }
 

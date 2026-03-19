@@ -151,11 +151,11 @@ fn print_func(
         }
 
         // Body
-        write!(h, " {{\n")?;
+        writeln!(h, " {{")?;
         h.print_region_eliding_entry(region, indent + 2)?;
         writeln!(h, "{indent_str}}}")?;
     } else {
-        write!(h, "\n")?;
+        writeln!(h)?;
     }
 
     Ok(())
