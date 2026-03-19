@@ -16,7 +16,7 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
 Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`):
-  Language-agnostic dialects (core, func, cont, scf, arith, mem, cf, clif,
+  Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
   trampoline, wasm, adt)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
   Tribute-specific dialects (ability, closure, tribute_rt)
@@ -24,7 +24,7 @@ Dialects are split across two crates:
 Dialect levels (high → low):
 
 - **High-level**: ability, closure, tribute_rt — Tribute language concepts
-- **Mid-level**: func, cont, scf, arith, mem, adt — structured operations
+- **Mid-level**: func, scf, arith, mem, adt — structured operations
 - **Low-level**: cf, wasm, clif, trampoline — target-specific
 
 ## `#[dialect]` Macro

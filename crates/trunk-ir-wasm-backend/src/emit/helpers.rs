@@ -109,10 +109,7 @@ pub(crate) fn type_to_valtype(
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<ValType> {
-    if is_type(ctx, ty, "core", "i32")
-        || is_type(ctx, ty, "core", "i1")
-        || is_type(ctx, ty, "cont", "prompt_tag")
-    {
+    if is_type(ctx, ty, "core", "i32") || is_type(ctx, ty, "core", "i1") {
         Ok(ValType::I32)
     } else if is_type(ctx, ty, "core", "i64") {
         Ok(ValType::I64)
@@ -182,14 +179,6 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::Ref(RefType {
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
-        }))
-    } else if is_type(ctx, ty, "cont", "continuation") {
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            },
         }))
     } else if ctx.types.get(ty).dialect == Symbol::new("adt") {
         Ok(ValType::Ref(RefType::ANYREF))

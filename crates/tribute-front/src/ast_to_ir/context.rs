@@ -11,7 +11,6 @@ use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -335,11 +334,9 @@ impl<'db> IrLoweringCtx<'db> {
                 self.anyref_type(ir)
             }
             TypeKind::App { ctor, .. } => self.convert_type(ir, *ctor),
-            TypeKind::Continuation { arg, result, .. } => {
-                let ir_arg = self.convert_type(ir, *arg);
-                let ir_result = self.convert_type(ir, *result);
-                let effect = self.anyref_type(ir);
-                self.continuation_type(ir, ir_arg, ir_result, effect)
+            TypeKind::Continuation { .. } => {
+                // CPS: continuations are represented as anyref-typed closures
+                self.anyref_type(ir)
             }
         }
     }
@@ -418,11 +415,6 @@ impl<'db> IrLoweringCtx<'db> {
         arena_tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Get the `cont.prompt_tag` type.
-    pub fn prompt_tag_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_cont::prompt_tag(ir).as_type_ref()
-    }
-
     /// Create a `core.func` type with params and result.
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
@@ -441,17 +433,6 @@ impl<'db> IrLoweringCtx<'db> {
         effect: Option<TypeRef>,
     ) -> TypeRef {
         arena_core::func(ir, result, params.iter().copied(), effect).as_type_ref()
-    }
-
-    /// Create a `cont.continuation` type.
-    pub fn continuation_type(
-        &self,
-        ir: &mut IrContext,
-        arg: TypeRef,
-        result: TypeRef,
-        effect: TypeRef,
-    ) -> TypeRef {
-        arena_cont::continuation(ir, arg, result, effect).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.

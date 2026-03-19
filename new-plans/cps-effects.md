@@ -27,8 +27,8 @@ continuation을 사후 추출하는 모놀리식 패스였다. 주요 복잡도 
 
 ### ability.perform
 
-`cont.shift`를 대체하는 high-level op. Ability operation 수행 + explicit
-continuation:
+High-level op for ability operations. CPS 변환에서 explicit continuation과 함께
+사용:
 
 ```text
 ability.perform @State, @get, [%args], %continuation_closure
@@ -62,9 +62,10 @@ ability.handle_dispatch %yr, %tag {
 }
 ```
 
-### cont dialect 제거
+### cont dialect 제거 (완료)
 
-CPS에서 cont의 모든 역할이 대체됨:
+CPS 전환이 완료되어 cont dialect가 코드베이스에서 완전히 제거됨.
+아래는 각 op의 대체 관계:
 
 | cont op               | CPS 대체                                          |
 | --------------------- | ------------------------------------------------- |
