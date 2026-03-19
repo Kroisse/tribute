@@ -97,12 +97,11 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some
-            if let Some(namespace) = name.namespace() {
-                if namespace.is_simple() {
-                    if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
-                        return self.binding_to_ref(binding, sym);
-                    }
-                }
+            if let Some(namespace) = name.namespace()
+                && namespace.is_simple()
+                && let Some(binding) = self.env.lookup_qualified(namespace, sym)
+            {
+                return self.binding_to_ref(binding, sym);
             }
             // TODO: Support multi-level paths (e.g., std::io::Reader)
         }
