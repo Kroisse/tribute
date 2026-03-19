@@ -5,8 +5,8 @@
 //! - Handler dispatch uses `ability.handle_dispatch`
 //! - Continuation calls use `func.call_indirect` (not `ability.resume`)
 //!
-//! Also lowers ability operation calls to `cont.shift` (fallback for
-//! non-CPS contexts).
+//! Ability operation calls are lowered to `ability.perform` with CPS
+//! continuations.
 
 use std::collections::HashSet;
 

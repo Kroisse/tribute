@@ -39,8 +39,8 @@ pub enum Binding<'db> {
 
     /// An ability operation.
     ///
-    /// Unlike regular functions, ability operations are lowered to `cont.shift`
-    /// with runtime evidence lookup.
+    /// Unlike regular functions, ability operations are lowered to
+    /// `ability.perform` with CPS continuations and runtime evidence lookup.
     AbilityOp {
         /// The ability identifier (e.g., AbilityId for "State").
         ability: AbilityId<'db>,

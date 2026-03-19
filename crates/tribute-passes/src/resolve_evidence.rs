@@ -231,7 +231,7 @@ fn collect_handler_root_functions(
             if fns_with_evidence.contains(&func_name) {
                 continue;
             }
-            if region_contains_push_prompt(ctx, func_op.body(ctx)) {
+            if region_contains_handle_dispatch(ctx, func_op.body(ctx)) {
                 handler_roots.insert(func_name);
             }
         }
@@ -240,14 +240,14 @@ fn collect_handler_root_functions(
 }
 
 /// Check if a region contains `ability.handle_dispatch`.
-fn region_contains_push_prompt(ctx: &IrContext, region: RegionRef) -> bool {
+fn region_contains_handle_dispatch(ctx: &IrContext, region: RegionRef) -> bool {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 return true;
             }
             for &nested in ctx.op(op).regions.iter() {
-                if region_contains_push_prompt(ctx, nested) {
+                if region_contains_handle_dispatch(ctx, nested) {
                     return true;
                 }
             }

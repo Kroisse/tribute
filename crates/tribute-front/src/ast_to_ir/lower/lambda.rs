@@ -238,7 +238,7 @@ pub(super) fn lower_lambda<'db>(
 
     // Lower the lambda body.
     // For effectful lambdas, use CPS so that ability ops produce
-    // ability.perform (not cont.shift), consistent with CPS handle dispatch.
+    // ability.perform, consistent with CPS handle dispatch.
     if effect.is_some() {
         let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
         match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {

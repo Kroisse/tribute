@@ -338,7 +338,7 @@ pub enum ResolvedRef<'db> {
     /// Reference to an ability operation.
     ///
     /// Ability operations like `State::get()` are resolved to this variant,
-    /// which is lowered directly to `cont.shift` + runtime calls.
+    /// which is lowered to `ability.perform` with CPS continuations.
     AbilityOp {
         /// The ability identifier (e.g., AbilityId for "State").
         ability: AbilityId<'db>,

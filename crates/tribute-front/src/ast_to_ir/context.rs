@@ -193,8 +193,8 @@ impl<'db> IrLoweringCtx<'db> {
     /// Generate a fresh prompt tag and push it onto the active stack.
     ///
     /// This should be called when entering a `handle` expression.
-    /// The tag is used by both `cont.push_prompt` and `cont.shift` to ensure
-    /// they reference the same prompt.
+    /// The tag is used by `ability.handle_dispatch` and evidence extension
+    /// to ensure they reference the same handler scope.
     pub fn push_prompt_tag(&mut self) -> u32 {
         let tag = self.prompt_tag_counter;
         self.prompt_tag_counter = self
