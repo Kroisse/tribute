@@ -16,7 +16,7 @@ core.module @test {
           func.unreachable
       }
       %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
-          cont.done {
+          ability.done {
             ^bb4(%10: tribute_rt.anyref):
               %11 = core.unrealized_conversion_cast %10 : core.i32
               scf.yield %11

@@ -2,17 +2,16 @@
 //!
 //! Most practical abilities (State, Reader, Writer, Console) are **tail-resumptive**:
 //! the handler immediately resumes with `k(value)`, making continuation capture
-//! unnecessary. This module detects such patterns and converts `cont.suspend` ops
-//! to `cont.yield` so that downstream lowering passes can skip the resume/shift
+//! unnecessary. This module detects such patterns and converts `ability.suspend` ops
+//! to `ability.yield` so that downstream lowering passes can skip the resume/shift
 //! overhead based on the operation type rather than an attribute.
 //!
-//! A `cont.suspend` body is tail-resumptive when:
+//! A `ability.suspend` body is tail-resumptive when:
 //! 1. `%k` (block arg 0) is used exactly once
-//! 2. That single use is a `cont.resume %k, %value` operation
-//! 3. The result of `cont.resume` flows directly to `scf.yield` (tail position)
+//! 2. That single use is a `ability.resume %k, %value` operation
+//! 3. The result of `ability.resume` flows directly to `scf.yield` (tail position)
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::scf as arena_scf;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
@@ -20,21 +19,23 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
+use tribute_ir::dialect::ability;
+
 /// Information about a tail-resumptive suspend body.
 pub struct TailResumptiveInfo {
-    /// The `cont.resume` operation in the body.
+    /// The `ability.resume` operation in the body.
     pub resume_op: OpRef,
-    /// The value passed to `cont.resume` (i.e., the value to yield directly).
+    /// The value passed to `ability.resume` (i.e., the value to yield directly).
     pub resume_value: ValueRef,
 }
 
-/// Analyze whether a `cont.suspend` body is tail-resumptive.
+/// Analyze whether a `ability.suspend` body is tail-resumptive.
 ///
 /// Returns `Some(TailResumptiveInfo)` if the body matches the pattern:
 /// ```text
 /// ^bb0(%k: continuation, %shift_args: any):
 ///     // ... ops that don't use %k ...
-///     %result = cont.resume %k, %value
+///     %result = ability.resume %k, %value
 ///     scf.yield %result
 /// ```
 pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<TailResumptiveInfo> {
@@ -54,9 +55,9 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
         return None;
     }
 
-    // Check: the single use is a `cont.resume` operation
+    // Check: the single use is a `ability.resume` operation
     let use_op = uses[0].user;
-    let resume = arena_cont::Resume::from_op(ctx, use_op).ok()?;
+    let resume = ability::Resume::from_op(ctx, use_op).ok()?;
 
     // Verify the continuation operand is indeed %k
     if resume.continuation(ctx) != k {
@@ -66,7 +67,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
     let resume_value = resume.value(ctx);
     let resume_result = resume.result(ctx);
 
-    // Check: cont.resume result flows directly to scf.yield (tail position)
+    // Check: ability.resume result flows directly to scf.yield (tail position)
     let resume_uses = ctx.uses(resume_result);
     if resume_uses.len() != 1 {
         return None;
@@ -84,7 +85,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
         return None;
     }
 
-    // Verify: cont.resume is the second-to-last op
+    // Verify: ability.resume is the second-to-last op
     if block_ops.len() < 2 {
         return None;
     }
@@ -99,7 +100,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
     })
 }
 
-/// Pattern that converts `cont.suspend` to `cont.yield` when the body is tail-resumptive.
+/// Pattern that converts `ability.suspend` to `ability.yield` when the body is tail-resumptive.
 struct SuspendToYieldPattern;
 
 impl RewritePattern for SuspendToYieldPattern {
@@ -109,7 +110,7 @@ impl RewritePattern for SuspendToYieldPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(suspend) = arena_cont::Suspend::from_op(ctx, op) else {
+        let Ok(suspend) = ability::Suspend::from_op(ctx, op) else {
             return false;
         };
         if is_tail_resumptive(ctx, suspend.body(ctx)).is_none() {
@@ -124,17 +125,17 @@ impl RewritePattern for SuspendToYieldPattern {
         // Detach the body region from the old suspend op
         ctx.detach_region(body);
 
-        // Create a new cont.yield op with the same attributes and body
-        let new_op = arena_cont::r#yield(ctx, loc, ability_ref, op_name, body);
+        // Create a new ability.yield op with the same attributes and body
+        let new_op = ability::r#yield(ctx, loc, ability_ref, op_name, body);
         rewriter.replace_op(new_op.op_ref());
         true
     }
 }
 
-/// Convert tail-resumptive `cont.suspend` ops to `cont.yield` in the module.
+/// Convert tail-resumptive `ability.suspend` ops to `ability.yield` in the module.
 ///
 /// Uses `PatternApplicator` to walk all operations and replace eligible
-/// `cont.suspend` ops with `cont.yield`.
+/// `ability.suspend` ops with `ability.yield`.
 pub fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(SuspendToYieldPattern);
@@ -145,22 +146,21 @@ pub fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
 mod tests {
     use super::*;
     use trunk_ir::context::IrContext;
-    use trunk_ir::dialect::cont as arena_cont;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::refs::OpRef;
     use trunk_ir::walk;
 
-    /// Find all cont.suspend ops in the module.
+    /// Find all ability.suspend ops in the module.
     fn find_suspend_ops(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Vec<OpRef> {
         let body = module.body(ctx).unwrap();
-        collect_ops_by_type::<arena_cont::Suspend>(ctx, body)
+        collect_ops_by_type::<ability::Suspend>(ctx, body)
     }
 
-    /// Find all cont.yield ops in the module.
+    /// Find all ability.yield ops in the module.
     fn find_yield_ops(ctx: &IrContext, module: trunk_ir::rewrite::Module) -> Vec<OpRef> {
         let body = module.body(ctx).unwrap();
-        collect_ops_by_type::<arena_cont::Yield>(ctx, body)
+        collect_ops_by_type::<ability::Yield>(ctx, body)
     }
 
     /// Collect ops matching a dialect op type from a region (recursive).
@@ -187,19 +187,16 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
     }
@@ -211,7 +208,7 @@ mod tests {
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1);
 
-        let suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         let info = is_tail_resumptive(&ctx, suspend.body(&ctx));
         assert!(info.is_some(), "simple k(value) pattern should be TR");
     }
@@ -224,17 +221,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
           %c = arith.const {value = 42} : core.i32
           %cast = core.unrealized_conversion_cast %c : core.ptr
@@ -249,7 +243,7 @@ mod tests {
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1);
 
-        let suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         assert!(
             is_tail_resumptive(&ctx, suspend.body(&ctx)).is_none(),
             "unused k should not be TR"
@@ -264,20 +258,17 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r1 = cont.resume %k, %sv : core.ptr
-          %r2 = cont.resume %k, %r1 : core.ptr
+          %r1 = ability.resume %k, %sv : core.ptr
+          %r2 = ability.resume %k, %r1 : core.ptr
           scf.yield %r2
       }
     }
@@ -289,7 +280,7 @@ mod tests {
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1);
 
-        let suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         assert!(
             is_tail_resumptive(&ctx, suspend.body(&ctx)).is_none(),
             "k used twice should not be TR"
@@ -298,7 +289,7 @@ mod tests {
 
     #[test]
     fn k_in_non_resume_is_not_tr() {
-        // %k used in a func.call instead of cont.resume
+        // %k used in a func.call instead of ability.resume
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -307,17 +298,14 @@ mod tests {
     func.return %x
   }
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
           %r = func.call %k {callee = @some_func} : core.ptr
           scf.yield %r
@@ -331,7 +319,7 @@ mod tests {
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1);
 
-        let suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         assert!(
             is_tail_resumptive(&ctx, suspend.body(&ctx)).is_none(),
             "k used in non-resume context should not be TR"
@@ -340,25 +328,22 @@ mod tests {
 
     #[test]
     fn resume_not_in_tail_position_is_not_tr() {
-        // cont.resume is not in tail position (extra ops after)
+        // ability.resume is not in tail position (extra ops after)
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           %c = arith.const {value = 1} : core.i32
           %cast = core.unrealized_conversion_cast %c : core.ptr
           scf.yield %cast
@@ -372,7 +357,7 @@ mod tests {
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1);
 
-        let suspend = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         assert!(
             is_tail_resumptive(&ctx, suspend.body(&ctx)).is_none(),
             "resume not in tail position should not be TR"
@@ -390,19 +375,16 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
     }
@@ -424,10 +406,10 @@ mod tests {
             "TR suspend should be converted to yield"
         );
         let yields = find_yield_ops(&ctx, module);
-        assert_eq!(yields.len(), 1, "Should have 1 cont.yield");
+        assert_eq!(yields.len(), 1, "Should have 1 ability.yield");
         assert!(
-            arena_cont::Yield::matches(&ctx, yields[0]),
-            "Should be cont.yield"
+            ability::Yield::matches(&ctx, yields[0]),
+            "Should be ability.yield"
         );
     }
 
@@ -438,17 +420,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
           %c = arith.const {value = 42} : core.i32
           %cast = core.unrealized_conversion_cast %c : core.ptr
@@ -462,7 +441,7 @@ mod tests {
 
         convert_tail_resumptive(&mut ctx, module);
 
-        // Non-TR suspend should remain as cont.suspend
+        // Non-TR suspend should remain as ability.suspend
         assert_eq!(
             find_suspend_ops(&ctx, module).len(),
             1,
@@ -471,7 +450,7 @@ mod tests {
         assert_eq!(
             find_yield_ops(&ctx, module).len(),
             0,
-            "Should have no cont.yield"
+            "Should have no ability.yield"
         );
     }
 
@@ -482,22 +461,19 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
-      cont.done {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
+      ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: core.ptr, %sv: core.ptr):
-          %r = cont.resume %k, %sv : core.ptr
+          %r = ability.resume %k, %sv : core.ptr
           scf.yield %r
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
         ^bb0(%k2: core.ptr, %sv2: core.ptr):
           %c = arith.const {value = 0} : core.i32
           %cast = core.unrealized_conversion_cast %c : core.ptr
@@ -514,13 +490,13 @@ mod tests {
         // First suspend (get) should be converted to yield
         let yields = find_yield_ops(&ctx, module);
         assert_eq!(yields.len(), 1, "get arm should be converted to yield");
-        let yield_op = arena_cont::Yield::from_op(&ctx, yields[0]).unwrap();
+        let yield_op = ability::Yield::from_op(&ctx, yields[0]).unwrap();
         assert_eq!(yield_op.op_name(&ctx), trunk_ir::Symbol::new("get"));
 
         // Second suspend (set) should remain as suspend
         let suspends = find_suspend_ops(&ctx, module);
         assert_eq!(suspends.len(), 1, "set arm should remain as suspend");
-        let suspend_op = arena_cont::Suspend::from_op(&ctx, suspends[0]).unwrap();
+        let suspend_op = ability::Suspend::from_op(&ctx, suspends[0]).unwrap();
         assert_eq!(suspend_op.op_name(&ctx), trunk_ir::Symbol::new("set"));
     }
 }

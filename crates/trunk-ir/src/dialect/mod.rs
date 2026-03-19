@@ -6,7 +6,6 @@ pub mod adt;
 pub mod arith;
 pub mod cf;
 pub mod clif;
-pub mod cont;
 pub mod core;
 pub mod func;
 pub mod mem;

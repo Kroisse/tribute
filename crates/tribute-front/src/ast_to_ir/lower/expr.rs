@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
-use trunk_ir::dialect::{adt, arith, cont, core, func};
+use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
@@ -276,7 +276,7 @@ pub(super) fn lower_expr<'db>(
                                 Some(result)
                             } else {
                                 let result_ty = builder.ctx.convert_type(builder.ir, *result);
-                                let op = cont::resume(
+                                let op = ability::resume(
                                     builder.ir,
                                     location,
                                     callee_val,

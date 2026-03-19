@@ -20,7 +20,6 @@
 //! | `adt.typeref<T>`    | `core.ptr`  | Struct reference as pointer        |
 //! | `closure.closure`   | `core.ptr`  | Closure as pointer                 |
 //! | `core.array<T>`     | `core.ptr`  | Array as heap pointer              |
-//! | `cont.prompt_tag`   | `core.i32`  | Prompt tag as integer              |
 //!
 //! ## Materializations
 //!
@@ -33,7 +32,6 @@ use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif as arena_clif;
-use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::TypeConverter;
@@ -59,7 +57,6 @@ pub struct NativeTypeRefs {
     pub tribute_rt_intref: TypeRef,
     pub tribute_rt_anyref: TypeRef,
     pub core_i1: TypeRef,
-    pub cont_prompt_tag: TypeRef,
 
     // Target types
     pub core_i32: TypeRef,
@@ -88,7 +85,6 @@ impl NativeTypeRefs {
             core_i1: ctx
                 .types
                 .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build()),
-            cont_prompt_tag: arena_cont::prompt_tag(ctx).as_type_ref(),
 
             core_i32: ctx
                 .types
@@ -137,9 +133,6 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if ty == r.tribute_rt_intref {
             return Some(r.core_ptr);
         }
-        if ty == r.cont_prompt_tag {
-            return Some(r.core_i32);
-        }
         // Evidence type → ptr
         if ty == r.evidence_ty {
             return Some(r.core_ptr);
@@ -158,10 +151,6 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         }
         // core.array (non-evidence) → ptr
         if is_array_type(ctx, ty) && ty != r.evidence_ty {
-            return Some(r.core_ptr);
-        }
-        // cont.continuation → ptr (continuation captured in closure env)
-        if is_continuation_type(ctx, ty) {
             return Some(r.core_ptr);
         }
         None
@@ -202,9 +191,6 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(arena_materialize_result_noop(value));
         }
         if from_ty == r.core_ptr && to_ty == r.evidence_ty {
-            return Some(arena_materialize_result_noop(value));
-        }
-        if from_ty == r.cont_prompt_tag && to_ty == r.core_i32 {
             return Some(arena_materialize_result_noop(value));
         }
 
@@ -412,11 +398,6 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         return true;
     }
 
-    // cont.continuation (captured in closure env)
-    if data.dialect == Symbol::new("cont") && data.name == Symbol::new("continuation") {
-        return true;
-    }
-
     false
 }
 
@@ -454,12 +435,6 @@ fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == Symbol::new("core") && data.name == Symbol::new("array")
 }
 
-/// Helper: Check if a type is cont.continuation.
-fn is_continuation_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.types.get(ty);
-    data.dialect == Symbol::new("cont") && data.name == Symbol::new("continuation")
-}
-
 impl NativeTypeRefs {
     /// Clone all TypeRef fields for use in closures.
     /// (TypeRef is Copy, so this is just a convenient struct copy.)
@@ -472,7 +447,6 @@ impl NativeTypeRefs {
             tribute_rt_intref: self.tribute_rt_intref,
             tribute_rt_anyref: self.tribute_rt_anyref,
             core_i1: self.core_i1,
-            cont_prompt_tag: self.cont_prompt_tag,
             core_i32: self.core_i32,
             core_i64: self.core_i64,
             core_f64: self.core_f64,
@@ -496,7 +470,6 @@ struct NativeTypeRefsCopy {
     tribute_rt_intref: TypeRef,
     tribute_rt_anyref: TypeRef,
     core_i1: TypeRef,
-    cont_prompt_tag: TypeRef,
     core_i32: TypeRef,
     core_i64: TypeRef,
     core_f64: TypeRef,

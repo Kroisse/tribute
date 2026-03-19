@@ -483,15 +483,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert cont.prompt_tag -> core.i32 (same representation at runtime)
-    tc.add_conversion(move |ctx, ty| {
-        if is_type(ctx, ty, Symbol::new("cont"), Symbol::new("prompt_tag")) {
-            Some(i32_ty)
-        } else {
-            None
-        }
-    });
-
     // Convert marker ADT type -> pass through (already standard ADT struct)
     // This conversion is a no-op since marker_adt_type() returns a standard adt.struct
     tc.add_conversion(move |ctx, ty| {
@@ -827,12 +818,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // marker (adt.struct) -> wasm.structref (marker is a struct)
         if is_marker_type_ref(ctx, from_ty)
             && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // cont.prompt_tag -> core.i32 (same representation at runtime)
-        if is_type(ctx, from_ty, Symbol::new("cont"), Symbol::new("prompt_tag"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("i32"))
         {
             return Some(MaterializeResult { value, ops: vec![] });
         }

@@ -22,8 +22,8 @@ mod ability {
 
     /// Perform an ability operation with an explicit continuation closure.
     ///
-    /// CPS replacement for `cont.shift`. The continuation closure captures
-    /// the rest of the computation after the effect point.
+    /// The continuation closure captures the rest of the computation
+    /// after the effect point.
     ///
     /// ```text
     /// %yr = ability.perform %continuation, [%args...]
@@ -36,8 +36,8 @@ mod ability {
 
     /// Handler dispatch loop over a YieldResult value.
     ///
-    /// CPS replacement for `cont.handler_dispatch`. Matches the prompt tag
-    /// and dispatches to the appropriate handler arm in the body region.
+    /// Matches the prompt tag and dispatches to the appropriate handler
+    /// arm in the body region.
     ///
     /// The `handler_fn` operand is a closure `(k, op_idx, value) -> void`
     /// that dispatches to the appropriate handler arm. It is stored in the
@@ -54,6 +54,26 @@ mod ability {
         #[region(body)]
         {}
     }
+
+    fn done() {
+        #[region(body)]
+        {}
+    }
+
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn suspend() {
+        #[region(body)]
+        {}
+    }
+
+    /// Tail-resumptive yield: like `suspend` but guarantees no continuation capture.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn r#yield() {
+        #[region(body)]
+        {}
+    }
+
+    fn resume(continuation: (), value: ()) -> result {}
 }
 
 // === Hash-Based Dispatch ===

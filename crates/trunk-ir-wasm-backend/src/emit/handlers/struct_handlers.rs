@@ -101,20 +101,16 @@ pub(crate) fn handle_struct_get(
     emit_operands(ctx, operands, emit_ctx, function)?;
     let attrs = &ctx.op(op).attributes;
 
-    // Check if operand is abstract type (anyref/structref/continuation) and needs casting to concrete struct type
+    // Check if operand is abstract type (anyref/structref) and needs casting to concrete struct type
     // This happens when:
     // - A closure is captured (stored as anyref) and later used
     // - A continuation field is typed as structref but needs access to concrete struct fields
-    // - cont::Continuation type is stored as structref in wasm but accessed with concrete struct ops
     let operand_abstract_type = operands.first().and_then(|op_val| {
         let ty = value_type(ctx, *op_val);
         if helpers::is_type(ctx, ty, "wasm", "anyref") {
             Some("anyref")
         } else if helpers::is_type(ctx, ty, "wasm", "structref") {
             Some("structref")
-        } else if helpers::is_type(ctx, ty, "cont", "continuation") {
-            // cont::Continuation is stored as structref in wasm
-            Some("cont.continuation")
         } else {
             None
         }

@@ -11,7 +11,6 @@ use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cont as arena_cont;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -67,7 +66,7 @@ pub struct IrLoweringCtx<'db> {
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
 
     /// When true, continuation calls in handler arms use `func.call_indirect`
-    /// instead of `cont.resume` (CPS effect handling mode).
+    /// instead of `ability.resume` (CPS effect handling mode).
     pub(crate) cps_handler_mode: bool,
 }
 
@@ -194,8 +193,8 @@ impl<'db> IrLoweringCtx<'db> {
     /// Generate a fresh prompt tag and push it onto the active stack.
     ///
     /// This should be called when entering a `handle` expression.
-    /// The tag is used by both `cont.push_prompt` and `cont.shift` to ensure
-    /// they reference the same prompt.
+    /// The tag is used by `ability.handle_dispatch` and evidence extension
+    /// to ensure they reference the same handler scope.
     pub fn push_prompt_tag(&mut self) -> u32 {
         let tag = self.prompt_tag_counter;
         self.prompt_tag_counter = self
@@ -335,11 +334,9 @@ impl<'db> IrLoweringCtx<'db> {
                 self.anyref_type(ir)
             }
             TypeKind::App { ctor, .. } => self.convert_type(ir, *ctor),
-            TypeKind::Continuation { arg, result, .. } => {
-                let ir_arg = self.convert_type(ir, *arg);
-                let ir_result = self.convert_type(ir, *result);
-                let effect = self.anyref_type(ir);
-                self.continuation_type(ir, ir_arg, ir_result, effect)
+            TypeKind::Continuation { .. } => {
+                // CPS: continuations are represented as anyref-typed closures
+                self.anyref_type(ir)
             }
         }
     }
@@ -418,11 +415,6 @@ impl<'db> IrLoweringCtx<'db> {
         arena_tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Get the `cont.prompt_tag` type.
-    pub fn prompt_tag_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_cont::prompt_tag(ir).as_type_ref()
-    }
-
     /// Create a `core.func` type with params and result.
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
@@ -441,17 +433,6 @@ impl<'db> IrLoweringCtx<'db> {
         effect: Option<TypeRef>,
     ) -> TypeRef {
         arena_core::func(ir, result, params.iter().copied(), effect).as_type_ref()
-    }
-
-    /// Create a `cont.continuation` type.
-    pub fn continuation_type(
-        &self,
-        ir: &mut IrContext,
-        arg: TypeRef,
-        result: TypeRef,
-        effect: TypeRef,
-    ) -> TypeRef {
-        arena_cont::continuation(ir, arg, result, effect).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.
@@ -708,6 +689,35 @@ mod tests {
         let int_ty = AstType::new(&db, TypeKind::Int);
         let bool_ty = AstType::new(&db, TypeKind::Bool);
         let ty = AstType::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
+        let ir_ty = ctx.convert_type(&mut ir, ty);
+        let expected = ctx.anyref_type(&mut ir);
+        assert_eq!(ir_ty, expected);
+    }
+
+    #[test]
+    fn test_convert_type_continuation_to_any() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let path = ir.paths.intern("test.trb".to_owned());
+        let ctx = IrLoweringCtx::new(
+            &db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        );
+
+        let int_ty = AstType::new(&db, TypeKind::Int);
+        let effect = crate::ast::EffectRow::pure(&db);
+        let ty = AstType::new(
+            &db,
+            TypeKind::Continuation {
+                arg: int_ty,
+                result: int_ty,
+                effect,
+            },
+        );
         let ir_ty = ctx.convert_type(&mut ir, ty);
         let expected = ctx.anyref_type(&mut ir);
         assert_eq!(ir_ty, expected);

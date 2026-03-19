@@ -8,7 +8,7 @@
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{cont, core, scf};
+use trunk_ir::dialect::{core, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
@@ -75,13 +75,13 @@ impl RewritePattern for LowerHandleDispatchPattern {
 
 /// Get the done region from handler_dispatch's body.
 ///
-/// Finds the first `cont.done` child op and returns its body region.
+/// Finds the first `ability.done` child op and returns its body region.
 fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
     let blocks = &ctx.region(body).blocks;
     let &first_block = blocks.first()?;
 
     for &op in &ctx.block(first_block).ops {
-        if let Ok(done_op) = cont::Done::from_op(ctx, op) {
+        if let Ok(done_op) = ability::Done::from_op(ctx, op) {
             return Some(done_op.body(ctx));
         }
     }
@@ -89,7 +89,7 @@ fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
     None
 }
 
-/// Inline the `cont.done` region's body before `insert_before`.
+/// Inline the `ability.done` region's body before `insert_before`.
 ///
 /// The done region has a single block argument (the body result value).
 /// We map that argument to `done_value` and clone the ops into `dest_block`.
@@ -154,11 +154,11 @@ mod tests {
     %body = arith.const {value = 42} : tribute_rt.anyref
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
-      cont.done {
+      ability.done {
         ^bb0(%v: tribute_rt.anyref):
           scf.yield %v
       }
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: tribute_rt.anyref, %sv: tribute_rt.anyref):
           scf.yield %k
       }
@@ -186,7 +186,7 @@ mod tests {
     %body = arith.const {value = 10} : tribute_rt.anyref
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = core.i32} : core.i32 {
-      cont.done {
+      ability.done {
         ^bb0(%v: tribute_rt.anyref):
           %one = arith.const {value = 1} : core.i32
           %cast = core.unrealized_conversion_cast %v : core.i32
@@ -217,7 +217,7 @@ mod tests {
     %body = arith.const {value = 42} : tribute_rt.anyref
     %handler_fn = arith.const {value = 0} : tribute_rt.anyref
     %result = ability.handle_dispatch %body, %handler_fn {tag = 1, result_type = tribute_rt.anyref} : tribute_rt.anyref {
-      cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+      ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
         ^bb0(%k: tribute_rt.anyref, %sv: tribute_rt.anyref):
           scf.yield %k
       }
