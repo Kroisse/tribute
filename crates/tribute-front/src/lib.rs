@@ -27,14 +27,32 @@ pub use fluent_uri::Uri;
 pub use query::{ParsedCst, parse_cst};
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
-use trunk_ir::{Symbol, SymbolVec, smallvec::SmallVec};
+use trunk_ir::Symbol;
 
-/// Build a module path for a struct field or ability operation.
+/// Build a qualified symbol by joining `prefix` and `name` with `::`.
 ///
-/// Appends the type name to the module path, creating a path like ["foo", "Point"]
-/// for a field accessor like `Point::x` in module `foo`.
-pub fn build_field_module_path(module_path: &[Symbol], type_name: Symbol) -> SymbolVec {
-    let mut path: SymbolVec = SmallVec::from_slice(module_path);
-    path.push(type_name);
-    path
+/// If `prefix` is empty, returns `name` directly (no allocation).
+/// Otherwise, temporarily appends `::name` to the buffer, creates the symbol,
+/// then restores the buffer to its original length.
+pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
+    if prefix.is_empty() {
+        name
+    } else {
+        let len = prefix.len();
+        prefix.push_str("::");
+        name.with_str(|s| prefix.push_str(s));
+        let sym = Symbol::from_dynamic(prefix);
+        prefix.truncate(len);
+        sym
+    }
+}
+
+/// Push a segment onto a prefix buffer. Returns the length before push (for truncate).
+pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
+    let len = prefix.len();
+    if !prefix.is_empty() {
+        prefix.push_str("::");
+    }
+    name.with_str(|s| prefix.push_str(s));
+    len
 }

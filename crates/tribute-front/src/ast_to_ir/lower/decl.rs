@@ -21,13 +21,13 @@ fn prescan_struct_fields<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
     decls: &[Decl<TypedRef<'db>>],
-    module_path: &[Symbol],
+    prefix: &mut String,
 ) {
-    let path_vec = trunk_ir::SymbolVec::from_slice(module_path);
     for decl in decls {
         match decl {
             Decl::Struct(s) => {
-                let ctor_id = CtorId::new(ctx.db, path_vec.clone(), s.name);
+                let qualified = crate::qualified_symbol(prefix, s.name);
+                let ctor_id = CtorId::new(ctx.db, qualified);
                 let field_names: Vec<Symbol> = s
                     .fields
                     .iter()
@@ -50,7 +50,8 @@ fn prescan_struct_fields<'db>(
                 ctx.register_type(qualified, struct_ir_type);
             }
             Decl::Enum(e) => {
-                let ctor_id = CtorId::new(ctx.db, path_vec.clone(), e.name);
+                let qualified = crate::qualified_symbol(prefix, e.name);
+                let ctor_id = CtorId::new(ctx.db, qualified);
 
                 let ir_variants: Vec<(Symbol, Vec<TypeRef>)> = e
                     .variants
@@ -70,9 +71,9 @@ fn prescan_struct_fields<'db>(
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    let mut nested_path: Vec<Symbol> = module_path.to_vec();
-                    nested_path.push(m.name);
-                    prescan_struct_fields(ctx, ir, body, &nested_path);
+                    let saved = crate::push_prefix(prefix, m.name);
+                    prescan_struct_fields(ctx, ir, body, prefix);
+                    prefix.truncate(saved);
                 }
             }
             _ => {}
@@ -107,7 +108,7 @@ pub fn lower_module<'db>(
     );
 
     // Pre-scan: register all struct field orders before lowering any declarations.
-    prescan_struct_fields(&mut ctx, ir, &module.decls, &[]);
+    prescan_struct_fields(&mut ctx, ir, &module.decls, &mut String::new());
 
     // Create the module block (top-down: create block first, push ops into it)
     let module_block = ir.create_block(BlockData {
@@ -372,12 +373,13 @@ fn lower_struct_decl<'db>(
     // Use the registered full struct IR type for adt.struct_get
     let qualified_key = {
         let module_path = ctx.module_path();
-        let prescan_path = if module_path.len() > 1 {
-            trunk_ir::SymbolVec::from_slice(&module_path[1..])
-        } else {
-            trunk_ir::SymbolVec::new()
-        };
-        let ctor_id = CtorId::new(ctx.db, prescan_path, name);
+        let mut prefix = String::new();
+        // Skip the first segment (top-level module name) to match prescan
+        for seg in module_path.iter().skip(1) {
+            crate::push_prefix(&mut prefix, *seg);
+        }
+        let qualified = crate::qualified_symbol(&mut prefix, name);
+        let ctor_id = CtorId::new(ctx.db, qualified);
         qualified_type_name(ctx.db, &ctor_id)
     };
     let struct_get_ty = ctx.get_type(qualified_key).unwrap_or_else(|| {

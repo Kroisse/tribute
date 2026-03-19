@@ -26,7 +26,7 @@ mod func_check;
 
 use std::collections::HashMap;
 
-use trunk_ir::{Span, Symbol, SymbolVec, smallvec::SmallVec};
+use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
     Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef,
@@ -62,8 +62,8 @@ pub enum Mode<'db> {
 pub struct TypeChecker<'db> {
     /// Module-level type environment (function signatures, constructors, type defs).
     pub(crate) env: ModuleTypeEnv<'db>,
-    /// Current module path for qualified function names.
-    pub(crate) module_path: Vec<Symbol>,
+    /// Current module prefix for qualified function names (e.g., "foo::bar").
+    pub(crate) prefix: String,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: SpanMap,
     /// Accumulated node types from all functions.
@@ -76,7 +76,7 @@ impl<'db> TypeChecker<'db> {
     pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
             env: ModuleTypeEnv::new(db),
-            module_path: Vec::new(),
+            prefix: String::new(),
             span_map,
             node_types: HashMap::new(),
         }
@@ -87,14 +87,17 @@ impl<'db> TypeChecker<'db> {
         self.span_map.get_or_default(node_id)
     }
 
-    /// Get the current module path as a SymbolVec.
-    pub(crate) fn current_module_path(&self) -> SymbolVec {
-        SmallVec::from_slice(&self.module_path)
+    /// Get the current module prefix string (e.g., "foo::bar").
+    pub(crate) fn current_prefix(&self) -> &str {
+        &self.prefix
     }
 
-    /// Create a FuncDefId from the current module path and function name.
+    /// Create a FuncDefId from the current prefix and function name.
     pub(crate) fn func_def_id(&self, name: Symbol) -> FuncDefId<'db> {
-        FuncDefId::new(self.db(), self.current_module_path(), name)
+        FuncDefId::new(
+            self.db(),
+            crate::qualified_symbol(&mut self.prefix.clone(), name),
+        )
     }
 
     /// Get the database.
@@ -227,15 +230,15 @@ impl<'db> TypeChecker<'db> {
         &mut self,
         module: crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
-        // Push module name to path
-        self.module_path.push(module.name);
+        // Push module name to prefix
+        let prev_len = crate::push_prefix(&mut self.prefix, module.name);
 
         let body = module
             .body
             .map(|decls| decls.into_iter().map(|d| self.check_decl(d)).collect());
 
-        // Pop module name from path
-        self.module_path.pop();
+        // Restore prefix
+        self.prefix.truncate(prev_len);
 
         crate::ast::ModuleDecl {
             id: module.id,

@@ -540,7 +540,6 @@ mod tests {
     use super::*;
     use crate::ast::TypeParam;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::SymbolVec;
 
     /// Create a type parameter with just a name.
     fn type_param(name: Symbol) -> TypeParam {
@@ -556,8 +555,8 @@ mod tests {
 
         // Two separate FunctionInferenceContexts with different function IDs
         // should produce globally unique UniVar IDs
-        let func_id1 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("func1"));
-        let func_id2 = FuncDefId::new(db, SymbolVec::new(), Symbol::new("func2"));
+        let func_id1 = FuncDefId::new(db, Symbol::new("func1"));
+        let func_id2 = FuncDefId::new(db, Symbol::new("func2"));
         let mut ctx1 = FunctionInferenceContext::new(db, &env, func_id1);
         let mut ctx2 = FunctionInferenceContext::new(db, &env, func_id2);
 
@@ -594,7 +593,7 @@ mod tests {
 
         // Create a polymorphic function type: forall a. a -> a
         let name = Symbol::new("identity");
-        let func_id = FuncDefId::new(db, SymbolVec::new(), name);
+        let func_id = FuncDefId::new(db, name);
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let effect = EffectRow::pure(db);
@@ -610,7 +609,7 @@ mod tests {
         env.register_function(func_id, scheme);
 
         // Create a FunctionInferenceContext and instantiate the function
-        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
         let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         let ty1 = ctx.instantiate_function(func_id).unwrap();
@@ -656,7 +655,7 @@ mod tests {
     #[salsa_test]
     fn test_local_binding(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
         let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         // Bind a local by LocalId
@@ -677,7 +676,7 @@ mod tests {
     #[salsa_test]
     fn test_constraints(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
         let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         let var = ctx.fresh_type_var();
@@ -699,7 +698,7 @@ mod tests {
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
         let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, SymbolVec::new(), type_name);
+        let ctor_id = CtorId::new(db, type_name);
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
@@ -722,7 +721,7 @@ mod tests {
         env.register_constructor(ctor_id, scheme);
 
         // Create a FunctionInferenceContext and instantiate the constructor
-        let test_func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test_func"));
+        let test_func_id = FuncDefId::new(db, Symbol::new("test_func"));
         let mut ctx = FunctionInferenceContext::new(db, &env, test_func_id);
 
         let ty1 = ctx.instantiate_constructor(ctor_id).unwrap();
@@ -789,17 +788,16 @@ mod merge_effect_tests {
     use crate::ast::AbilityId;
     use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
-    use trunk_ir::SymbolVec;
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+        AbilityId::new(db, Symbol::from_dynamic(name))
     }
 
     #[salsa_test]
     fn merge_pure_rows(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let pure = EffectRow::pure(db);
@@ -816,7 +814,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_concrete_effects(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));
@@ -843,7 +841,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_open_rows(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));
@@ -880,7 +878,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_deduplicates(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));
@@ -901,7 +899,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_closed_with_open(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));
@@ -931,7 +929,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_open_rows_same_rest_var(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));
@@ -965,7 +963,7 @@ mod merge_effect_tests {
     #[salsa_test]
     fn merge_open_rows_same_rest_var_with_overlap(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new("test"));
+        let func_id = FuncDefId::new(db, Symbol::new("test"));
         let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
 
         let console = simple_effect(db, test_ability_id(db, "Console"));

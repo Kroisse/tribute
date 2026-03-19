@@ -204,7 +204,7 @@ impl<'db> ModuleTypeEnv<'db> {
             self.constructor_types.len()
         );
         for id in self.constructor_types.keys() {
-            eprintln!("  - {:?} (ctor_name: {:?})", id, id.ctor_name(db));
+            eprintln!("  - {:?} (ctor_name: {:?})", id, id.name(db));
         }
     }
 
@@ -273,8 +273,8 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, *v))
             .collect();
         result.sort_by(|(a, _), (b, _)| {
-            a.ctor_name(self.db)
-                .with_str(|a| b.ctor_name(self.db).with_str(|b| a.cmp(b)))
+            a.name(self.db)
+                .with_str(|a| b.name(self.db).with_str(|b| a.cmp(b)))
         });
         result
     }
@@ -410,7 +410,7 @@ impl<'db> ModuleTypeEnv<'db> {
 #[cfg(test)]
 mod tests {
     use salsa_test_macros::salsa_test;
-    use trunk_ir::{Symbol, SymbolVec};
+    use trunk_ir::Symbol;
 
     use crate::ast::{CtorId, FuncDefId, Type, TypeKind, TypeScheme};
 
@@ -425,9 +425,9 @@ mod tests {
         let mut env = ModuleTypeEnv::new(db);
 
         // Insert in non-alphabetical order
-        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
-        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
-        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
+        let func_z = FuncDefId::new(db, Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, Symbol::new("middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -454,9 +454,9 @@ mod tests {
     fn test_export_function_types_with_ids_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let func_z = FuncDefId::new(db, SymbolVec::new(), Symbol::new("zebra"));
-        let func_a = FuncDefId::new(db, SymbolVec::new(), Symbol::new("alpha"));
-        let func_m = FuncDefId::new(db, SymbolVec::new(), Symbol::new("middle"));
+        let func_z = FuncDefId::new(db, Symbol::new("zebra"));
+        let func_a = FuncDefId::new(db, Symbol::new("alpha"));
+        let func_m = FuncDefId::new(db, Symbol::new("middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -483,9 +483,9 @@ mod tests {
     fn test_export_constructor_types_sorted(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
 
-        let ctor_z = CtorId::new(db, SymbolVec::new(), Symbol::new("Zebra"));
-        let ctor_a = CtorId::new(db, SymbolVec::new(), Symbol::new("Alpha"));
-        let ctor_m = CtorId::new(db, SymbolVec::new(), Symbol::new("Middle"));
+        let ctor_z = CtorId::new(db, Symbol::new("Zebra"));
+        let ctor_a = CtorId::new(db, Symbol::new("Alpha"));
+        let ctor_m = CtorId::new(db, Symbol::new("Middle"));
 
         let int_ty = Type::new(db, TypeKind::Int);
         let scheme = TypeScheme::mono(db, int_ty);
@@ -497,7 +497,7 @@ mod tests {
         let exported = env.export_constructor_types();
 
         // Should be sorted alphabetically by constructor name
-        let names: Vec<_> = exported.iter().map(|(id, _)| id.ctor_name(db)).collect();
+        let names: Vec<_> = exported.iter().map(|(id, _)| id.name(db)).collect();
         assert_eq!(
             names,
             vec![
@@ -592,7 +592,7 @@ mod tests {
 
         // Add items in random order
         for name in ["d", "b", "e", "a", "c"] {
-            let func_id = FuncDefId::new(db, SymbolVec::new(), Symbol::new(name));
+            let func_id = FuncDefId::new(db, Symbol::new(name));
             env.register_function(func_id, scheme);
         }
 

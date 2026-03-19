@@ -204,7 +204,6 @@ pub fn parameterized_effect<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::SymbolVec;
 
     fn test_db() -> salsa::DatabaseImpl {
         salsa::DatabaseImpl::new()
@@ -212,7 +211,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::new(db, SymbolVec::new(), Symbol::from_dynamic(name))
+        AbilityId::new(db, Symbol::from_dynamic(name))
     }
 
     #[test]
@@ -485,11 +484,12 @@ mod tests {
         module_path: &[&str],
         name: &str,
     ) -> AbilityId<'db> {
-        let path: SymbolVec = module_path
-            .iter()
-            .map(|s| Symbol::from_dynamic(s))
-            .collect();
-        AbilityId::new(db, path, Symbol::from_dynamic(name))
+        let mut qualified = module_path.join("::");
+        if !qualified.is_empty() {
+            qualified.push_str("::");
+        }
+        qualified.push_str(name);
+        AbilityId::new(db, Symbol::from_dynamic(&qualified))
     }
 
     #[test]
@@ -585,13 +585,10 @@ mod tests {
 
         // Test simple ability name
         let simple = test_ability_id(&db, "Console");
-        assert_eq!(format!("{}", simple.qualified_name(&db)), "Console");
+        assert_eq!(format!("{}", simple.qualified(&db)), "Console");
 
         // Test ability with module path
         let qualified = ability_id_with_path(&db, &["std", "io"], "Console");
-        assert_eq!(
-            format!("{}", qualified.qualified_name(&db)),
-            "std::io::Console"
-        );
+        assert_eq!(format!("{}", qualified.qualified(&db)), "std::io::Console");
     }
 }

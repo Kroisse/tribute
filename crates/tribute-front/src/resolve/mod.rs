@@ -20,12 +20,12 @@ mod resolver;
 pub use env::{Binding, ModuleEnv};
 pub use resolver::Resolver;
 
-use trunk_ir::{Symbol, smallvec::SmallVec};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityId, CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
 };
-use crate::build_field_module_path;
+use crate::{push_prefix, qualified_symbol};
 
 /// Resolve names in a module.
 ///
@@ -65,15 +65,15 @@ pub fn build_env<'db>(
 ) -> ModuleEnv<'db> {
     let mut env = ModuleEnv::new();
 
-    // Note: We don't use module.name as the initial module_path because
+    // Note: We don't use module.name as the initial prefix because
     // module.name is derived from the file name (e.g., "add" from "add.trb"),
     // but top-level functions within the file should use simple names.
     // The file-derived name is for external references, not internal ones.
     // Only nested `mod foo { ... }` declarations extend the module path.
-    let module_path: Vec<Symbol> = Vec::new();
+    let mut prefix = String::new();
 
     for decl in &module.decls {
-        collect_definition(db, &mut env, decl, &module_path);
+        collect_definition(db, &mut env, decl, &mut prefix);
     }
 
     env
@@ -84,51 +84,54 @@ fn collect_definition<'db>(
     db: &'db dyn salsa::Database,
     env: &mut ModuleEnv<'db>,
     decl: &Decl<UnresolvedName>,
-    module_path: &[Symbol],
+    prefix: &mut String,
 ) {
-    let path_vec = SmallVec::from_slice(module_path);
-
     match decl {
         Decl::Function(func) => {
-            let id = FuncDefId::new(db, path_vec.clone(), func.name);
+            let qualified = qualified_symbol(prefix, func.name);
+            let id = FuncDefId::new(db, qualified);
             env.add_function(func.name, id);
         }
 
         Decl::ExternFunction(func) => {
-            let id = FuncDefId::new(db, path_vec.clone(), func.name);
+            let qualified = qualified_symbol(prefix, func.name);
+            let id = FuncDefId::new(db, qualified);
             env.add_function(func.name, id);
         }
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let type_def_id = TypeDefId::new(db, path_vec.clone(), s.name);
-            let ctor_id = CtorId::new(db, path_vec.clone(), s.name);
+            let qualified = qualified_symbol(prefix, s.name);
+            let type_def_id = TypeDefId::new(db, qualified);
+            let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name, type_def_id);
             env.add_constructor(s.name, ctor_id, None, s.fields.len());
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
+            let saved = push_prefix(prefix, s.name);
             for field in &s.fields {
                 if let Some(field_name) = field.name {
-                    // Build qualified path to avoid FuncDefId collisions across modules
-                    // e.g., ["foo", "Point"] for field "x" instead of just "x"
-                    let field_path = build_field_module_path(module_path, s.name);
-                    let func_id = FuncDefId::new(db, field_path, field_name);
+                    let field_qualified = qualified_symbol(prefix, field_name);
+                    let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
                     env.add_to_namespace(s.name, field_name, binding);
                 }
             }
+            prefix.truncate(saved);
         }
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let type_def_id = TypeDefId::new(db, path_vec.clone(), e.name);
+            let qualified = qualified_symbol(prefix, e.name);
+            let type_def_id = TypeDefId::new(db, qualified);
             env.add_type(e.name, type_def_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_id = CtorId::new(db, path_vec.clone(), variant.name);
+                let variant_qualified = qualified_symbol(prefix, variant.name);
+                let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
                     tag: Some(variant.name),
@@ -148,7 +151,8 @@ fn collect_definition<'db>(
 
         Decl::Ability(a) => {
             // Create AbilityId for this ability
-            let ability_id = AbilityId::new(db, path_vec.clone(), a.name);
+            let qualified = qualified_symbol(prefix, a.name);
+            let ability_id = AbilityId::new(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)
             env.add_ability(a.name, ability_id);
@@ -179,14 +183,15 @@ fn collect_definition<'db>(
             // then register them under the module's namespace
             if let Some(body) = &m.body {
                 // Build nested module path by appending current module name
-                let mut nested_path = module_path.to_vec();
-                nested_path.push(m.name);
+                let saved = push_prefix(prefix, m.name);
 
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
                 for inner_decl in body {
-                    collect_definition(db, &mut inner_env, inner_decl, &nested_path);
+                    collect_definition(db, &mut inner_env, inner_decl, prefix);
                 }
+
+                prefix.truncate(saved);
 
                 // Register each inner definition under the module's namespace
                 // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available

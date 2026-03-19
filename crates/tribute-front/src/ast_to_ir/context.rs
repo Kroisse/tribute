@@ -360,7 +360,7 @@ impl<'db> IrLoweringCtx<'db> {
         let ability_types: Vec<TypeRef> = effects
             .iter()
             .map(|effect| {
-                let ability_name = effect.ability_id.qualified_name(self.db).to_string();
+                let ability_name = effect.ability_id.qualified(self.db).to_string();
                 let ability_sym = Symbol::from_dynamic(&ability_name);
 
                 // Convert type arguments

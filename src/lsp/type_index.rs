@@ -683,12 +683,11 @@ mod tests {
     #[test]
     fn test_print_ast_type_function_with_effects() {
         use tribute_front::ast::{AbilityId, Effect, EffectRow};
-        use trunk_ir::SymbolVec;
 
         let db = salsa::DatabaseImpl::default();
 
         let int_ty = Type::new(&db, TypeKind::Int);
-        let io_id = AbilityId::new(&db, SymbolVec::new(), trunk_ir::Symbol::new("IO"));
+        let io_id = AbilityId::new(&db, trunk_ir::Symbol::new("IO"));
         let effect = Effect {
             ability_id: io_id,
             args: vec![],

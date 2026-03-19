@@ -45,8 +45,8 @@ impl<'db> TypeChecker<'db> {
                 Decl::Module(m) => {
                     // For inline modules, recursively collect from nested declarations
                     if let Some(body) = &m.body {
-                        // Push module name to path
-                        self.module_path.push(m.name);
+                        // Push module name to prefix
+                        let prev_len = crate::push_prefix(&mut self.prefix, m.name);
                         // Create a temporary module to reuse collect_declarations
                         let inner_module = Module {
                             id: m.id,
@@ -54,8 +54,8 @@ impl<'db> TypeChecker<'db> {
                             decls: body.clone(),
                         };
                         self.collect_declarations(&inner_module);
-                        // Pop module name from path
-                        self.module_path.pop();
+                        // Restore prefix
+                        self.prefix.truncate(prev_len);
                     }
                 }
             }
@@ -106,11 +106,10 @@ impl<'db> TypeChecker<'db> {
         let effect = match &func.effects {
             Some(anns) => {
                 // For effects, we use a closed row during collection
-                let module_path = self.current_module_path();
                 crate::ast::abilities_to_effect_row(
                     self.db(),
                     anns,
-                    &module_path,
+                    self.current_prefix(),
                     &mut |ann| {
                         self.annotation_to_type_for_sig(ann, &mut type_var_map, &mut next_bound_var)
                     },
@@ -222,7 +221,10 @@ impl<'db> TypeChecker<'db> {
         };
 
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-        let ctor_id = CtorId::new(self.db(), self.current_module_path(), name);
+        let ctor_id = CtorId::new(
+            self.db(),
+            crate::qualified_symbol(&mut self.current_prefix().to_owned(), name),
+        );
         self.env.register_constructor(ctor_id, ctor_scheme);
 
         // Register struct field information for accessor resolution
@@ -285,7 +287,10 @@ impl<'db> TypeChecker<'db> {
             };
 
             let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), ctor_ty);
-            let ctor_id = CtorId::new(self.db(), self.current_module_path(), variant.name);
+            let ctor_id = CtorId::new(
+                self.db(),
+                crate::qualified_symbol(&mut self.current_prefix().to_owned(), variant.name),
+            );
             self.env.register_constructor(ctor_id, ctor_scheme);
         }
     }
@@ -296,7 +301,10 @@ impl<'db> TypeChecker<'db> {
     /// handler arm type checking.
     fn collect_ability_def(&mut self, a: &AbilityDecl) {
         // Create AbilityId for this ability
-        let ability_id = AbilityId::new(self.db(), self.current_module_path(), a.name);
+        let ability_id = AbilityId::new(
+            self.db(),
+            crate::qualified_symbol(&mut self.current_prefix().to_owned(), a.name),
+        );
 
         // Build type parameter info
         let type_params: Vec<TypeParam> = a
@@ -406,11 +414,10 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 let result_ty =
                     self.annotation_to_type_for_sig(result, type_var_map, next_bound_var);
-                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
-                    &module_path,
+                    self.current_prefix(),
                     &mut |a| self.annotation_to_type_for_sig(a, type_var_map, next_bound_var),
                     || EffectVar { id: 0 },
                 );
@@ -471,11 +478,10 @@ impl<'db> TypeChecker<'db> {
                     .map(|p| self.annotation_to_type_for_ctor(p, type_param_indices))
                     .collect();
                 let result_ty = self.annotation_to_type_for_ctor(result, type_param_indices);
-                let module_path = self.current_module_path();
                 let effect = crate::ast::abilities_to_effect_row(
                     self.db(),
                     abilities,
-                    &module_path,
+                    self.current_prefix(),
                     &mut |a| self.annotation_to_type_for_ctor(a, type_param_indices),
                     || EffectVar { id: 0 },
                 );
