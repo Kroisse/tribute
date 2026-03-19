@@ -68,13 +68,18 @@ impl RewritePattern for ArithConstPattern {
         let value = _const_op.value(ctx);
 
         let new_op_ref = match type_name {
-            "i32" => {
-                let Attribute::Int(v) = value else {
-                    warn!("arith.const: expected Int for i32, got {:?}", value);
+            "i32" => match value {
+                Attribute::Int(v) => {
+                    wasm_dialect::i32_const(ctx, loc, result_ty, v as i32).op_ref()
+                }
+                Attribute::Bool(b) => {
+                    wasm_dialect::i32_const(ctx, loc, result_ty, if b { 1 } else { 0 }).op_ref()
+                }
+                _ => {
+                    warn!("arith.const: expected Int or Bool for i32, got {:?}", value);
                     return false;
-                };
-                wasm_dialect::i32_const(ctx, loc, result_ty, v as i32).op_ref()
-            }
+                }
+            },
             "i64" => {
                 let Attribute::Int(v) = value else {
                     warn!("arith.const: expected Int for i64, got {:?}", value);
