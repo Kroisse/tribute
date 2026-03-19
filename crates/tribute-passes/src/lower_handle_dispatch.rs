@@ -8,7 +8,7 @@
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{cont as arena_cont, core, scf};
+use trunk_ir::dialect::{cont, core, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
@@ -81,7 +81,7 @@ fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
     let &first_block = blocks.first()?;
 
     for &op in &ctx.block(first_block).ops {
-        if let Ok(done_op) = arena_cont::Done::from_op(ctx, op) {
+        if let Ok(done_op) = cont::Done::from_op(ctx, op) {
             return Some(done_op.body(ctx));
         }
     }
