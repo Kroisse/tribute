@@ -228,17 +228,17 @@ fn lower_function<'db>(
     });
 
     // Bind parameters to their block argument values
-    ctx.enter_scope();
-    for (i, param) in func_decl.params.iter().enumerate() {
-        if let Some(local_id) = param.local_id {
-            let arg_val = ir.block_arg(entry_block, i as u32);
-            ctx.bind(local_id, param.name, arg_val);
-        }
-    }
-
-    // Lower function body
     {
-        let mut builder = IrBuilder::new(ctx, ir, entry_block);
+        let mut scope = ctx.scope();
+        for (i, param) in func_decl.params.iter().enumerate() {
+            if let Some(local_id) = param.local_id {
+                let arg_val = ir.block_arg(entry_block, i as u32);
+                scope.bind(local_id, param.name, arg_val);
+            }
+        }
+
+        // Lower function body
+        let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
         if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
             let ret_op = func::r#return(builder.ir, location, [result]);
             builder.ir.push_op(builder.block, ret_op.op_ref());
@@ -248,8 +248,6 @@ fn lower_function<'db>(
             builder.ir.push_op(builder.block, ret_op.op_ref());
         }
     }
-
-    ctx.exit_scope();
 
     // Build function type
     let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, effect_ir);

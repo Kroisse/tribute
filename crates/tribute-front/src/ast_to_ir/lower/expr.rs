@@ -1126,36 +1126,35 @@ fn build_cps_continuation<'db>(
         parent_region: None,
     });
 
-    builder.ctx.enter_scope();
-
-    // Cast anyref parameter to the logical result type and bind to the pattern
-    let param_val = builder.ir.block_arg(entry_block, 0);
-    let typed_param = if param_type != logical_type {
-        let cast_op =
-            core::unrealized_conversion_cast(builder.ir, location, param_val, logical_type);
-        builder.ir.push_op(entry_block, cast_op.op_ref());
-        cast_op.result(builder.ir)
-    } else {
-        param_val
-    };
-    if let Some(pattern) = pattern {
-        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        bind_stmt_pattern(&mut inner_builder, pattern, typed_param);
-    }
-
-    // Lower remaining computation inside the continuation body
-    let result = {
-        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        lower_block_cps(&mut inner_builder, remaining_stmts, value)
-    };
-    let Some((body_result, is_cps)) = result else {
-        builder.ctx.exit_scope();
-        return None;
-    };
-
-    // Emit return: pass through result directly (no YieldResult wrapping)
     {
-        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
+        let mut scope = builder.ctx.scope();
+
+        // Cast anyref parameter to the logical result type and bind to the pattern
+        let param_val = builder.ir.block_arg(entry_block, 0);
+        let typed_param = if param_type != logical_type {
+            let cast_op =
+                core::unrealized_conversion_cast(builder.ir, location, param_val, logical_type);
+            builder.ir.push_op(entry_block, cast_op.op_ref());
+            cast_op.result(builder.ir)
+        } else {
+            param_val
+        };
+        if let Some(pattern) = pattern {
+            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            bind_stmt_pattern(&mut inner_builder, pattern, typed_param);
+        }
+
+        // Lower remaining computation inside the continuation body
+        let result = {
+            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            lower_block_cps(&mut inner_builder, remaining_stmts, value)
+        };
+        let Some((body_result, is_cps)) = result else {
+            return None; // scope drops automatically
+        };
+
+        // Emit return: pass through result directly (no YieldResult wrapping)
+        let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
         if !is_cps {
             // Pure result → return as anyref
             let result_anyref = inner_builder.cast_if_needed(location, body_result, anyref_ty);
@@ -1167,8 +1166,6 @@ fn build_cps_continuation<'db>(
             // ability.perform op.
         }
     }
-
-    builder.ctx.exit_scope();
 
     let body_region = builder.ir.create_region(trunk_ir::context::RegionData {
         location,

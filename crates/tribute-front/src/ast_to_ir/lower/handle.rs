@@ -115,54 +115,47 @@ pub(super) fn lower_handle<'db>(
     body: &Expr<TypedRef<'db>>,
     handlers: &[HandlerArm<TypedRef<'db>>],
 ) -> Option<ValueRef> {
-    // Generate a fresh prompt tag
-    let tag = builder.ctx.push_prompt_tag();
-
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    // Collect handled abilities for the body closure's effect annotation.
-    // This ensures the body function is detected as effectful by evidence passes.
-    let handled_ability_refs: Vec<_> = handlers
-        .iter()
-        .filter_map(|h| match &h.kind {
-            HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
-                let name = match &ability.resolved {
-                    ResolvedRef::Ability { id } => {
-                        Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string())
-                    }
-                    ResolvedRef::TypeDef { id } => {
-                        Symbol::from_dynamic(&id.qualified_name(builder.db()).to_string())
-                    }
-                    _ => return None,
-                };
-                Some(builder.ctx.ability_ref_type(builder.ir, name, &[]))
-            }
-            _ => None,
-        })
-        .collect();
-    let effect_ty = if !handled_ability_refs.is_empty() {
-        Some(
-            builder
-                .ctx
-                .effect_row_type(builder.ir, &handled_ability_refs, 0),
-        )
-    } else {
-        None
-    };
+    // Generate a fresh prompt tag and build body inside the prompt scope.
+    let (tag, body_yr, effect_ty) = {
+        let mut prompt_scope = builder.ctx.prompt_tag_scope();
+        let tag = prompt_scope.tag();
 
-    // 1. Build body as a CPS closure that returns anyref
-    //    (tail calls handle effects; the final return goes to the handle frame)
-    let body_yr = match build_cps_body(builder, location, body, anyref_ty, effect_ty) {
-        Some(yr) => yr,
-        None => {
-            builder.ctx.pop_prompt_tag();
-            return None;
-        }
-    };
+        // Collect handled abilities for the body closure's effect annotation.
+        // This ensures the body function is detected as effectful by evidence passes.
+        let handled_ability_refs: Vec<_> = handlers
+            .iter()
+            .filter_map(|h| match &h.kind {
+                HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
+                    let name = match &ability.resolved {
+                        ResolvedRef::Ability { id } => {
+                            Symbol::from_dynamic(&id.qualified_name(prompt_scope.db).to_string())
+                        }
+                        ResolvedRef::TypeDef { id } => {
+                            Symbol::from_dynamic(&id.qualified_name(prompt_scope.db).to_string())
+                        }
+                        _ => return None,
+                    };
+                    Some(prompt_scope.ability_ref_type(builder.ir, name, &[]))
+                }
+                _ => None,
+            })
+            .collect();
+        let effect_ty = if !handled_ability_refs.is_empty() {
+            Some(prompt_scope.effect_row_type(builder.ir, &handled_ability_refs, 0))
+        } else {
+            None
+        };
 
-    // Pop the prompt tag immediately after body.
-    // Handlers are lowered with the outer prompt active.
-    builder.ctx.pop_prompt_tag();
+        // 1. Build body as a CPS closure that returns anyref
+        //    (tail calls handle effects; the final return goes to the handle frame)
+        let builder = &mut IrBuilder::new(&mut prompt_scope, builder.ir, builder.block);
+        let body_yr = build_cps_body(builder, location, body, anyref_ty, effect_ty)?;
+
+        (tag, body_yr, effect_ty)
+    };
+    // Prompt tag popped — handlers are lowered with the outer prompt active.
 
     // Compute the body's logical result type for the done handler cast.
     let logical_result_ty = builder
@@ -236,33 +229,33 @@ fn build_cps_body<'db>(
         parent_region: None,
     });
 
-    builder.ctx.enter_scope();
-    let result = {
-        let mut body_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
-    };
-    let Some((body_result, is_cps)) = result else {
-        builder.ctx.exit_scope();
-        return None;
-    };
-
-    // In the tail-call CPS design:
-    // - CPS path (is_cps=true): ability.perform will be lowered to tail_call
-    //   handler_dispatch. The body function never returns normally on this path.
-    // - Pure path (is_cps=false): body returns the result directly.
-    if !is_cps {
-        let result = if builder.ir.value_ty(body_result) != result_ty {
-            let cast =
-                core::unrealized_conversion_cast(builder.ir, location, body_result, result_ty);
-            builder.ir.push_op(entry_block, cast.op_ref());
-            cast.result(builder.ir)
-        } else {
-            body_result
+    {
+        let mut scope = builder.ctx.scope();
+        let result = {
+            let mut body_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
         };
-        let ret = func::r#return(builder.ir, location, [result]);
-        builder.ir.push_op(entry_block, ret.op_ref());
+        let Some((body_result, is_cps)) = result else {
+            return None; // scope drops automatically
+        };
+
+        // In the tail-call CPS design:
+        // - CPS path (is_cps=true): ability.perform will be lowered to tail_call
+        //   handler_dispatch. The body function never returns normally on this path.
+        // - Pure path (is_cps=false): body returns the result directly.
+        if !is_cps {
+            let result = if builder.ir.value_ty(body_result) != result_ty {
+                let cast =
+                    core::unrealized_conversion_cast(builder.ir, location, body_result, result_ty);
+                builder.ir.push_op(entry_block, cast.op_ref());
+                cast.result(builder.ir)
+            } else {
+                body_result
+            };
+            let ret = func::r#return(builder.ir, location, [result]);
+            builder.ir.push_op(entry_block, ret.op_ref());
+        }
     }
-    builder.ctx.exit_scope();
 
     let body_region = builder.ir.create_region(RegionData {
         location,
@@ -386,19 +379,14 @@ fn build_done_handler_region<'db>(
     };
 
     let result = if let Some(handler) = result_handler {
-        ctx.enter_scope();
+        let mut scope = ctx.scope();
 
         if let HandlerKind::Do { binding } = &handler.kind {
-            bind_pattern_fields(ctx, ir, block, location, done_value, binding);
+            bind_pattern_fields(&mut scope, ir, block, location, done_value, binding);
         }
 
-        let body_result = {
-            let mut builder = IrBuilder::new(ctx, ir, block);
-            super::expr::lower_expr(&mut builder, handler.body.clone())
-        };
-
-        ctx.exit_scope();
-        body_result
+        let mut builder = IrBuilder::new(&mut scope, ir, block);
+        super::expr::lower_expr(&mut builder, handler.body.clone())
     } else {
         Some(done_value)
     };
@@ -501,38 +489,40 @@ fn build_cps_suspend_handler_region<'db>(
     let cont_value = ir.block_arg(block, 0);
     let shift_value = ir.block_arg(block, 1);
 
-    ctx.enter_scope();
-
-    // Enable CPS handler mode so that continuation calls use func.call_indirect
-    let prev_cps_mode = ctx.cps_handler_mode;
-    ctx.cps_handler_mode = true;
-
-    // Bind resume continuation if this is an `op` arm with resume
-    if let Some(k_local_id) = resume_local_id {
-        ctx.bind(k_local_id, Symbol::new("resume"), cont_value);
-    }
-
-    // Bind params patterns
-    if params.len() == 1 {
-        bind_pattern_fields(ctx, ir, block, location, shift_value, &params[0]);
-    } else if params.len() > 1 {
-        // Multiple params - destructure as tuple
-        for (i, param) in params.iter().enumerate() {
-            let field_op = adt::struct_get(ir, location, shift_value, any_ty, any_ty, i as u32);
-            ir.push_op(block, field_op.op_ref());
-            let field_val = field_op.result(ir);
-            bind_pattern_fields(ctx, ir, block, location, field_val, param);
-        }
-    }
-
-    // Evaluate the handler body
     let body_result = {
-        let mut builder = IrBuilder::new(ctx, ir, block);
-        super::expr::lower_expr(&mut builder, handler.body.clone())
-    };
+        let mut scope = ctx.scope();
 
-    ctx.cps_handler_mode = prev_cps_mode;
-    ctx.exit_scope();
+        // Enable CPS handler mode so that continuation calls use func.call_indirect
+        let prev_cps_mode = scope.cps_handler_mode;
+        scope.cps_handler_mode = true;
+
+        // Bind resume continuation if this is an `op` arm with resume
+        if let Some(k_local_id) = resume_local_id {
+            scope.bind(k_local_id, Symbol::new("resume"), cont_value);
+        }
+
+        // Bind params patterns
+        if params.len() == 1 {
+            bind_pattern_fields(&mut scope, ir, block, location, shift_value, &params[0]);
+        } else if params.len() > 1 {
+            // Multiple params - destructure as tuple
+            for (i, param) in params.iter().enumerate() {
+                let field_op = adt::struct_get(ir, location, shift_value, any_ty, any_ty, i as u32);
+                ir.push_op(block, field_op.op_ref());
+                let field_val = field_op.result(ir);
+                bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
+            }
+        }
+
+        // Evaluate the handler body
+        let body_result = {
+            let mut builder = IrBuilder::new(&mut scope, ir, block);
+            super::expr::lower_expr(&mut builder, handler.body.clone())
+        };
+
+        scope.cps_handler_mode = prev_cps_mode;
+        body_result
+    };
 
     let body_val = match body_result {
         Some(v) => v,
@@ -819,36 +809,39 @@ fn build_handler_arm_for_dispatch<'db>(
         parent_region: None,
     });
 
-    ctx.enter_scope();
-
-    let prev_cps_mode = ctx.cps_handler_mode;
-    ctx.cps_handler_mode = true;
-
-    // Bind resume continuation if this is an `op` arm with resume
-    if let Some(k_local_id) = resume_local_id {
-        ctx.bind(k_local_id, Symbol::new("resume"), k_val);
-    }
-
-    // Bind params patterns
-    if params.len() == 1 {
-        bind_pattern_fields(ctx, ir, block, location, value_val, &params[0]);
-    } else if params.len() > 1 {
-        for (i, param) in params.iter().enumerate() {
-            let field_op = adt::struct_get(ir, location, value_val, anyref_ty, anyref_ty, i as u32);
-            ir.push_op(block, field_op.op_ref());
-            let field_val = field_op.result(ir);
-            bind_pattern_fields(ctx, ir, block, location, field_val, param);
-        }
-    }
-
-    // Evaluate the handler body
     let body_result = {
-        let mut inner_builder = IrBuilder::new(ctx, ir, block);
-        super::expr::lower_expr(&mut inner_builder, handler.body.clone())
-    };
+        let mut scope = ctx.scope();
 
-    ctx.cps_handler_mode = prev_cps_mode;
-    ctx.exit_scope();
+        let prev_cps_mode = scope.cps_handler_mode;
+        scope.cps_handler_mode = true;
+
+        // Bind resume continuation if this is an `op` arm with resume
+        if let Some(k_local_id) = resume_local_id {
+            scope.bind(k_local_id, Symbol::new("resume"), k_val);
+        }
+
+        // Bind params patterns
+        if params.len() == 1 {
+            bind_pattern_fields(&mut scope, ir, block, location, value_val, &params[0]);
+        } else if params.len() > 1 {
+            for (i, param) in params.iter().enumerate() {
+                let field_op =
+                    adt::struct_get(ir, location, value_val, anyref_ty, anyref_ty, i as u32);
+                ir.push_op(block, field_op.op_ref());
+                let field_val = field_op.result(ir);
+                bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
+            }
+        }
+
+        // Evaluate the handler body
+        let body_result = {
+            let mut inner_builder = IrBuilder::new(&mut scope, ir, block);
+            super::expr::lower_expr(&mut inner_builder, handler.body.clone())
+        };
+
+        scope.cps_handler_mode = prev_cps_mode;
+        body_result
+    };
 
     let body_val = match body_result {
         Some(v) => v,
