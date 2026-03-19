@@ -32,7 +32,7 @@ impl std::error::Error for ParseError {}
 // ============================================================================
 
 #[derive(Debug, Clone)]
-pub(crate) struct RawOperation<'a> {
+pub struct RawOperation<'a> {
     pub results: Vec<&'a str>,
     pub dialect: &'a str,
     pub op_name: &'a str,
@@ -53,20 +53,20 @@ pub(crate) struct RawOperation<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RawRegion<'a> {
+pub struct RawRegion<'a> {
     pub type_aliases: Vec<(String, RawType<'a>)>,
     pub blocks: Vec<RawBlock<'a>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RawBlock<'a> {
+pub struct RawBlock<'a> {
     pub label: &'a str,
     pub args: Vec<(&'a str, RawType<'a>)>,
     pub ops: Vec<RawOperation<'a>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum RawType<'a> {
+pub enum RawType<'a> {
     Concrete {
         dialect: &'a str,
         name: &'a str,
@@ -78,7 +78,7 @@ pub(crate) enum RawType<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) enum RawAttribute<'a> {
+pub enum RawAttribute<'a> {
     Bool(bool),
     Int(i128),
     Float(f64),
@@ -96,14 +96,14 @@ pub(crate) enum RawAttribute<'a> {
 // ============================================================================
 
 /// Skip whitespace.
-pub(crate) fn ws(input: &mut &str) -> ModalResult<()> {
+pub fn ws(input: &mut &str) -> ModalResult<()> {
     take_while(0.., |c: char| c.is_ascii_whitespace())
         .void()
         .parse_next(input)
 }
 
 /// Parse an identifier: [a-zA-Z_][a-zA-Z0-9_]*
-pub(crate) fn ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+pub fn ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     (
         one_of(|c: char| c.is_ascii_alphabetic() || c == '_'),
         take_while(0.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
@@ -113,7 +113,7 @@ pub(crate) fn ident<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
 }
 
 /// Parse a value reference: %name or %number
-pub(crate) fn value_ref<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+pub fn value_ref<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     preceded(
         '%',
         take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
@@ -125,7 +125,7 @@ pub(crate) fn value_ref<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
 ///
 /// Quoted symbols use the same escape sequences as string literals
 /// (`\\`, `\"`, `\n`, `\t`, `\r`, `\0`, `\xNN`).
-pub(crate) fn symbol_ref(input: &mut &str) -> ModalResult<String> {
+pub fn symbol_ref(input: &mut &str) -> ModalResult<String> {
     '@'.parse_next(input)?;
     if input.starts_with('"') {
         // Quoted symbol — reuse string_lit which handles all escapes
@@ -139,7 +139,7 @@ pub(crate) fn symbol_ref(input: &mut &str) -> ModalResult<String> {
 }
 
 /// Parse a block label: ^bbN or ^name
-pub(crate) fn block_label<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+pub fn block_label<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     preceded(
         '^',
         take_while(1.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
@@ -148,7 +148,7 @@ pub(crate) fn block_label<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
 }
 
 /// Parse a dialect-qualified name: dialect.name
-pub(crate) fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<(&'a str, &'a str)> {
+pub fn qualified_name<'a>(input: &mut &'a str) -> ModalResult<(&'a str, &'a str)> {
     (ident, '.', ident)
         .map(|(d, _, n)| (d, n))
         .parse_next(input)
@@ -259,13 +259,13 @@ fn type_alias_name(input: &mut &str) -> ModalResult<String> {
 }
 
 /// Parse a type alias reference: `!name` or `!"quoted name"`
-pub(crate) fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+pub fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '!'.parse_next(input)?;
     let name = type_alias_name.parse_next(input)?;
     Ok(RawType::Alias(name))
 }
 
-pub(crate) fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     // Check for alias reference first
     if input.starts_with('!') {
         return type_alias_ref.parse_next(input);
@@ -303,7 +303,7 @@ pub(crate) fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 }
 
 /// Parse an attribute value.
-pub(crate) fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
+pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
     alt((
         // Keywords
         "true".value(RawAttribute::Bool(true)),
@@ -368,9 +368,7 @@ fn raw_bytes_attr<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
 }
 
 /// Parse an attribute dict: {key = value, ...}
-pub(crate) fn raw_attr_dict<'a>(
-    input: &mut &'a str,
-) -> ModalResult<Vec<(&'a str, RawAttribute<'a>)>> {
+pub fn raw_attr_dict<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawAttribute<'a>)>> {
     delimited(
         ('{', ws),
         separated(
@@ -393,7 +391,7 @@ fn result_list<'a>(input: &mut &'a str) -> ModalResult<Vec<&'a str>> {
 }
 
 /// Parse operand list: %a, %b, ...
-fn operand_list<'a>(input: &mut &'a str) -> ModalResult<Vec<&'a str>> {
+pub fn operand_list<'a>(input: &mut &'a str) -> ModalResult<Vec<&'a str>> {
     separated(1.., (ws, value_ref, ws).map(|(_, v, _)| v), ',').parse_next(input)
 }
 
@@ -407,7 +405,7 @@ fn type_annotation<'a>(input: &mut &'a str) -> ModalResult<Vec<RawType<'a>>> {
 }
 
 /// Parse function-style parameter list: (%arg: type, ...)
-pub(crate) fn func_params<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawType<'a>)>> {
+pub fn func_params<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawType<'a>)>> {
     delimited(
         ('(', ws),
         separated(
@@ -426,7 +424,7 @@ fn empty_parens(input: &mut &str) -> ModalResult<()> {
 }
 
 /// Parse return type: -> type
-fn return_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+pub fn return_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     preceded((ws, '-', '>', ws), raw_type).parse_next(input)
 }
 
@@ -447,7 +445,7 @@ fn successor_list<'a>(input: &mut &'a str) -> ModalResult<Vec<&'a str>> {
 /// [results =] dialect.op [@symbol] [(%arg: type, ...) | () | operands]
 ///   [-> type] [effects type] [{attrs}] [: types] [[successors]] [regions]
 /// ```
-pub(crate) fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
+pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     ws.parse_next(input)?;
 
     // Try to parse results: %0 = or %0, %1 =
@@ -459,6 +457,14 @@ pub(crate) fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation
 
     // Optional @symbol (e.g., core.module @test, func.func @main)
     let sym_name = opt(preceded(ws, symbol_ref)).parse_next(input)?;
+
+    // Check custom assembly format registry
+    if let Some(fmt) = crate::op_interface::lookup_asm_format(
+        crate::Symbol::from_dynamic(dialect),
+        crate::Symbol::from_dynamic(op_name),
+    ) {
+        return (fmt.parse_fn)(input, results, sym_name);
+    }
 
     // Parse either func-style params (%arg: type, ...) or operands (%val, %val)
     // or empty parens ()
@@ -527,7 +533,7 @@ pub(crate) fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation
 }
 
 /// Parse a block: ^label(args): ops...
-pub(crate) fn raw_block<'a>(input: &mut &'a str) -> ModalResult<RawBlock<'a>> {
+pub fn raw_block<'a>(input: &mut &'a str) -> ModalResult<RawBlock<'a>> {
     ws.parse_next(input)?;
     let label = block_label.parse_next(input)?;
 
@@ -598,7 +604,7 @@ fn is_type_alias_def(input: &str) -> bool {
 }
 
 /// Parse a region: { blocks... } or { ops... } (single implicit block)
-pub(crate) fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> {
+pub fn raw_region<'a>(input: &mut &'a str) -> ModalResult<RawRegion<'a>> {
     '{'.parse_next(input)?;
     ws.parse_next(input)?;
 

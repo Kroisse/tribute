@@ -96,7 +96,7 @@ impl<'a> PrintState<'a> {
     // Type / Attribute writing (with alias support)
     // ====================================================================
 
-    fn write_type(&self, f: &mut impl Write, ty: TypeRef) -> fmt::Result {
+    fn write_type(&self, f: &mut dyn Write, ty: TypeRef) -> fmt::Result {
         // Check alias map first
         if let Some(alias_name) = self.type_alias_names.get(&ty) {
             return write_type_alias_name(f, alias_name);
@@ -129,7 +129,7 @@ impl<'a> PrintState<'a> {
         Ok(())
     }
 
-    fn write_attribute(&self, f: &mut impl Write, attr: &Attribute) -> fmt::Result {
+    fn write_attribute(&self, f: &mut dyn Write, attr: &Attribute) -> fmt::Result {
         match attr {
             Attribute::Unit => f.write_str("unit"),
             Attribute::Bool(b) => write!(f, "{b}"),
@@ -177,6 +177,122 @@ impl<'a> PrintState<'a> {
                 write!(f, "\" {}:{})", loc.span.start, loc.span.end)
             }
         }
+    }
+}
+
+// ============================================================================
+// OpPrintHelper — public wrapper for custom assembly format printers
+// ============================================================================
+
+/// Public wrapper around printer state for custom `OpAsmFormat` implementations.
+///
+/// Provides access to IR context, value naming, type/attribute printing, and
+/// region printing without exposing `PrintState` internals.
+///
+/// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
+pub struct OpPrintHelper<'a, 'ctx> {
+    state: &'a mut PrintState<'ctx>,
+    f: &'a mut dyn Write,
+}
+
+impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
+    /// Access the IR context.
+    pub fn ctx(&self) -> &IrContext {
+        self.state.ctx
+    }
+
+    /// Assign a sequential name (%0, %1, ...) to a value.
+    pub fn assign_value_name(&mut self, v: ValueRef) -> String {
+        self.state.assign_value_name(v)
+    }
+
+    /// Get the previously assigned name of a value.
+    pub fn get_value_name(&self, v: ValueRef) -> &str {
+        self.state.get_value_name(v)
+    }
+
+    /// Write a type using the current alias map.
+    pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
+        self.state.write_type(&mut *self.f, ty)
+    }
+
+    /// Write an attribute value.
+    pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        self.state.write_attribute(&mut *self.f, attr)
+    }
+
+    /// Reset value and block numbering (for func.func — each function restarts at %0).
+    pub fn reset_numbering(&mut self) {
+        self.state.reset_numbering();
+    }
+
+    /// Print a region with the entry block label elided.
+    ///
+    /// Entry block args are assumed to have been printed externally (e.g., as
+    /// function parameters in the operation signature). For single-block regions,
+    /// the entry label is omitted entirely. For multi-block regions, the entry
+    /// block label is printed without args, and non-entry blocks are printed
+    /// normally.
+    pub fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
+        let blocks: Vec<BlockRef> = self
+            .state
+            .ctx
+            .region(region)
+            .blocks
+            .iter()
+            .copied()
+            .collect();
+
+        // Pre-assign block labels for all blocks
+        for &block in &blocks {
+            self.state.assign_block_label(block);
+        }
+
+        let is_single_block = blocks.len() == 1;
+
+        for (i, &block) in blocks.iter().enumerate() {
+            if i == 0 && is_single_block {
+                // Single block: elide entry block label entirely
+            } else {
+                // Multi-block: print label
+                let indent_str = " ".repeat(indent);
+                let label = self.state.get_block_label(block).to_owned();
+                write!(self.f, "{indent_str}{label}")?;
+                if i > 0 {
+                    // Non-entry blocks: print args
+                    let args = self.state.ctx.block_args(block);
+                    if !args.is_empty() {
+                        self.f.write_char('(')?;
+                        for (j, &arg) in args.iter().enumerate() {
+                            if j > 0 {
+                                self.f.write_str(", ")?;
+                            }
+                            let name = self.state.assign_value_name(arg);
+                            let ty = self.state.ctx.value_ty(arg);
+                            write!(self.f, "{name}: ")?;
+                            self.state.write_type(&mut *self.f, ty)?;
+                        }
+                        self.f.write_char(')')?;
+                    }
+                }
+                self.f.write_str(":\n")?;
+            }
+
+            // Print ops in block
+            let block_data = self.state.ctx.block(block);
+            let ops: Vec<_> = block_data.ops.iter().copied().collect();
+            for &op in &ops {
+                print_operation(self.state, &mut *self.f, op, indent + 2)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Write for OpPrintHelper<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.f.write_str(s)
     }
 }
 
@@ -296,7 +412,7 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
     }
 }
 
-fn write_escaped_string(f: &mut impl Write, s: &str) -> fmt::Result {
+pub(crate) fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
     for ch in s.chars() {
         match ch {
             '\\' => f.write_str("\\\\")?,
@@ -313,8 +429,9 @@ fn write_escaped_string(f: &mut impl Write, s: &str) -> fmt::Result {
 }
 
 /// Write a type alias name with `!` prefix. Quotes if name contains non-ident chars.
-fn write_type_alias_name(f: &mut impl Write, name: &str) -> fmt::Result {
-    let needs_quoting = name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_');
+fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
+    let needs_quoting =
+        name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if needs_quoting {
         f.write_str("!\"")?;
         write_escaped_string(f, name)?;
@@ -324,9 +441,10 @@ fn write_type_alias_name(f: &mut impl Write, name: &str) -> fmt::Result {
     }
 }
 
-fn write_symbol(f: &mut impl Write, sym: crate::symbol::Symbol) -> fmt::Result {
+fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| {
-        let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let needs_quoting =
+            s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if needs_quoting {
             f.write_str("@\"")?;
             write_escaped_string(f, s)?;
@@ -578,7 +696,7 @@ fn collect_attr_type_deps(
 
 fn print_operation(
     state: &mut PrintState<'_>,
-    f: &mut impl Write,
+    f: &mut dyn Write,
     op: OpRef,
     indent: usize,
 ) -> fmt::Result {
@@ -587,14 +705,15 @@ fn print_operation(
     let name = data.name;
 
     // Check for special ops
-    let is_func = dialect == crate::Symbol::new("func") && name == crate::Symbol::new("func");
     let is_module = dialect == crate::Symbol::new("core") && name == crate::Symbol::new("module");
-
     if is_module {
         return print_module_op(state, f, op, indent);
     }
-    if is_func {
-        return print_func_op(state, f, op, indent);
+
+    // Check custom assembly format registry
+    if let Some(fmt) = crate::op_interface::lookup_asm_format(dialect, name) {
+        let mut helper = OpPrintHelper { state, f };
+        return (fmt.print_fn)(&mut helper, op, indent);
     }
 
     print_generic_op(state, f, op, indent)
@@ -602,7 +721,7 @@ fn print_operation(
 
 fn print_generic_op(
     state: &mut PrintState<'_>,
-    f: &mut impl Write,
+    f: &mut dyn Write,
     op: OpRef,
     indent: usize,
 ) -> fmt::Result {
@@ -697,7 +816,7 @@ fn print_generic_op(
 
 fn print_region(
     state: &mut PrintState<'_>,
-    f: &mut impl Write,
+    f: &mut dyn Write,
     region: RegionRef,
     indent: usize,
 ) -> fmt::Result {
@@ -754,7 +873,7 @@ fn print_region(
 
 fn print_module_op(
     state: &mut PrintState<'_>,
-    f: &mut impl Write,
+    f: &mut dyn Write,
     op: OpRef,
     indent: usize,
 ) -> fmt::Result {
@@ -831,131 +950,6 @@ fn print_module_op(
 
         // Restore alias state — auto aliases are scoped to this module.
         state.type_alias_names = saved_aliases;
-
-        writeln!(f, "{indent_str}}}")?;
-    } else {
-        f.write_char('\n')?;
-    }
-
-    Ok(())
-}
-
-fn print_func_op(
-    state: &mut PrintState<'_>,
-    f: &mut impl Write,
-    op: OpRef,
-    indent: usize,
-) -> fmt::Result {
-    let indent_str = " ".repeat(indent);
-    let data = state.ctx.op(op);
-
-    write!(f, "{indent_str}func.func")?;
-
-    // Function name
-    if let Some(Attribute::Symbol(name)) = data.attributes.get(&crate::Symbol::new("sym_name")) {
-        f.write_char(' ')?;
-        write_symbol(f, *name)?;
-    }
-
-    // Reset numbering for function body
-    state.reset_numbering();
-
-    let regions = &data.regions;
-    assert!(
-        regions.len() <= 1,
-        "print_func_op: expected at most one region, found {}",
-        regions.len(),
-    );
-    if let Some(&region) = regions.first() {
-        let region_data = state.ctx.region(region);
-        let blocks: Vec<_> = region_data.blocks.iter().copied().collect();
-
-        // Print entry block args as function signature
-        if let Some(&entry_block) = blocks.first() {
-            let args = state.ctx.block_args(entry_block);
-            f.write_char('(')?;
-            for (i, &arg) in args.iter().enumerate() {
-                if i > 0 {
-                    f.write_str(", ")?;
-                }
-                let name = state.assign_value_name(arg);
-                let ty = state.ctx.value_ty(arg);
-                write!(f, "{name}: ")?;
-                state.write_type(f, ty)?;
-            }
-            f.write_char(')')?;
-        }
-
-        // Return type and effects from func type attribute
-        if let Some(Attribute::Type(func_ty)) = data.attributes.get(&crate::Symbol::new("type")) {
-            let ty_data = state.ctx.types.get(*func_ty);
-            let is_core_func = ty_data.dialect == crate::Symbol::new("core")
-                && ty_data.name == crate::Symbol::new("func");
-            if is_core_func && !ty_data.params.is_empty() {
-                // Decompose core.func: params[0] = return type, attrs["effect"] = effect
-                let result_ty = ty_data.params[0];
-                let effect_ty = ty_data
-                    .attrs
-                    .get(&crate::Symbol::new("effect"))
-                    .and_then(|a| match a {
-                        Attribute::Type(t) => Some(*t),
-                        _ => None,
-                    });
-                f.write_str(" -> ")?;
-                state.write_type(f, result_ty)?;
-                if let Some(eff) = effect_ty {
-                    f.write_str(" effects ")?;
-                    state.write_type(f, eff)?;
-                }
-            } else {
-                f.write_str(" -> ")?;
-                state.write_type(f, *func_ty)?;
-            }
-        }
-
-        // Body
-        f.write_str(" {\n")?;
-
-        // Pre-assign block labels for all blocks
-        for &block in &blocks {
-            state.assign_block_label(block);
-        }
-
-        let single_block_no_args = blocks.len() == 1 && state.ctx.block_args(blocks[0]).is_empty();
-
-        for (i, &block) in blocks.iter().enumerate() {
-            // For entry block, args already printed in signature
-            if i == 0 && single_block_no_args {
-                // Elide entry block label
-            } else if i > 0 || !single_block_no_args {
-                let label = state.get_block_label(block).to_owned();
-                write!(f, "{}  {label}", indent_str)?;
-                if i > 0 {
-                    // Non-entry blocks show args
-                    let args = state.ctx.block_args(block);
-                    if !args.is_empty() {
-                        f.write_char('(')?;
-                        for (j, &arg) in args.iter().enumerate() {
-                            if j > 0 {
-                                f.write_str(", ")?;
-                            }
-                            let name = state.assign_value_name(arg);
-                            let ty = state.ctx.value_ty(arg);
-                            write!(f, "{name}: ")?;
-                            state.write_type(f, ty)?;
-                        }
-                        f.write_char(')')?;
-                    }
-                }
-                f.write_str(":\n")?;
-            }
-
-            let block_data = state.ctx.block(block);
-            let ops: Vec<_> = block_data.ops.iter().copied().collect();
-            for &child_op in &ops {
-                print_operation(state, f, child_op, indent + 4)?;
-            }
-        }
 
         writeln!(f, "{indent_str}}}")?;
     } else {

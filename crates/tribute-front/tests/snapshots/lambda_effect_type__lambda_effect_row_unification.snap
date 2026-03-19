@@ -4,14 +4,12 @@ expression: ir_text
 ---
 core.module @test {
   func.func @with_state(%0: core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 1012}}, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 1012} {
-    ^bb0:
-      %2 = closure.lambda %0 : closure.closure(core.func(tribute_rt.anyref)) {
+      %2 = closure.lambda() -> tribute_rt.anyref [%0] {
           %3 = func.call_indirect %0 : tribute_rt.anyref
           func.return %3
       }
       %4 = func.call_indirect %2 : tribute_rt.anyref
-      %5 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)) {
-        ^bb2(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref):
+      %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
       %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
@@ -20,12 +18,12 @@ core.module @test {
               scf.yield %10
           }
       }
-      %11 = closure.lambda %1 : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row() {tail_var_id = 31}}) {
+      %11 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 31} [%1] {
           %12 = arith.const {value = unit} : core.nil
           func.return %12
       }
       %13 = func.call %11, %1 {callee = @with_state} : tribute_rt.anyref
-      %14 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row() {tail_var_id = 54}}) {
+      %14 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 54} {
           %15 = arith.const {value = unit} : core.nil
           %16 = arith.const {value = unit} : core.nil
           func.return %16
@@ -34,9 +32,8 @@ core.module @test {
       func.return %17
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 6}}) {
-          %1 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
-            ^bb2(%2: tribute_rt.anyref):
+      %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 6} {
+          %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref {
               func.return %2
           }
           %3 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref

@@ -1,11 +1,9 @@
 ---
 source: crates/tribute-passes/src/native/adt_rc_header.rs
-assertion_line: 462
 expression: output
 ---
 core.module @test {
   func.func @create_struct(%0: core.i32, %1: core.i32) -> core.ptr {
-    ^bb0:
       %2 = clif.iconst {value = 16} : core.i64
       %3 = clif.call %2 {callee = @__tribute_alloc} : core.ptr
       %4 = clif.iconst {value = 1} : core.i32

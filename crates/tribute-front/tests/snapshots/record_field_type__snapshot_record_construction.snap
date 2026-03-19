@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 136
 expression: ir_text
 ---
 core.module @test {
@@ -10,12 +9,10 @@ core.module @test {
     !Point_1 = adt.typeref() {name = @Point}
 
     func.func @"test::Point::x"(%0: !Point_1) -> core.i32 {
-      ^bb0:
         %1 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
         func.return %1
     }
     func.func @"test::Point::y"(%0: !Point_1) -> core.i32 {
-      ^bb0:
         %1 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
         func.return %1
     }

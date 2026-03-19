@@ -1502,6 +1502,7 @@ dependencies = [
  "rustc-hash",
  "tracing",
  "trunk-ir",
+ "winnow",
 ]
 
 [[package]]

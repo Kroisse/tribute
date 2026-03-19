@@ -7,11 +7,9 @@ core.module @test {
 
   func.func @set_and_get() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
       %0 = arith.const {value = 42} : core.i32
-      %1 = closure.lambda : !t0 {
-        ^bb1(%2: tribute_rt.anyref):
+      %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref {
           %3 = core.unrealized_conversion_cast %2 : core.nil
-          %4 = closure.lambda : !t0 {
-            ^bb2(%5: tribute_rt.anyref):
+          %4 = closure.lambda(%5: tribute_rt.anyref) -> tribute_rt.anyref {
               func.return %5
           }
           %6 = ability.perform %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref

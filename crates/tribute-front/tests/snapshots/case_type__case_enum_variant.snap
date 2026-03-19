@@ -1,13 +1,11 @@
 ---
 source: crates/tribute-front/tests/case_type.rs
-assertion_line: 98
 expression: ir_text
 ---
 core.module @test {
   !Option = adt.enum() {name = @Option, variants = [[@Some, [tribute_rt.anyref]], [@None, []]]}
 
   func.func @unwrap_or(%0: tribute_rt.anyref, %1: core.i32) -> core.i32 {
-    ^bb0:
       %2 = adt.variant_is %0 {tag = @Some, type = !Option} : core.i1
       %3 = scf.if %2 : core.i32 {
           %4 = adt.variant_cast %0 {tag = @Some, type = !Option} : !Option

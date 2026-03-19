@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-passes/src/lower_ability_perform.rs
-assertion_line: 299
 expression: ir_text
 ---
 core.module @test {
@@ -8,7 +7,6 @@ core.module @test {
   !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
 
   func.func @test_fn(%0: core.array(!_Marker)) -> tribute_rt.anyref {
-    ^bb0:
       %1 = arith.const {value = 0} : tribute_rt.anyref
       %2 = ability.evidence_lookup %0 {ability_ref = core.ability_ref() {name = @State}} : !_Marker
       %3 = adt.struct_get %2 {field = 3, type = !_Marker} : !_closure

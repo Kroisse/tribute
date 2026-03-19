@@ -6,15 +6,13 @@ core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
   func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
-    ^bb0:
-      %1 = closure.lambda %0 : closure.closure(core.func(tribute_rt.anyref)) {
+      %1 = closure.lambda() -> tribute_rt.anyref [%0] {
           %2 = func.call_indirect %0 : core.i32
           %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
           func.return %3
       }
       %4 = func.call_indirect %1 : tribute_rt.anyref
-      %5 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref)) {
-        ^bb2(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref):
+      %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
       %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
@@ -31,14 +29,12 @@ core.module @test {
       func.return %15
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) {
-          %1 = closure.lambda : !t0 {
-            ^bb2(%2: tribute_rt.anyref):
+      %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+          %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref {
               %3 = core.unrealized_conversion_cast %2 : core.i32
               %4 = arith.const {value = 1} : core.i32
               %5 = arith.add %3, %4 : core.i32
-              %6 = closure.lambda %3 : !t0 {
-                ^bb3(%7: tribute_rt.anyref):
+              %6 = closure.lambda(%7: tribute_rt.anyref) -> tribute_rt.anyref [%3] {
                   %8 = core.unrealized_conversion_cast %7 : core.nil
                   %9 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
                   func.return %9
