@@ -1,0 +1,12 @@
+---
+source: crates/trunk-ir-cranelift-backend/src/passes/arith_to_clif.rs
+assertion_line: 547
+expression: result
+---
+core.module @test {
+  func.func @test_fn() -> core.i8 {
+      %0 = clif.iconst {value = 1} : core.bool
+      %1 = clif.iconst {value = 0} : core.bool
+      func.return %0
+  }
+}

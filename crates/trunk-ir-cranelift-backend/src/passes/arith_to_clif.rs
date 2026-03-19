@@ -139,29 +139,29 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match category {
             "f32" => {
-                if let Attribute::FloatBits(v) = value {
-                    arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
-                } else {
-                    arena_clif::f32const(ctx, loc, result_ty, 0.0).op_ref()
-                }
+                let Attribute::FloatBits(v) = value else {
+                    return false;
+                };
+                arena_clif::f32const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
             }
             "f64" => {
-                if let Attribute::FloatBits(v) = value {
-                    arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
-                } else {
-                    arena_clif::f64const(ctx, loc, result_ty, 0.0).op_ref()
-                }
+                let Attribute::FloatBits(v) = value else {
+                    return false;
+                };
+                arena_clif::f64const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
             }
-            _ => {
-                if let Attribute::Int(v) = value {
+            _ => match value {
+                Attribute::Int(v) => {
                     let Some(v) = i64::try_from(v).ok() else {
                         return false;
                     };
                     arena_clif::iconst(ctx, loc, result_ty, v).op_ref()
-                } else {
-                    arena_clif::iconst(ctx, loc, result_ty, 0).op_ref()
                 }
-            }
+                Attribute::Bool(b) => {
+                    arena_clif::iconst(ctx, loc, result_ty, if b { 1 } else { 0 }).op_ref()
+                }
+                _ => return false,
+            },
         };
 
         rewriter.replace_op(new_op_ref);
@@ -513,5 +513,35 @@ impl RewritePattern for ArithConversionPattern {
 
         rewriter.replace_op(new_op);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use trunk_ir::context::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::TypeConverter;
+
+    fn run_pass(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        let type_converter = TypeConverter::new();
+        super::lower(&mut ctx, module, type_converter);
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn test_arith_const_bool() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i8 {
+    %0 = arith.const {value = true} : core.bool
+    %1 = arith.const {value = false} : core.bool
+    func.return %0
+  }
+}"#,
+        );
+        insta::assert_snapshot!(result);
     }
 }
