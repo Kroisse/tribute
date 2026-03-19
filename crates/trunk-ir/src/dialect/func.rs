@@ -58,7 +58,8 @@ fn print_func(
     if let Some(name) = sym_name {
         write!(h, " @")?;
         name.with_str(|s| {
-            let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_');
+            let needs_quoting =
+                s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
             if needs_quoting {
                 write!(h, "\"")?;
                 for ch in s.chars() {

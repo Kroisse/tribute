@@ -889,6 +889,21 @@ mod tests {
         assert_roundtrip(&ctx, module_op);
     }
 
+    #[test]
+    fn test_roundtrip_non_ascii_symbol() {
+        // Non-ASCII symbol names must be quoted to survive round-trip
+        // (parser only accepts ASCII alphanumeric + '_' for bare symbols)
+        let input = r#"core.module @test {
+  func.func @"π"() -> core.i32 {
+    %0 = arith.const {value = 42} : core.i32
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op = parse_module(&mut ctx, input).unwrap();
+        assert_roundtrip(&ctx, module_op);
+    }
+
     // ================================================================
     // Error detection tests
     // ================================================================

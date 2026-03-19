@@ -430,7 +430,8 @@ fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
 
 /// Write a type alias name with `!` prefix. Quotes if name contains non-ident chars.
 fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
-    let needs_quoting = name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_');
+    let needs_quoting =
+        name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if needs_quoting {
         f.write_str("!\"")?;
         write_escaped_string(f, name)?;
@@ -442,7 +443,8 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 
 fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| {
-        let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let needs_quoting =
+            s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
         if needs_quoting {
             f.write_str("@\"")?;
             write_escaped_string(f, s)?;

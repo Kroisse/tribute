@@ -105,6 +105,26 @@ fn print_closure_lambda(
         h.write_type(eff_ty)?;
     }
 
+    // " {key = val, ...}" — attributes (if any)
+    let attrs: Vec<(trunk_ir::Symbol, trunk_ir::Attribute)> = h
+        .ctx()
+        .op(op)
+        .attributes
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    if !attrs.is_empty() {
+        write!(h, " {{")?;
+        for (i, (key, val)) in attrs.iter().enumerate() {
+            if i > 0 {
+                write!(h, ", ")?;
+            }
+            write!(h, "{key} = ")?;
+            h.write_attribute(val)?;
+        }
+        write!(h, "}}")?;
+    }
+
     // " [%x, %y]" — captures (operands)
     let capture_names: Vec<String> = h
         .ctx()
@@ -127,6 +147,23 @@ fn print_closure_lambda(
     writeln!(h, " {{")?;
     h.print_region_eliding_entry(region, indent + 2)?;
     writeln!(h, "{indent_str}}}")
+}
+
+/// Lookahead: does the input start with an attribute dict `{key = ...}`?
+///
+/// Distinguishes `{key = val}` (attr dict) from `{ ops... }` (body region).
+/// Checks for `{` + optional whitespace + identifier + whitespace + `=`.
+fn starts_attr_dict(input: &str) -> bool {
+    let rest = input.strip_prefix('{').unwrap_or("");
+    let rest = rest.trim_start();
+    // Must start with an ident char (letter or _)
+    let after_ident = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    // Must have consumed at least one ident char, then whitespace + '='
+    if after_ident.len() == rest.len() {
+        return false; // no ident consumed
+    }
+    let after_ws = after_ident.trim_start();
+    after_ws.starts_with('=')
 }
 
 /// Parse closure.lambda custom format back into a RawOperation.
@@ -152,6 +189,14 @@ fn parse_closure_lambda<'a>(
 
     // "effects effect_type" (optional)
     let eff_ty = opt(preceded((ws, "effects", ws), raw_type)).parse_next(input)?;
+
+    // " {key = val, ...}" (optional attributes — distinguished from body by lookahead)
+    ws.parse_next(input)?;
+    let attributes = if starts_attr_dict(input) {
+        raw_attr_dict.parse_next(input)?
+    } else {
+        vec![]
+    };
 
     // " [%x, %y]" (optional captures)
     ws.parse_next(input)?;
@@ -223,7 +268,7 @@ fn parse_closure_lambda<'a>(
         return_type: None,
         effect_type: None,
         operands: captures,
-        attributes: vec![],
+        attributes,
         result_types: vec![closure_raw_ty],
         regions,
         successors: vec![],
@@ -521,6 +566,20 @@ mod tests {
   func.func @main() -> core.i32 {
     %0 = closure.lambda() -> core.i32 {
         %1 = arith.const {value = 42} : core.i32
+        func.return %1
+    }
+    func.return %0
+  }
+}"#,
+        );
+    }
+
+    #[test]
+    fn test_lambda_roundtrip_with_attributes() {
+        assert_roundtrip(
+            r#"core.module @test {
+  func.func @main() -> core.i32 {
+    %0 = closure.lambda(%1: core.i32) -> core.i32 {tag = 42} {
         func.return %1
     }
     func.return %0

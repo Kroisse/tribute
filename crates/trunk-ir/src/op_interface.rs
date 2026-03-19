@@ -299,6 +299,12 @@ static ASM_FORMAT_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpAsmFor
         for fmt in inventory::iter::<OpAsmFormat> {
             let dialect = Symbol::from_dynamic(fmt.dialect);
             let op_name = Symbol::from_dynamic(fmt.op_name);
+            if map.contains_key(&(dialect, op_name)) {
+                panic!(
+                    "duplicate OpAsmFormat registration for '{}.{}'",
+                    fmt.dialect, fmt.op_name
+                );
+            }
             map.insert((dialect, op_name), fmt);
         }
         map
