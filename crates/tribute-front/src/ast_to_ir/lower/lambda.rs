@@ -247,7 +247,7 @@ pub(super) fn lower_lambda<'db>(
             }
             Some((result, false)) => {
                 // Pure result in an effectful lambda: just return it.
-                // cont_to_yield_bubbling will handle return wrapping if needed.
+                // The lowering pipeline will handle return wrapping if needed.
                 let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
                 let ret_op = func::r#return(inner_builder.ir, location, [result]);
                 inner_builder

@@ -32,7 +32,7 @@ graph TD
     subgraph "tribute-passes/src/native/ (tribute-ir 의존)"
         lower["lower.rs — 오케스트레이션"]
         type_conv["type_converter.rs — 네이티브 타입 변환"]
-        cont_yb["cont_to_yield_bubbling — effect lowering"]
+        cps["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
         rc["rc.rs — RC 삽입 (future)"]
     end
 
@@ -62,7 +62,7 @@ flowchart TB
     input["TrunkIR Module\n(cont.*, func.*, arith.*, scf.*, adt.*)"]
 
     subgraph native_passes["tribute-passes/src/native/"]
-        cont["cont_to_yield_bubbling\ncont.* → ADT-based yield bubbling"]
+        cont["CPS effect lowering\nlower_ability_perform + lower_handle_dispatch"]
         rc_pass["rc 삽입 (future)\nretain/release 삽입"]
     end
 
@@ -114,12 +114,13 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 
 ---
 
-## Effect 구현: Yield Bubbling
+## Effect 구현: CPS Tail-Call
 
-WASM과 Native 모두 ADT 기반 yield bubbling을 사용한다.
-`cont_to_yield_bubbling` pass가 cont.* 연산을 ADT enum/struct로 변환.
+Effect handling은 tail-call CPS 방식으로 처리된다.
+`lower_ability_perform`과 `lower_handle_dispatch` pass가
+ability 연산을 handler_dispatch 클로저 호출로 변환한다.
 
-상세 내용은 [implementation.md](implementation.md#cranelift-yield-bubbling)를 참조.
+상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 
 ---
 
@@ -166,9 +167,9 @@ Array:  [length: i64] [elements...]
 - RC retain/release 삽입 pass
 - Valgrind / AddressSanitizer 검증
 
-### Phase 4: ADT-based Yield Bubbling Effect
+### Phase 4: CPS Tail-Call Effect Handling
 
-- `cont_to_yield_bubbling` pass (WASM/Native 공유)
+- `lower_ability_perform` + `lower_handle_dispatch` passes
 - Evidence 런타임 (native)
 
 ### Phase 5: E2E 파이프라인

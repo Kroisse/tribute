@@ -8,18 +8,16 @@
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, scf};
+use trunk_ir::dialect::{cont as arena_cont, core, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{BlockRef, OpRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Location;
 
 use tribute_ir::dialect::ability;
-
-use crate::cont_util::get_done_region;
 
 /// Lower all `ability.handle_dispatch` ops in the module.
 pub fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
@@ -73,6 +71,22 @@ impl RewritePattern for LowerHandleDispatchPattern {
         rewriter.erase_op(vec![result_val]);
         true
     }
+}
+
+/// Get the done region from handler_dispatch's body.
+///
+/// Finds the first `cont.done` child op and returns its body region.
+fn get_done_region(ctx: &IrContext, body: RegionRef) -> Option<RegionRef> {
+    let blocks = &ctx.region(body).blocks;
+    let &first_block = blocks.first()?;
+
+    for &op in &ctx.block(first_block).ops {
+        if let Ok(done_op) = arena_cont::Done::from_op(ctx, op) {
+            return Some(done_op.body(ctx));
+        }
+    }
+
+    None
 }
 
 /// Inline the `cont.done` region's body before `insert_before`.

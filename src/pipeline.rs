@@ -43,10 +43,10 @@
 //! Module (evidence passed through calls)
 //!     │
 //!     ▼ resolve_evidence
-//! Module (cont.shift uses dynamic tags)
+//! Module (evidence resolved)
 //!     │
-//!     ▼ cont_to_yield_bubbling
-//! Module (cont.* lowered to ADT yield bubbling)
+//!     ▼ lower_ability_perform + lower_handle_dispatch (CPS tail-call)
+//! Module (effects lowered)
 //!     │
 //!     ├─► [native only] evidence_to_native
 //!     │
@@ -456,11 +456,9 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
 
 /// Lower continuation ops and run cleanup passes shared by both backends.
 ///
-/// In the tail-call CPS design, cont_to_yield_bubbling is no longer needed —
-/// effects are handled via tail calls through handler_dispatch closures.
+/// Effects are handled via tail-call CPS through handler_dispatch closures.
 fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
-    // cont_to_yield_bubbling removed — tail call CPS handles effects directly.
-    // Validation still runs in debug mode.
+    // Validation runs in debug mode.
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {

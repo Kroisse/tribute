@@ -36,7 +36,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
 /// Lower evidence operations for the native backend.
 ///
-/// Must run AFTER `cont_to_yield_bubbling` and BEFORE DCE.
+/// Must run AFTER effect lowering passes and BEFORE DCE.
 pub fn lower_evidence_to_native(ctx: &mut IrContext, module: Module) {
     replace_stubs_and_add_empty(ctx, module);
     rewrite_evidence_ops_in_module(ctx, module);

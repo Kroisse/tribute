@@ -425,26 +425,21 @@ fn effectful_call(ev: *const Evidence) -> Result<T, Yield> {
 (resume $cont (local.get $value))
 ```
 
-### WASM / Native 공통: ADT-based Yield Bubbling
+### WASM / Native 공통: CPS Tail-Call Effect Handling
 
-WASM과 Native 백엔드 모두 동일한 `cont_to_yield_bubbling` pass를 사용하여
-cont.* 연산을 ADT enum/struct 기반 yield bubbling으로 변환한다.
+Effect handling은 tail-call CPS 방식으로 처리된다.
+`lower_ability_perform`과 `lower_handle_dispatch` pass가
+ability.perform/handle_dispatch를 handler_dispatch 클로저 호출로 변환한다.
 
-**cont.* → yield bubbling 매핑:**
-
-| cont.* op | 변환 결과 | 설명 |
-| --------- | --------- | ---- |
-| `cont.push_prompt` | body 호출 + handler dispatch loop | YieldResult enum으로 Done/Shift 구분 |
-| `cont.shift` | state 캡처 + Continuation struct + YieldResult::Shift 반환 | 라이브 변수를 ADT struct에 저장 |
-| `cont.resume(k, val)` | Continuation에서 resume_fn 추출 + call_indirect | 캡처된 상태 복원 후 재개 |
-| `cont.drop(k)` | (no-op) | RC가 자동 관리 |
+상세 내용은 [cps-effects.md](cps-effects.md)를 참조.
 
 **파이프라인 분기:**
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
       → evidence_params → closure_lower → evidence_calls → resolve_evidence
-      → cont_to_yield_bubbling → [native only: evidence_to_native]
+      → lower_ability_perform → lower_handle_dispatch
+      → [native only: evidence_to_native]
       → dce → resolve_casts
 
 WASM:   → lower_to_wasm → emit_wasm

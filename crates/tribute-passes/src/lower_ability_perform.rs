@@ -26,20 +26,38 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{BlockRef, OpRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Attribute;
 
 use tribute_ir::dialect::ability;
-
-use crate::cont_to_yield_bubbling::types::YieldBubblingTypes;
 use tribute_ir::dialect::ability::compute_op_idx;
+use tribute_ir::dialect::tribute_rt;
+
+/// Cached common type references used by the perform lowering pattern.
+#[derive(Clone, Copy)]
+struct CommonTypes {
+    anyref: TypeRef,
+    i32: TypeRef,
+}
+
+impl CommonTypes {
+    fn new(ctx: &mut IrContext) -> Self {
+        Self {
+            anyref: tribute_rt::anyref(ctx).as_type_ref(),
+            i32: ctx.types.intern(
+                trunk_ir::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32"))
+                    .build(),
+            ),
+        }
+    }
+}
 
 /// Lower all `ability.perform` ops in the module.
 pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
-    let types = YieldBubblingTypes::new(ctx);
+    let types = CommonTypes::new(ctx);
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerPerformPattern { types });
     applicator.apply_partial(ctx, module);
@@ -47,7 +65,7 @@ pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
 
 /// Pattern: `ability.perform` → evidence lookup + handler_dispatch call + return.
 struct LowerPerformPattern {
-    types: YieldBubblingTypes,
+    types: CommonTypes,
 }
 
 impl RewritePattern for LowerPerformPattern {
@@ -264,9 +282,9 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    /// Register the YieldResult ADT type so the pass can find it.
-    fn init_yield_result_types(ctx: &mut IrContext) {
-        YieldBubblingTypes::new(ctx);
+    /// Initialize common types used by the pass.
+    fn init_common_types(ctx: &mut IrContext) {
+        CommonTypes::new(ctx);
     }
 
     /// Build the canonical evidence type string for use in test IR.
@@ -277,7 +295,7 @@ mod tests {
     #[test]
     fn test_lower_perform_basic() {
         let mut ctx = IrContext::new();
-        init_yield_result_types(&mut ctx);
+        init_common_types(&mut ctx);
         let ev_ty = evidence_type_str();
 
         let module = parse_test_module(
@@ -302,7 +320,7 @@ mod tests {
     #[test]
     fn test_lower_perform_with_args() {
         let mut ctx = IrContext::new();
-        init_yield_result_types(&mut ctx);
+        init_common_types(&mut ctx);
         let ev_ty = evidence_type_str();
 
         let module = parse_test_module(
@@ -329,7 +347,7 @@ mod tests {
     #[should_panic(expected = "ability.perform requires evidence parameter")]
     fn test_lower_perform_no_evidence() {
         let mut ctx = IrContext::new();
-        init_yield_result_types(&mut ctx);
+        init_common_types(&mut ctx);
 
         // Function without evidence parameter — should panic.
         let module = parse_test_module(
