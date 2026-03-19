@@ -42,10 +42,13 @@
 //!     ▼ evidence_calls (Phase 2)
 //! Module (evidence passed through calls)
 //!     │
+//!     ▼ lower_ability_perform (CPS tail-call)
+//! Module (ability.perform lowered)
+//!     │
 //!     ▼ resolve_evidence
 //! Module (evidence resolved)
 //!     │
-//!     ▼ lower_ability_perform + lower_handle_dispatch (CPS tail-call)
+//!     ▼ lower_handle_dispatch
 //! Module (effects lowered)
 //!     │
 //!     ├─► [native only] evidence_to_native

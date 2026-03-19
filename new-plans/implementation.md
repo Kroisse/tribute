@@ -437,8 +437,8 @@ ability.perform/handle_dispatch를 handler_dispatch 클로저 호출로 변환�
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
-      → evidence_params → closure_lower → evidence_calls → resolve_evidence
-      → lower_ability_perform → lower_handle_dispatch
+      → evidence_params → closure_lower → evidence_calls
+      → lower_ability_perform → resolve_evidence → lower_handle_dispatch
       → [native only: evidence_to_native]
       → dce → resolve_casts
 

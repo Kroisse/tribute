@@ -284,7 +284,7 @@ mod tests {
 
     /// Initialize common types used by the pass.
     fn init_common_types(ctx: &mut IrContext) {
-        CommonTypes::new(ctx);
+        let _ = CommonTypes::new(ctx);
     }
 
     /// Build the canonical evidence type string for use in test IR.

@@ -41,12 +41,12 @@ graph TD
     end
 
     dialects --> passes
-    dialects --> cont_yb
+    dialects --> cps
     passes --> translate
     translate --> function
     translate --> validation
     lower --> passes
-    lower --> cont_yb
+    lower --> cps
     pipeline --> lower
     pipeline --> translate
 ```
@@ -92,7 +92,7 @@ flowchart TB
 
 | 측면 | WASM | Native |
 | ---- | ---- | ------ |
-| Effect | yield bubbling (ADT-based) | yield bubbling (ADT-based) |
+| Effect | CPS tail-call handling | CPS tail-call handling |
 | 메모리 | WasmGC (런타임 GC) | Reference Counting |
 | ADT | GC struct/array | 포인터 + load/store |
 | 제어 흐름 | Structured (block/loop/if) | CFG (brif/jump/br_table) |
