@@ -129,12 +129,8 @@ pub(super) fn lower_handle<'db>(
             .filter_map(|h| match &h.kind {
                 HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
                     let name = match &ability.resolved {
-                        ResolvedRef::Ability { id } => {
-                            Symbol::from_dynamic(&id.qualified(prompt_scope.db).to_string())
-                        }
-                        ResolvedRef::TypeDef { id } => {
-                            Symbol::from_dynamic(&id.qualified(prompt_scope.db).to_string())
-                        }
+                        ResolvedRef::Ability { id } => id.qualified(prompt_scope.db),
+                        ResolvedRef::TypeDef { id } => id.qualified(prompt_scope.db),
                         _ => return None,
                     };
                     Some(prompt_scope.ability_ref_type(builder.ir, name, &[]))
@@ -424,8 +420,8 @@ fn extract_ability_ref_and_op_name<'db>(
     };
 
     let ability_name = match &ability.resolved {
-        ResolvedRef::Ability { id } => Symbol::from_dynamic(&id.qualified(db).to_string()),
-        ResolvedRef::TypeDef { id } => Symbol::from_dynamic(&id.qualified(db).to_string()),
+        ResolvedRef::Ability { id } => id.qualified(db),
+        ResolvedRef::TypeDef { id } => id.qualified(db),
         other => {
             Diagnostic {
                 message: format!(
