@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
-use trunk_ir::{Symbol, SymbolVec};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Pattern, Stmt,
@@ -12,34 +12,6 @@ use crate::ast::{
 use super::context::AstLoweringCtx;
 use super::helpers::is_comment;
 use super::patterns::lower_pattern;
-
-/// Parse a symbol that may contain "::" into module_path and name.
-///
-/// Examples:
-/// - "foo" → ([], "foo")
-/// - "State::get" → (["State"], "get")
-/// - "a::b::c" → (["a", "b"], "c")
-fn parse_qualified_symbol(sym: Symbol) -> (SymbolVec, Symbol) {
-    if sym.is_simple() {
-        (SymbolVec::new(), sym)
-    } else {
-        let name = sym.last_segment();
-        // Collect path segments as Strings first to avoid deadlock
-        // (Symbol::from_dynamic inside with_str callback would cause deadlock)
-        let path_strings: Vec<String> = sym.with_str(|s| {
-            let segments: Vec<&str> = s.split("::").collect();
-            segments[..segments.len() - 1]
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        });
-        let path: SymbolVec = path_strings
-            .iter()
-            .map(|s| Symbol::from_dynamic(s))
-            .collect();
-        (path, name)
-    }
-}
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
@@ -107,8 +79,8 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
                         let type_name = ctx.node_symbol(&type_node);
                         let operator = ctx.node_symbol(&operator_node);
                         let name_id = ctx.fresh_id_with_span(&op_node);
-                        let module_path = SymbolVec::from_iter([type_name]);
-                        ExprKind::Var(UnresolvedName::qualified(module_path, operator, name_id))
+                        let qualified = type_name.join_path(operator);
+                        ExprKind::Var(UnresolvedName::new(qualified, name_id))
                     } else {
                         ExprKind::Error
                     }
@@ -117,7 +89,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
                     // Simple operator: +, -, <>, ==, etc.
                     let name = ctx.node_symbol(&op_node);
                     let name_id = ctx.fresh_id_with_span(&op_node);
-                    ExprKind::Var(UnresolvedName::simple(name, name_id))
+                    ExprKind::Var(UnresolvedName::new(name, name_id))
                 }
             },
             None => ExprKind::Error,
@@ -127,7 +99,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         "identifier" => {
             let name = ctx.node_symbol(&node);
             let name_id = ctx.fresh_id_with_span(&node);
-            ExprKind::Var(UnresolvedName::simple(name, name_id))
+            ExprKind::Var(UnresolvedName::new(name, name_id))
         }
 
         // === Binary expressions ===
@@ -180,8 +152,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
         "path_expression" | "qualified_identifier" => {
             let sym = ctx.node_symbol(&node);
             let name_id = ctx.fresh_id_with_span(&node);
-            let (module_path, name) = parse_qualified_symbol(sym);
-            ExprKind::Var(UnresolvedName::qualified(module_path, name, name_id))
+            ExprKind::Var(UnresolvedName::new(sym, name_id))
         }
 
         _ => {
@@ -286,8 +257,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unre
 
     let sym = ctx.node_symbol(&name_node);
     let name_id = ctx.fresh_id_with_span(&name_node);
-    let (module_path, name) = parse_qualified_symbol(sym);
-    let ctor = UnresolvedName::qualified(module_path, name, name_id);
+    let ctor = UnresolvedName::new(sym, name_id);
 
     let args = args_node
         .map(|args| lower_argument_list(ctx, args))
@@ -306,8 +276,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 
     let type_name_sym = ctx.node_symbol(&type_node);
     let type_name_id = ctx.fresh_id_with_span(&type_node);
-    let (module_path, name) = parse_qualified_symbol(type_name_sym);
-    let type_name = UnresolvedName::qualified(module_path, name, type_name_id);
+    let type_name = UnresolvedName::new(type_name_sym, type_name_id);
 
     let mut fields = Vec::new();
     let mut spread = None;
@@ -747,33 +716,12 @@ fn lower_handler_operation_path(
     let op_node = node.child_by_field_name("operation")?;
     let op_text = ctx.node_text(&op_node).to_string();
     let op_symbol = Symbol::from_dynamic(&op_text);
-
-    if op_symbol.is_simple() {
-        // Unqualified: just op name, ability will be inferred
-        let ability_name = Symbol::from_dynamic("_");
-        let ability_id = ctx.fresh_id_with_span(&op_node);
-        let ability = UnresolvedName::simple(ability_name, ability_id);
-        Some((ability, op_symbol))
-    } else {
-        // Qualified path: State::get -> ability=State, op=get
-        // For module-qualified paths like std::io::State::get,
-        // parent = "std::io::State", which splits into module_path=["std","io"], name="State"
-        let parent = op_symbol.parent_path().unwrap();
-        let ability_id = ctx.fresh_id_with_span(&op_node);
-        let ability = if parent.is_simple() {
-            UnresolvedName::simple(parent, ability_id)
-        } else {
-            let ability_name = parent.last_segment();
-            let module_path = parent.parent_path().unwrap();
-            // Collect the string first to avoid deadlock:
-            // with_str holds a read lock, Symbol::from_dynamic needs a write lock.
-            let path_str = module_path.to_string();
-            let segments: SymbolVec = path_str.split("::").map(Symbol::from_dynamic).collect();
-            UnresolvedName::qualified(segments, ability_name, ability_id)
-        };
-        let op = op_symbol.last_segment();
-        Some((ability, op))
-    }
+    let op_name = op_symbol.last_segment();
+    let ability_sym = op_symbol
+        .parent_path()
+        .unwrap_or_else(|| Symbol::from_dynamic("_"));
+    let ability_id = ctx.fresh_id_with_span(&op_node);
+    Some((UnresolvedName::new(ability_sym, ability_id), op_name))
 }
 
 /// Parse handler parameters (identifiers) from a fn_handler or op_handler node.

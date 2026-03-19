@@ -81,7 +81,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
         "type_identifier" => {
             let name = ctx.node_symbol(&node);
             let ctor_id = ctx.fresh_id_with_span(&node);
-            let ctor = UnresolvedName::simple(name, ctor_id);
+            let ctor = UnresolvedName::new(name, ctor_id);
             PatternKind::Variant {
                 ctor,
                 fields: Vec::new(),
@@ -115,7 +115,7 @@ fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKin
 
     let name = ctx.node_symbol(&name_node);
     let ctor_id = ctx.fresh_id_with_span(&name_node);
-    let ctor = UnresolvedName::simple(name, ctor_id);
+    let ctor = UnresolvedName::new(name, ctor_id);
 
     // Handle tuple-style args: Some(x), Pair(a, b)
     if let Some(args) = args_node {
@@ -180,7 +180,7 @@ fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unr
     let type_name = if let Some(n) = type_node {
         let name = ctx.node_symbol(&n);
         let id = ctx.fresh_id_with_span(&n);
-        Some(UnresolvedName::simple(name, id))
+        Some(UnresolvedName::new(name, id))
     } else {
         None
     };
@@ -670,7 +670,7 @@ mod tests {
         let PatternKind::Variant { ctor, fields } = pattern else {
             panic!("Expected variant pattern, got {:?}", pattern);
         };
-        assert_eq!(ctor.name.to_string(), "None");
+        assert_eq!(ctor.name().to_string(), "None");
         assert!(fields.is_empty());
     }
 
@@ -688,7 +688,7 @@ mod tests {
         let PatternKind::Variant { ctor, fields } = pattern else {
             panic!("Expected variant pattern, got {:?}", pattern);
         };
-        assert_eq!(ctor.name.to_string(), "Some");
+        assert_eq!(ctor.name().to_string(), "Some");
         assert_eq!(fields.len(), 1);
         let PatternKind::Bind { name, .. } = fields[0].kind.as_ref() else {
             panic!("Expected bind pattern in variant");
@@ -710,7 +710,7 @@ mod tests {
         let PatternKind::Variant { ctor, fields } = pattern else {
             panic!("Expected variant pattern, got {:?}", pattern);
         };
-        assert_eq!(ctor.name.to_string(), "Pair");
+        assert_eq!(ctor.name().to_string(), "Pair");
         assert_eq!(fields.len(), 2);
     }
 
@@ -728,7 +728,7 @@ mod tests {
         let PatternKind::Variant { ctor, fields } = pattern else {
             panic!("Expected variant pattern, got {:?}", pattern);
         };
-        assert_eq!(ctor.name.to_string(), "Point");
+        assert_eq!(ctor.name().to_string(), "Point");
         assert_eq!(fields.len(), 2);
     }
 
@@ -868,7 +868,7 @@ mod tests {
         let PatternKind::Variant { ctor, .. } = inner.kind.as_ref() else {
             panic!("Expected variant pattern inside as");
         };
-        assert_eq!(ctor.name.to_string(), "Some");
+        assert_eq!(ctor.name().to_string(), "Some");
     }
 
     #[test]
