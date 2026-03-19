@@ -37,18 +37,17 @@ pub(super) fn lower_case_chain<'db>(
             if last.guard.is_none() && (is_else_chain || is_irrefutable_pattern(&last.pattern)) =>
         {
             // Unconditional arm: skip condition check
-            builder.ctx.enter_scope();
+            let mut scope = builder.ctx.scope();
             bind_pattern_fields(
-                builder.ctx,
+                &mut scope,
                 builder.ir,
                 builder.block,
                 location,
                 scrutinee,
                 &last.pattern,
             );
-            let result = super::expr::lower_expr(builder, last.body.clone());
-            builder.ctx.exit_scope();
-            result
+            let mut builder = IrBuilder::new(&mut scope, builder.ir, builder.block);
+            super::expr::lower_expr(&mut builder, last.body.clone())
         }
         [first, rest @ ..] => {
             // Multi-arm: pattern check → then/else regions → scf.if
@@ -253,56 +252,58 @@ fn build_guarded_arm_region<'db>(
     });
 
     // 1. Bind pattern fields (safe — we're inside the matched region)
-    ctx.enter_scope();
-    bind_pattern_fields(ctx, ir, block, location, scrutinee, &arm.pattern);
+    let (guard_cond, inner_then_region) = {
+        let mut scope = ctx.scope();
+        bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
 
-    // 2. Evaluate guard condition
-    let guard_cond = {
-        let mut builder = IrBuilder::new(ctx, ir, block);
-        super::expr::lower_expr(&mut builder, guard_expr.clone())
-    };
-    let guard_cond = match guard_cond {
-        Some(v) => v,
-        None => {
-            let bool_ty = ctx.bool_type(ir);
-            let op = arith::r#const(ir, location, bool_ty, Attribute::Bool(false));
-            ir.push_op(block, op.op_ref());
-            op.result(ir)
-        }
-    };
-
-    // 3. Build inner then region (arm body)
-    let inner_then_region = {
-        let inner_block = ir.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: Default::default(),
-            parent_region: None,
-        });
-        let result = {
-            let mut builder = IrBuilder::new(ctx, ir, inner_block);
-            let val = super::expr::lower_expr(&mut builder, arm.body.clone());
-            val.map(|v| builder.cast_if_needed(location, v, result_ty))
+        // 2. Evaluate guard condition
+        let guard_cond = {
+            let mut builder = IrBuilder::new(&mut scope, ir, block);
+            super::expr::lower_expr(&mut builder, guard_expr.clone())
         };
-        let yield_val = match result {
+        let guard_cond = match guard_cond {
             Some(v) => v,
             None => {
-                let nil_ty = ctx.nil_type(ir);
-                let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
-                ir.push_op(inner_block, op.op_ref());
+                let bool_ty = scope.bool_type(ir);
+                let op = arith::r#const(ir, location, bool_ty, Attribute::Bool(false));
+                ir.push_op(block, op.op_ref());
                 op.result(ir)
             }
         };
-        let yield_op = scf::r#yield(ir, location, [yield_val]);
-        ir.push_op(inner_block, yield_op.op_ref());
-        ir.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![inner_block],
-            parent_op: None,
-        })
-    };
 
-    ctx.exit_scope();
+        // 3. Build inner then region (arm body)
+        let inner_then_region = {
+            let inner_block = ir.create_block(BlockData {
+                location,
+                args: vec![],
+                ops: Default::default(),
+                parent_region: None,
+            });
+            let result = {
+                let mut builder = IrBuilder::new(&mut scope, ir, inner_block);
+                let val = super::expr::lower_expr(&mut builder, arm.body.clone());
+                val.map(|v| builder.cast_if_needed(location, v, result_ty))
+            };
+            let yield_val = match result {
+                Some(v) => v,
+                None => {
+                    let nil_ty = scope.nil_type(ir);
+                    let op = arith::r#const(ir, location, nil_ty, Attribute::Unit);
+                    ir.push_op(inner_block, op.op_ref());
+                    op.result(ir)
+                }
+            };
+            let yield_op = scf::r#yield(ir, location, [yield_val]);
+            ir.push_op(inner_block, yield_op.op_ref());
+            ir.create_region(RegionData {
+                location,
+                blocks: trunk_ir::smallvec::smallvec![inner_block],
+                parent_op: None,
+            })
+        };
+
+        (guard_cond, inner_then_region)
+    };
 
     // 4. Build inner else region (fall through to remaining arms)
     let inner_else_region = build_else_chain_region(ctx, ir, location, scrutinee, result_ty, rest);
@@ -346,16 +347,14 @@ fn build_arm_region<'db>(
         parent_region: None,
     });
 
-    ctx.enter_scope();
-    bind_pattern_fields(ctx, ir, block, location, scrutinee, &arm.pattern);
-
     let result = {
-        let mut builder = IrBuilder::new(ctx, ir, block);
+        let mut scope = ctx.scope();
+        bind_pattern_fields(&mut scope, ir, block, location, scrutinee, &arm.pattern);
+
+        let mut builder = IrBuilder::new(&mut scope, ir, block);
         let val = super::expr::lower_expr(&mut builder, arm.body.clone());
         val.map(|v| builder.cast_if_needed(location, v, result_ty))
     };
-
-    ctx.exit_scope();
 
     let yield_val = match result {
         Some(v) => v,

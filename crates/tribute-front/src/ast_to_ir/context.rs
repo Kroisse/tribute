@@ -137,17 +137,17 @@ impl<'db> IrLoweringCtx<'db> {
     /// in place of `self`/`ctx`. The scope is automatically exited when
     /// the guard is dropped, even on early returns or `?`.
     pub fn scope(&mut self) -> ScopeGuard<'_, 'db> {
-        self.scopes.push(HashMap::new());
+        self.enter_scope();
         ScopeGuard { ctx: self }
     }
 
-    /// Enter a new scope (non-guard version — prefer `scope()` instead).
-    pub fn enter_scope(&mut self) {
+    /// Enter a new scope (internal — use `scope()` guard instead).
+    fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
-    /// Exit the current scope (non-guard version — prefer `scope()` instead).
-    pub fn exit_scope(&mut self) {
+    /// Exit the current scope (internal — use `scope()` guard instead).
+    fn exit_scope(&mut self) {
         self.scopes.pop();
     }
 
@@ -190,12 +190,18 @@ impl<'db> IrLoweringCtx<'db> {
         LocalId::new(id)
     }
 
-    /// Generate a fresh prompt tag and push it onto the active stack.
+    /// Enter a prompt tag scope, returning a guard that pops the tag on drop.
     ///
-    /// This should be called when entering a `handle` expression.
-    /// The tag is used by `ability.handle_dispatch` and evidence extension
-    /// to ensure they reference the same handler scope.
-    pub fn push_prompt_tag(&mut self) -> u32 {
+    /// The guard dereferences to `IrLoweringCtx`, so callers can use it
+    /// in place of `self`/`ctx`. The prompt tag is automatically popped when
+    /// the guard is dropped, even on early returns or `?`.
+    pub fn prompt_tag_scope(&mut self) -> PromptTagGuard<'_, 'db> {
+        let tag = self.push_prompt_tag();
+        PromptTagGuard { ctx: self, tag }
+    }
+
+    /// Generate a fresh prompt tag and push it onto the active stack (internal — use `prompt_tag_scope()` instead).
+    fn push_prompt_tag(&mut self) -> u32 {
         let tag = self.prompt_tag_counter;
         self.prompt_tag_counter = self
             .prompt_tag_counter
@@ -205,10 +211,8 @@ impl<'db> IrLoweringCtx<'db> {
         tag
     }
 
-    /// Pop the current active prompt tag from the stack.
-    ///
-    /// This should be called when exiting a `handle` expression.
-    pub fn pop_prompt_tag(&mut self) {
+    /// Pop the current active prompt tag from the stack (internal — use `prompt_tag_scope()` instead).
+    fn pop_prompt_tag(&mut self) {
         self.active_prompt_tag_stack.pop();
     }
 
@@ -613,6 +617,41 @@ impl<'db> DerefMut for ScopeGuard<'_, 'db> {
 impl Drop for ScopeGuard<'_, '_> {
     fn drop(&mut self) {
         self.ctx.exit_scope();
+    }
+}
+
+/// RAII guard that pops a prompt tag on drop.
+///
+/// Created by [`IrLoweringCtx::prompt_tag_scope()`]. Dereferences to
+/// `IrLoweringCtx` so it can be used as a drop-in replacement for `&mut ctx`.
+pub struct PromptTagGuard<'a, 'db> {
+    ctx: &'a mut IrLoweringCtx<'db>,
+    tag: u32,
+}
+
+impl<'db> PromptTagGuard<'_, 'db> {
+    /// Get the prompt tag managed by this guard.
+    pub fn tag(&self) -> u32 {
+        self.tag
+    }
+}
+
+impl<'db> Deref for PromptTagGuard<'_, 'db> {
+    type Target = IrLoweringCtx<'db>;
+    fn deref(&self) -> &Self::Target {
+        self.ctx
+    }
+}
+
+impl<'db> DerefMut for PromptTagGuard<'_, 'db> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ctx
+    }
+}
+
+impl Drop for PromptTagGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.ctx.pop_prompt_tag();
     }
 }
 

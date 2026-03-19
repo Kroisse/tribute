@@ -122,10 +122,11 @@ mod tests {
         assert!(ctx.lookup(local_id).is_none());
 
         // After entering scope and binding, can look up
-        ctx.enter_scope();
-        // Note: We can't easily test bind without creating a Value,
-        // so just verify scope entry/exit doesn't panic
-        ctx.exit_scope();
+        {
+            let _scope = ctx.scope();
+            // Note: We can't easily test bind without creating a Value,
+            // so just verify scope entry/exit doesn't panic
+        }
     }
 
     #[test]

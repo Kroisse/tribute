@@ -222,39 +222,57 @@ pub(super) fn lower_lambda<'db>(
     });
 
     // Enter scope for lambda body
-    builder.ctx.enter_scope();
+    {
+        let mut scope = builder.ctx.scope();
 
-    // Bind lambda parameters
-    for (i, param) in params.iter().enumerate() {
-        if let Some(local_id) = param.local_id {
-            let arg_val = builder.ir.block_arg(entry_block, i as u32);
-            builder.ctx.bind(local_id, param.name, arg_val);
-        }
-    }
-
-    // No need to rebind captures — they are already in scope from the parent.
-    // The closure.lambda body is NOT isolated from above, so parent-scope
-    // ValueRefs are valid inside the body region.
-
-    // Lower the lambda body.
-    // For effectful lambdas, use CPS so that ability ops produce
-    // ability.perform, consistent with CPS handle dispatch.
-    if effect.is_some() {
-        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
-            Some((_result, true)) => {
-                // CPS result: lower_ability_perform will add func.return
+        // Bind lambda parameters
+        for (i, param) in params.iter().enumerate() {
+            if let Some(local_id) = param.local_id {
+                let arg_val = builder.ir.block_arg(entry_block, i as u32);
+                scope.bind(local_id, param.name, arg_val);
             }
-            Some((result, false)) => {
-                // Pure result in an effectful lambda: just return it.
-                // The lowering pipeline will handle return wrapping if needed.
+        }
+
+        // No need to rebind captures — they are already in scope from the parent.
+        // The closure.lambda body is NOT isolated from above, so parent-scope
+        // ValueRefs are valid inside the body region.
+
+        // Lower the lambda body.
+        // For effectful lambdas, use CPS so that ability ops produce
+        // ability.perform, consistent with CPS handle dispatch.
+        if effect.is_some() {
+            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
+                Some((_result, true)) => {
+                    // CPS result: lower_ability_perform will add func.return
+                }
+                Some((result, false)) => {
+                    // Pure result in an effectful lambda: just return it.
+                    // The lowering pipeline will handle return wrapping if needed.
+                    let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
+                    let ret_op = func::r#return(inner_builder.ir, location, [result]);
+                    inner_builder
+                        .ir
+                        .push_op(inner_builder.block, ret_op.op_ref());
+                }
+                None => {
+                    let nil = inner_builder.emit_nil(location);
+                    let ret_op = func::r#return(inner_builder.ir, location, [nil]);
+                    inner_builder
+                        .ir
+                        .push_op(inner_builder.block, ret_op.op_ref());
+                }
+            }
+        } else {
+            // Pure lambda: standard lowering
+            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
+            if let Some(result) = super::expr::lower_expr(&mut inner_builder, body.clone()) {
                 let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
                 let ret_op = func::r#return(inner_builder.ir, location, [result]);
                 inner_builder
                     .ir
                     .push_op(inner_builder.block, ret_op.op_ref());
-            }
-            None => {
+            } else {
                 let nil = inner_builder.emit_nil(location);
                 let ret_op = func::r#return(inner_builder.ir, location, [nil]);
                 inner_builder
@@ -262,25 +280,7 @@ pub(super) fn lower_lambda<'db>(
                     .push_op(inner_builder.block, ret_op.op_ref());
             }
         }
-    } else {
-        // Pure lambda: standard lowering
-        let mut inner_builder = IrBuilder::new(builder.ctx, builder.ir, entry_block);
-        if let Some(result) = super::expr::lower_expr(&mut inner_builder, body.clone()) {
-            let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
-            let ret_op = func::r#return(inner_builder.ir, location, [result]);
-            inner_builder
-                .ir
-                .push_op(inner_builder.block, ret_op.op_ref());
-        } else {
-            let nil = inner_builder.emit_nil(location);
-            let ret_op = func::r#return(inner_builder.ir, location, [nil]);
-            inner_builder
-                .ir
-                .push_op(inner_builder.block, ret_op.op_ref());
-        }
     }
-
-    builder.ctx.exit_scope();
 
     let body_region = builder.ir.create_region(RegionData {
         location,
