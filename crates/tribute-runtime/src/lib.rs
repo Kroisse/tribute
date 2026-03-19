@@ -233,12 +233,17 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
 /// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
 /// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
 /// not fully tail-resumptive.
+///
+/// `handler_dispatch` is a pointer to the full CPS handler dispatch closure
+/// `(k: ptr, op_idx: i32, value: ptr) -> void`, or null if not using
+/// full CPS. Used by the tail-call-based effect handling path.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Marker {
     pub ability_id: i32,
     pub prompt_tag: i32,
     pub tr_dispatch_fn: *const u8,
+    pub handler_dispatch: *const u8,
 }
 
 /// Opaque evidence structure — a sorted array of `Marker`s keyed by `ability_id`.
@@ -322,7 +327,7 @@ pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_
 
 /// Extend evidence with a new marker (persistent — returns a new evidence).
 ///
-/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr) -> ptr`
+/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, handler_dispatch: ptr) -> ptr`
 ///
 /// # Safety
 ///
@@ -334,12 +339,14 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: *const u8,
+    handler_dispatch: *const u8,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
     let marker = Marker {
         ability_id,
         prompt_tag,
         tr_dispatch_fn,
+        handler_dispatch,
     };
     Box::into_raw(Box::new(ev.extend(marker)))
 }
@@ -362,6 +369,26 @@ pub unsafe extern "C" fn __tribute_evidence_lookup_tr(
 ) -> *const u8 {
     let ev = unsafe { &*ev };
     ev.lookup(ability_id).tr_dispatch_fn
+}
+
+/// Look up the handler dispatch closure pointer for an ability.
+///
+/// Returns the `handler_dispatch` pointer from the marker, or null if
+/// the handler does not use full CPS dispatch.
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by `__tribute_evidence_empty` or
+/// `__tribute_evidence_extend`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_lookup_handler(
+    ev: *const Evidence,
+    ability_id: i32,
+) -> *const u8 {
+    let ev = unsafe { &*ev };
+    ev.lookup(ability_id).handler_dispatch
 }
 
 // =============================================================================
@@ -437,7 +464,7 @@ mod tests {
     fn test_evidence_extend_single() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
+            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), core::ptr::null());
 
             let ev2_ref = &*ev2;
             assert_eq!(ev2_ref.markers.len(), 1);
@@ -459,9 +486,9 @@ mod tests {
         unsafe {
             let ev = __tribute_evidence_empty();
             // Insert in reverse order: 30, 10, 20
-            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null(), core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), core::ptr::null());
 
             let ev_ref = &*ev;
             assert_eq!(ev_ref.markers.len(), 3);
@@ -479,8 +506,8 @@ mod tests {
     fn test_evidence_lookup_found() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), core::ptr::null());
 
             let prompt_tag = __tribute_evidence_lookup(ev, 20);
             assert_eq!(prompt_tag, 2);

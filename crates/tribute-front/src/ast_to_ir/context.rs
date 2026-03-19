@@ -4,6 +4,7 @@
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::closure as arena_closure;
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
@@ -61,13 +62,13 @@ pub struct IrLoweringCtx<'db> {
     /// The top of the stack is the currently active prompt tag.
     active_prompt_tag_stack: Vec<u32>,
 
-    /// Stack of continuation values for `resume` expressions.
-    /// Pushed when entering an `op` handler region, popped when exiting.
-    resume_continuation_stack: Vec<ValueRef>,
-
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
+
+    /// When true, continuation calls in handler arms use `func.call_indirect`
+    /// instead of `cont.resume` (CPS effect handling mode).
+    pub(crate) cps_handler_mode: bool,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -94,9 +95,9 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: im::HashMap::new(),
             prompt_tag_counter: 0,
             active_prompt_tag_stack: Vec::new(),
-            resume_continuation_stack: Vec::new(),
 
             node_types,
+            cps_handler_mode: false,
         }
     }
 
@@ -131,25 +132,24 @@ impl<'db> IrLoweringCtx<'db> {
         Location::new(self.path, span)
     }
 
-    /// Enter a new scope.
+    /// Enter a new scope, returning a guard that exits on drop.
+    ///
+    /// The guard dereferences to `IrLoweringCtx`, so callers can use it
+    /// in place of `self`/`ctx`. The scope is automatically exited when
+    /// the guard is dropped, even on early returns or `?`.
+    pub fn scope(&mut self) -> ScopeGuard<'_, 'db> {
+        self.scopes.push(HashMap::new());
+        ScopeGuard { ctx: self }
+    }
+
+    /// Enter a new scope (non-guard version — prefer `scope()` instead).
     pub fn enter_scope(&mut self) {
         self.scopes.push(HashMap::new());
     }
 
-    /// Exit the current scope.
+    /// Exit the current scope (non-guard version — prefer `scope()` instead).
     pub fn exit_scope(&mut self) {
         self.scopes.pop();
-    }
-
-    /// Execute a closure with a new scope, automatically entering and exiting.
-    pub fn scoped<F, R>(&mut self, f: F) -> R
-    where
-        F: FnOnce(&mut Self) -> R,
-    {
-        self.enter_scope();
-        let result = f(self);
-        self.exit_scope();
-        result
     }
 
     /// Bind a local variable to an SSA value.
@@ -211,25 +211,6 @@ impl<'db> IrLoweringCtx<'db> {
     /// This should be called when exiting a `handle` expression.
     pub fn pop_prompt_tag(&mut self) {
         self.active_prompt_tag_stack.pop();
-    }
-
-    /// Push a continuation value for `resume` expressions.
-    ///
-    /// Called when entering an `op` handler region.
-    pub fn push_resume_continuation(&mut self, cont_value: ValueRef) {
-        self.resume_continuation_stack.push(cont_value);
-    }
-
-    /// Pop the current continuation value.
-    ///
-    /// Called when exiting an `op` handler region.
-    pub fn pop_resume_continuation(&mut self) {
-        self.resume_continuation_stack.pop();
-    }
-
-    /// Get the current continuation value for `resume` expressions.
-    pub fn current_resume_continuation(&self) -> Option<ValueRef> {
-        self.resume_continuation_stack.last().copied()
     }
 
     /// Get the currently active prompt tag.
@@ -575,6 +556,40 @@ impl<'db> IrLoweringCtx<'db> {
             .is_dialect(ty, Symbol::new("closure"), Symbol::new("closure"))
     }
 
+    /// Create the `@YieldResult` enum type used by CPS effect handling.
+    ///
+    /// Layout: `adt.enum @YieldResult { Done(anyref), Shift(ShiftInfo) }`
+    /// where ShiftInfo is `adt.struct @ShiftInfo { value, prompt, op_idx, continuation }`.
+    ///
+    /// This creates the same interned types as `YieldBubblingTypes::new()` in
+    /// tribute-passes, ensuring type compatibility across the pipeline.
+    pub fn yield_result_type(&self, ir: &mut IrContext) -> TypeRef {
+        let anyref = self.anyref_type(ir);
+        let i32_ty = self.i32_type(ir);
+
+        // ShiftInfo struct (must match cont_to_yield_bubbling/types.rs)
+        let shift_info_ty = self.adt_struct_type(
+            ir,
+            Symbol::new("@ShiftInfo"),
+            &[
+                (Symbol::new("value"), anyref),
+                (Symbol::new("prompt"), i32_ty),
+                (Symbol::new("op_idx"), i32_ty),
+                (Symbol::new("continuation"), anyref),
+            ],
+        );
+
+        // YieldResult enum
+        self.adt_enum_type(
+            ir,
+            Symbol::new("@YieldResult"),
+            &[
+                (Symbol::new("Done"), vec![anyref]),
+                (Symbol::new("Shift"), vec![shift_info_ty]),
+            ],
+        )
+    }
+
     /// Check if a type is a `core.func` type.
     pub fn is_func_type(&self, ir: &IrContext, ty: TypeRef) -> bool {
         ir.types
@@ -590,6 +605,33 @@ impl<'db> IrLoweringCtx<'db> {
         } else {
             0
         }
+    }
+}
+
+/// RAII guard that exits a scope on drop.
+///
+/// Created by [`IrLoweringCtx::scope()`]. Dereferences to `IrLoweringCtx`
+/// so it can be used as a drop-in replacement for `&mut ctx`.
+pub struct ScopeGuard<'a, 'db> {
+    ctx: &'a mut IrLoweringCtx<'db>,
+}
+
+impl<'db> Deref for ScopeGuard<'_, 'db> {
+    type Target = IrLoweringCtx<'db>;
+    fn deref(&self) -> &Self::Target {
+        self.ctx
+    }
+}
+
+impl<'db> DerefMut for ScopeGuard<'_, 'db> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ctx
+    }
+}
+
+impl Drop for ScopeGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.ctx.exit_scope();
     }
 }
 

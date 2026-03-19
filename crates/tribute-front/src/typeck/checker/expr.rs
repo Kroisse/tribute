@@ -352,7 +352,7 @@ impl<'db> TypeChecker<'db> {
                 // (e.g., inside `fn() { k(init) }`), the lambda needs the full effect
                 // row `{e, State(s)}` so it matches the expected `comp` parameter type.
                 ctx.push_handle_ctx(super::super::func_context::HandleContext {
-                    _body_effect: body_effect_after,
+                    body_effect: body_effect_after,
                 });
 
                 // The unhandled effects from the handle body should be consistent
@@ -379,11 +379,21 @@ impl<'db> TypeChecker<'db> {
                 }
                 ctx.named_type(Symbol::new("List"), vec![elem_ty])
             }
-            ExprKind::Resume { arg, .. } => {
-                let _arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
-                // Resume returns a fresh type variable; the actual type
-                // depends on the continuation context.
-                ctx.fresh_type_var()
+            ExprKind::Resume { arg, local_id } => {
+                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+                if let Some(lid) = local_id
+                    && let Some(cont_ty) = ctx.lookup_local(*lid)
+                    && let TypeKind::Continuation {
+                        arg: cont_arg,
+                        result: cont_result,
+                        ..
+                    } = cont_ty.kind(self.db())
+                {
+                    ctx.constrain_eq(arg_ty, *cont_arg);
+                    *cont_result
+                } else {
+                    ctx.fresh_type_var()
+                }
             }
             ExprKind::Error => ctx.error_type(),
         };
@@ -1586,7 +1596,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         arm: HandlerArm<ResolvedRef<'db>>,
-        _handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
+        handle_ctx: Option<&super::super::func_context::HandleContext<'db>>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Do { binding } => HandlerKind::Do {
@@ -1609,15 +1619,36 @@ impl<'db> TypeChecker<'db> {
                 op,
                 params,
                 resume_local_id,
-            } => HandlerKind::Op {
-                ability: self.convert_ref_with_ctx(ctx, ability),
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                    .collect(),
-                resume_local_id,
-            },
+            } => {
+                // Bind the synthetic `resume` local with a Continuation type
+                // so that `resume(value)` calls inside `op` arms are typed correctly.
+                if let Some(k_local_id) = resume_local_id {
+                    let arg_ty = ctx.fresh_type_var();
+                    let result_ty = ctx.fresh_type_var();
+                    let cont_effect = handle_ctx
+                        .map(|hc| hc.body_effect)
+                        .unwrap_or_else(|| ctx.fresh_effect_row());
+                    let cont_ty = Type::new(
+                        self.db(),
+                        TypeKind::Continuation {
+                            arg: arg_ty,
+                            result: result_ty,
+                            effect: cont_effect,
+                        },
+                    );
+                    ctx.bind_local(k_local_id, cont_ty);
+                }
+
+                HandlerKind::Op {
+                    ability: self.convert_ref_with_ctx(ctx, ability),
+                    op,
+                    params: params
+                        .into_iter()
+                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                        .collect(),
+                    resume_local_id,
+                }
+            }
         };
         HandlerArm {
             id: arm.id,

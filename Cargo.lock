@@ -1499,6 +1499,7 @@ name = "tribute-ir"
 version = "0.1.0"
 dependencies = [
  "inventory",
+ "rustc-hash",
  "tracing",
  "trunk-ir",
 ]

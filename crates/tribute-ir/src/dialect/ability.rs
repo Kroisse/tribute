@@ -39,16 +39,39 @@ mod ability {
     /// CPS replacement for `cont.handler_dispatch`. Matches the prompt tag
     /// and dispatches to the appropriate handler arm in the body region.
     ///
+    /// The `handler_fn` operand is a closure `(k, op_idx, value) -> void`
+    /// that dispatches to the appropriate handler arm. It is stored in the
+    /// Marker's `handler_dispatch` field by `resolve_evidence` for use by
+    /// the tail-call-based CPS path in `lower_ability_perform`.
+    ///
     /// ```text
-    /// %result = ability.handle_dispatch %yield_result
+    /// %result = ability.handle_dispatch %yield_result, %handler_fn
     ///   { tag: 0, result_type: anyref }
     ///   body { ... handler arms ... }
     /// ```
     #[attr(tag: u32, result_type: Type)]
-    fn handle_dispatch(value: ()) -> result {
+    fn handle_dispatch(value: (), handler_fn: ()) -> result {
         #[region(body)]
         {}
     }
+}
+
+// === Hash-Based Dispatch ===
+
+/// Compute operation index using hash-based dispatch.
+///
+/// Computes a stable, handler-independent index from ability name and
+/// operation name. Both shift sites and handler dispatch use this function,
+/// ensuring they always agree on the op index regardless of handler
+/// registration order.
+pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    ability_ref.hash(&mut hasher);
+    op_name.hash(&mut hasher);
+
+    (hasher.finish() % 0x7FFFFFFF) as u32
 }
 
 // === Pure operation registrations ===
@@ -76,12 +99,17 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 ///     ability_id: i32,
 ///     prompt_tag: i32,
 ///     tr_dispatch_fn: ptr,
+///     handler_dispatch: ptr,
 /// }
 /// ```
 ///
 /// `tr_dispatch_fn` is a pointer to a tail-resumptive dispatch function
 /// `(op_idx: i32, shift_value: ptr) -> ptr`, or null if the handler is
 /// not fully tail-resumptive.
+///
+/// `handler_dispatch` is a pointer to the full CPS handler dispatch closure
+/// `(k: ptr, op_idx: i32, value: ptr) -> void`, or null if not using
+/// full CPS. Used by the tail-call-based effect handling path.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
@@ -101,6 +129,10 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
         ]),
         Attribute::List(vec![
             Attribute::Symbol(Symbol::new("tr_dispatch_fn")),
+            Attribute::Type(ptr_ty),
+        ]),
+        Attribute::List(vec![
+            Attribute::Symbol(Symbol::new("handler_dispatch")),
             Attribute::Type(ptr_ty),
         ]),
     ]);
@@ -165,10 +197,10 @@ mod tests {
             Some(&Attribute::Symbol(Symbol::new("_Marker")))
         );
 
-        // Should have 3 fields
+        // Should have 4 fields
         let fields = data.attrs.get(&Symbol::new("fields")).unwrap();
         match fields {
-            Attribute::List(list) => assert_eq!(list.len(), 3),
+            Attribute::List(list) => assert_eq!(list.len(), 4),
             _ => panic!("expected list attribute for fields"),
         }
     }

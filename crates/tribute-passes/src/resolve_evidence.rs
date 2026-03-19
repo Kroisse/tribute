@@ -254,11 +254,14 @@ fn collect_handler_root_functions(
     handler_roots
 }
 
-/// Check if a region contains `cont.push_prompt`.
+/// Check if a region contains `cont.push_prompt` or `ability.handle_dispatch`.
 fn region_contains_push_prompt(ctx: &IrContext, region: RegionRef) -> bool {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             if arena_cont::PushPrompt::from_op(ctx, op).is_ok() {
+                return true;
+            }
+            if arena_ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 return true;
             }
             for &nested in ctx.op(op).regions.iter() {
@@ -271,39 +274,52 @@ fn region_contains_push_prompt(ctx: &IrContext, region: RegionRef) -> bool {
     false
 }
 
-/// Collect handled abilities by tag from handler_dispatch ops in a block.
+/// Collect handled abilities by tag from handler_dispatch / handle_dispatch ops in a block.
 fn collect_handled_abilities_by_tag(
     ctx: &IrContext,
     block: BlockRef,
 ) -> HashMap<u32, Vec<TypeRef>> {
     let mut map = HashMap::new();
     for &op in ctx.block(block).ops.iter() {
+        // Old path: cont.handler_dispatch
         if let Ok(dispatch_op) = arena_cont::HandlerDispatch::from_op(ctx, op) {
             let tag = dispatch_op.tag(ctx);
-            let mut abilities = Vec::new();
-            let body = dispatch_op.body(ctx);
-            let blocks = &ctx.region(body).blocks;
-            if let Some(&first_block) = blocks.first() {
-                for &child_op in ctx.block(first_block).ops.iter() {
-                    let ability_ref =
-                        if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, child_op) {
-                            Some(yield_op.ability_ref(ctx))
-                        } else if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
-                            Some(suspend_op.ability_ref(ctx))
-                        } else {
-                            None
-                        };
-                    if let Some(ability_ref) = ability_ref
-                        && !abilities.contains(&ability_ref)
-                    {
-                        abilities.push(ability_ref);
-                    }
-                }
-            }
+            let abilities = collect_abilities_from_body_region(ctx, dispatch_op.body(ctx));
+            map.insert(tag, abilities);
+        }
+        // CPS path: ability.handle_dispatch
+        if let Ok(dispatch_op) = arena_ability::HandleDispatch::from_op(ctx, op) {
+            let tag = dispatch_op.tag(ctx);
+            let abilities = collect_abilities_from_body_region(ctx, dispatch_op.body(ctx));
             map.insert(tag, abilities);
         }
     }
     map
+}
+
+/// Extract handled ability types from a handler body region.
+///
+/// Looks for `cont.yield` and `cont.suspend` ops in the body's first block.
+fn collect_abilities_from_body_region(ctx: &IrContext, body: RegionRef) -> Vec<TypeRef> {
+    let mut abilities = Vec::new();
+    let blocks = &ctx.region(body).blocks;
+    if let Some(&first_block) = blocks.first() {
+        for &child_op in ctx.block(first_block).ops.iter() {
+            let ability_ref = if let Ok(yield_op) = arena_cont::Yield::from_op(ctx, child_op) {
+                Some(yield_op.ability_ref(ctx))
+            } else if let Ok(suspend_op) = arena_cont::Suspend::from_op(ctx, child_op) {
+                Some(suspend_op.ability_ref(ctx))
+            } else {
+                None
+            };
+            if let Some(ability_ref) = ability_ref
+                && !abilities.contains(&ability_ref)
+            {
+                abilities.push(ability_ref);
+            }
+        }
+    }
+    abilities
 }
 
 /// Compute ability ID from a TypeRef.
@@ -464,6 +480,12 @@ fn transform_handler_roots(
         }
 
         polymorphic_roots.insert(func_name);
+
+        // Skip if evidence param was already added by add_evidence_params.
+        if crate::evidence::has_evidence_first_param(ctx, func_ty) {
+            fns_with_evidence.insert(func_name);
+            continue;
+        }
 
         // Add evidence param to function signature
         let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
@@ -795,11 +817,15 @@ fn transform_shifts_in_block(
             let tag_val = ctx.op_result(tag_call.op_ref(), 0);
             ctx.insert_op_before(block, op, tag_call.op_ref());
 
-            // Create null tr_dispatch_fn (unused by yield bubbling; kept for Marker ABI)
+            // Create null tr_dispatch_fn and handler_dispatch (unused by yield bubbling; kept for Marker ABI)
             let ptr_ty = arena_core::ptr(ctx).as_type_ref();
             let null_ptr = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
             let tr_dispatch_fn_val = null_ptr.result(ctx);
             ctx.insert_op_before(block, op, null_ptr.op_ref());
+
+            let null_handler = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
+            let handler_dispatch_val = null_handler.result(ctx);
+            ctx.insert_op_before(block, op, null_handler.op_ref());
 
             // Extend evidence for each ability
             let mut current_ev = ev_value;
@@ -811,11 +837,16 @@ fn transform_shifts_in_block(
                 let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                 ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
-                // Create Marker struct: { ability_id, prompt_tag, tr_dispatch_fn }
+                // Create Marker struct: { ability_id, prompt_tag, tr_dispatch_fn, handler_dispatch }
                 let marker_struct = arena_adt::struct_new(
                     ctx,
                     loc,
-                    vec![ability_id_val, tag_val, tr_dispatch_fn_val],
+                    vec![
+                        ability_id_val,
+                        tag_val,
+                        tr_dispatch_fn_val,
+                        handler_dispatch_val,
+                    ],
                     marker_ty,
                     marker_ty,
                 );
@@ -852,6 +883,137 @@ fn transform_shifts_in_block(
             transform_shifts_in_region(
                 ctx,
                 handlers_region,
+                current_ev,
+                fns_with_evidence,
+                prepend_evidence,
+            );
+            continue;
+        }
+
+        // Handle ability.handle_dispatch (CPS path) — extend evidence before
+        // the body closure call and transform the handler body region.
+        if let Ok(dispatch_op) = arena_ability::HandleDispatch::from_op(ctx, op) {
+            let loc = ctx.op(op).location;
+            let tag = dispatch_op.tag(ctx);
+            let abilities = handled_by_tag.get(&tag).cloned().unwrap_or_default();
+
+            let mut current_ev = ev_value;
+
+            if !abilities.is_empty() {
+                let i32_ty = i32_type_ref(ctx);
+                let evidence_ty = arena_ability::evidence_adt_type_ref(ctx);
+                let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+                let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+
+                // All evidence extension ops are inserted before handle_dispatch.
+                // The body closure call (which needs extended evidence) is moved
+                // to after the extension, also before handle_dispatch.
+
+                // Generate runtime tag
+                let tag_call = arena_func::call(
+                    ctx,
+                    loc,
+                    std::iter::empty::<ValueRef>(),
+                    i32_ty,
+                    Symbol::new("__tribute_next_tag"),
+                );
+                let tag_val = ctx.op_result(tag_call.op_ref(), 0);
+                ctx.insert_op_before(block, op, tag_call.op_ref());
+
+                // Null tr_dispatch_fn
+                let null_ptr = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
+                let tr_dispatch_fn_val = null_ptr.result(ctx);
+                ctx.insert_op_before(block, op, null_ptr.op_ref());
+
+                // Extract handler_fn from handle_dispatch operand[1]
+                let handler_dispatch_val = {
+                    let operands = ctx.op_operands(op).to_vec();
+                    let handler_val = operands
+                        .get(1)
+                        .expect("handle_dispatch must have operand[1] (handler closure)");
+                    let cast =
+                        arena_core::unrealized_conversion_cast(ctx, loc, *handler_val, ptr_ty);
+                    ctx.insert_op_before(block, op, cast.op_ref());
+                    cast.result(ctx)
+                };
+
+                // Extend evidence for each ability
+                for &ability_ref in &abilities {
+                    let ability_id = compute_ability_id(ctx, ability_ref);
+                    let ability_id_const =
+                        arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
+                    let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
+                    ctx.insert_op_before(block, op, ability_id_const.op_ref());
+
+                    let marker_struct = arena_adt::struct_new(
+                        ctx,
+                        loc,
+                        vec![
+                            ability_id_val,
+                            tag_val,
+                            tr_dispatch_fn_val,
+                            handler_dispatch_val,
+                        ],
+                        marker_ty,
+                        marker_ty,
+                    );
+                    let marker_val = ctx.op_result(marker_struct.op_ref(), 0);
+                    ctx.insert_op_before(block, op, marker_struct.op_ref());
+
+                    let extend_call = arena_func::call(
+                        ctx,
+                        loc,
+                        vec![current_ev, marker_val],
+                        evidence_ty,
+                        Symbol::new("__tribute_evidence_extend"),
+                    );
+                    current_ev = ctx.op_result(extend_call.op_ref(), 0);
+                    ctx.insert_op_before(block, op, extend_call.op_ref());
+                }
+
+                // Find the body closure call and move it after evidence extension.
+                // The body call produces handle_dispatch's operand[0] and originally
+                // appears before handle_dispatch. We remove it, create a new call
+                // with extended evidence, and insert it just before handle_dispatch
+                // (after all evidence extension ops).
+                let yr_operand = ctx.op_operands(op)[0];
+                let block_ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+                for &candidate in &block_ops {
+                    let results = ctx.op_results(candidate);
+                    if !results.is_empty()
+                        && results[0] == yr_operand
+                        && arena_func::CallIndirect::from_op(ctx, candidate).is_ok()
+                    {
+                        let operands = ctx.op_operands(candidate).to_vec();
+                        // Replace evidence arg (index 1: [table_idx, evidence, ...rest])
+                        if operands.len() >= 2 {
+                            let new_call = arena_func::call_indirect(
+                                ctx,
+                                loc,
+                                operands[0],
+                                std::iter::once(current_ev)
+                                    .chain(operands[2..].iter().copied())
+                                    .collect::<Vec<_>>(),
+                                ctx.op_result_types(candidate)[0],
+                            );
+                            let old_result = ctx.op_result(candidate, 0);
+                            let new_result = ctx.op_result(new_call.op_ref(), 0);
+                            ctx.replace_all_uses(old_result, new_result);
+                            // Insert new call before handle_dispatch (after evidence extension)
+                            ctx.insert_op_before(block, op, new_call.op_ref());
+                            ctx.remove_op_from_block(block, candidate);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            // Always transform handler body region, even when abilities is
+            // empty, so that any shifts inside are properly resolved.
+            let handler_body = dispatch_op.body(ctx);
+            transform_shifts_in_region(
+                ctx,
+                handler_body,
                 current_ev,
                 fns_with_evidence,
                 prepend_evidence,
@@ -1015,6 +1177,40 @@ fn transform_shifts_in_block(
             }
         }
 
+        // Handle ability.evidence_lookup (from CPS lower_ability_perform pass).
+        // Replace with: func.call @__tribute_evidence_lookup(%ev, %ability_id)
+        if let Ok(lookup_op) = arena_ability::EvidenceLookup::from_op(ctx, op) {
+            let loc = ctx.op(op).location;
+            let ability_ref = lookup_op.ability_ref(ctx);
+            let ability_id = compute_ability_id(ctx, ability_ref);
+
+            let marker_ty = arena_ability::marker_adt_type_ref(ctx);
+            let i32_ty = i32_type_ref(ctx);
+
+            // %ability_id_const = arith.const ability_id
+            let ability_id_const =
+                arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128));
+            let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
+            ctx.insert_op_before(block, op, ability_id_const.op_ref());
+
+            // %marker = func.call @__tribute_evidence_lookup(%ev, %ability_id)
+            let lookup_call = arena_func::call(
+                ctx,
+                loc,
+                vec![ev_value, ability_id_val],
+                marker_ty,
+                Symbol::new("__tribute_evidence_lookup"),
+            );
+            let new_marker = ctx.op_result(lookup_call.op_ref(), 0);
+            ctx.insert_op_before(block, op, lookup_call.op_ref());
+
+            // Replace uses of old result with new marker
+            let old_result = ctx.op_result(op, 0);
+            ctx.replace_all_uses(old_result, new_marker);
+            ctx.remove_op_from_block(block, op);
+            continue;
+        }
+
         // Recursively transform nested regions
         let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
         for region in regions {
@@ -1162,4 +1358,9 @@ mod tests {
         // Same ability name but different type params should produce different IDs
         assert_ne!(id_with_params, id_no_params);
     }
+
+    // Note: CPS-specific evidence resolution (ability.evidence_lookup,
+    // ability.handle_dispatch evidence extension) requires full pipeline
+    // context (add_evidence_params must run first). These paths are covered
+    // by e2e_ability_core integration tests.
 }

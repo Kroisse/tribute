@@ -1,0 +1,22 @@
+---
+source: crates/tribute-passes/src/lower_ability_perform.rs
+expression: ir_text
+---
+core.module @test {
+  !_Marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
+  !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+
+  func.func @test_fn() -> tribute_rt.anyref {
+      %0 = arith.const {value = 0} : tribute_rt.anyref
+      %1 = adt.ref_null {type = !_Marker} : !_Marker
+      %2 = adt.struct_get %1 {field = 3, type = !_Marker} : tribute_rt.anyref
+      %3 = arith.const {value = 1972422014} : core.i32
+      %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %5 = core.unrealized_conversion_cast %0 : tribute_rt.anyref
+      %6 = adt.struct_get %2 {field = 0, type = !_closure} : core.i32
+      %7 = adt.struct_get %2 {field = 1, type = !_closure} : tribute_rt.anyref
+      %8 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+      %9 = func.call_indirect %6, %8, %7, %5, %3, %4 : tribute_rt.anyref
+      func.return %9
+  }
+}

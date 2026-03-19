@@ -1,0 +1,68 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: ir_text
+---
+core.module @test {
+  func.func @get_state() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
+        ^bb1(%1: tribute_rt.anyref):
+          func.return %1
+      }
+      %2 = ability.perform %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      func.return %2
+  }
+  func.func @run() -> core.i32 {
+      %0 = closure.lambda : closure.closure(core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0}}) {
+          %1 = func.call {callee = @get_state} : core.i32
+          %2 = core.unrealized_conversion_cast %1 : tribute_rt.anyref
+          func.return %2
+      }
+      %3 = func.call_indirect %0 : tribute_rt.anyref
+      %4 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref, core.i32, tribute_rt.anyref) {effect = core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0}}) {
+        ^bb2(%5: tribute_rt.anyref, %6: core.i32, %7: tribute_rt.anyref):
+          %8 = arith.const {value = 1972422014} : core.i32
+          %9 = arith.cmp_eq %6, %8 : core.i1
+          %10 = scf.if %9 : tribute_rt.anyref {
+              %11 = arith.const {value = 42} : core.i32
+              %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref
+              scf.yield %12
+          } {
+              %13 = arith.const {value = 1} : core.i1
+              %14 = scf.if %13 : tribute_rt.anyref {
+                  %15 = arith.const {value = unit} : core.nil
+                  %16 = core.unrealized_conversion_cast %15 : tribute_rt.anyref
+                  scf.yield %16
+              } {
+                  func.unreachable
+              }
+              scf.yield %14
+          }
+          func.return %10
+      }
+      %17 = ability.handle_dispatch %3, %4 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+          cont.done {
+            ^bb8(%18: tribute_rt.anyref):
+              %19 = core.unrealized_conversion_cast %18 : core.i32
+              scf.yield %19
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+            ^bb9(%20: tribute_rt.anyref, %21: tribute_rt.anyref):
+              %22 = arith.const {value = 42} : core.i32
+              %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
+              scf.yield %23
+          }
+          cont.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+            ^bb10(%24: tribute_rt.anyref, %25: tribute_rt.anyref):
+              %26 = arith.const {value = unit} : core.nil
+              %27 = core.unrealized_conversion_cast %26 : tribute_rt.anyref
+              scf.yield %27
+          }
+      }
+      %28 = core.unrealized_conversion_cast %17 : core.i32
+      func.return %28
+  }
+  func.func @main() -> core.nil {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}

@@ -438,6 +438,44 @@ impl<'a> FunctionTranslator<'a> {
             return Ok(());
         }
 
+        // === Return Call (tail call) ===
+        if let Ok(rc) = arena_clif::ReturnCall::from_op(ctx, op) {
+            let callee_sym = rc.callee(ctx);
+            let func_ref = self
+                .func_refs
+                .get(&callee_sym)
+                .copied()
+                .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
+
+            let operands = ctx.op_operands(op);
+            let args: Vec<cl_ir::Value> = operands
+                .iter()
+                .map(|v| self.lookup(*v))
+                .collect::<CompilationResult<_>>()?;
+
+            self.builder.ins().return_call(func_ref, &args);
+            return Ok(());
+        }
+
+        // === Return Call Indirect (indirect tail call) ===
+        if let Ok(rci) = arena_clif::ReturnCallIndirect::from_op(ctx, op) {
+            let operands = ctx.op_operands(op);
+            let callee = self.lookup(operands[0])?;
+            let args: Vec<cl_ir::Value> = operands[1..]
+                .iter()
+                .map(|v| self.lookup(*v))
+                .collect::<CompilationResult<_>>()?;
+
+            let sig_ty = rci.sig(ctx);
+            let sig = translate_signature(ctx, sig_ty, self.call_conv, self.ptr_ty)?;
+            let sig_ref = self.builder.import_signature(sig);
+
+            self.builder
+                .ins()
+                .return_call_indirect(sig_ref, callee, &args);
+            return Ok(());
+        }
+
         // === Indirect Call ===
         if let Ok(call_ind) = arena_clif::CallIndirect::from_op(ctx, op) {
             let operands = ctx.op_operands(op);

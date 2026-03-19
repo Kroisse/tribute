@@ -38,7 +38,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 use crate::evidence::collect_effectful_functions;
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
-fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
+pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
         .types
         .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
@@ -82,11 +82,10 @@ fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
         return true;
     }
     if arena_core::Func::matches(ctx, ty) {
-        // Only treat core.func as closure if it's a block arg (matching LowerClosureCallArena)
-        return matches!(
-            ctx.value_def(value),
-            trunk_ir::refs::ValueDef::BlockArg(_, _)
-        );
+        // core.func in func.call_indirect is always a closure value.
+        // Direct function calls use func.call; call_indirect operates on
+        // closure values (block args, env captures, etc.).
+        return true;
     }
     false
 }
@@ -292,11 +291,10 @@ impl RewritePattern for LowerClosureCallArena {
             // Already lowered closure struct
             true
         } else if arena_core::Func::matches(ctx, callee_ty) {
-            // core.func: only treat as closure if it's a block arg
-            matches!(
-                ctx.value_def(callee),
-                trunk_ir::refs::ValueDef::BlockArg(_, _)
-            )
+            // core.func in func.call_indirect is always a closure value.
+            // Direct function calls use func.call; call_indirect operates on
+            // closure values (block args, env captures, etc.).
+            true
         } else {
             // Fallback: check if result of closure.new
             if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
@@ -312,12 +310,18 @@ impl RewritePattern for LowerClosureCallArena {
 
         let loc = ctx.op(op).location;
         let args: Vec<ValueRef> = operands[1..].to_vec();
-        let result_ty = ctx.op_result_types(op)[0];
+        let caller_result_ty = ctx.op_result_types(op)[0];
 
         let i32_ty = ctx
             .types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
+
+        // Determine actual return type from the closure's func type.
+        // Effectful lambdas may return anyref even if the caller's
+        // declared type says otherwise (e.g., Nat).
+        let callee_return_ty =
+            extract_return_type_from_callee(ctx, callee_ty).unwrap_or(caller_result_ty);
 
         // Generate: %table_idx = closure.func %closure
         let table_idx_op = arena_closure::func(ctx, loc, callee, i32_ty);
@@ -330,11 +334,25 @@ impl RewritePattern for LowerClosureCallArena {
         // Generate: %result = func.call_indirect %table_idx, [%env, %args...]
         let mut new_args = vec![env];
         new_args.extend(args);
-        let new_call = arena_func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
+        let new_call = arena_func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
 
         rewriter.insert_op(table_idx_op.op_ref());
         rewriter.insert_op(env_op.op_ref());
-        rewriter.replace_op(new_call.op_ref());
+
+        // If the closure's return type differs from the caller's expected type,
+        // insert a cast so downstream code sees the expected type.
+        if callee_return_ty != caller_result_ty {
+            let cast = arena_core::unrealized_conversion_cast(
+                ctx,
+                loc,
+                new_call.result(ctx),
+                caller_result_ty,
+            );
+            rewriter.insert_op(new_call.op_ref());
+            rewriter.replace_op(cast.op_ref());
+        } else {
+            rewriter.replace_op(new_call.op_ref());
+        }
         true
     }
 
@@ -406,6 +424,24 @@ impl RewritePattern for LowerClosureEnvArena {
 // ============================================================================
 // Phase 2: Evidence passing for closure calls
 // ============================================================================
+
+/// Extract the return type from a callee type (closure.closure or core.func).
+fn extract_return_type_from_callee(ctx: &IrContext, callee_ty: TypeRef) -> Option<TypeRef> {
+    let data = ctx.types.get(callee_ty);
+    // closure.closure<core.func<Return, Params...>>
+    if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        let func_ty = *data.params.first()?;
+        let func_data = ctx.types.get(func_ty);
+        if func_data.dialect == Symbol::new("core") && func_data.name == Symbol::new("func") {
+            return func_data.params.first().copied();
+        }
+    }
+    // core.func<Return, Params...>
+    if data.dialect == Symbol::new("core") && data.name == Symbol::new("func") {
+        return data.params.first().copied();
+    }
+    None
+}
 
 /// Transform closure calls to pass evidence in arena IR.
 ///

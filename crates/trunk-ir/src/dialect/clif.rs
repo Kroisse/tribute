@@ -81,6 +81,9 @@ mod clif {
     #[attr(callee: Symbol)]
     fn return_call(#[rest] args: ()) {}
 
+    #[attr(sig: Type)]
+    fn return_call_indirect(callee: (), #[rest] args: ()) {}
+
     // Memory
     #[attr(offset: i32)]
     fn load(addr: ()) -> result {}

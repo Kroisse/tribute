@@ -16,25 +16,7 @@ use trunk_ir::refs::{RegionRef, ValueRef};
 // Hash-Based Dispatch
 // ============================================================================
 
-/// Compute operation index using hash-based dispatch.
-///
-/// Computes a stable, handler-independent index from ability name and
-/// operation name. Both shift sites and handler dispatch use this function,
-/// ensuring they always agree on the op index regardless of handler
-/// registration order.
-///
-/// Hashes the interned [`Symbol`] keys directly (no string allocation).
-/// Cross-session stability is not required because op indices are never
-/// persisted or compared across binaries.
-pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = rustc_hash::FxHasher::default();
-    ability_ref.hash(&mut hasher);
-    op_name.hash(&mut hasher);
-
-    (hasher.finish() % 0x7FFFFFFF) as u32
-}
+pub use tribute_ir::dialect::ability::compute_op_idx;
 
 // ============================================================================
 // Handler Dispatch Utilities

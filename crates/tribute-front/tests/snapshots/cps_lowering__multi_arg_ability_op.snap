@@ -1,0 +1,21 @@
+---
+source: crates/tribute-front/tests/cps_lowering.rs
+expression: ir_text
+---
+core.module @test {
+  func.func @store() -> core.nil effects core.effect_row(core.ability_ref(core.i32, core.i32) {name = @KV}) {tail_var_id = 0} {
+      %0 = arith.const {value = 1} : core.i32
+      %1 = arith.const {value = 2} : core.i32
+      %2 = adt.struct_new %0, %1 {type = tribute_rt.anyref} : tribute_rt.anyref
+      %3 = closure.lambda : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref)) {
+        ^bb1(%4: tribute_rt.anyref):
+          func.return %4
+      }
+      %5 = ability.perform %3, %2 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref
+      func.return %5
+  }
+  func.func @main() -> core.nil {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+}

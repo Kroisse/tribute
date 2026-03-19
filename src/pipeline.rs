@@ -443,33 +443,29 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     evidence::transform_evidence_calls(&mut ctx, m);
+    // CPS effect handling: lower_ability_perform produces ability.evidence_lookup ops
+    // that resolve_evidence needs to process. lower_handle_dispatch consumes
+    // handle_dispatch ops, so it must run AFTER resolve_evidence expands evidence.
+    tribute_passes::lower_ability_perform::lower_ability_perform(&mut ctx, m);
     tribute_passes::tail_resumptive::convert_tail_resumptive(&mut ctx, m);
     tribute_passes::resolve_evidence::resolve_evidence_dispatch(&mut ctx, m);
+    tribute_passes::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, m);
 
     Some((ctx, m))
 }
 
 /// Lower continuation ops and run cleanup passes shared by both backends.
 ///
-/// Runs `cont_to_yield_bubbling` + DCE + `resolve_casts`.
-/// Native pipeline inserts `evidence_to_native` before DCE.
+/// In the tail-call CPS design, cont_to_yield_bubbling is no longer needed —
+/// effects are handled via tail calls through handler_dispatch closures.
 fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
-    tribute_passes::cont_to_yield_bubbling::lower_cont_to_yield_bubbling(ctx, m).map_err(
-        |illegal_ops| ConversionError {
-            illegal_ops: illegal_ops
-                .into_iter()
-                .map(|op| IllegalOp {
-                    dialect: op.dialect.to_string(),
-                    name: op.name.to_string(),
-                })
-                .collect(),
-        },
-    )?;
+    // cont_to_yield_bubbling removed — tail call CPS handles effects directly.
+    // Validation still runs in debug mode.
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
             tracing::warn!(
-                "Value integrity errors after cont_to_yield_bubbling: stale={:?}, use_chain={:?}",
+                "Value integrity errors after lowering: stale={:?}, use_chain={:?}",
                 result.stale_errors,
                 result.use_chain_errors
             );

@@ -5,7 +5,6 @@
 //! - `func.call` -> `clif.call`
 //! - `func.call_indirect` -> `clif.call_indirect`
 //! - `func.return` -> `clif.return`
-//! - `func.tail_call` -> `clif.return_call`
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 

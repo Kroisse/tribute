@@ -99,7 +99,7 @@ pub fn has_tail_effect_variable(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 /// Check if a `core.func` type has evidence as its first parameter.
-fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
+pub(crate) fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
     let data = ctx.types.get(func_ty);
     if data.dialect != Symbol::new("core") || data.name != Symbol::new("func") {
         return false;

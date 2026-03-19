@@ -1,0 +1,14 @@
+---
+source: crates/tribute-passes/src/lower_handle_dispatch.rs
+expression: ir_text
+---
+core.module @test {
+  func.func @run() -> core.i32 {
+      %0 = arith.const {value = 10} : tribute_rt.anyref
+      %1 = arith.const {value = 0} : tribute_rt.anyref
+      %2 = arith.const {value = 1} : core.i32
+      %3 = core.unrealized_conversion_cast %0 : core.i32
+      %4 = arith.add %3, %2 : core.i32
+      func.return %4
+  }
+}

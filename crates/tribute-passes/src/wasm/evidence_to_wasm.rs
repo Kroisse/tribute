@@ -203,7 +203,10 @@ impl RewritePattern for EvidenceExtendPattern {
         // Create: %op_table_idx = wasm.i32_const(0)
         let op_table_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
 
-        // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %op_table_idx)
+        // Create: %handler_dispatch = wasm.i32_const(0)  (null, unused for now)
+        let handler_dispatch_const = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+
+        // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %op_table_idx, %handler_dispatch)
         let marker_op = wasm_dialect::struct_new(
             ctx,
             loc,
@@ -211,6 +214,7 @@ impl RewritePattern for EvidenceExtendPattern {
                 ability_id_const.result(ctx),
                 prompt_tag_const.result(ctx),
                 op_table_const.result(ctx),
+                handler_dispatch_const.result(ctx),
             ],
             marker_ty,
             MARKER_IDX,
@@ -229,6 +233,7 @@ impl RewritePattern for EvidenceExtendPattern {
         rewriter.insert_op(ability_id_const.op_ref());
         rewriter.insert_op(prompt_tag_const.op_ref());
         rewriter.insert_op(op_table_const.op_ref());
+        rewriter.insert_op(handler_dispatch_const.op_ref());
         rewriter.insert_op(marker_op.op_ref());
         rewriter.insert_op(call_op.op_ref());
         rewriter.erase_op(vec![call_result]);
