@@ -666,7 +666,7 @@ mod tests {
         let ExprKind::Var(name) = callee.kind.as_ref() else {
             panic!("Expected var callee");
         };
-        assert_eq!(name.name.to_string(), "foo");
+        assert_eq!(name.name().to_string(), "foo");
         assert!(args.is_empty());
     }
 
@@ -687,7 +687,7 @@ mod tests {
         let ExprKind::Var(name) = callee.kind.as_ref() else {
             panic!("Expected var callee");
         };
-        assert_eq!(name.name.to_string(), "add");
+        assert_eq!(name.name().to_string(), "add");
         // args may or may not be parsed - just verify call structure exists
         let _ = args;
     }
@@ -714,7 +714,7 @@ mod tests {
         let ExprKind::Var(name) = receiver.kind.as_ref() else {
             panic!("Expected var receiver");
         };
-        assert_eq!(name.name.to_string(), "x");
+        assert_eq!(name.name().to_string(), "x");
         assert_eq!(method.to_string(), "to_string");
         assert!(args.is_empty());
     }
@@ -754,7 +754,7 @@ mod tests {
         let ExprKind::Cons { ctor, .. } = value.kind.as_ref() else {
             panic!("Expected constructor, got {:?}", value.kind);
         };
-        assert_eq!(ctor.name.to_string(), "Some");
+        assert_eq!(ctor.name().to_string(), "Some");
     }
 
     #[test]
@@ -772,7 +772,7 @@ mod tests {
         let ExprKind::Cons { ctor, args } = value.kind.as_ref() else {
             panic!("Expected cons, got {:?}", value.kind);
         };
-        assert_eq!(ctor.name.to_string(), "None");
+        assert_eq!(ctor.name().to_string(), "None");
         assert!(args.is_empty());
     }
 
@@ -791,7 +791,7 @@ mod tests {
         let ExprKind::Record { type_name, .. } = value.kind.as_ref() else {
             panic!("Expected record, got {:?}", value.kind);
         };
-        assert_eq!(type_name.name.to_string(), "Point");
+        assert_eq!(type_name.name().to_string(), "Point");
     }
 
     // =============================================================================
@@ -910,7 +910,7 @@ mod tests {
         let ExprKind::Var(name) = scrutinee.kind.as_ref() else {
             panic!("Expected var scrutinee");
         };
-        assert_eq!(name.name.to_string(), "opt");
+        assert_eq!(name.name().to_string(), "opt");
         assert_eq!(arms.len(), 2);
     }
 
@@ -1158,11 +1158,8 @@ mod tests {
         let ExprKind::Var(name) = value.kind.as_ref() else {
             panic!("Expected var for path, got {:?}", value.kind);
         };
-        // Qualified identifier should have module_path = ["std", "io"] and name = "println"
-        assert_eq!(name.module_path.len(), 2, "Expected 2 path segments");
-        assert_eq!(name.module_path[0].to_string(), "std");
-        assert_eq!(name.module_path[1].to_string(), "io");
-        assert_eq!(name.name.to_string(), "println");
+        // Qualified identifier stored as single symbol
+        assert_eq!(name.qualified.to_string(), "std::io::println");
     }
 
     // =============================================================================

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use salsa::Accumulator as _;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -76,7 +77,7 @@ impl<'db> Resolver<'db> {
 
     /// Resolve an unresolved name to a ResolvedRef.
     fn resolve_name(&self, name: &UnresolvedName) -> ResolvedRef<'db> {
-        let sym = name.name;
+        let sym = name.name();
 
         // For simple names: check locals, builtins, then module environment
         if name.is_simple() {
@@ -96,12 +97,11 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some
-            // For single-segment module path (e.g., ["State"], "get"),
-            // use lookup_qualified(namespace, name)
-            if name.module_path.len() == 1 {
-                let namespace = name.module_path[0];
-                if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
-                    return self.binding_to_ref(binding, sym);
+            if let Some(namespace) = name.namespace() {
+                if namespace.is_simple() {
+                    if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
+                        return self.binding_to_ref(binding, sym);
+                    }
                 }
             }
             // TODO: Support multi-level paths (e.g., std::io::Reader)
@@ -494,8 +494,8 @@ impl<'db> Resolver<'db> {
     /// Resolve ability reference in a handler arm.
     /// Skips "_" placeholder (unqualified ops) without emitting diagnostics.
     fn resolve_handler_ability(&mut self, ability: &UnresolvedName) -> ResolvedRef<'db> {
-        if ability.name == Symbol::new("_") {
-            ResolvedRef::local(LocalId::UNRESOLVED, ability.name)
+        if ability.qualified == Symbol::new("_") {
+            ResolvedRef::local(LocalId::UNRESOLVED, ability.qualified)
         } else {
             self.resolve_name(ability)
         }
@@ -623,7 +623,7 @@ mod tests {
         resolver.bind_local(param_name);
 
         // Create unresolved reference to the parameter
-        let body_var = UnresolvedName::simple(param_name, NodeId::from_raw(2));
+        let body_var = UnresolvedName::new(param_name, NodeId::from_raw(2));
 
         // Resolve the variable reference
         let resolved = resolver.resolve_name(&body_var);
@@ -643,7 +643,7 @@ mod tests {
         let resolver = Resolver::new(db, env, SpanMap::default());
 
         // Create unresolved reference to print
-        let unresolved = UnresolvedName::simple(Symbol::new("print"), NodeId::from_raw(1));
+        let unresolved = UnresolvedName::new(Symbol::new("print"), NodeId::from_raw(1));
 
         // Resolve the builtin
         let resolved = resolver.resolve_name(&unresolved);
@@ -666,7 +666,7 @@ mod tests {
         resolver.bind_local(name);
 
         // Create unresolved reference
-        let unresolved = UnresolvedName::simple(name, NodeId::from_raw(1));
+        let unresolved = UnresolvedName::new(name, NodeId::from_raw(1));
 
         // Resolve - should get local, not builtin
         let resolved = resolver.resolve_name(&unresolved);
@@ -696,7 +696,7 @@ mod tests {
         resolver.pop_scope();
 
         // After popping inner scope, x should still be visible
-        let x_ref = UnresolvedName::simple(x, NodeId::from_raw(1));
+        let x_ref = UnresolvedName::new(x, NodeId::from_raw(1));
         let resolved = resolver.resolve_name(&x_ref);
 
         match resolved {
@@ -727,8 +727,8 @@ mod tests {
         let y_id = resolver.bind_local(y);
 
         // Both x and y should be visible from inner scope
-        let x_ref = UnresolvedName::simple(x, NodeId::from_raw(1));
-        let y_ref = UnresolvedName::simple(y, NodeId::from_raw(2));
+        let x_ref = UnresolvedName::new(x, NodeId::from_raw(1));
+        let y_ref = UnresolvedName::new(y, NodeId::from_raw(2));
 
         let resolved_x = resolver.resolve_name(&x_ref);
         let resolved_y = resolver.resolve_name(&y_ref);
