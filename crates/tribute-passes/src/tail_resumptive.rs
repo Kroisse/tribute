@@ -187,12 +187,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -224,12 +221,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -264,12 +258,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -307,12 +298,9 @@ mod tests {
     func.return %x
   }
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -346,12 +334,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -390,12 +375,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -438,12 +420,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
@@ -482,12 +461,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = cont.push_prompt {tag = 1} : core.ptr {
-      %c0 = arith.const {value = 0} : core.i32
-      scf.yield %c0
-    } {
-    }
-    %1 = cont.handler_dispatch %0 {tag = 1, result_type = core.ptr} : core.ptr {
+    %yr = arith.const {value = 0} : core.ptr
+    %hf = arith.const {value = 0} : core.ptr
+    %1 = ability.handle_dispatch %yr, %hf {tag = 1, result_type = core.ptr} : core.ptr {
       ability.done {
         ^bb0(%v: core.ptr):
           scf.yield %v
