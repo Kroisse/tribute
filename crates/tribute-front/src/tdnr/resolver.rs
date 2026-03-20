@@ -977,11 +977,12 @@ mod tests {
             },
         );
 
-        let ctor_id = CtorId::new(db, option_name);
+        let some_name = Symbol::new("Some");
+        let ctor_id = CtorId::new(db, some_name);
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
-                variant: Symbol::new("Some"),
+                variant: some_name,
             },
             ty: ctor_func_ty,
         };
