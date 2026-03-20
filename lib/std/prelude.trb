@@ -120,7 +120,7 @@ pub mod Result {
 /// String literals `"..."` produce `Leaf(bytes)` values.
 enum String {
     Leaf(Bytes),
-    Branch(String, String, Nat, Nat),
+    Branch(String, String, Nat),
 }
 
 pub mod String {
@@ -131,28 +131,13 @@ pub mod String {
     pub fn len(s: String) -> Nat {
         case s {
             Leaf(bytes) -> bytes.len()
-            Branch(_, _, cached_len, _) -> cached_len
-        }
-    }
-
-    /// Get the depth of the rope tree.
-    pub fn depth(s: String) -> Nat {
-        case s {
-            Leaf(_) -> 0
-            Branch(_, _, _, d) -> d
+            Branch(_, _, cached_len) -> cached_len
         }
     }
 
     /// Concatenate two strings.
     pub fn concat(left: String, right: String) -> String {
-        let new_len = left.len() + right.len()
-        let left_depth = left.depth()
-        let right_depth = right.depth()
-        let new_depth = case left_depth > right_depth {
-            True -> left_depth + 1
-            False -> right_depth + 1
-        }
-        Branch(left, right, new_len, new_depth)
+        Branch(left, right, left.len() + right.len())
     }
 
     /// Concatenation operator for strings.
@@ -164,7 +149,7 @@ pub mod String {
     pub fn to_bytes(s: String) -> Bytes {
         case s {
             Leaf(bytes) -> bytes
-            Branch(left, right, _, _) -> __bytes_concat(left.to_bytes(), right.to_bytes())
+            Branch(left, right, _) -> __bytes_concat(left.to_bytes(), right.to_bytes())
         }
     }
 }
