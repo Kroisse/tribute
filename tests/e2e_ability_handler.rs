@@ -619,3 +619,35 @@ fn main() {
 "#;
     assert_native_output("non_effectful_call_in_nested_region.trb", code, "7");
 }
+
+// =============================================================================
+// Edge Case: Ability Operation with Multiple Parameters
+// =============================================================================
+
+/// Test that a handler correctly receives multiple parameters from an ability op.
+///
+/// `Multi::combine(10, 20, 30)` yields three arguments to the handler arm.
+/// The handler sums them and resumes with the result.
+///
+/// Currently panics in adt_rc_header layout computation for multi-param yield payloads.
+#[test]
+#[ignore = "backend panics on multi-param yield payload layout (adt_rc_header)"]
+fn test_handler_multi_param_op() {
+    let code = r#"ability Multi {
+    op combine(x: Nat, y: Nat, z: Nat) -> Nat
+}
+
+fn use_multi() ->{Multi} Nat {
+    Multi::combine(10, 20, 30)
+}
+
+fn main() {
+    let result = handle use_multi() {
+        do result { result }
+        op Multi::combine(x, y, z) { resume (x + y + z) }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_multi_param_op.trb", code, "60");
+}

@@ -881,3 +881,162 @@ fn main() { }
         diagnostics.len()
     );
 }
+
+// =============================================================================
+// Edge Case: Empty Ability (No Operations)
+// =============================================================================
+
+/// Test that an ability with no operations parses and typechecks.
+///
+/// `ability Empty { }` is a valid but degenerate ability definition.
+/// It should pass through the full compilation pipeline without errors.
+#[test]
+fn test_empty_ability_no_operations() {
+    let code = r#"ability Empty {
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_and_check(code, "empty_ability.trb");
+
+    print_diagnostics(&diagnostics);
+
+    assert!(
+        diagnostics.is_empty(),
+        "Empty ability should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
+}
+
+/// Test that an empty ability can be used in an effect annotation.
+#[test]
+fn test_empty_ability_in_effect_annotation() {
+    let code = r#"ability Empty {
+}
+
+fn with_empty() ->{Empty} Nat {
+    42
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "empty_ability_effect.trb");
+
+    print_diagnostics(&diagnostics);
+
+    assert!(
+        diagnostics.is_empty(),
+        "Empty ability in effect annotation should pass frontend, got {} diagnostics",
+        diagnostics.len()
+    );
+}
+
+// =============================================================================
+// Edge Case: Ability Operation with Multiple Parameters
+// =============================================================================
+
+/// Test that ability operations with multiple parameters typecheck correctly.
+#[test]
+fn test_ability_op_multiple_params() {
+    let code = r#"ability Multi {
+    op combine(x: Int, y: Nat, z: Bool) -> Int
+}
+
+fn use_multi() ->{Multi} Int {
+    Multi::combine(+1, 2, True)
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "ability_op_multi_params.trb");
+
+    print_diagnostics(&diagnostics);
+
+    assert!(
+        diagnostics.is_empty(),
+        "Multi-param ability op should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
+}
+
+/// Test that a handler for multi-param ability op compiles successfully.
+///
+/// The tree-sitter grammar emits ERROR nodes for multi-param handler arms
+/// (e.g., `op Multi::combine(x, y, z) { ... }`), but error recovery still
+/// produces a working compilation. This test verifies compilation succeeds
+/// despite parse diagnostics.
+#[test]
+fn test_ability_op_multiple_params_with_handler() {
+    let code = r#"ability Multi {
+    op combine(x: Nat, y: Nat, z: Nat) -> Nat
+}
+
+fn use_multi() ->{Multi} Nat {
+    Multi::combine(10, 20, 30)
+}
+
+fn run() -> Nat {
+    handle use_multi() {
+        do result { result }
+        op Multi::combine(x, y, z) { resume (x + y + z) }
+    }
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_and_check(code, "ability_op_multi_params_handler.trb");
+
+    print_diagnostics(&diagnostics);
+
+    // Parse diagnostics are expected due to tree-sitter grammar limitations
+    // on multi-param handler arms, but compilation should still succeed
+    // via error recovery. Verify no type-checking errors.
+    let non_parse_errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|d| {
+            !matches!(
+                d.phase,
+                tribute_passes::diagnostic::CompilationPhase::Parsing
+            )
+        })
+        .collect();
+    assert!(
+        non_parse_errors.is_empty(),
+        "Multi-param handler should have no type errors (only parse warnings), got: {:?}",
+        non_parse_errors
+    );
+}
+
+// =============================================================================
+// Edge Case: Ability with Multiple Type Parameters
+// =============================================================================
+
+/// Test that an ability with multiple type parameters parses and typechecks.
+#[test]
+fn test_ability_multiple_type_params() {
+    let code = r#"ability Pair(a, b) {
+    op get_first() -> a
+    op get_second() -> b
+}
+
+fn use_pair() ->{Pair(Int, Nat)} Int {
+    Pair::get_first()
+}
+
+fn main() { }
+"#;
+
+    let diagnostics = compile_and_check(code, "ability_multi_type_params.trb");
+
+    print_diagnostics(&diagnostics);
+
+    assert!(
+        diagnostics.is_empty(),
+        "Multi-type-param ability should compile without errors, got {} diagnostics",
+        diagnostics.len()
+    );
+}
