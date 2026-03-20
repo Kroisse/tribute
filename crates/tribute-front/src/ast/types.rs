@@ -144,6 +144,14 @@ impl TypeKind<'_> {
         }
     }
 
+    /// Create the String type (prelude-defined enum, not a primitive).
+    pub fn string() -> Self {
+        Self::Named {
+            name: Symbol::new("String"),
+            args: vec![],
+        }
+    }
+
     /// Returns the `TypeKind` for a primitive type name, or `None` if the name
     /// is not a primitive.
     pub fn from_primitive_name(name: &str) -> Option<Self> {

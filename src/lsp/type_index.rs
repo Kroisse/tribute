@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Span;
 
 use tribute_front::SourceCst;
 use tribute_front::ast::{
@@ -276,13 +276,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.add_entry(expr.id, float_ty);
             }
             ExprKind::StringLit(_) => {
-                let string_ty = Type::new(
-                    self.db,
-                    TypeKind::Named {
-                        name: Symbol::new("String"),
-                        args: vec![],
-                    },
-                );
+                let string_ty = Type::new(self.db, TypeKind::string());
                 self.add_entry(expr.id, string_ty);
             }
             ExprKind::BytesLit(_) => {

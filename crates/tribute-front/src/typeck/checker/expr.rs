@@ -2198,13 +2198,7 @@ mod tests {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
-        let string_ty = Type::new(
-            db,
-            TypeKind::Named {
-                name: Symbol::new("String"),
-                args: vec![],
-            },
-        );
+        let string_ty = Type::new(db, TypeKind::string());
 
         let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Concat);
 
@@ -2292,13 +2286,7 @@ mod tests {
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
         let nil_ty = Type::new(db, TypeKind::Nil);
-        let string_ty = Type::new(
-            db,
-            TypeKind::Named {
-                name: Symbol::new("String"),
-                args: vec![],
-            },
-        );
+        let string_ty = Type::new(db, TypeKind::string());
 
         // Print: (a) ->{?e} Nil
         let print_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Print);
@@ -2523,16 +2511,7 @@ mod tests {
         if let TypeKind::Tuple(elems) = ty.kind(db) {
             assert_eq!(elems.len(), 2);
             assert_eq!(elems[0], Type::new(db, TypeKind::Int));
-            assert_eq!(
-                elems[1],
-                Type::new(
-                    db,
-                    TypeKind::Named {
-                        name: Symbol::new("String"),
-                        args: vec![],
-                    },
-                )
-            );
+            assert_eq!(elems[1], Type::new(db, TypeKind::string()));
         } else {
             panic!("Tuple annotation should be Tuple type");
         }
@@ -2689,13 +2668,7 @@ mod tests {
         let mut ctx = make_test_ctx(db, &env);
 
         // List<String> → String
-        let string_ty = Type::new(
-            db,
-            TypeKind::Named {
-                name: Symbol::new("String"),
-                args: vec![],
-            },
-        );
+        let string_ty = Type::new(db, TypeKind::string());
         let list_ty = Type::new(
             db,
             TypeKind::Named {

@@ -356,13 +356,7 @@ impl<'db> ModuleTypeEnv<'db> {
 
     /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        Type::new(
-            self.db,
-            TypeKind::Named {
-                name: Symbol::new("String"),
-                args: vec![],
-            },
-        )
+        Type::new(self.db, TypeKind::string())
     }
 
     /// Create the Bytes type.
