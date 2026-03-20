@@ -310,7 +310,7 @@ impl fmt::Display for Effect<'_> {
                 write!(f, ")")
             }
         })
-        .expect("Effect::fmt requires an attached salsa database")
+        .unwrap_or(Err(fmt::Error))
     }
 }
 
