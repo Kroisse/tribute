@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/cps_lowering.rs
+assertion_line: 192
 expression: ir_text
 ---
 core.module @test {
@@ -43,13 +44,13 @@ core.module @test {
               %19 = core.unrealized_conversion_cast %18 : core.i32
               scf.yield %19
           }
-          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
+          ability.yield {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
             ^bb9(%20: tribute_rt.anyref, %21: tribute_rt.anyref):
               %22 = arith.const {value = 42} : core.i32
               %23 = core.unrealized_conversion_cast %22 : tribute_rt.anyref
               scf.yield %23
           }
-          ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
+          ability.yield {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
             ^bb10(%24: tribute_rt.anyref, %25: tribute_rt.anyref):
               %26 = arith.const {value = unit} : core.nil
               %27 = core.unrealized_conversion_cast %26 : tribute_rt.anyref

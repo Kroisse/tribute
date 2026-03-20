@@ -324,14 +324,24 @@ fn build_cps_handler_dispatch_body<'db>(
     let done_op = ability::done(ir, location, done_body);
     ir.push_op(block, done_op.op_ref());
 
-    // ability.suspend child ops (handler arms use CPS mode for continuation calls)
+    // ability.suspend / ability.yield child ops (handler arms use CPS mode for continuation calls)
     for effect_handler in &effect_handlers {
         let (ability_ref_ty, op_name) =
             extract_ability_ref_and_op_name(ctx, ir, location, effect_handler);
-        let suspend_body =
+        let handler_body =
             build_cps_suspend_handler_region(ctx, ir, location, effect_handler, _yr_ty);
-        let suspend_op = ability::suspend(ir, location, ability_ref_ty, op_name, suspend_body);
-        ir.push_op(block, suspend_op.op_ref());
+        let handler_op_ref = match &effect_handler.kind {
+            // fn handler: tail-resumptive guaranteed at compile time → ability.yield directly
+            HandlerKind::Fn { .. } => {
+                ability::r#yield(ir, location, ability_ref_ty, op_name, handler_body).op_ref()
+            }
+            // op handler: may capture continuation → ability.suspend
+            HandlerKind::Op { .. } => {
+                ability::suspend(ir, location, ability_ref_ty, op_name, handler_body).op_ref()
+            }
+            _ => unreachable!(),
+        };
+        ir.push_op(block, handler_op_ref);
     }
 
     ir.create_region(RegionData {
