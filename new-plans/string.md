@@ -67,8 +67,8 @@ UTF-8 rope 구조:
 
 ```rust
 enum String {
-    Leaf(Bytes)                      // 짧은 텍스트 (UTF-8 validated)
-    Branch(String, String, Nat)      // left, right, total_len
+    Leaf(Bytes)                              // 짧은 텍스트 (UTF-8 validated)
+    Branch(String, String, Nat, Nat)         // left, right, total_len, depth
 }
 ```
 
@@ -343,9 +343,14 @@ ability Display {
 
 | 항목 | 선택지 |
 | ---- | ------ |
-| String 정의 위치 | Library type vs Builtin type |
 | String byte 인덱싱 | 허용 vs 금지 |
 | Display ability | 도입 vs 명시적 변환만 |
+
+### 결정 완료 (이전 미결정)
+
+| 항목 | 결정 |
+| ---- | ---- |
+| String 정의 위치 | Library type (prelude에 enum으로 정의) |
 
 ---
 

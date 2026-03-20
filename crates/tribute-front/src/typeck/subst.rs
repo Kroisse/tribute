@@ -282,7 +282,7 @@ mod tests {
         let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
 
         let int_ty = Type::new(db, TypeKind::Int);
-        let string_ty = Type::new(db, TypeKind::String);
+        let string_ty = Type::new(db, TypeKind::Bool);
         let subst = vec![int_ty, string_ty];
 
         let result = substitute_bound_vars(db, tuple_ty, &subst);

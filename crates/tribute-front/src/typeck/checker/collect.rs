@@ -517,8 +517,6 @@ impl<'db> TypeChecker<'db> {
             self.env.float_type()
         } else if name == "Bool" {
             self.env.bool_type()
-        } else if name == "String" {
-            self.env.string_type()
         } else if name == "Bytes" {
             self.env.bytes_type()
         } else if name == "Rune" {

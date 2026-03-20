@@ -64,8 +64,6 @@ pub enum TypeKind<'db> {
     Float,
     /// Boolean type
     Bool,
-    /// UTF-8 string type
-    String,
     /// Byte sequence type
     Bytes,
     /// Unicode code point (i32)
@@ -139,7 +137,6 @@ impl TypeKind<'_> {
             Self::Nat => Some("Nat"),
             Self::Float => Some("Float"),
             Self::Bool => Some("Bool"),
-            Self::String => Some("String"),
             Self::Bytes => Some("Bytes"),
             Self::Rune => Some("Rune"),
             Self::Nil => Some("Nil"),
@@ -155,7 +152,6 @@ impl TypeKind<'_> {
             "Nat" => Some(Self::Nat),
             "Float" => Some(Self::Float),
             "Bool" => Some(Self::Bool),
-            "String" => Some(Self::String),
             "Bytes" => Some(Self::Bytes),
             "Rune" => Some(Self::Rune),
             "Nil" => Some(Self::Nil),
