@@ -8,6 +8,8 @@
 //! - Functions are stored with TypeSchemes (they can be polymorphic)
 //! - During type checking, TypeSchemes are instantiated to Types with fresh type variables
 
+use std::fmt;
+
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -282,26 +284,41 @@ pub struct Effect<'db> {
 }
 
 impl<'db> Effect<'db> {
-    /// Format this effect for diagnostic messages.
+    /// Returns a value that implements [`fmt::Display`] for diagnostic messages.
     ///
     /// Produces strings like `"State(Int)"` or `"Console"`.
-    pub fn display(&self, db: &'db dyn salsa::Database) -> String {
-        let name = self.ability_id.name(db);
-        if self.args.is_empty() {
-            name.with_str(|s| s.to_owned())
-        } else {
-            let args: Vec<String> = self
-                .args
-                .iter()
-                .map(|ty| {
-                    ty.kind(db)
-                        .primitive_name()
-                        .map(|s| s.to_owned())
-                        .unwrap_or_else(|| format!("{:?}", ty.kind(db)))
-                })
-                .collect();
-            name.with_str(|s| format!("{}({})", s, args.join(", ")))
+    pub fn display<'a>(&'a self, db: &'db dyn salsa::Database) -> impl fmt::Display + 'a
+    where
+        'db: 'a,
+    {
+        struct EffectDisplay<'a, 'db> {
+            effect: &'a Effect<'db>,
+            db: &'db dyn salsa::Database,
         }
+
+        impl fmt::Display for EffectDisplay<'_, '_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let name = self.effect.ability_id.name(self.db);
+                if self.effect.args.is_empty() {
+                    name.with_str(|s| f.write_str(s))
+                } else {
+                    name.with_str(|s| write!(f, "{}(", s))?;
+                    for (i, ty) in self.effect.args.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        if let Some(prim) = ty.kind(self.db).primitive_name() {
+                            write!(f, "{}", prim)?;
+                        } else {
+                            write!(f, "{:?}", ty.kind(self.db))?;
+                        }
+                    }
+                    write!(f, ")")
+                }
+            }
+        }
+
+        EffectDisplay { effect: self, db }
     }
 }
 
