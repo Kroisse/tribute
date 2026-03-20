@@ -963,11 +963,6 @@ fn main() { }
 }
 
 /// Test that a handler for multi-param ability op compiles successfully.
-///
-/// The tree-sitter grammar emits ERROR nodes for multi-param handler arms
-/// (e.g., `op Multi::combine(x, y, z) { ... }`), but error recovery still
-/// produces a working compilation. This test verifies compilation succeeds
-/// despite parse diagnostics.
 #[test]
 fn test_ability_op_multiple_params_with_handler() {
     let code = r#"ability Multi {
@@ -981,7 +976,7 @@ fn use_multi() ->{Multi} Nat {
 fn run() -> Nat {
     handle use_multi() {
         do result { result }
-        op Multi::combine(x, y, z) { resume { x + y + z } }
+        op Multi::combine(x, y, z) { resume x + y + z }
     }
 }
 
@@ -992,22 +987,10 @@ fn main() { }
 
     print_diagnostics(&diagnostics);
 
-    // Parse diagnostics are expected due to tree-sitter grammar limitations
-    // on multi-param handler arms, but compilation should still succeed
-    // via error recovery. Verify no type-checking errors.
-    let non_parse_errors: Vec<_> = diagnostics
-        .iter()
-        .filter(|d| {
-            !matches!(
-                d.phase,
-                tribute_passes::diagnostic::CompilationPhase::Parsing
-            )
-        })
-        .collect();
     assert!(
-        non_parse_errors.is_empty(),
-        "Multi-param handler should have no type errors (only parse warnings), got: {:?}",
-        non_parse_errors
+        diagnostics.is_empty(),
+        "Multi-param ability op with handler should compile without errors, got {} diagnostics",
+        diagnostics.len()
     );
 }
 

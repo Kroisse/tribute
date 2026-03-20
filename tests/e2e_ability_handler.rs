@@ -645,7 +645,7 @@ fn use_multi() ->{Multi} Nat {
 fn main() {
     let result = handle use_multi() {
         do result { result }
-        op Multi::combine(x, y, z) { resume { x + y + z } }
+        op Multi::combine(x, y, z) { resume x + y + z }
     }
     __tribute_print_nat(result)
 }
