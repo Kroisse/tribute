@@ -296,18 +296,14 @@ impl fmt::Display for Effect<'_> {
             if self.args.is_empty() {
                 name.with_str(|s| f.write_str(s))
             } else {
-                name.with_str(|s| write!(f, "{}(", s))?;
-                for (i, ty) in self.args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
+                let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
                     if let Some(prim) = ty.kind(db).primitive_name() {
-                        write!(f, "{}", prim)?;
+                        f.write_str(prim)
                     } else {
-                        write!(f, "{:?}", ty.kind(db))?;
+                        write!(f, "{:?}", ty.kind(db))
                     }
-                }
-                write!(f, ")")
+                });
+                name.with_str(|s| write!(f, "{}({args})", s))
             }
         })
         .unwrap_or(Err(fmt::Error))
