@@ -54,7 +54,6 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Nat
         | TypeKind::Float
         | TypeKind::Bool
-        | TypeKind::String
         | TypeKind::Bytes
         | TypeKind::Rune
         | TypeKind::Nil
@@ -495,6 +494,8 @@ impl<'db> TypeChecker<'db> {
                 let result_ty = ctx.fresh_type_var();
                 for arm in arms {
                     ctx.push_scope();
+                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                    ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
                     ctx.constrain_eq(arm_ty, result_ty);
@@ -1819,7 +1820,7 @@ impl<'db> TypeChecker<'db> {
                 .accumulate(self.db());
                 return;
             }
-            TypeKind::Int | TypeKind::String | TypeKind::Float | TypeKind::Nat => {
+            TypeKind::Int | TypeKind::Float | TypeKind::Nat => {
                 // Primitive types without catch-all are non-exhaustive
                 let span = self.get_span(span_node_id);
                 Diagnostic {
@@ -2197,7 +2198,7 @@ mod tests {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
-        let string_ty = Type::new(db, TypeKind::String);
+        let string_ty = Type::new(db, TypeKind::string());
 
         let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Concat);
 
@@ -2285,7 +2286,7 @@ mod tests {
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
         let nil_ty = Type::new(db, TypeKind::Nil);
-        let string_ty = Type::new(db, TypeKind::String);
+        let string_ty = Type::new(db, TypeKind::string());
 
         // Print: (a) ->{?e} Nil
         let print_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Print);
@@ -2343,7 +2344,6 @@ mod tests {
             ("Nat", TypeKind::Nat),
             ("Float", TypeKind::Float),
             ("Bool", TypeKind::Bool),
-            ("String", TypeKind::String),
             ("Bytes", TypeKind::Bytes),
             ("Rune", TypeKind::Rune),
             ("Nil", TypeKind::Nil),
@@ -2511,7 +2511,7 @@ mod tests {
         if let TypeKind::Tuple(elems) = ty.kind(db) {
             assert_eq!(elems.len(), 2);
             assert_eq!(elems[0], Type::new(db, TypeKind::Int));
-            assert_eq!(elems[1], Type::new(db, TypeKind::String));
+            assert_eq!(elems[1], Type::new(db, TypeKind::string()));
         } else {
             panic!("Tuple annotation should be Tuple type");
         }
@@ -2668,7 +2668,7 @@ mod tests {
         let mut ctx = make_test_ctx(db, &env);
 
         // List<String> → String
-        let string_ty = Type::new(db, TypeKind::String);
+        let string_ty = Type::new(db, TypeKind::string());
         let list_ty = Type::new(
             db,
             TypeKind::Named {

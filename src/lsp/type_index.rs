@@ -276,7 +276,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
                 self.add_entry(expr.id, float_ty);
             }
             ExprKind::StringLit(_) => {
-                let string_ty = Type::new(self.db, TypeKind::String);
+                let string_ty = Type::new(self.db, TypeKind::string());
                 self.add_entry(expr.id, string_ty);
             }
             ExprKind::BytesLit(_) => {

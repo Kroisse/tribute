@@ -1112,7 +1112,6 @@ impl<'db> TypeSolver<'db> {
             | (TypeKind::Nat, TypeKind::Nat)
             | (TypeKind::Float, TypeKind::Float)
             | (TypeKind::Bool, TypeKind::Bool)
-            | (TypeKind::String, TypeKind::String)
             | (TypeKind::Bytes, TypeKind::Bytes)
             | (TypeKind::Rune, TypeKind::Rune)
             | (TypeKind::Nil, TypeKind::Nil) => true,

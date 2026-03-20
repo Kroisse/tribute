@@ -276,17 +276,17 @@ mod tests {
 
     #[salsa_test]
     fn test_substitute_in_tuple_type(db: &dyn salsa::Database) {
-        // (BoundVar(0), BoundVar(1)) + [Int, String]
+        // (BoundVar(0), BoundVar(1)) + [Int, Bool]
         let bound0 = Type::new(db, TypeKind::BoundVar { index: 0 });
         let bound1 = Type::new(db, TypeKind::BoundVar { index: 1 });
         let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
 
         let int_ty = Type::new(db, TypeKind::Int);
-        let string_ty = Type::new(db, TypeKind::String);
-        let subst = vec![int_ty, string_ty];
+        let bool_ty = Type::new(db, TypeKind::Bool);
+        let subst = vec![int_ty, bool_ty];
 
         let result = substitute_bound_vars(db, tuple_ty, &subst);
-        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, string_ty]));
+        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, bool_ty]));
         assert_eq!(result, SubstResult::Ok(expected));
     }
 

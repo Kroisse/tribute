@@ -550,7 +550,6 @@ mod tests {
     fn test_type_name_constants_extended() {
         assert_eq!(super::core::TUPLE(), Symbol::new("tuple"));
         assert_eq!(super::core::FUNC(), Symbol::new("func"));
-        assert_eq!(super::core::STRING(), Symbol::new("string"));
         assert_eq!(super::core::BYTES(), Symbol::new("bytes"));
     }
 }

@@ -560,7 +560,7 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::IntLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Int)),
             ExprKind::FloatLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Float)),
             ExprKind::BoolLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
-            ExprKind::StringLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::String)),
+            ExprKind::StringLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::string())),
             ExprKind::BytesLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Bytes)),
             ExprKind::RuneLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Rune)),
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
@@ -1122,7 +1122,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let string_ty = Type::new(&db, TypeKind::String);
+        let string_ty = Type::new(&db, TypeKind::string());
         let outer_app = Type::new(
             &db,
             TypeKind::App {
@@ -1147,7 +1147,7 @@ mod tests {
             (TypeKind::Nat, "Nat"),
             (TypeKind::Float, "Float"),
             (TypeKind::Bool, "Bool"),
-            (TypeKind::String, "String"),
+            (TypeKind::string(), "String"),
             (TypeKind::Bytes, "Bytes"),
             (TypeKind::Rune, "Rune"),
             (TypeKind::Nil, "Nil"),

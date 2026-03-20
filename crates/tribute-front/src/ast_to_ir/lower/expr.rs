@@ -89,7 +89,7 @@ pub(super) fn lower_expr<'db>(
         }
 
         ExprKind::StringLit(ref s) => {
-            let string_ty = builder.ctx.string_type(builder.ir);
+            let string_ty = builder.ctx.anyref_type(builder.ir);
             let op = adt::string_const(builder.ir, location, string_ty, s.clone());
             builder.ir.push_op(builder.block, op.op_ref());
             let result = op.result(builder.ir);

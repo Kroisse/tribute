@@ -301,7 +301,6 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Int | TypeKind::Nat | TypeKind::Rune => self.i32_type(ir),
             TypeKind::Float => self.f64_type(ir),
             TypeKind::Bool => self.bool_type(ir),
-            TypeKind::String => self.string_type(ir),
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
             TypeKind::BoundVar { .. } => {
@@ -403,11 +402,6 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn f64_type(&self, ir: &mut IrContext) -> TypeRef {
         ir.types
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("f64")).build())
-    }
-
-    /// Get the `core.string` type.
-    pub fn string_type(&self, ir: &mut IrContext) -> TypeRef {
-        arena_core::string(ir).as_type_ref()
     }
 
     /// Get the `core.bytes` type.
@@ -816,10 +810,6 @@ mod tests {
         // Bool → I1
         let bool_ty = AstType::new(&db, TypeKind::Bool);
         assert_eq!(ctx.convert_type(&mut ir, bool_ty), ctx.bool_type(&mut ir));
-
-        // String → string
-        let str_ty = AstType::new(&db, TypeKind::String);
-        assert_eq!(ctx.convert_type(&mut ir, str_ty), ctx.string_type(&mut ir));
 
         // Float → F64
         let float_ty = AstType::new(&db, TypeKind::Float);

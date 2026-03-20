@@ -113,6 +113,48 @@ pub mod Result {
 }
 
 // =============================================================================
+// String type (UTF-8 rope)
+// =============================================================================
+
+/// A Unicode text type using a rope data structure for efficient concatenation.
+/// String literals `"..."` produce `Leaf(bytes)` values.
+enum String {
+    Leaf(Bytes),
+    Branch(String, String, Nat),
+}
+
+pub mod String {
+    /// Create a string from a byte sequence (assumed UTF-8).
+    pub fn from_bytes(bytes: Bytes) -> String { Leaf(bytes) }
+
+    /// Get the byte length of a string.
+    pub fn len(s: String) -> Nat {
+        case s {
+            Leaf(bytes) -> bytes.len()
+            Branch(_, _, cached_len) -> cached_len
+        }
+    }
+
+    /// Concatenate two strings.
+    pub fn concat(left: String, right: String) -> String {
+        Branch(left, right, left.len() + right.len())
+    }
+
+    /// Concatenation operator for strings.
+    pub fn (<>)(left: String, right: String) -> String {
+        left.concat(right)
+    }
+
+    /// Convert a string to its underlying bytes (flattened).
+    pub fn to_bytes(s: String) -> Bytes {
+        case s {
+            Leaf(bytes) -> bytes
+            Branch(left, right, _) -> __bytes_concat(left.to_bytes(), right.to_bytes())
+        }
+    }
+}
+
+// =============================================================================
 // Intrinsic declarations
 // =============================================================================
 // These functions are implemented by the backend (e.g., wasm).

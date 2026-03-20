@@ -354,9 +354,9 @@ impl<'db> ModuleTypeEnv<'db> {
         Type::new(self.db, TypeKind::Bool)
     }
 
-    /// Create the String type.
+    /// Create the String type (prelude-defined enum).
     pub fn string_type(&self) -> Type<'db> {
-        Type::new(self.db, TypeKind::String)
+        Type::new(self.db, TypeKind::string())
     }
 
     /// Create the Bytes type.

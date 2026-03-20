@@ -229,8 +229,6 @@ pub(super) fn convert_annotation_to_ir_type<'db>(
                 ctx.f64_type(ir)
             } else if *name == "Bool" {
                 ctx.bool_type(ir)
-            } else if *name == "String" {
-                ctx.string_type(ir)
             } else if *name == "Bytes" {
                 ctx.bytes_type(ir)
             } else if *name == "Rune" {
