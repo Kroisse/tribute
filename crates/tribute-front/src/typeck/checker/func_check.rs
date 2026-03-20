@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
-use tribute_core::fmt::Sep;
+use tribute_core::fmt::joined;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 use crate::ast::{
@@ -143,7 +143,7 @@ impl<'db> TypeChecker<'db> {
                 Diagnostic {
                     message: format!(
                         "function 'main' has unhandled effects: {}",
-                        Sep(", ", effects)
+                        joined(", ", effects)
                     ),
                     span: self.get_span(func.id),
                     severity: DiagnosticSeverity::Error,
