@@ -1289,6 +1289,20 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_bytes_const_with_non_ascii() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.bytes {
+    %0 = adt.bytes_const {value = b"\x80\xff\x00"} : core.bytes
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module_op =
+            parse_module(&mut ctx, input).expect("should parse bytes_const with non-ASCII hex");
+        assert_roundtrip(&ctx, module_op);
+    }
+
+    #[test]
     fn test_type_alias_rejected_in_non_module_region() {
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
