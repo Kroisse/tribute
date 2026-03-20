@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
@@ -1200,10 +1201,40 @@ fn pack_ability_args(
 ) -> Vec<ValueRef> {
     if arg_values.len() > 1 {
         let any_ty = builder.ctx.anyref_type(builder.ir);
-        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, any_ty);
+        let tuple_ty = ability_args_tuple_type(builder.ir, arg_values.len());
+        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, tuple_ty);
         builder.ir.push_op(builder.block, tuple_op.op_ref());
         vec![tuple_op.result(builder.ir)]
     } else {
         arg_values
     }
+}
+
+/// Create an `adt.struct` type for packing multiple ability operation arguments.
+///
+/// The struct has N fields named `_0`, `_1`, ..., all typed as `anyref`.
+/// Because the type is interned, calling this with the same `num_fields`
+/// always returns the same `TypeRef`.
+pub(super) fn ability_args_tuple_type(ir: &mut IrContext, num_fields: usize) -> TypeRef {
+    use trunk_ir::types::TypeDataBuilder;
+
+    let anyref_ty = tribute_ir::dialect::tribute_rt::anyref(ir).as_type_ref();
+    let fields_attr: Vec<Attribute> = (0..num_fields)
+        .map(|i| {
+            Attribute::List(vec![
+                Attribute::Symbol(Symbol::from_dynamic(&format!("_{i}"))),
+                Attribute::Type(anyref_ty),
+            ])
+        })
+        .collect();
+
+    ir.types.intern(
+        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+            .attr(
+                "name",
+                Attribute::Symbol(Symbol::new("__ability_args_tuple")),
+            )
+            .attr("fields", Attribute::List(fields_attr))
+            .build(),
+    )
 }

@@ -981,7 +981,7 @@ fn use_multi() ->{Multi} Nat {
 fn run() -> Nat {
     handle use_multi() {
         do result { result }
-        op Multi::combine(x, y, z) { resume (x + y + z) }
+        op Multi::combine(x, y, z) { resume { x + y + z } }
     }
 }
 

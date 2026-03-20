@@ -48,7 +48,8 @@ pub(super) fn lower_ability_op_call<'db>(
 
     // Pack multiple arguments into a tuple if needed
     let packed_args = if args.len() > 1 {
-        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, anyref_ty);
+        let tuple_ty = super::expr::ability_args_tuple_type(builder.ir, args.len());
+        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, tuple_ty);
         builder.ir.push_op(builder.block, tuple_op.op_ref());
         vec![tuple_op.result(builder.ir)]
     } else {
@@ -502,8 +503,10 @@ fn build_cps_suspend_handler_region<'db>(
             bind_pattern_fields(&mut scope, ir, block, location, shift_value, &params[0]);
         } else if params.len() > 1 {
             // Multiple params - destructure as tuple
+            let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
             for (i, param) in params.iter().enumerate() {
-                let field_op = adt::struct_get(ir, location, shift_value, any_ty, any_ty, i as u32);
+                let field_op =
+                    adt::struct_get(ir, location, shift_value, any_ty, tuple_ty, i as u32);
                 ir.push_op(block, field_op.op_ref());
                 let field_val = field_op.result(ir);
                 bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
@@ -820,9 +823,10 @@ fn build_handler_arm_for_dispatch<'db>(
         if params.len() == 1 {
             bind_pattern_fields(&mut scope, ir, block, location, value_val, &params[0]);
         } else if params.len() > 1 {
+            let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
             for (i, param) in params.iter().enumerate() {
                 let field_op =
-                    adt::struct_get(ir, location, value_val, anyref_ty, anyref_ty, i as u32);
+                    adt::struct_get(ir, location, value_val, anyref_ty, tuple_ty, i as u32);
                 ir.push_op(block, field_op.op_ref());
                 let field_val = field_op.result(ir);
                 bind_pattern_fields(&mut scope, ir, block, location, field_val, param);

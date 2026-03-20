@@ -629,9 +629,10 @@ fn main() {
 /// `Multi::combine(10, 20, 30)` yields three arguments to the handler arm.
 /// The handler sums them and resumes with the result.
 ///
-/// Currently panics in adt_rc_header layout computation for multi-param yield payloads.
+/// Currently segfaults at runtime: handler unpack produces anyref values that
+/// are used directly in arith.add without unbox_int, causing type mismatch.
 #[test]
-#[ignore = "backend panics on multi-param yield payload layout (adt_rc_header)"]
+#[ignore = "multi-param handler unpack missing unbox for struct_get results"]
 fn test_handler_multi_param_op() {
     let code = r#"ability Multi {
     op combine(x: Nat, y: Nat, z: Nat) -> Nat
@@ -644,7 +645,7 @@ fn use_multi() ->{Multi} Nat {
 fn main() {
     let result = handle use_multi() {
         do result { result }
-        op Multi::combine(x, y, z) { resume (x + y + z) }
+        op Multi::combine(x, y, z) { resume { x + y + z } }
     }
     __tribute_print_nat(result)
 }
