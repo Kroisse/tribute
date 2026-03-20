@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use salsa::Accumulator;
+use tribute_core::fmt::CommaSep;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 use crate::ast::{
@@ -137,16 +138,12 @@ impl<'db> TypeChecker<'db> {
         // the function type's row variable.
         if func.name == "main" {
             let resolved_effect = row_subst.apply(self.db(), body_effect_row);
-            if !resolved_effect.effects(self.db()).is_empty() {
-                let effects: Vec<String> = resolved_effect
-                    .effects(self.db())
-                    .iter()
-                    .map(|e| e.to_string())
-                    .collect();
+            let effects = resolved_effect.effects(self.db());
+            if !effects.is_empty() {
                 Diagnostic {
                     message: format!(
                         "function 'main' has unhandled effects: {}",
-                        effects.join(", ")
+                        CommaSep(effects)
                     ),
                     span: self.get_span(func.id),
                     severity: DiagnosticSeverity::Error,
