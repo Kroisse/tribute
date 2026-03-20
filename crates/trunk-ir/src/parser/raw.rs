@@ -4,9 +4,9 @@
 //! It is shared by both the Salsa IR builder and the Arena IR builder.
 
 use winnow::ascii;
-use winnow::combinator::{alt, delimited, opt, preceded, separated};
+use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated};
 use winnow::prelude::*;
-use winnow::token::{any, one_of, take_while};
+use winnow::token::{any, one_of, take, take_while};
 
 // ============================================================================
 // Error type
@@ -311,8 +311,8 @@ pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> 
         "unit".value(RawAttribute::Unit),
         // Location: loc("path" start:end)
         raw_location_attr,
-        // Bytes: bytes(1, 2, 3)
-        raw_bytes_attr,
+        // Bytes: b"..."
+        raw_bytes_string_lit,
         // String literal
         string_lit.map(RawAttribute::String),
         // Symbol reference
@@ -352,21 +352,53 @@ fn raw_location_attr<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
     Ok(RawAttribute::Location(path, start, end))
 }
 
-/// Parse bytes(1, 2, 3)
-fn raw_bytes_attr<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
-    "bytes".parse_next(input)?;
-    ws.parse_next(input)?;
-    let bytes: Vec<u8> = delimited(
-        ('(', ws),
-        separated(
-            0..,
-            (ws, ascii::dec_uint::<_, u8, _>, ws).map(|(_, b, _)| b),
-            ',',
-        ),
-        (ws, ')'),
+/// Parse b"..." bytes string literal.
+///
+/// Unlike `string_lit`, this interprets `\xNN` escapes as single raw bytes
+/// (0x00–0xFF) instead of Unicode code points, so the result is a `Vec<u8>`
+/// that faithfully represents arbitrary byte sequences.
+fn raw_bytes_string_lit<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> {
+    preceded('b', delimited('"', bytes_content, '"'))
+        .map(RawAttribute::Bytes)
+        .parse_next(input)
+}
+
+/// Collect bytes content fragments into a `Vec<u8>`.
+fn bytes_content(input: &mut &str) -> ModalResult<Vec<u8>> {
+    enum Fragment<'a> {
+        Literal(&'a str),
+        Escape(u8),
+    }
+
+    repeat(
+        0..,
+        alt((
+            preceded('\\', byte_escape).map(Fragment::Escape),
+            take_while(1.., |c: char| c != '"' && c != '\\').map(Fragment::Literal),
+        )),
     )
-    .parse_next(input)?;
-    Ok(RawAttribute::Bytes(bytes))
+    .fold(Vec::new, |mut acc, frag| {
+        match frag {
+            Fragment::Literal(s) => acc.extend_from_slice(s.as_bytes()),
+            Fragment::Escape(b) => acc.push(b),
+        }
+        acc
+    })
+    .parse_next(input)
+}
+
+/// Parse a single byte escape sequence (after the leading `\`).
+fn byte_escape(input: &mut &str) -> ModalResult<u8> {
+    alt((
+        '"'.value(b'"'),
+        '\\'.value(b'\\'),
+        'n'.value(b'\n'),
+        't'.value(b'\t'),
+        'r'.value(b'\r'),
+        '0'.value(b'\0'),
+        preceded('x', take(2usize)).try_map(|hex: &str| u8::from_str_radix(hex, 16)),
+    ))
+    .parse_next(input)
 }
 
 /// Parse an attribute dict: {key = value, ...}
@@ -923,5 +955,42 @@ mod tests {
         let mut input = "[^bb0, ^bb1]";
         let result = successor_list.parse_next(&mut input).expect("should parse");
         assert_eq!(result, vec!["bb0", "bb1"]);
+    }
+
+    #[test]
+    fn test_parse_bytes_string_lit() {
+        let mut input = r#"b"hello""#;
+        let attr = raw_attr_value
+            .parse_next(&mut input)
+            .expect("should parse b\"...\"");
+        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b == b"hello"));
+    }
+
+    #[test]
+    fn test_parse_bytes_string_lit_empty() {
+        let mut input = r#"b"""#;
+        let attr = raw_attr_value
+            .parse_next(&mut input)
+            .expect("should parse empty bytes");
+        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b.is_empty()));
+    }
+
+    #[test]
+    fn test_parse_bytes_string_lit_escapes() {
+        let mut input = r#"b"a\nb\t\r\0\\\"""#;
+        let attr = raw_attr_value
+            .parse_next(&mut input)
+            .expect("should parse bytes with escapes");
+        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b == b"a\nb\t\r\0\\\""));
+    }
+
+    #[test]
+    fn test_parse_bytes_string_lit_hex_escape() {
+        // \xNN escapes decode to single raw bytes, including above 0x7F
+        let mut input = r#"b"\x00\x7f\x80\xff""#;
+        let attr = raw_attr_value
+            .parse_next(&mut input)
+            .expect("should parse bytes with hex escapes");
+        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b == &[0x00, 0x7f, 0x80, 0xff]));
     }
 }

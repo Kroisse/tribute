@@ -75,6 +75,6 @@ mod adt {
     #[attr(value: String)]
     fn string_const() -> result {}
 
-    #[attr(value: any)]
+    #[attr(value: Bytes)]
     fn bytes_const() -> result {}
 }

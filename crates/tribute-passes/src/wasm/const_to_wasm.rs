@@ -260,10 +260,7 @@ impl RewritePattern for BytesConstPattern {
             return false;
         };
 
-        let value_attr = bytes_const.value(ctx);
-        let Attribute::Bytes(b) = value_attr else {
-            return false;
-        };
+        let b = bytes_const.value(ctx);
         let content: Vec<u8> = b.to_vec();
 
         let Some((data_idx, len)) = lookup_bytes_info(&self.allocations, &content) else {

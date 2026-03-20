@@ -149,14 +149,9 @@ impl<'a> PrintState<'a> {
                 f.write_char('"')
             }
             Attribute::Bytes(bytes) => {
-                f.write_str("bytes(")?;
-                for (i, b) in bytes.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write!(f, "{b}")?;
-                }
-                f.write_char(')')
+                f.write_str("b\"")?;
+                write_escaped_bytes(f, bytes)?;
+                f.write_char('"')
             }
             Attribute::Symbol(sym) => write_symbol(f, *sym),
             Attribute::Type(ty) => self.write_type(f, *ty),
@@ -382,14 +377,9 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
             f.write_char('"')
         }
         Attribute::Bytes(bytes) => {
-            f.write_str("bytes(")?;
-            for (i, b) in bytes.iter().enumerate() {
-                if i > 0 {
-                    f.write_str(", ")?;
-                }
-                write!(f, "{b}")?;
-            }
-            f.write_char(')')
+            f.write_str("b\"")?;
+            write_escaped_bytes(f, bytes)?;
+            f.write_char('"')
         }
         Attribute::Symbol(sym) => write_symbol(f, *sym),
         Attribute::Type(ty) => write_type(ctx, f, *ty),
@@ -410,6 +400,22 @@ fn write_attribute(ctx: &IrContext, f: &mut impl Write, attr: &Attribute) -> fmt
             write!(f, "\" {}:{})", loc.span.start, loc.span.end)
         }
     }
+}
+
+pub(crate) fn write_escaped_bytes(f: &mut dyn Write, bytes: &[u8]) -> fmt::Result {
+    for &b in bytes {
+        match b {
+            b'\\' => f.write_str("\\\\")?,
+            b'"' => f.write_str("\\\"")?,
+            b'\n' => f.write_str("\\n")?,
+            b'\t' => f.write_str("\\t")?,
+            b'\r' => f.write_str("\\r")?,
+            b'\0' => f.write_str("\\0")?,
+            0x20..=0x7e => f.write_char(b as char)?,
+            _ => write!(f, "\\x{b:02x}")?,
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn write_escaped_string(f: &mut dyn Write, s: &str) -> fmt::Result {
@@ -1615,5 +1621,35 @@ core.module @test {
         let operands = ctx.op_operands(add.op_ref());
         assert_eq!(operands[0], v2);
         assert_eq!(operands[1], v2);
+    }
+
+    #[test]
+    fn test_write_escaped_bytes_ascii() {
+        let mut buf = String::new();
+        write_escaped_bytes(&mut buf, b"hello").unwrap();
+        assert_eq!(buf, "hello");
+    }
+
+    #[test]
+    fn test_write_escaped_bytes_escapes() {
+        let mut buf = String::new();
+        write_escaped_bytes(&mut buf, b"a\n\t\r\0\\\"b").unwrap();
+        assert_eq!(buf, r#"a\n\t\r\0\\\"b"#);
+    }
+
+    #[test]
+    fn test_write_escaped_bytes_non_ascii() {
+        let mut buf = String::new();
+        write_escaped_bytes(&mut buf, &[0x00, 0x7f, 0x80, 0xff]).unwrap();
+        assert_eq!(buf, r"\0\x7f\x80\xff");
+    }
+
+    #[test]
+    fn test_print_bytes_attribute() {
+        let ctx = IrContext::new();
+        let attr = Attribute::Bytes(smallvec::smallvec![104, 101, 108, 108, 111]);
+        let mut buf = String::new();
+        write_attribute(&ctx, &mut buf, &attr).unwrap();
+        assert_eq!(buf, r#"b"hello""#);
     }
 }
