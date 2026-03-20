@@ -1401,6 +1401,197 @@ fn main() {
 }
 
 // =============================================================================
+// Nested Handler Semantics Tests (#500)
+// =============================================================================
+
+/// Test inner handler shadowing outer handler with same ability and same type.
+///
+/// Both handlers handle `State(Nat)`. The inner handler (init=0) should shadow
+/// the outer handler (init=100). After inner completes, outer's state remains 100.
+#[test]
+fn test_nested_handler_same_ability_same_type_shadowing() {
+    let code = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn inner_comp() ->{State(Nat)} Nat {
+    let x = State::get()
+    State::set(x + 1)
+    State::get()
+}
+
+fn main() {
+    let result = run_state(fn() {
+        let inner_result = run_state(fn() { inner_comp() }, 0)
+        __tribute_print_nat(inner_result)
+        let outer_val = State::get()
+        __tribute_print_nat(outer_val)
+        outer_val
+    }, 100)
+    __tribute_print_nat(result)
+}
+"#;
+    // inner: get()→0, set(1), get()→1 → inner_result=1
+    // outer: get()→100 (unchanged) → outer_val=100
+    // final result=100
+    assert_native_output("nested_handler_shadowing.trb", code, "1\n100\n100");
+}
+
+/// Test calling a different ability operation inside a handler arm.
+///
+/// The State handler's `set` arm calls `Logger::log()` to record the value.
+/// Logger handler wraps State handler from outside.
+#[test]
+fn test_nested_handler_cross_ability_in_handler_arm() {
+    let code = r#"ability Logger {
+    op log(msg: Nat) -> Nil
+}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_logging_state(comp: fn() ->{e, State(s), Logger} a, init: s) ->{e, Logger} a {
+    handle comp() {
+        op State::get() { run_logging_state(fn() { resume init }, init) }
+        op State::set(v) {
+            Logger::log(v)
+            run_logging_state(fn() { resume Nil }, v)
+        }
+    }
+}
+
+fn run_logger(comp: fn() ->{e, Logger} a) ->{e} a {
+    handle comp() {
+        op Logger::log(msg) {
+            __tribute_print_nat(msg)
+            run_logger(fn() { resume Nil })
+        }
+    }
+}
+
+fn computation() ->{State(Nat), Logger} Nat {
+    State::set(10)
+    State::set(20)
+    State::get()
+}
+
+fn main() {
+    let result = run_logger(fn() {
+        run_logging_state(fn() { computation() }, 0)
+    })
+    __tribute_print_nat(result)
+}
+"#;
+    // set(10) → Logger::log(10) prints 10
+    // set(20) → Logger::log(20) prints 20
+    // get() → 20
+    // result = 20
+    assert_native_output("nested_handler_cross_ability.trb", code, "10\n20\n20");
+}
+
+/// Test resuming a continuation that triggers another effect (re-entrant yield).
+///
+/// Computation calls do_a() then do_b(), summing results.
+/// A handler resumes with 10, B handler resumes with 32.
+/// Expected: 10 + 32 = 42.
+#[test]
+fn test_nested_handler_resume_triggers_different_effect() {
+    let code = r#"ability A {
+    op do_a() -> Nat
+}
+
+ability B {
+    op do_b() -> Nat
+}
+
+fn run_a(comp: fn() ->{e, A} a) ->{e} a {
+    handle comp() {
+        op A::do_a() { run_a(fn() { resume 10 }) }
+    }
+}
+
+fn run_b(comp: fn() ->{e, B} a) ->{e} a {
+    handle comp() {
+        op B::do_b() { run_b(fn() { resume 32 }) }
+    }
+}
+
+fn computation() ->{A, B} Nat {
+    let a = A::do_a()
+    let b = B::do_b()
+    a + b
+}
+
+fn main() {
+    let result = run_a(fn() { run_b(fn() { computation() }) })
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("nested_handler_reentrant_yield.trb", code, "42");
+}
+
+/// Test deep nesting (4 levels) of the same handler.
+///
+/// Four nested `run_state` handlers with init values 1, 2, 3, 4 (innermost first).
+/// Each level performs get() to read its own state. The innermost computation
+/// reads its state (init=1) and returns it.
+#[test]
+fn test_nested_handler_deep_four_levels_same_ability() {
+    let code = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn level4() ->{State(Nat)} Nat {
+    let v = State::get()
+    __tribute_print_nat(v)
+    State::set(v + 1)
+    State::get()
+}
+
+fn main() {
+    let result = run_state(fn() {
+        let v4 = State::get()
+        __tribute_print_nat(v4)
+        run_state(fn() {
+            let v3 = State::get()
+            __tribute_print_nat(v3)
+            run_state(fn() {
+                let v2 = State::get()
+                __tribute_print_nat(v2)
+                run_state(fn() { level4() }, 1)
+            }, 2)
+        }, 3)
+    }, 4)
+    __tribute_print_nat(result)
+}
+"#;
+    // level 4 (outermost): get()→4
+    // level 3: get()→3
+    // level 2: get()→2
+    // level 1 (innermost): get()→1, set(2), get()→2
+    // result = 2
+    assert_native_output("nested_handler_deep_four_levels.trb", code, "4\n3\n2\n1\n2");
+}
+
+// =============================================================================
 // State Final Value Tests
 // =============================================================================
 
