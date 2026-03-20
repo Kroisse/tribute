@@ -8,6 +8,8 @@
 //! - Functions are stored with TypeSchemes (they can be polymorphic)
 //! - During type checking, TypeSchemes are instantiated to Types with fresh type variables
 
+use std::fmt;
+
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -279,6 +281,33 @@ pub struct Effect<'db> {
     pub ability_id: super::AbilityId<'db>,
     /// Type arguments for parameterized abilities.
     pub args: Vec<Type<'db>>,
+}
+
+impl fmt::Display for Effect<'_> {
+    /// Formats this effect for diagnostic messages.
+    ///
+    /// Produces strings like `"State(Int)"` or `"Console"`.
+    ///
+    /// Requires an attached salsa database on the current thread
+    /// (i.e., must be called inside `db.attach()`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| {
+            let name = self.ability_id.name(db);
+            if self.args.is_empty() {
+                name.with_str(|s| f.write_str(s))
+            } else {
+                let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
+                    if let Some(prim) = ty.kind(db).primitive_name() {
+                        f.write_str(prim)
+                    } else {
+                        write!(f, "{:?}", ty.kind(db))
+                    }
+                });
+                name.with_str(|s| write!(f, "{}({args})", s))
+            }
+        })
+        .unwrap_or(Err(fmt::Error))
+    }
 }
 
 /// Effect row variable for row-polymorphic effects.

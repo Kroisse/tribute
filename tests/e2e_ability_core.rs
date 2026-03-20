@@ -43,6 +43,29 @@ fn compile_and_check(code: &str, name: &str) -> Vec<tribute_passes::diagnostic::
     })
 }
 
+/// Helper to run only frontend stages (parse, resolve, typecheck, TDNR) and collect diagnostics.
+///
+/// Use this instead of `compile_and_check` when testing for frontend errors that would
+/// cause later pipeline stages to panic.
+fn compile_frontend_and_check(
+    code: &str,
+    name: &str,
+) -> Vec<tribute_passes::diagnostic::Diagnostic> {
+    use tribute_passes::diagnostic::Diagnostic;
+
+    let source_code = Rope::from_str(code);
+
+    TributeDatabaseImpl::default().attach(|db| {
+        let tree = parse_with_thread_local(&source_code, None);
+        let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
+
+        tribute::pipeline::parse_and_lower_ast::accumulated::<Diagnostic>(db, source_file)
+            .into_iter()
+            .cloned()
+            .collect()
+    })
+}
+
 /// Helper to print diagnostics concisely (truncating long messages).
 fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
     for diag in diagnostics {
@@ -424,18 +447,113 @@ fn main() { }
 // Edge Cases and Error Detection
 // =============================================================================
 
-/// Test that unhandled effects are properly tracked.
-/// A function using State without declaring it in its effect row should error.
+/// Test that unhandled effects in main produce an error.
+/// When main directly calls ability operations without a handler, it should fail.
 #[test]
-#[ignore = "Effect checking not yet enforced - requires #112"]
 fn test_unhandled_effect_error() {
     let code = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
 
-// Missing ->{State(Int)} annotation
-fn bad_counter() -> Int {
+fn main() {
+    let n = State::get()
+    State::set(n + 1)
+}
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "unhandled_effect.trb");
+
+    print_diagnostics(&diagnostics);
+
+    let has_unhandled_effect_error = diagnostics
+        .iter()
+        .any(|d| d.message.contains("unhandled effects"));
+    assert!(
+        has_unhandled_effect_error,
+        "Expected 'unhandled effects' error for main calling ability ops, got: {:?}",
+        diagnostics
+    );
+}
+
+/// Test that calling an effectful function from main without a handler is an error.
+#[test]
+fn test_unhandled_effect_error_via_effectful_call() {
+    let code = r#"ability Console {
+    fn print(msg: String) -> Nil
+}
+
+fn greet() ->{Console} Nil {
+    Console::print("hello")
+}
+
+fn main() {
+    greet()
+}
+"#;
+
+    let diagnostics = compile_frontend_and_check(code, "unhandled_effect_call.trb");
+
+    print_diagnostics(&diagnostics);
+
+    let has_unhandled_effect_error = diagnostics
+        .iter()
+        .any(|d| d.message.contains("unhandled effects"));
+    assert!(
+        has_unhandled_effect_error,
+        "Expected 'unhandled effects' error when main calls effectful function, got: {:?}",
+        diagnostics
+    );
+}
+
+/// Test that wrapping effectful code in a handler makes main pure (no error).
+#[test]
+fn test_handled_effect_no_error() {
+    let code = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn use_state() ->{State(Nat)} Nil {
+    let n = State::get()
+    State::set(n + 1)
+}
+
+fn run() -> Nil {
+    handle use_state() {
+        do result { result }
+        op State::get() { resume 0 }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn main() {
+    run()
+}
+"#;
+
+    // Use frontend-only check to verify no "unhandled effects" error is emitted.
+    // Full pipeline has a pre-existing backend issue with handle expression codegen.
+    let diagnostics = compile_frontend_and_check(code, "handled_effect.trb");
+
+    print_diagnostics(&diagnostics);
+
+    assert!(
+        diagnostics.is_empty(),
+        "Handled effects should not produce errors in main, got {} diagnostics",
+        diagnostics.len()
+    );
+}
+
+/// Test that non-main functions can freely use effects without error.
+#[test]
+fn test_non_main_effectful_function_no_error() {
+    let code = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn counter() -> Nat {
     let n = State::get()
     State::set(n + 1)
     n
@@ -444,12 +562,16 @@ fn bad_counter() -> Int {
 fn main() { }
 "#;
 
-    let diagnostics = compile_and_check(code, "unhandled_effect.trb");
+    // Use frontend-only check because the backend panics for
+    // undecorated effectful functions (missing evidence params).
+    let diagnostics = compile_frontend_and_check(code, "non_main_effectful.trb");
 
-    // Should have an error about unhandled effect
+    print_diagnostics(&diagnostics);
+
     assert!(
-        !diagnostics.is_empty(),
-        "Expected error for unhandled effect"
+        diagnostics.is_empty(),
+        "Non-main functions should allow effect inference without errors, got {} diagnostics",
+        diagnostics.len()
     );
 }
 
