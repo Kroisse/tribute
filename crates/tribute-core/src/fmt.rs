@@ -2,28 +2,28 @@
 
 use std::fmt;
 
-/// Wrapper that displays a slice of items as a comma-separated list.
+/// Wrapper that displays a slice of items joined by a separator.
 ///
 /// # Examples
 ///
 /// ```
-/// use tribute_core::fmt::CommaSep;
+/// use tribute_core::fmt::Sep;
 ///
 /// let items = vec!["State(Int)", "Console"];
-/// let output = format!("{}", CommaSep(&items));
-/// assert_eq!(output, "State(Int), Console");
+/// assert_eq!(format!("{}", Sep(", ", &items)), "State(Int), Console");
+/// assert_eq!(format!("{}", Sep(" | ", &items)), "State(Int) | Console");
 ///
-/// assert_eq!(format!("{}", CommaSep::<String>(&[])), "");
-/// assert_eq!(format!("{}", CommaSep(&["solo"])), "solo");
+/// assert_eq!(format!("{}", Sep(", ", &[] as &[String])), "");
+/// assert_eq!(format!("{}", Sep(", ", &["solo"])), "solo");
 /// ```
-pub struct CommaSep<'a, I: fmt::Display>(pub &'a [I]);
+pub struct Sep<'a, I: fmt::Display>(pub &'a str, pub &'a [I]);
 
-impl<I: fmt::Display> fmt::Display for CommaSep<'_, I> {
+impl<I: fmt::Display> fmt::Display for Sep<'_, I> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
-        for item in self.0 {
+        for item in self.1 {
             if !first {
-                f.write_str(", ")?;
+                f.write_str(self.0)?;
             }
             first = false;
             write!(f, "{item}")?;
