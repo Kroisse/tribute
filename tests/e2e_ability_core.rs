@@ -1417,7 +1417,6 @@ fn test_nested_handler_same_ability_same_type_shadowing() {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() { resume init }, init) }
         op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
@@ -1463,7 +1462,6 @@ ability State(s) {
 
 fn run_logging_state(comp: fn() ->{e, State(s), Logger} a, init: s) ->{e, Logger} a {
     handle comp() {
-        do result { result }
         op State::get() { run_logging_state(fn() { resume init }, init) }
         op State::set(v) {
             Logger::log(v)
@@ -1474,7 +1472,6 @@ fn run_logging_state(comp: fn() ->{e, State(s), Logger} a, init: s) ->{e, Logger
 
 fn run_logger(comp: fn() ->{e, Logger} a) ->{e} a {
     handle comp() {
-        do result { result }
         op Logger::log(msg) {
             __tribute_print_nat(msg)
             run_logger(fn() { resume Nil })
@@ -1519,14 +1516,12 @@ ability B {
 
 fn run_a(comp: fn() ->{e, A} a) ->{e} a {
     handle comp() {
-        do result { result }
         op A::do_a() { run_a(fn() { resume 10 }) }
     }
 }
 
 fn run_b(comp: fn() ->{e, B} a) ->{e} a {
     handle comp() {
-        do result { result }
         op B::do_b() { run_b(fn() { resume 32 }) }
     }
 }
@@ -1559,7 +1554,6 @@ fn test_nested_handler_deep_four_levels_same_ability() {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        do result { result }
         op State::get() { run_state(fn() { resume init }, init) }
         op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
