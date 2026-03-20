@@ -112,7 +112,7 @@ impl<'db> TypeChecker<'db> {
         let substituted_ty = type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
 
         // Validate that `main` returns Nil
-        if func.name.with_str(|s| s == "main")
+        if func.name == "main"
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil)
         {
@@ -135,7 +135,7 @@ impl<'db> TypeChecker<'db> {
         // rather than the function signature's effect row, because effect inference
         // tracks effects in the context's current_effect rather than constraining
         // the function type's row variable.
-        if func.name.with_str(|s| s == "main") {
+        if func.name == "main" {
             let resolved_effect = row_subst.apply(self.db(), body_effect_row);
             if !resolved_effect.effects(self.db()).is_empty() {
                 let effects: Vec<String> = resolved_effect
