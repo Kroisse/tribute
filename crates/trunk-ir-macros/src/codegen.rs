@@ -689,6 +689,7 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::Type => quote!(#crate_path::TypeRef),
         AttrType::String => quote!(::std::string::String),
         AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
+        AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
     }
 }
 
@@ -709,6 +710,7 @@ fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> Tok
         AttrType::Symbol | AttrType::QualifiedName => {
             quote!(#crate_path::Attribute::Symbol(#val))
         }
+        AttrType::Bytes => quote!(#crate_path::Attribute::Bytes(#val)),
     }
 }
 
@@ -773,6 +775,12 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
             match attr {
                 #crate_path::Attribute::Symbol(v) => *v,
                 _ => panic!("expected Symbol attribute"),
+            }
+        },
+        AttrType::Bytes => quote! {
+            match attr {
+                #crate_path::Attribute::Bytes(v) => v.clone(),
+                _ => panic!("expected Bytes attribute"),
             }
         },
     }

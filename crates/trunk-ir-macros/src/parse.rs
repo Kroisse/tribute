@@ -70,6 +70,7 @@ pub enum AttrType {
     String,
     Symbol,
     QualifiedName,
+    Bytes,
 }
 
 pub struct Operand {
@@ -332,6 +333,7 @@ fn parse_attr_type(ident: &Ident) -> Result<AttrType, String> {
         "String" => Ok(AttrType::String),
         "Symbol" => Ok(AttrType::Symbol),
         "QualifiedName" => Ok(AttrType::QualifiedName),
+        "Bytes" => Ok(AttrType::Bytes),
         other => Err(format!("unknown attribute type `{other}`")),
     }
 }
