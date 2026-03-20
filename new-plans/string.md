@@ -67,8 +67,8 @@ UTF-8 rope 구조:
 
 ```rust
 enum String {
-    Leaf(Bytes)                              // 짧은 텍스트 (UTF-8 validated)
-    Branch(String, String, Nat, Nat)         // left, right, total_len, depth
+    Leaf(Bytes)                      // 짧은 텍스트 (UTF-8 validated)
+    Branch(String, String, Nat)      // left, right, total_len
 }
 ```
 
