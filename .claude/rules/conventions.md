@@ -34,6 +34,17 @@ pub enum CompileError {
 }
 ```
 
+## Formatting Utilities
+
+`tribute_core::fmt` provides helpers for diagnostic messages:
+
+```rust
+use tribute_core::fmt::joined;
+
+// joined(separator, iterable) -> impl Display
+format!("unhandled effects: {}", joined(", ", &effects))
+```
+
 ## Type System
 
 ### Row-Polymorphic Effects
