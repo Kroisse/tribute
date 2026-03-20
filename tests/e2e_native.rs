@@ -260,3 +260,31 @@ fn main() {
         "10\n42",
     );
 }
+
+/// Test enum destructuring with mixed-type fields.
+/// Regression test: each pattern binding must get a fresh type variable.
+#[test]
+fn test_native_enum_mixed_type_fields() {
+    assert_native_output(
+        "enum_mixed_fields.trb",
+        r#"
+enum Tree {
+    Leaf(Nat),
+    Branch(Tree, Tree, Nat),
+}
+
+fn sum(t: Tree) -> Nat {
+    case t {
+        Leaf(n) -> n
+        Branch(left, right, len) -> sum(left) + sum(right) + len
+    }
+}
+
+fn main() {
+    let t = Branch(Leaf(1), Branch(Leaf(2), Leaf(3), 0), 0)
+    __tribute_print_nat(sum(t))
+}
+"#,
+        "6",
+    );
+}

@@ -495,6 +495,8 @@ impl<'db> TypeChecker<'db> {
                 let result_ty = ctx.fresh_type_var();
                 for arm in arms {
                     ctx.push_scope();
+                    let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &arm.pattern);
+                    ctx.constrain_eq(pattern_ty, scrutinee_ty);
                     self.bind_pattern_vars_with_ctx(ctx, &arm.pattern, scrutinee_ty);
                     let arm_ty = self.infer_expr_type_with_ctx(ctx, &arm.body);
                     ctx.constrain_eq(arm_ty, result_ty);
