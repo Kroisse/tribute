@@ -67,6 +67,8 @@ impl<'db> TypeChecker<'db> {
         let constraints = ctx.take_constraints();
         // Take node_types now while ctx is still alive, before we need mutable self access
         let func_node_types = ctx.take_node_types();
+        // Save the accumulated effect row from the body before dropping ctx
+        let body_effect_row = ctx.current_effect();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
 
@@ -110,7 +112,6 @@ impl<'db> TypeChecker<'db> {
         let substituted_ty = type_subst.apply_with_rows(self.db(), instantiated_func_ty, row_subst);
 
         // Validate that `main` returns Nil
-        // Validate that `main` returns Nil
         if func.name.with_str(|s| s == "main")
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil)
@@ -127,6 +128,32 @@ impl<'db> TypeChecker<'db> {
                 phase: CompilationPhase::TypeChecking,
             }
             .accumulate(self.db());
+        }
+
+        // Validate that `main` has no unhandled effects.
+        // We check body_effect_row (the accumulated effect from type-checking the body)
+        // rather than the function signature's effect row, because effect inference
+        // tracks effects in the context's current_effect rather than constraining
+        // the function type's row variable.
+        if func.name.with_str(|s| s == "main") {
+            let resolved_effect = row_subst.apply(self.db(), body_effect_row);
+            if !resolved_effect.effects(self.db()).is_empty() {
+                let effects: Vec<String> = resolved_effect
+                    .effects(self.db())
+                    .iter()
+                    .map(|e| e.display(self.db()))
+                    .collect();
+                Diagnostic {
+                    message: format!(
+                        "function 'main' has unhandled effects: {}",
+                        effects.join(", ")
+                    ),
+                    span: self.get_span(func.id),
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::TypeChecking,
+                }
+                .accumulate(self.db());
+            }
         }
 
         let generalized =

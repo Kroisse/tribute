@@ -281,6 +281,30 @@ pub struct Effect<'db> {
     pub args: Vec<Type<'db>>,
 }
 
+impl<'db> Effect<'db> {
+    /// Format this effect for diagnostic messages.
+    ///
+    /// Produces strings like `"State(Int)"` or `"Console"`.
+    pub fn display(&self, db: &'db dyn salsa::Database) -> String {
+        let name = self.ability_id.name(db);
+        if self.args.is_empty() {
+            name.with_str(|s| s.to_owned())
+        } else {
+            let args: Vec<String> = self
+                .args
+                .iter()
+                .map(|ty| {
+                    ty.kind(db)
+                        .primitive_name()
+                        .map(|s| s.to_owned())
+                        .unwrap_or_else(|| format!("{:?}", ty.kind(db)))
+                })
+                .collect();
+            name.with_str(|s| format!("{}({})", s, args.join(", ")))
+        }
+    }
+}
+
 /// Effect row variable for row-polymorphic effects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct EffectVar {
