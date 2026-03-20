@@ -39,10 +39,14 @@ pub enum CompileError {
 `tribute_core::fmt` provides helpers for diagnostic messages:
 
 ```rust
-use tribute_core::fmt::joined;
+use tribute_core::fmt::{joined, joined_by};
 
 // joined(separator, iterable) -> impl Display
 format!("unhandled effects: {}", joined(", ", &effects))
+
+// joined_by(separator, iterable, formatter) -> impl Display
+// Custom formatting per item, zero allocation
+format!("{}", joined_by(", ", &items, |item, f| write!(f, "#{item}")))
 ```
 
 ## Type System
