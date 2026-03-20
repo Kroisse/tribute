@@ -141,7 +141,7 @@ impl<'db> TypeChecker<'db> {
                 let effects: Vec<String> = resolved_effect
                     .effects(self.db())
                     .iter()
-                    .map(|e| e.display(self.db()).to_string())
+                    .map(|e| e.to_string())
                     .collect();
                 Diagnostic {
                     message: format!(

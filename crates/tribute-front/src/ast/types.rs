@@ -283,42 +283,34 @@ pub struct Effect<'db> {
     pub args: Vec<Type<'db>>,
 }
 
-impl<'db> Effect<'db> {
-    /// Returns a value that implements [`fmt::Display`] for diagnostic messages.
+impl fmt::Display for Effect<'_> {
+    /// Formats this effect for diagnostic messages.
     ///
     /// Produces strings like `"State(Int)"` or `"Console"`.
-    pub fn display<'a>(&'a self, db: &'db dyn salsa::Database) -> impl fmt::Display + 'a
-    where
-        'db: 'a,
-    {
-        struct EffectDisplay<'a, 'db> {
-            effect: &'a Effect<'db>,
-            db: &'db dyn salsa::Database,
-        }
-
-        impl fmt::Display for EffectDisplay<'_, '_> {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                let name = self.effect.ability_id.name(self.db);
-                if self.effect.args.is_empty() {
-                    name.with_str(|s| f.write_str(s))
-                } else {
-                    name.with_str(|s| write!(f, "{}(", s))?;
-                    for (i, ty) in self.effect.args.iter().enumerate() {
-                        if i > 0 {
-                            write!(f, ", ")?;
-                        }
-                        if let Some(prim) = ty.kind(self.db).primitive_name() {
-                            write!(f, "{}", prim)?;
-                        } else {
-                            write!(f, "{:?}", ty.kind(self.db))?;
-                        }
+    ///
+    /// Requires an attached salsa database on the current thread
+    /// (i.e., must be called inside `db.attach()`).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| {
+            let name = self.ability_id.name(db);
+            if self.args.is_empty() {
+                name.with_str(|s| f.write_str(s))
+            } else {
+                name.with_str(|s| write!(f, "{}(", s))?;
+                for (i, ty) in self.args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
                     }
-                    write!(f, ")")
+                    if let Some(prim) = ty.kind(db).primitive_name() {
+                        write!(f, "{}", prim)?;
+                    } else {
+                        write!(f, "{:?}", ty.kind(db))?;
+                    }
                 }
+                write!(f, ")")
             }
-        }
-
-        EffectDisplay { effect: self, db }
+        })
+        .expect("Effect::fmt requires an attached salsa database")
     }
 }
 
