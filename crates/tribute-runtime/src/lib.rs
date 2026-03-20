@@ -176,6 +176,43 @@ pub extern "C" fn __tribute_print_float(value: f64) {
     }
 }
 
+/// Print raw bytes to stdout (no newline appended).
+///
+/// Used by the String rope implementation to output leaf byte sequences.
+/// The caller is responsible for traversing the rope and calling this for
+/// each `Leaf(bytes)` node.
+///
+/// Signature: `(ptr: *const u8, len: u64) -> ()`
+///
+/// # Safety
+///
+/// `ptr` must point to a valid byte buffer of at least `len` bytes,
+/// or be null when `len` is 0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_print_bytes(ptr: *const u8, len: u64) {
+    if ptr.is_null() || len == 0 {
+        return;
+    }
+    let Ok(len) = usize::try_from(len) else {
+        return;
+    };
+    unsafe {
+        write(1, ptr, len);
+    }
+}
+
+/// Print a newline character to stdout.
+///
+/// Used by `print_line` after traversing and printing a String rope.
+///
+/// Signature: `() -> ()`
+#[unsafe(no_mangle)]
+pub extern "C" fn __tribute_print_newline() {
+    unsafe {
+        write(1, b"\n".as_ptr(), 1);
+    }
+}
+
 // =============================================================================
 // Allocator
 // =============================================================================
