@@ -21,6 +21,7 @@ use salsa_test_macros::salsa_test;
 #[salsa_test]
 fn test_resume_in_op_handler(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -53,6 +54,7 @@ fn main() { }
 #[salsa_test]
 fn test_single_ability_op_in_block(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -77,6 +79,7 @@ fn main() { }
 #[salsa_test]
 fn test_ability_op_then_pure_expr(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -102,6 +105,7 @@ fn main() { }
 #[salsa_test]
 fn test_sequential_ability_ops(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -133,6 +137,7 @@ fn main() { }
 #[salsa_test]
 fn test_handle_with_do_and_op_arms(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -165,6 +170,7 @@ fn main() { }
 #[salsa_test]
 fn test_handle_with_fn_handler(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -201,6 +207,7 @@ fn main() { }
 #[salsa_test]
 fn test_multi_arg_ability_op(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability KV(k, v) {

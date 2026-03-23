@@ -1,27 +1,18 @@
 //! Shared test helpers for tribute-front integration tests.
 
 use ropey::Rope;
+use tree_sitter::Parser;
 use tribute_front::SourceCst;
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
 
-pub fn source_from_str(path: &str, text: &str) -> SourceCst {
-    use tree_sitter::Parser;
-    salsa::with_attached_database(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let text: Rope = text.into();
-        let tree = parser.parse(text.to_string().as_str(), None);
-        SourceCst::new(
-            db,
-            fluent_uri::Uri::parse_from(format!("test:///{}", path)).unwrap(),
-            text,
-            tree,
-        )
-    })
-    .expect("attached db")
+pub fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parser.parse(text, None).expect("Failed to parse");
+    SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
 }
 
 /// Run the full AST pipeline (parse → resolve → typecheck → TDNR → IR)
