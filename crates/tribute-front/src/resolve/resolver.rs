@@ -204,12 +204,15 @@ impl<'db> Resolver<'db> {
 
     /// Find names in scope that are similar to the given name.
     fn find_similar_names(&self, name: Symbol) -> Vec<Symbol> {
-        let candidates = self
+        use std::collections::HashSet;
+
+        let candidates: HashSet<Symbol> = self
             .local_scopes
             .iter()
             .flat_map(|scope| scope.keys().copied())
             .chain(self.env.iter_all_names())
-            .chain(BUILTINS.iter().map(|(n, _)| Symbol::new(n)));
+            .chain(BUILTINS.iter().map(|(n, _)| Symbol::new(n)))
+            .collect();
 
         let target = name.to_string();
         best_matches_by(
