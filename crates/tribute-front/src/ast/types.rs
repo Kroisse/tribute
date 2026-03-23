@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use tribute_core::fmt::joined_by;
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -190,48 +191,25 @@ impl fmt::Display for TypeKind<'_> {
             Self::Named { name, args } => {
                 name.with_str(|s| f.write_str(s))?;
                 if !args.is_empty() {
-                    write!(
-                        f,
-                        "({})",
-                        tribute_core::fmt::joined_by(", ", args, |ty, f| {
-                            write!(f, "{}", ty.kind(db))
-                        })
-                    )
+                    let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                    write!(f, "({args})")
                 } else {
                     Ok(())
                 }
             }
             Self::Func { params, result, .. } => {
-                write!(f, "fn(")?;
-                for (i, p) in params.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", p.kind(db))?;
-                }
-                write!(f, ") -> {}", result.kind(db))
+                let params = joined_by(", ", params, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "fn({params}) -> {}", result.kind(db))
             }
             Self::Tuple(elems) => {
-                write!(f, "#(")?;
-                for (i, e) in elems.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", e.kind(db))?;
-                }
-                write!(f, ")")
+                let elems = joined_by(", ", elems, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "#({elems})")
             }
             Self::BoundVar { index } => write!(f, "_{}", index),
             Self::UniVar { .. } => f.write_str("_"),
             Self::App { ctor, args } => {
-                write!(f, "{}(", ctor.kind(db))?;
-                for (i, a) in args.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", a.kind(db))?;
-                }
-                write!(f, ")")
+                let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "{}({args})", ctor.kind(db))
             }
             Self::Continuation { arg, result, .. } => {
                 write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
@@ -372,9 +350,7 @@ impl fmt::Display for Effect<'_> {
             if self.args.is_empty() {
                 name.with_str(|s| f.write_str(s))
             } else {
-                let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
-                    write!(f, "{}", ty.kind(db))
-                });
+                let args = joined_by(", ", &self.args, |ty, f| write!(f, "{}", ty.kind(db)));
                 name.with_str(|s| write!(f, "{}({args})", s))
             }
         })
