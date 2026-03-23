@@ -170,6 +170,84 @@ impl TypeKind<'_> {
     }
 }
 
+impl fmt::Display for Type<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| self.kind(db).fmt_display(db, f))
+            .unwrap_or(Err(fmt::Error))
+    }
+}
+
+impl<'db> TypeKind<'db> {
+    /// Format for diagnostic messages. Requires an attached salsa database.
+    fn fmt_display(&self, db: &'db dyn salsa::Database, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Int => f.write_str("Int"),
+            Self::Nat => f.write_str("Nat"),
+            Self::Float => f.write_str("Float"),
+            Self::Bool => f.write_str("Bool"),
+            Self::Bytes => f.write_str("Bytes"),
+            Self::Rune => f.write_str("Rune"),
+            Self::Nil => f.write_str("Nil"),
+            Self::Named { name, args } => {
+                name.with_str(|s| f.write_str(s))?;
+                if !args.is_empty() {
+                    write!(
+                        f,
+                        "({})",
+                        tribute_core::fmt::joined_by(", ", args, |ty, f| ty
+                            .kind(db)
+                            .fmt_display(db, f))
+                    )
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Func { params, result, .. } => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    p.kind(db).fmt_display(db, f)?;
+                }
+                write!(f, ") -> ")?;
+                result.kind(db).fmt_display(db, f)
+            }
+            Self::Tuple(elems) => {
+                write!(f, "#(")?;
+                for (i, e) in elems.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    e.kind(db).fmt_display(db, f)?;
+                }
+                write!(f, ")")
+            }
+            Self::BoundVar { index } => write!(f, "_{}", index),
+            Self::UniVar { .. } => f.write_str("_"),
+            Self::App { ctor, args } => {
+                ctor.kind(db).fmt_display(db, f)?;
+                write!(f, "(")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    a.kind(db).fmt_display(db, f)?;
+                }
+                write!(f, ")")
+            }
+            Self::Continuation { arg, result, .. } => {
+                write!(f, "Continuation(")?;
+                arg.kind(db).fmt_display(db, f)?;
+                write!(f, " -> ")?;
+                result.kind(db).fmt_display(db, f)?;
+                write!(f, ")")
+            }
+            Self::Error => f.write_str("<error>"),
+        }
+    }
+}
+
 /// A polymorphic type scheme with universally quantified type parameters.
 ///
 /// TypeSchemes represent types that can be instantiated with different type arguments.
@@ -301,11 +379,7 @@ impl fmt::Display for Effect<'_> {
                 name.with_str(|s| f.write_str(s))
             } else {
                 let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
-                    if let Some(prim) = ty.kind(db).primitive_name() {
-                        f.write_str(prim)
-                    } else {
-                        write!(f, "{:?}", ty.kind(db))
-                    }
+                    ty.kind(db).fmt_display(db, f)
                 });
                 name.with_str(|s| write!(f, "{}({args})", s))
             }

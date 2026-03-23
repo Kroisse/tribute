@@ -78,7 +78,7 @@ impl<'db> TypeChecker<'db> {
         if let Err(error) = solver.solve(constraints) {
             let span = self.get_span(func.id);
             Diagnostic {
-                message: format!("Type error in function '{}': {:?}", func.name, error),
+                message: format!("type error in function '{}': {}", func.name, error),
                 span,
                 severity: DiagnosticSeverity::Error,
                 phase: CompilationPhase::TypeChecking,
@@ -117,13 +117,8 @@ impl<'db> TypeChecker<'db> {
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil)
         {
-            let type_name = result
-                .kind(self.db())
-                .primitive_name()
-                .map(|s| s.to_owned())
-                .unwrap_or_else(|| format!("{:?}", result.kind(self.db())));
             Diagnostic {
-                message: format!("function 'main' must return Nil, but returns {}", type_name),
+                message: format!("function 'main' must return Nil, but returns `{}`", result),
                 span: self.get_span(func.id),
                 severity: DiagnosticSeverity::Error,
                 phase: CompilationPhase::TypeChecking,
