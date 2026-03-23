@@ -2,13 +2,13 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "Type error in function 'main': TypeMismatch { expected: Type { kind: Nat }, actual: Type { kind: Named { name: Symbol(\"Foo\"), args: [] } } }"
+- message: "type error in function 'main': expected `Nat`, found `Foo`"
   span:
     start: 0
     end: 23
   severity: Error
   phase: TypeChecking
-- message: "function 'main' must return Nil, but returns Named { name: Symbol(\"Foo\"), args: [] }"
+- message: "function 'main' must return Nil, but returns `Foo`"
   span:
     start: 0
     end: 23

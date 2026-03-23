@@ -655,14 +655,13 @@ fn main() { }
         "Expected type error for State(Int) vs State(Bool) mismatch"
     );
 
-    // Verify it's a row mismatch or type mismatch error
-    let has_type_error = diagnostics.iter().any(|d| {
-        let msg = format!("{:?}", d);
-        msg.contains("Mismatch") || msg.contains("mismatch")
-    });
+    // Verify it's a type mismatch error
+    let has_type_error = diagnostics
+        .iter()
+        .any(|d| d.message.contains("expected") && d.message.contains("found"));
     assert!(
         has_type_error,
-        "Expected row/type mismatch error, got: {:?}",
+        "Expected type mismatch error, got: {:?}",
         diagnostics
     );
 }

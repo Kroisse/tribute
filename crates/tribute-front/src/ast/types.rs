@@ -10,6 +10,7 @@
 
 use std::fmt;
 
+use tribute_core::fmt::joined_by;
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -170,6 +171,55 @@ impl TypeKind<'_> {
     }
 }
 
+impl fmt::Display for Type<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| write!(f, "{}", self.kind(db)))
+            .unwrap_or(Err(fmt::Error))
+    }
+}
+
+impl fmt::Display for TypeKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| match self {
+            Self::Int => f.write_str("Int"),
+            Self::Nat => f.write_str("Nat"),
+            Self::Float => f.write_str("Float"),
+            Self::Bool => f.write_str("Bool"),
+            Self::Bytes => f.write_str("Bytes"),
+            Self::Rune => f.write_str("Rune"),
+            Self::Nil => f.write_str("Nil"),
+            Self::Named { name, args } => {
+                name.with_str(|s| f.write_str(s))?;
+                if !args.is_empty() {
+                    let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                    write!(f, "({args})")
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Func { params, result, .. } => {
+                let params = joined_by(", ", params, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "fn({params}) -> {}", result.kind(db))
+            }
+            Self::Tuple(elems) => {
+                let elems = joined_by(", ", elems, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "#({elems})")
+            }
+            Self::BoundVar { index } => write!(f, "_{}", index),
+            Self::UniVar { .. } => f.write_str("_"),
+            Self::App { ctor, args } => {
+                let args = joined_by(", ", args, |ty, f| write!(f, "{}", ty.kind(db)));
+                write!(f, "{}({args})", ctor.kind(db))
+            }
+            Self::Continuation { arg, result, .. } => {
+                write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
+            }
+            Self::Error => f.write_str("<error>"),
+        })
+        .unwrap_or(Err(fmt::Error))
+    }
+}
+
 /// A polymorphic type scheme with universally quantified type parameters.
 ///
 /// TypeSchemes represent types that can be instantiated with different type arguments.
@@ -300,13 +350,7 @@ impl fmt::Display for Effect<'_> {
             if self.args.is_empty() {
                 name.with_str(|s| f.write_str(s))
             } else {
-                let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
-                    if let Some(prim) = ty.kind(db).primitive_name() {
-                        f.write_str(prim)
-                    } else {
-                        write!(f, "{:?}", ty.kind(db))
-                    }
-                });
+                let args = joined_by(", ", &self.args, |ty, f| write!(f, "{}", ty.kind(db)));
                 name.with_str(|s| write!(f, "{}({args})", s))
             }
         })

@@ -61,6 +61,58 @@ pub enum SolveError<'db> {
     },
 }
 
+impl std::fmt::Display for SolveError<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TypeMismatch { expected, actual } => {
+                write!(f, "expected `{}`, found `{}`", expected, actual)
+            }
+            Self::OccursCheck { ty, .. } => {
+                write!(
+                    f,
+                    "infinite type: cannot construct the infinite type `{}`",
+                    ty
+                )
+            }
+            Self::RowMismatch { expected, actual } => salsa::with_attached_database(|db| {
+                let fmt_row = |row: &EffectRow<'_>| -> String {
+                    let effects = row.effects(db);
+                    if effects.is_empty() {
+                        "{{}}".to_string()
+                    } else {
+                        format!("{{{}}}", tribute_core::fmt::joined(", ", effects.iter()))
+                    }
+                };
+                write!(
+                    f,
+                    "effect mismatch: expected `{}`, found `{}`",
+                    fmt_row(expected),
+                    fmt_row(actual)
+                )
+            })
+            .unwrap_or(Err(std::fmt::Error)),
+            Self::EffectArgArityMismatch {
+                effect_name,
+                expected,
+                found,
+            } => {
+                use tribute_core::fmt::PluralExt;
+                effect_name.with_str(|name| {
+                    write!(
+                        f,
+                        "ability `{}` expects {} type argument{}, but {} {} given",
+                        name,
+                        expected,
+                        expected.plural(),
+                        found,
+                        found.verb("was", "were"),
+                    )
+                })
+            }
+        }
+    }
+}
+
 /// Type substitution: maps type variable IDs to types.
 #[derive(Clone, Debug, Default)]
 pub struct TypeSubst<'db> {
