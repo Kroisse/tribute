@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "Type error in function 'test': TypeMismatch { expected: Type { kind: Int }, actual: Type { kind: Nat } }"
+  span:
+    start: 42
+    end: 82
+  severity: Error
+  phase: TypeChecking

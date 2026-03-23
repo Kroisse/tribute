@@ -1,9 +1,10 @@
 //! Diagnostic messages emitted during compilation.
 
+use serde::Serialize;
 use trunk_ir::Span;
 
 /// A diagnostic message (error, warning, or info) with source location.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[salsa::accumulator]
 pub struct Diagnostic {
     pub message: String,
@@ -13,7 +14,7 @@ pub struct Diagnostic {
 }
 
 /// Severity level of a diagnostic.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
@@ -21,7 +22,7 @@ pub enum DiagnosticSeverity {
 }
 
 /// Compilation phase where a diagnostic was emitted.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub enum CompilationPhase {
     Parsing,
     AstGeneration,

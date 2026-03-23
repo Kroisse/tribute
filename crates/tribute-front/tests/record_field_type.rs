@@ -14,6 +14,7 @@ use salsa_test_macros::salsa_test;
 #[salsa_test]
 fn test_record_field_type_correct(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -31,6 +32,7 @@ fn make_point() -> Point {
 #[salsa_test]
 fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Person { name: String, age: Int, active: Bool }
@@ -49,6 +51,7 @@ fn make_person() -> Person {
 #[salsa_test]
 fn test_record_spread_same_type(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -66,6 +69,7 @@ fn update_x(p: Point) -> Point {
 #[salsa_test]
 fn test_record_spread_only(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Config { debug: Bool, verbose: Bool }
@@ -83,6 +87,7 @@ fn copy_config(c: Config) -> Config {
 #[salsa_test]
 fn test_record_generic_type(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Pair(a, b) { first: a, second: b }
@@ -100,6 +105,7 @@ fn make_pair() -> Pair(Int, Bool) {
 #[salsa_test]
 fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -122,6 +128,7 @@ fn test() -> Int {
 #[salsa_test]
 fn test_snapshot_record_construction(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -140,6 +147,7 @@ fn make_point() -> Point {
 #[salsa_test]
 fn test_snapshot_record_spread(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -158,6 +166,7 @@ fn update_x(p: Point) -> Point {
 #[salsa_test]
 fn test_snapshot_record_generic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Pair(a, b) { first: a, second: b }
@@ -177,6 +186,7 @@ fn make_pair() -> Pair(Int, Bool) {
 #[salsa_test]
 fn test_snapshot_record_spread_only(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Config { debug: Bool, verbose: Bool }
@@ -196,6 +206,7 @@ fn copy_config(c: Config) -> Config {
 #[salsa_test]
 fn test_snapshot_record_spread_all_fields_explicit(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -214,6 +225,7 @@ fn replace_all(p: Point) -> Point {
 #[salsa_test]
 fn test_record_spread_complex_expr(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -243,6 +255,7 @@ fn shift_x() -> Point {
 #[salsa_test]
 fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn make_point() -> Point {

@@ -20,6 +20,7 @@ use salsa_test_macros::salsa_test;
 #[salsa_test]
 fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
@@ -38,6 +39,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
@@ -64,6 +66,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_effectful_lambda_direct_ability_call(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -96,6 +99,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_effectful_lambda_indirect_effect_call(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -131,6 +135,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_effectful_lambda_multiple_operations(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -174,6 +179,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -201,6 +207,7 @@ fn main() -> Int { 0 }
 #[salsa_test]
 fn test_ability_core_full_pattern(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -244,6 +251,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_nested_lambda_inner_effectful(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {
@@ -282,6 +290,7 @@ fn main() -> Int {
 #[salsa_test]
 fn test_lambda_effect_row_unification(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability State(s) {

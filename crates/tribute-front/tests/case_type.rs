@@ -18,6 +18,7 @@ use salsa_test_macros::salsa_test;
 #[salsa_test]
 fn test_case_nat_literal(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn classify(x: Nat) -> Nat {
@@ -39,6 +40,7 @@ fn classify(x: Nat) -> Nat {
 #[salsa_test]
 fn test_case_int_literal(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn sign(x: Int) -> Int {
@@ -59,6 +61,7 @@ fn sign(x: Int) -> Int {
 #[salsa_test]
 fn test_case_bool_literal(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn invert(x: Bool) -> Bool {
@@ -78,6 +81,7 @@ fn invert(x: Bool) -> Bool {
 #[salsa_test]
 fn test_case_enum_variant(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 enum Option(a) {
@@ -103,6 +107,7 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
 #[salsa_test]
 fn test_case_result_type_unification(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn to_nat(b: Bool) -> Nat {
@@ -122,6 +127,7 @@ fn to_nat(b: Bool) -> Nat {
 #[salsa_test]
 fn test_case_nested(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn nested(x: Nat, y: Bool) -> Nat {

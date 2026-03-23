@@ -14,6 +14,7 @@ use salsa_test_macros::salsa_test;
 #[salsa_test]
 fn test_tuple_pattern_basic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test(x: Bool, y: Bool) -> Int {
@@ -33,6 +34,7 @@ fn test(x: Bool, y: Bool) -> Int {
 #[salsa_test]
 fn test_tuple_pattern_nested(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test(a: Bool, b: Bool, c: Bool) -> Int {
@@ -52,6 +54,7 @@ fn test(a: Bool, b: Bool, c: Bool) -> Int {
 #[salsa_test]
 fn test_tuple_pattern_generic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn first(pair: #(a, b)) -> a {
@@ -77,6 +80,7 @@ fn test() -> Int {
 #[salsa_test]
 fn test_tuple_let_destructure_basic(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test() -> Nat {
@@ -95,6 +99,7 @@ fn test() -> Nat {
 #[salsa_test]
 fn test_tuple_let_destructure_nested(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test() -> Nat {
@@ -113,6 +118,7 @@ fn test() -> Nat {
 #[salsa_test]
 fn test_tuple_let_destructure_wildcard(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test() -> Nat {
@@ -131,6 +137,7 @@ fn test() -> Nat {
 #[salsa_test]
 fn test_tuple_let_destructure_from_function(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn make_pair(x: Nat, y: Nat) -> #(Nat, Nat) {
