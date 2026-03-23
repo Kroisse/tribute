@@ -5,20 +5,11 @@
 //! message is improved, review and update the corresponding snapshot with
 //! `cargo insta review`.
 
-use ropey::Rope;
-use salsa_test_macros::salsa_test;
-use tree_sitter::Parser;
-use tribute::pipeline::compile_with_diagnostics;
-use tribute_front::SourceCst;
+mod common;
 
-fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::LANGUAGE.into())
-        .expect("Failed to set language");
-    let tree = parser.parse(text, None).expect("Failed to parse");
-    SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
-}
+use self::common::source_from_str;
+use salsa_test_macros::salsa_test;
+use tribute::pipeline::compile_with_diagnostics;
 
 // =============================================================================
 // Name resolution errors

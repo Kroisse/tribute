@@ -11,24 +11,11 @@
 //! lambda inside an effectful function might be incorrectly unified with the
 //! function's effect row.
 
-use ropey::Rope;
-use salsa_test_macros::salsa_test;
-use tree_sitter::Parser;
-use tribute::pipeline::compile_with_diagnostics;
-use tribute_front::SourceCst;
+mod common;
 
-/// Helper to create SourceCst from string
-fn source_from_str(path: &str, text: &str) -> SourceCst {
-    salsa::with_attached_database(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parser.parse(text, None).expect("tree");
-        SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
-    })
-    .expect("attached db")
-}
+use self::common::source_from_str;
+use salsa_test_macros::salsa_test;
+use tribute::pipeline::compile_with_diagnostics;
 
 /// Test that pure lambdas inside effectful functions have distinct effect variables.
 ///
@@ -53,7 +40,7 @@ fn effectful_with_lambda() ->{State(Int)} Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("effect_collision.trb", code);
+    let source = source_from_str(db, "effect_collision.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -86,7 +73,7 @@ fn effectful_with_multiple_lambdas() ->{State(Int)} Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("multiple_lambdas.trb", code);
+    let source = source_from_str(db, "multiple_lambdas.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -136,7 +123,7 @@ fn effectful_using_pure(init: Int) ->{State(Int)} Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("pure_in_effectful.trb", code);
+    let source = source_from_str(db, "pure_in_effectful.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -185,7 +172,7 @@ fn should_fail() ->{State(Int)} Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("effectful_rejected.trb", code);
+    let source = source_from_str(db, "effectful_rejected.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     // This SHOULD fail with a type error
@@ -218,7 +205,7 @@ fn nested_lambdas() ->{State(Int)} Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("nested_lambdas.trb", code);
+    let source = source_from_str(db, "nested_lambdas.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -254,7 +241,7 @@ fn test_lambda() -> Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("pure_lambda_basic.trb", code);
+    let source = source_from_str(db, "pure_lambda_basic.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -286,7 +273,7 @@ fn test_compose() -> Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("multiple_pure_lambdas.trb", code);
+    let source = source_from_str(db, "multiple_pure_lambdas.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
@@ -316,7 +303,7 @@ fn test_nested() -> Int {
 fn main() { }
 "#;
 
-    let source = source_from_str("nested_pure_lambdas.trb", code);
+    let source = source_from_str(db, "nested_pure_lambdas.trb", code);
     let result = compile_with_diagnostics(db, source);
 
     for diag in &result.diagnostics {
