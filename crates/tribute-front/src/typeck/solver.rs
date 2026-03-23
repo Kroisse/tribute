@@ -95,17 +95,20 @@ impl std::fmt::Display for SolveError<'_> {
                 effect_name,
                 expected,
                 found,
-            } => effect_name.with_str(|name| {
-                write!(
-                    f,
-                    "ability `{}` expects {} type argument{}, but {} {} given",
-                    name,
-                    expected,
-                    if *expected == 1 { "" } else { "s" },
-                    found,
-                    if *found == 1 { "was" } else { "were" },
-                )
-            }),
+            } => {
+                use tribute_core::fmt::PluralExt;
+                effect_name.with_str(|name| {
+                    write!(
+                        f,
+                        "ability `{}` expects {} type argument{}, but {} {} given",
+                        name,
+                        expected,
+                        expected.plural(),
+                        found,
+                        found.verb("was", "were"),
+                    )
+                })
+            }
         }
     }
 }
