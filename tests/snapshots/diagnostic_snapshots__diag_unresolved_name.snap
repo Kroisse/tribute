@@ -1,0 +1,16 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "unresolved name `undefined_var`"
+  span:
+    start: 19
+    end: 32
+  severity: Error
+  phase: NameResolution
+- message: "function 'main' must return Nil, but returns Int"
+  span:
+    start: 0
+    end: 34
+  severity: Error
+  phase: TypeChecking

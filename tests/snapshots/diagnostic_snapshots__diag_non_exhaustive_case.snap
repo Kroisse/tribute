@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "non-exhaustive case expression: not all cases are covered"
+  span:
+    start: 35
+    end: 36
+  severity: Error
+  phase: TypeChecking

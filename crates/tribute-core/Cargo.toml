@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 salsa.workspace = true
+serde.workspace = true
 target-lexicon.workspace = true
 trunk-ir.workspace = true
