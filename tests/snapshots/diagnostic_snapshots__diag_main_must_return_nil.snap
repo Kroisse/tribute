@@ -1,0 +1,16 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "Type error in function 'main': TypeMismatch { expected: Type { kind: Nat }, actual: Type { kind: Int } }"
+  span:
+    start: 0
+    end: 23
+  severity: Error
+  phase: TypeChecking
+- message: "function 'main' must return Nil, but returns Int"
+  span:
+    start: 0
+    end: 23
+  severity: Error
+  phase: TypeChecking

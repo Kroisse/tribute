@@ -76,6 +76,73 @@ fn test(x: Nat) -> Nat {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+#[salsa_test]
+fn diag_type_mismatch_in_function(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+fn add(x: Int, y: Int) -> Int { x + y }
+
+fn test() -> Int {
+    add(1, "hello")
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
+    let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+// =============================================================================
+// Lowering errors
+// =============================================================================
+
+/// Panics: accumulate() called outside tracked function during lowering.
+#[ignore = "lowering diagnostic accumulate panics outside tracked function"]
+#[salsa_test]
+fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+struct Point { x: Int, y: Int }
+
+fn test() -> Point {
+    Point { x: 1, z: 2 }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Panics: accumulate() called outside tracked function during lowering.
+#[ignore = "lowering diagnostic accumulate panics outside tracked function"]
+#[salsa_test]
+fn diag_missing_struct_field(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        "test.trb",
+        r#"
+struct Point { x: Int, y: Int }
+
+fn test() -> Point {
+    Point { x: 1 }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 // =============================================================================
 // Ability / effect errors
 // =============================================================================
