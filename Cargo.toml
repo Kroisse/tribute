@@ -39,6 +39,7 @@ salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1"
 smallvec = { version = "1.13", features = ["union", "const_generics", "serde"] }
+strsim = "0.11"
 target-lexicon = "0.13"
 tempfile = "3.27"
 tracing = "0.1"

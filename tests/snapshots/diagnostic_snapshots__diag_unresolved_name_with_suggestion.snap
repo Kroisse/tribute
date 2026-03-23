@@ -1,0 +1,22 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "unresolved name `compue`; did you mean `compute`?"
+  span:
+    start: 65
+    end: 71
+  severity: Error
+  phase: NameResolution
+- message: "type error in function 'compute': expected `Int`, found `Nat`"
+  span:
+    start: 1
+    end: 44
+  severity: Error
+  phase: TypeChecking
+- message: "function 'main' must return Nil, but returns `Int`"
+  span:
+    start: 46
+    end: 77
+  severity: Error
+  phase: TypeChecking

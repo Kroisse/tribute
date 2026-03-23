@@ -24,6 +24,22 @@ fn diag_unresolved_name(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
+fn diag_unresolved_name_with_suggestion(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        db,
+        "test.trb",
+        r#"
+fn compute(value: Int) -> Int { value + 1 }
+
+fn main() -> Int { compue(42) }
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
     let source = source_from_str(db, "test.trb", "fn main() -> Foo { 42 }");
     let result = compile_with_diagnostics(db, source);
