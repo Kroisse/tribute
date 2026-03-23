@@ -11,16 +11,13 @@ use tree_sitter::Parser;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::SourceCst;
 
-fn source_from_str(path: &str, text: &str) -> SourceCst {
-    salsa::with_attached_database(|db| {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parser.parse(text, None).expect("Failed to parse");
-        SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
-    })
-    .expect("attached db")
+fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("Failed to set language");
+    let tree = parser.parse(text, None).expect("Failed to parse");
+    SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
 }
 
 // =============================================================================
@@ -29,7 +26,7 @@ fn source_from_str(path: &str, text: &str) -> SourceCst {
 
 #[salsa_test]
 fn diag_unresolved_name(db: &salsa::DatabaseImpl) {
-    let source = source_from_str("test.trb", "fn main() -> Int { undefined_var }");
+    let source = source_from_str(db, "test.trb", "fn main() -> Int { undefined_var }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -37,7 +34,7 @@ fn diag_unresolved_name(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
-    let source = source_from_str("test.trb", "fn main() -> Foo { 42 }");
+    let source = source_from_str(db, "test.trb", "fn main() -> Foo { 42 }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -49,7 +46,7 @@ fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn diag_syntax_error(db: &salsa::DatabaseImpl) {
-    let source = source_from_str("test.trb", "fn main( { }");
+    let source = source_from_str(db, "test.trb", "fn main( { }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -62,6 +59,7 @@ fn diag_syntax_error(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn diag_non_exhaustive_case(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn test(x: Nat) -> Nat {
@@ -79,6 +77,7 @@ fn test(x: Nat) -> Nat {
 #[salsa_test]
 fn diag_type_mismatch_in_function(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 fn add(x: Int, y: Int) -> Int { x + y }
@@ -95,7 +94,7 @@ fn test() -> Int {
 
 #[salsa_test]
 fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
-    let source = source_from_str("test.trb", "fn main() -> Int { 42 }");
+    let source = source_from_str(db, "test.trb", "fn main() -> Int { 42 }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -110,6 +109,7 @@ fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -129,6 +129,7 @@ fn test() -> Point {
 #[salsa_test]
 fn diag_missing_struct_field(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 struct Point { x: Int, y: Int }
@@ -153,6 +154,7 @@ fn test() -> Point {
 #[salsa_test]
 fn diag_unhandled_effect_in_main(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
+        db,
         "test.trb",
         r#"
 ability MyEffect {
