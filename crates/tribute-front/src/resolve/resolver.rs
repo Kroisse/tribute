@@ -18,6 +18,74 @@ use crate::ast::{
 
 use super::env::{Binding, ModuleEnv};
 
+/// Builtin name → BuiltinRef mapping. Source of truth for both resolution and suggestions.
+const BUILTINS: &[(&str, BuiltinRef)] = &[
+    ("print", BuiltinRef::Print),
+    ("readLine", BuiltinRef::ReadLine),
+    ("read_line", BuiltinRef::ReadLine),
+];
+
+/// Find the best matches from `candidates` by a caller-provided score function.
+///
+/// Returns up to `max` items sorted by descending score, keeping only scores >= `threshold`.
+/// Uses a min-heap to maintain only the top entries without collecting all candidates.
+fn best_matches_by<T>(
+    candidates: impl IntoIterator<Item = T>,
+    score: impl Fn(&T) -> f64,
+    threshold: f64,
+    max: usize,
+) -> Vec<T> {
+    use std::cmp::Ordering;
+    use std::collections::BinaryHeap;
+
+    struct Entry<T> {
+        item: T,
+        score: f64,
+    }
+
+    impl<T> PartialEq for Entry<T> {
+        fn eq(&self, other: &Self) -> bool {
+            self.score == other.score
+        }
+    }
+
+    impl<T> Eq for Entry<T> {}
+
+    impl<T> Ord for Entry<T> {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // Reverse: lower score = greater → pops first from max-heap
+            other
+                .score
+                .partial_cmp(&self.score)
+                .unwrap_or(Ordering::Equal)
+        }
+    }
+
+    impl<T> PartialOrd for Entry<T> {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    let mut heap: BinaryHeap<Entry<T>> = BinaryHeap::with_capacity(max + 1);
+
+    for item in candidates {
+        let s = score(&item);
+        if s < threshold {
+            continue;
+        }
+        if heap.len() == max && heap.peek().is_some_and(|top| s <= top.score) {
+            continue;
+        }
+        heap.push(Entry { item, score: s });
+        if heap.len() > max {
+            heap.pop();
+        }
+    }
+
+    heap.into_sorted_vec().into_iter().map(|e| e.item).collect()
+}
+
 /// Resolver for transforming unresolved names to resolved references.
 pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
@@ -111,17 +179,45 @@ impl<'db> Resolver<'db> {
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
     }
 
-    /// Report an unresolved name diagnostic.
+    /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
     fn report_unresolved_name(&self, name: &UnresolvedName) {
         let span = self.span_map.get_or_default(name.id);
+        let similar = self.find_similar_names(name.name());
+
+        let message = if similar.is_empty() {
+            format!("unresolved name `{}`", name)
+        } else {
+            let suggestions = tribute_core::fmt::joined_by(", ", &similar, |s, f| {
+                s.with_str(|name| write!(f, "`{}`", name))
+            });
+            format!("unresolved name `{}`; did you mean {}?", name, suggestions)
+        };
 
         Diagnostic {
-            message: format!("unresolved name `{}`", name),
+            message,
             span,
             severity: DiagnosticSeverity::Error,
             phase: CompilationPhase::NameResolution,
         }
         .accumulate(self.db);
+    }
+
+    /// Find names in scope that are similar to the given name.
+    fn find_similar_names(&self, name: Symbol) -> Vec<Symbol> {
+        let candidates = self
+            .local_scopes
+            .iter()
+            .flat_map(|scope| scope.keys().copied())
+            .chain(self.env.iter_all_names())
+            .chain(BUILTINS.iter().map(|(n, _)| Symbol::new(n)));
+
+        let target = name.to_string();
+        best_matches_by(
+            candidates,
+            |sym: &Symbol| sym.with_str(|s| strsim::jaro_winkler(&target, s)),
+            0.8,
+            3,
+        )
     }
 
     /// Convert a binding to a resolved reference.
@@ -143,14 +239,7 @@ impl<'db> Resolver<'db> {
 
     /// Check if a name refers to a builtin operation.
     fn resolve_builtin(&self, name: Symbol) -> Option<BuiltinRef> {
-        // Use Symbol's PartialEq<&str> implementation
-        if name == "print" {
-            Some(BuiltinRef::Print)
-        } else if name == "readLine" || name == "read_line" {
-            Some(BuiltinRef::ReadLine)
-        } else {
-            None
-        }
+        BUILTINS.iter().find(|(n, _)| name == *n).map(|(_, r)| *r)
     }
 
     /// Resolve a module, transforming all declarations.
@@ -829,5 +918,85 @@ mod tests {
 
         assert_eq!(*name, as_name);
         assert!(local_id.is_some(), "as-binding should have a LocalId");
+    }
+
+    mod best_matches {
+        use super::super::best_matches_by;
+
+        #[test]
+        fn finds_close_typo() {
+            let candidates = ["compute", "compare", "display"];
+            let result = best_matches_by(
+                candidates.iter(),
+                |s| strsim::jaro_winkler("compue", s),
+                0.8,
+                3,
+            );
+            assert!(result.contains(&&"compute"));
+            assert!(!result.contains(&&"display"));
+        }
+
+        #[test]
+        fn no_match_for_unrelated_name() {
+            let candidates = ["foo", "bar", "baz"];
+            let result = best_matches_by(
+                candidates.iter(),
+                |s| strsim::jaro_winkler("xyzzy", s),
+                0.8,
+                3,
+            );
+            assert!(result.is_empty());
+        }
+
+        #[test]
+        fn respects_max_limit() {
+            let candidates = ["print", "printf", "println", "printa", "printi"];
+            let result = best_matches_by(
+                candidates.iter(),
+                |s| strsim::jaro_winkler("printt", s),
+                0.5,
+                2,
+            );
+            assert!(result.len() <= 2);
+        }
+
+        #[test]
+        fn sorted_by_descending_score() {
+            // "prnt" vs candidates: "print" is closer than "point"
+            let candidates = ["point", "print", "paint"];
+            let result = best_matches_by(
+                candidates.iter(),
+                |s| strsim::jaro_winkler("prnt", s),
+                0.5,
+                3,
+            );
+            assert!(result.len() >= 2);
+            // Verify descending score order
+            for pair in result.windows(2) {
+                let s0 = strsim::jaro_winkler("prnt", pair[0]);
+                let s1 = strsim::jaro_winkler("prnt", pair[1]);
+                assert!(
+                    s0 >= s1,
+                    "{} ({}) should score >= {} ({})",
+                    pair[0],
+                    s0,
+                    pair[1],
+                    s1
+                );
+            }
+        }
+
+        #[test]
+        fn threshold_filters_low_scores() {
+            let candidates = ["abc", "xyz", "abcd"];
+            let result = best_matches_by(
+                candidates.iter(),
+                |s| strsim::jaro_winkler("abcde", s),
+                0.95,
+                3,
+            );
+            // With threshold 0.95, only very close matches survive
+            assert!(result.len() <= 1);
+        }
     }
 }

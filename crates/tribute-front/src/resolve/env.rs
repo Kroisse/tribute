@@ -174,6 +174,14 @@ impl<'db> ModuleEnv<'db> {
             .map(|(ns, bindings)| (*ns, bindings.iter().map(|(k, v)| (*k, v))))
     }
 
+    /// Iterate over all names visible via unqualified lookup (definitions + imports).
+    pub fn iter_all_names(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.definitions
+            .keys()
+            .copied()
+            .chain(self.imports.keys().copied())
+    }
+
     /// Merge another environment into this one.
     ///
     /// Self takes precedence: user definitions shadow prelude.

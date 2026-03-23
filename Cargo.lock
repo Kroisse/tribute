@@ -1488,6 +1488,7 @@ dependencies = [
  "salsa",
  "salsa-test-macros",
  "smallvec",
+ "strsim",
  "tracing",
  "tree-sitter",
  "tree-sitter-tribute",
