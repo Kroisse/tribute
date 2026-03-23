@@ -363,5 +363,11 @@ mod tests {
 
         // Should not panic; the perform op is left unchanged.
         lower_ability_perform(&mut ctx, module);
+
+        let ir = print_module(&ctx, module.op());
+        assert!(
+            ir.contains("ability.perform"),
+            "perform op should remain unchanged when evidence is missing, got:\n{ir}"
+        );
     }
 }
