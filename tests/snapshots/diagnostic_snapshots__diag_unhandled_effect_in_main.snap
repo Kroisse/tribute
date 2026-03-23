@@ -1,0 +1,16 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "function 'main' must return Nil, but returns `Int`"
+  span:
+    start: 52
+    end: 101
+  severity: Error
+  phase: TypeChecking
+- message: "function 'main' has unhandled effects: MyEffect"
+  span:
+    start: 52
+    end: 101
+  severity: Error
+  phase: TypeChecking
