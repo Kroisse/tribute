@@ -172,15 +172,14 @@ impl TypeKind<'_> {
 
 impl fmt::Display for Type<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        salsa::with_attached_database(|db| self.kind(db).fmt_display(db, f))
+        salsa::with_attached_database(|db| write!(f, "{}", self.kind(db)))
             .unwrap_or(Err(fmt::Error))
     }
 }
 
-impl<'db> TypeKind<'db> {
-    /// Format for diagnostic messages. Requires an attached salsa database.
-    fn fmt_display(&self, db: &'db dyn salsa::Database, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+impl fmt::Display for TypeKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        salsa::with_attached_database(|db| match self {
             Self::Int => f.write_str("Int"),
             Self::Nat => f.write_str("Nat"),
             Self::Float => f.write_str("Float"),
@@ -194,9 +193,9 @@ impl<'db> TypeKind<'db> {
                     write!(
                         f,
                         "({})",
-                        tribute_core::fmt::joined_by(", ", args, |ty, f| ty
-                            .kind(db)
-                            .fmt_display(db, f))
+                        tribute_core::fmt::joined_by(", ", args, |ty, f| {
+                            write!(f, "{}", ty.kind(db))
+                        })
                     )
                 } else {
                     Ok(())
@@ -208,10 +207,9 @@ impl<'db> TypeKind<'db> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    p.kind(db).fmt_display(db, f)?;
+                    write!(f, "{}", p.kind(db))?;
                 }
-                write!(f, ") -> ")?;
-                result.kind(db).fmt_display(db, f)
+                write!(f, ") -> {}", result.kind(db))
             }
             Self::Tuple(elems) => {
                 write!(f, "#(")?;
@@ -219,32 +217,28 @@ impl<'db> TypeKind<'db> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    e.kind(db).fmt_display(db, f)?;
+                    write!(f, "{}", e.kind(db))?;
                 }
                 write!(f, ")")
             }
             Self::BoundVar { index } => write!(f, "_{}", index),
             Self::UniVar { .. } => f.write_str("_"),
             Self::App { ctor, args } => {
-                ctor.kind(db).fmt_display(db, f)?;
-                write!(f, "(")?;
+                write!(f, "{}(", ctor.kind(db))?;
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    a.kind(db).fmt_display(db, f)?;
+                    write!(f, "{}", a.kind(db))?;
                 }
                 write!(f, ")")
             }
             Self::Continuation { arg, result, .. } => {
-                write!(f, "Continuation(")?;
-                arg.kind(db).fmt_display(db, f)?;
-                write!(f, " -> ")?;
-                result.kind(db).fmt_display(db, f)?;
-                write!(f, ")")
+                write!(f, "Continuation({} -> {})", arg.kind(db), result.kind(db))
             }
             Self::Error => f.write_str("<error>"),
-        }
+        })
+        .unwrap_or(Err(fmt::Error))
     }
 }
 
@@ -379,7 +373,7 @@ impl fmt::Display for Effect<'_> {
                 name.with_str(|s| f.write_str(s))
             } else {
                 let args = tribute_core::fmt::joined_by(", ", &self.args, |ty, f| {
-                    ty.kind(db).fmt_display(db, f)
+                    write!(f, "{}", ty.kind(db))
                 });
                 name.with_str(|s| write!(f, "{}({args})", s))
             }
