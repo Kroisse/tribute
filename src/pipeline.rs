@@ -813,6 +813,23 @@ pub fn parse_and_lower_ast<'db>(
     ))
 }
 
+/// TDNR with prelude imports for LSP queries.
+///
+/// Unlike `tribute_front::query::tdnr_module` (which has no imports),
+/// this injects prelude methods so UFCS calls to prelude functions resolve correctly.
+#[salsa::tracked]
+pub fn tdnr_module_with_prelude<'db>(
+    db: &'db dyn salsa::Database,
+    source: SourceCst,
+) -> Option<tribute_front::ast::Module<tribute_front::ast::TypedRef<'db>>> {
+    let module = ast_query::typed_module(db, source)?;
+    Some(ast_tdnr::resolve_tdnr(
+        db,
+        module,
+        prelude_module(db).iter().map(|p| p.module(db)),
+    ))
+}
+
 /// Run the shared pipeline for diagnostic collection only.
 ///
 /// This is a `#[salsa::tracked]` function so that diagnostics accumulated
