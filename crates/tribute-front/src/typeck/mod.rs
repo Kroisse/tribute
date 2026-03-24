@@ -49,6 +49,7 @@ use crate::ast::{
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
+    #[returns(ref)]
     pub module: Module<TypedRef<'db>>,
     /// Function type schemes collected during type checking.
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
