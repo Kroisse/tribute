@@ -13,17 +13,20 @@ core.module @test {
       %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
-      %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %9 = arith.const {value = 0} : tribute_rt.anyref
+      %10 = ability.handle_dispatch %4, %5, %9 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb4(%10: tribute_rt.anyref):
-              %11 = core.unrealized_conversion_cast %10 : core.i32
-              scf.yield %11
+            ^bb4(%11: tribute_rt.anyref):
+              %12 = core.unrealized_conversion_cast %11 : core.i32
+              scf.yield %12
           }
       }
-      %12 = core.unrealized_conversion_cast %9 : core.i32
-      %13 = arith.const {value = 99} : core.i32
-      %14 = arith.const {value = unit} : core.nil
-      func.return %14
+      %13 = core.unrealized_conversion_cast %10 : core.i32
+      %14 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %15 = core.unrealized_conversion_cast %14 : core.i32
+      %16 = arith.const {value = 99} : core.i32
+      %17 = arith.const {value = unit} : core.nil
+      func.return %17
   }
   func.func @apply_thunk(%0: core.func(core.i32) {effect = core.effect_row() {tail_var_id = 1001}}) -> core.i32 {
       %1 = func.call_indirect %0 : core.i32
@@ -32,15 +35,13 @@ core.module @test {
   func.func @main() -> core.i32 {
       %0 = closure.lambda() -> core.i32 effects core.effect_row() {tail_var_id = 1000} {
           %1 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-              %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref {
-                  func.return %3
-              }
-              %4 = ability.perform %2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+              %2 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+              func.return %2
           }
-          %5 = func.call %1 {callee = @run_with_state} : core.i32
-          func.return %5
+          %3 = func.call %1 {callee = @run_with_state} : core.i32
+          func.return %3
       }
-      %6 = func.call %0 {callee = @apply_thunk} : core.i32
-      func.return %6
+      %4 = func.call %0 {callee = @apply_thunk} : core.i32
+      func.return %4
   }
 }

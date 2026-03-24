@@ -12,35 +12,35 @@ core.module @test {
       %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
-      %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %9 = arith.const {value = 0} : tribute_rt.anyref
+      %10 = ability.handle_dispatch %4, %5, %9 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb4(%10: tribute_rt.anyref):
-              scf.yield %10
+            ^bb4(%11: tribute_rt.anyref):
+              scf.yield %11
           }
       }
-      %11 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 31} [%1] {
-          %12 = arith.const {value = unit} : core.nil
-          func.return %12
+      %12 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %13 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 31} [%1] {
+          %14 = arith.const {value = unit} : core.nil
+          func.return %14
       }
-      %13 = func.call %11, %1 {callee = @with_state} : tribute_rt.anyref
-      %14 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 54} {
-          %15 = arith.const {value = unit} : core.nil
-          %16 = arith.const {value = unit} : core.nil
-          func.return %16
+      %15 = func.call %13, %1 {callee = @with_state} : tribute_rt.anyref
+      %16 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 54} {
+          %17 = arith.const {value = unit} : core.nil
+          %18 = arith.const {value = unit} : core.nil
+          func.return %18
       }
-      %17 = arith.const {value = unit} : core.nil
-      func.return %17
+      %19 = arith.const {value = unit} : core.nil
+      func.return %19
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 6} {
-          %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref {
-              func.return %2
-          }
-          %3 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          func.return %1
       }
-      %4 = arith.const {value = 42} : core.i32
-      %5 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
-      %6 = func.call %0, %5 {callee = @with_state} : tribute_rt.anyref
-      func.return %6
+      %2 = arith.const {value = 42} : core.i32
+      %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
+      %4 = func.call %0, %3 {callee = @with_state} : tribute_rt.anyref
+      func.return %4
   }
 }

@@ -167,7 +167,7 @@ pub(super) fn lower_expr<'db>(
             | ResolvedRef::Module { .. }
             | ResolvedRef::TypeDef { .. }
             | ResolvedRef::Ability { .. } => None,
-            ResolvedRef::AbilityOp { ability, op } => {
+            ResolvedRef::AbilityOp { ability, op, .. } => {
                 Diagnostic {
                     message: format!(
                         "ability operation `{}::{}` cannot be used as a value; it must be called directly",
@@ -325,7 +325,7 @@ pub(super) fn lower_expr<'db>(
 
                         Some(result)
                     }
-                    ResolvedRef::AbilityOp { ability, op } => {
+                    ResolvedRef::AbilityOp { ability, op, kind } => {
                         let qualified_name = ability.qualified(builder.db()).to_string();
                         let ability_name = Symbol::from_dynamic(&qualified_name);
                         let result_ty = builder
@@ -333,14 +333,25 @@ pub(super) fn lower_expr<'db>(
                             .get_node_type(expr_node_id)
                             .map(|t| builder.ctx.convert_type(builder.ir, *t))
                             .unwrap_or_else(|| builder.call_result_type(&typed_ref.ty));
-                        super::handle::lower_ability_op_call(
-                            builder,
-                            location,
-                            ability_name,
-                            *op,
-                            arg_values,
-                            result_ty,
-                        )
+                        use crate::ast::OpDeclKind;
+                        match kind {
+                            OpDeclKind::Fn => super::handle::lower_ability_fn_call(
+                                builder,
+                                location,
+                                ability_name,
+                                *op,
+                                arg_values,
+                                result_ty,
+                            ),
+                            OpDeclKind::Op => super::handle::lower_ability_op_call(
+                                builder,
+                                location,
+                                ability_name,
+                                *op,
+                                arg_values,
+                                result_ty,
+                            ),
+                        }
                     }
                     _ => builder.emit_unsupported(location, "builtin/module call"),
                 },
@@ -798,9 +809,14 @@ fn try_lower_value_ability_op<'db>(
     let ExprKind::Var(typed_ref) = &*callee.kind else {
         return None;
     };
-    let ResolvedRef::AbilityOp { ability, op } = &typed_ref.resolved else {
+    let ResolvedRef::AbilityOp { ability, op, kind } = &typed_ref.resolved else {
         return None;
     };
+
+    // fn operations use direct call (no CPS), so they are not handled here.
+    if *kind == crate::ast::OpDeclKind::Fn {
+        return None;
+    }
 
     let call_expr_id = value.id;
     let location = builder.location(call_expr_id);
@@ -873,25 +889,28 @@ fn try_lower_value_ability_op<'db>(
     Some(perform_op.result(builder.ir))
 }
 
-/// Check if an expression contains a nested ability op call (not at the top level).
+/// Check if an expression contains a nested CPS ability op call (not at the top level).
 ///
 /// Returns true if any subexpression (argument, operand, etc.) is a call to
-/// an ability operation. Direct top-level ability op calls are handled by
-/// `try_lower_value_ability_op`; this catches the cases that bypass CPS.
+/// an `op` ability operation (which requires CPS). `fn` operations are excluded
+/// because they use direct calls without CPS.
 fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
     match &*expr.kind {
         ExprKind::Call { callee, args } => {
             // Check args (not callee — a direct call is fine, handled elsewhere)
-            let callee_is_ability_op = matches!(
+            let callee_is_cps_ability_op = matches!(
                 &*callee.kind,
-                ExprKind::Var(tr) if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
+                ExprKind::Var(tr) if matches!(
+                    &tr.resolved,
+                    ResolvedRef::AbilityOp { kind: crate::ast::OpDeclKind::Op, .. }
+                )
             );
-            if !callee_is_ability_op {
-                // Non-ability-op call: check callee (e.g. foo(bar)(emit()))
+            if !callee_is_cps_ability_op {
+                // Non-CPS-ability-op call: check callee (e.g. foo(bar)(emit()))
                 // and args for nested ability ops
                 contains_ability_op(callee) || args.iter().any(contains_ability_op)
             } else {
-                // Direct ability op call at top level — not "nested"
+                // Direct CPS ability op call at top level — not "nested"
                 false
             }
         }
@@ -911,12 +930,20 @@ fn contains_nested_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
     }
 }
 
-/// Check if an expression IS or CONTAINS an ability op call.
+/// Check if an expression IS or CONTAINS an `op` ability op call (CPS-requiring).
+///
+/// `fn` operations use direct calls and do not trigger CPS transformation.
 fn contains_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
     match &*expr.kind {
         ExprKind::Call { callee, args } => {
             if let ExprKind::Var(tr) = &*callee.kind
-                && matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
+                && matches!(
+                    &tr.resolved,
+                    ResolvedRef::AbilityOp {
+                        kind: crate::ast::OpDeclKind::Op,
+                        ..
+                    }
+                )
             {
                 return true;
             }
@@ -937,7 +964,9 @@ fn contains_ability_op<'db>(expr: &Expr<TypedRef<'db>>) -> bool {
     }
 }
 
-/// Check if a statement contains a direct ability op call.
+/// Check if a statement contains a direct ability op call that requires CPS.
+///
+/// `fn` operations are excluded because they use direct calls (no CPS).
 fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
     let call_expr = match stmt {
         Stmt::Let { value, .. } => value,
@@ -949,7 +978,13 @@ fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
     let ExprKind::Var(tr) = &*callee.kind else {
         return false;
     };
-    matches!(&tr.resolved, ResolvedRef::AbilityOp { .. })
+    matches!(
+        &tr.resolved,
+        ResolvedRef::AbilityOp {
+            kind: crate::ast::OpDeclKind::Op,
+            ..
+        }
+    )
 }
 
 /// Lower a single non-CPS statement (let binding or expression statement).
@@ -1034,7 +1069,7 @@ fn lower_cps_ability_op<'db>(
     let ExprKind::Var(typed_ref) = *callee.kind else {
         unreachable!("ICE: lower_cps_ability_op called with non-var callee");
     };
-    let ResolvedRef::AbilityOp { ability, op } = &typed_ref.resolved else {
+    let ResolvedRef::AbilityOp { ability, op, .. } = &typed_ref.resolved else {
         unreachable!("ICE: lower_cps_ability_op called with non-ability-op callee");
     };
 

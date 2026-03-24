@@ -44,13 +44,18 @@ mod ability {
     /// Marker's `handler_dispatch` field by `resolve_evidence` for use by
     /// the tail-call-based CPS path in `lower_ability_perform`.
     ///
+    /// The `tr_dispatch_fn` operand is a closure `(op_idx, value) -> anyref`
+    /// for tail-resumptive (`fn`) operations only. It is stored in the
+    /// Marker's `tr_dispatch_fn` field. May be a null constant if there
+    /// are no `fn` handlers.
+    ///
     /// ```text
-    /// %result = ability.handle_dispatch %yield_result, %handler_fn
+    /// %result = ability.handle_dispatch %yield_result, %handler_fn, %tr_dispatch_fn
     ///   { tag: 0, result_type: anyref }
     ///   body { ... handler arms ... }
     /// ```
     #[attr(tag: u32, result_type: Type)]
-    fn handle_dispatch(value: (), handler_fn: ()) -> result {
+    fn handle_dispatch(value: (), handler_fn: (), tr_dispatch_fn: ()) -> result {
         #[region(body)]
         {}
     }
@@ -74,6 +79,20 @@ mod ability {
     }
 
     fn resume(continuation: (), value: ()) -> result {}
+
+    /// Direct call to a `fn` (tail-resumptive) ability operation.
+    ///
+    /// Unlike `ability.perform`, this does not take a continuation closure.
+    /// The result flows inline — no CPS transformation is needed.
+    ///
+    /// ```text
+    /// %result = ability.call %args...
+    ///   { ability_ref = @State, op_name = @get }
+    /// ```
+    ///
+    /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
+    #[attr(ability_ref: Type, op_name: Symbol)]
+    fn call(#[rest] values: ()) -> result {}
 }
 
 // === Hash-Based Dispatch ===

@@ -55,11 +55,12 @@ impl CommonTypes {
     }
 }
 
-/// Lower all `ability.perform` ops in the module.
+/// Lower all `ability.perform` and `ability.call` ops in the module.
 pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
     let types = CommonTypes::new(ctx);
-    let applicator =
-        PatternApplicator::new(TypeConverter::new()).add_pattern(LowerPerformPattern { types });
+    let applicator = PatternApplicator::new(TypeConverter::new())
+        .add_pattern(LowerPerformPattern { types })
+        .add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, module);
 }
 
@@ -214,6 +215,113 @@ impl RewritePattern for LowerPerformPattern {
                 ctx.remove_op_from_block(block, dead_op);
             }
         }
+
+        true
+    }
+}
+
+/// Pattern: `ability.call` → evidence lookup + tr_dispatch_fn call (no CPS).
+struct LowerCallPattern {
+    types: CommonTypes,
+}
+
+impl RewritePattern for LowerCallPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(call_op) = ability::Call::from_op(ctx, op) else {
+            return false;
+        };
+
+        let location = ctx.op(op).location;
+        let ability_ref_type = call_op.ability_ref(ctx);
+        let op_name_sym = call_op.op_name(ctx);
+
+        // Operands: [...values]
+        let operands: Vec<ValueRef> = ctx.op_operands(op).to_vec();
+        let value_operands = &operands[..];
+
+        let t = &self.types;
+
+        // Find evidence parameter from enclosing func's entry block.
+        let evidence_val = find_evidence_from_op(ctx, op);
+
+        // === 1. Evidence lookup → marker ===
+        let marker_ty = ability::marker_adt_type_ref(ctx);
+        let Some(evidence_val) = evidence_val else {
+            // Missing evidence means the frontend detected unhandled effects
+            // and emitted a diagnostic. Skip this op gracefully.
+            return false;
+        };
+        let lookup =
+            ability::evidence_lookup(ctx, location, evidence_val, marker_ty, ability_ref_type);
+        rewriter.insert_op(lookup.op_ref());
+        let marker_val = lookup.result(ctx);
+
+        // === 2. Extract tr_dispatch_fn from marker (field index 2) ===
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let tr_fn_get = adt::struct_get(ctx, location, marker_val, closure_ty, marker_ty, 2);
+        rewriter.insert_op(tr_fn_get.op_ref());
+        let tr_dispatch_fn_val = tr_fn_get.result(ctx);
+
+        // === 3. Compute op_idx ===
+        let ability_data = ctx.types.get(ability_ref_type);
+        let ability_name = match ability_data.attrs.get(&Symbol::new("name")) {
+            Some(Attribute::Symbol(s)) => Some(*s),
+            _ => None,
+        };
+        let op_idx = compute_op_idx(ability_name, Some(op_name_sym));
+        let op_idx_const = arith::r#const(ctx, location, t.i32, Attribute::Int(op_idx as i128));
+        rewriter.insert_op(op_idx_const.op_ref());
+
+        // === 4. Build shift value (pack args or null) ===
+        assert!(
+            value_operands.len() <= 1,
+            "ability.call expects at most 1 value operand (multi-arg should be tuple-packed), \
+             got {}",
+            value_operands.len()
+        );
+        let shift_value_val = if let Some(&sv) = value_operands.first() {
+            let cast = core::unrealized_conversion_cast(ctx, location, sv, t.anyref);
+            rewriter.insert_op(cast.op_ref());
+            cast.result(ctx)
+        } else {
+            let null_op = adt::ref_null(ctx, location, t.anyref, t.anyref);
+            rewriter.insert_op(null_op.op_ref());
+            null_op.result(ctx)
+        };
+
+        // === 5. Decompose tr_dispatch_fn closure and call ===
+        let fn_ptr_get = adt::struct_get(ctx, location, tr_dispatch_fn_val, t.i32, closure_ty, 0);
+        rewriter.insert_op(fn_ptr_get.op_ref());
+        let fn_ptr = fn_ptr_get.result(ctx);
+
+        let env_get = adt::struct_get(ctx, location, tr_dispatch_fn_val, t.anyref, closure_ty, 1);
+        rewriter.insert_op(env_get.op_ref());
+        let env_val = env_get.result(ctx);
+
+        // Placeholder evidence for resolve_evidence to replace later.
+        let placeholder_ev = evidence_val;
+
+        let call_result = func::call_indirect(
+            ctx,
+            location,
+            fn_ptr,
+            vec![
+                placeholder_ev,
+                env_val,
+                op_idx_const.result(ctx),
+                shift_value_val,
+            ],
+            t.anyref,
+        );
+        rewriter.insert_op(call_result.op_ref());
+
+        // === 6. Erase ability.call, mapping its result to the call_indirect result ===
+        rewriter.erase_op(vec![call_result.result(ctx)]);
 
         true
     }

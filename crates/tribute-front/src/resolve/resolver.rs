@@ -235,7 +235,9 @@ impl<'db> Resolver<'db> {
                 let path_ref = ModulePath::new(self.db, path.clone());
                 ResolvedRef::Module { path: path_ref }
             }
-            Binding::AbilityOp { ability, op } => ResolvedRef::ability_op(*ability, *op),
+            Binding::AbilityOp { ability, op, kind } => {
+                ResolvedRef::ability_op(*ability, *op, *kind)
+            }
             Binding::Ability { id } => ResolvedRef::ability(*id),
         }
     }

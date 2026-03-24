@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{AbilityId, CtorId, FuncDefId, TypeDefId};
+use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId};
 
 /// Information about a resolved name binding.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
@@ -39,13 +39,18 @@ pub enum Binding<'db> {
 
     /// An ability operation.
     ///
-    /// Unlike regular functions, ability operations are lowered to
-    /// `ability.perform` with CPS continuations and runtime evidence lookup.
+    /// The `kind` field (`OpDeclKind`) determines the lowering path:
+    /// - `OpDeclKind::Fn` (tail-resumptive): lowered to `ability.call` with
+    ///   direct evidence-based dispatch (no CPS, no continuation).
+    /// - `OpDeclKind::Op` (general): lowered to `ability.perform` with CPS
+    ///   continuations and runtime evidence lookup.
     AbilityOp {
         /// The ability identifier (e.g., AbilityId for "State").
         ability: AbilityId<'db>,
         /// The operation name (e.g., "get").
         op: Symbol,
+        /// Whether this is a `fn` (tail-resumptive) or `op` (general) operation.
+        kind: OpDeclKind,
     },
 
     /// An ability definition (not an operation).

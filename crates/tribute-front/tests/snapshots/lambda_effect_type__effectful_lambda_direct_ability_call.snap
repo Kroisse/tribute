@@ -13,27 +13,28 @@ core.module @test {
       %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
-      %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %9 = arith.const {value = 0} : tribute_rt.anyref
+      %10 = ability.handle_dispatch %4, %5, %9 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb4(%10: tribute_rt.anyref):
-              %11 = core.unrealized_conversion_cast %10 : core.i32
-              scf.yield %11
+            ^bb4(%11: tribute_rt.anyref):
+              %12 = core.unrealized_conversion_cast %11 : core.i32
+              scf.yield %12
           }
       }
-      %12 = core.unrealized_conversion_cast %9 : core.i32
-      %13 = arith.const {value = 42} : core.i32
-      %14 = arith.const {value = unit} : core.nil
-      %15 = arith.const {value = unit} : core.nil
-      func.return %15
+      %13 = core.unrealized_conversion_cast %10 : core.i32
+      %14 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %15 = core.unrealized_conversion_cast %14 : core.i32
+      %16 = arith.const {value = 42} : core.i32
+      %17 = arith.const {value = unit} : core.nil
+      %18 = arith.const {value = unit} : core.nil
+      func.return %18
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-          %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref {
-              func.return %2
-          }
-          %3 = ability.perform %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+          func.return %1
       }
-      %4 = func.call %0 {callee = @run_with_state} : core.i32
-      func.return %4
+      %2 = func.call %0 {callee = @run_with_state} : core.i32
+      func.return %2
   }
 }
