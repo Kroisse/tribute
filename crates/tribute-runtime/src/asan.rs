@@ -212,14 +212,14 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
         .checked_add(size)
         .and_then(|s| s.checked_add(REDZONE_SIZE))
     else {
-        return core::ptr::null_mut();
+        crate::oom_abort();
     };
     let Ok(layout) = Layout::from_size_align(total, ALLOC_ALIGN) else {
-        return core::ptr::null_mut();
+        crate::oom_abort();
     };
     let base = unsafe { alloc::alloc::alloc(layout) };
     if base.is_null() {
-        return core::ptr::null_mut();
+        crate::oom_abort();
     }
 
     // Fill left red zone
