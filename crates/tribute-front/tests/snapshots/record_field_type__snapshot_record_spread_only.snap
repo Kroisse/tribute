@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 191
 expression: ir_text
 ---
 core.module @test {
@@ -8,11 +9,11 @@ core.module @test {
   core.module @Config {
     !Config_1 = adt.typeref() {name = @Config}
 
-    func.func @"test::Config::debug"(%0: !Config_1) -> core.i1 {
+    func.func @"Config::debug"(%0: !Config_1) -> core.i1 {
         %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
         func.return %1
     }
-    func.func @"test::Config::verbose"(%0: !Config_1) -> core.i1 {
+    func.func @"Config::verbose"(%0: !Config_1) -> core.i1 {
         %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
         func.return %1
     }

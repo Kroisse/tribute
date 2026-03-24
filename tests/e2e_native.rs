@@ -288,3 +288,125 @@ fn main() {
         "6",
     );
 }
+
+// =============================================================================
+// String / print_line Tests
+// =============================================================================
+
+#[test]
+fn test_native_print_line() {
+    let output = compile_and_run_native(
+        "print_line.trb",
+        r#"
+fn main() {
+    print_line("Hello, World!")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout.trim(), "Hello, World!");
+}
+
+#[test]
+fn test_native_print_line_empty() {
+    let output = compile_and_run_native(
+        "print_line_empty.trb",
+        r#"
+fn main() {
+    print_line("")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    // Empty string + newline
+    assert_eq!(stdout, "\n");
+}
+
+#[test]
+fn test_native_print_line_multiple() {
+    let output = compile_and_run_native(
+        "print_line_multi.trb",
+        r#"
+fn main() {
+    print_line("Hello")
+    print_line("World")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout, "Hello\nWorld\n");
+}
+
+#[test]
+fn test_native_string_as_function_arg() {
+    let output = compile_and_run_native(
+        "string_arg.trb",
+        r#"
+fn greet(name: String) -> Nil {
+    print_line(name)
+}
+
+fn main() {
+    greet("Tribute")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout.trim(), "Tribute");
+}
+
+#[test]
+fn test_native_string_dedup_rodata() {
+    // Same string literal used twice should work (rodata deduplication)
+    let output = compile_and_run_native(
+        "string_dedup.trb",
+        r#"
+fn main() {
+    print_line("echo")
+    print_line("echo")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout, "echo\necho\n");
+}

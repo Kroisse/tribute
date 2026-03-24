@@ -62,8 +62,10 @@ impl<'db> TdnrResolver<'db> {
     /// This indexes functions by their first parameter's type name,
     /// enabling efficient UFCS resolution.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
-        // Build prefix from the module name (if any)
-        let mut prefix = module.name.map(|n| n.to_string()).unwrap_or_default();
+        // Start with empty prefix — matches resolve::build_env convention.
+        // The top-level module name (derived from filename) is not part of
+        // internal qualified names. Only nested `pub mod` blocks extend the path.
+        let mut prefix = String::new();
         self.index_decls(&module.decls, &mut prefix);
     }
 

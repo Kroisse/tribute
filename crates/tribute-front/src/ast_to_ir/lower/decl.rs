@@ -260,7 +260,8 @@ fn lower_function<'db>(
         parent_op: None,
     });
 
-    let func_op = func::func(ir, location, func_name, func_type, body_region);
+    let qualified_name = ctx.qualify_name(func_name);
+    let func_op = func::func(ir, location, qualified_name, func_type, body_region);
     ir.push_op(top, func_op.op_ref());
 }
 
@@ -336,7 +337,8 @@ fn lower_extern_function<'db>(
         parent_op: None,
     });
 
-    let func_op = func::func(ir, location, func_name, func_type, body_region);
+    let qualified_name = ctx.qualify_name(func_name);
+    let func_op = func::func(ir, location, qualified_name, func_type, body_region);
 
     // Mark as extern so the backend treats it as Import linkage
     let abi_str = func_decl.abi.to_string();
@@ -401,15 +403,17 @@ fn lower_struct_decl<'db>(
 
     for (idx, (field_name, field_type)) in fields.iter().enumerate() {
         // Generate getter: fn qualified_name(self: StructType) -> FieldType
-        let qualified_name = if module_path.is_empty() {
+        // Skip the first segment (top-level module name) to match resolve convention.
+        let nested: Vec<_> = module_path.iter().skip(1).collect();
+        let qualified_name = if nested.is_empty() {
             Symbol::from_dynamic(&format!("{}::{}", name, field_name))
         } else {
-            let module_path_str = module_path
+            let nested_str = nested
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>()
                 .join("::");
-            Symbol::from_dynamic(&format!("{}::{}::{}", module_path_str, name, field_name))
+            Symbol::from_dynamic(&format!("{}::{}::{}", nested_str, name, field_name))
         };
 
         // Create getter function: entry block with one arg (self)

@@ -57,13 +57,14 @@ fn main() { add(1, 2) }
 
 // Note: String literals work as intrinsic arguments (e.g., __print_line)
 // but require additional lowering for case branch return values.
+// This test calls the intrinsic directly (not through prelude's print_line,
+// which now depends on native-only extern "C" functions).
 #[salsa_test]
 fn test_compile_print_line(db: &salsa::DatabaseImpl) {
-    // Declare the intrinsic and a wrapper, as the prelude does
     let code = r#"
 extern "intrinsic" fn __print_line(message: String) -> Nil
-fn print_line(message: String) -> Nil { __print_line(message) }
-fn main() { print_line("Hello, World!") }
+fn my_print(message: String) -> Nil { __print_line(message) }
+fn main() { my_print("Hello, World!") }
 "#;
     let source = source_from_str(db, "hello.trb", code);
     let binary = compile_to_wasm_binary(db, source);

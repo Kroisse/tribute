@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
+assertion_line: 172
 expression: ir_text
 ---
 core.module @test {
@@ -8,11 +9,11 @@ core.module @test {
   core.module @Pair {
     !Pair_1 = adt.typeref() {name = @Pair}
 
-    func.func @"test::Pair::first"(%0: !Pair_1) -> tribute_rt.anyref {
+    func.func @"Pair::first"(%0: !Pair_1) -> tribute_rt.anyref {
         %1 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
         func.return %1
     }
-    func.func @"test::Pair::second"(%0: !Pair_1) -> tribute_rt.anyref {
+    func.func @"Pair::second"(%0: !Pair_1) -> tribute_rt.anyref {
         %1 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
         func.return %1
     }

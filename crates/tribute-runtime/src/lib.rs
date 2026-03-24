@@ -214,6 +214,120 @@ pub extern "C" fn __tribute_print_newline() {
 }
 
 // =============================================================================
+// Bytes support
+// =============================================================================
+
+/// Bytes payload layout: [ptr: *const u8, len: u64].
+///
+/// Compiler passes emit code that stores this layout after the RC header.
+/// Runtime functions receive a pointer to this payload area (not the raw allocation).
+#[repr(C)]
+pub struct TributeBytes {
+    pub ptr: *const u8,
+    pub len: u64,
+}
+
+/// Print the contents of a Bytes value to stdout (no trailing newline).
+///
+/// Signature: `(bytes: ptr) -> ()`
+///
+/// # Safety
+///
+/// `bytes` must be a valid pointer to a `TributeBytes` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_print(bytes: *const TributeBytes) {
+    let b = unsafe { &*bytes };
+    if b.len > 0 && !b.ptr.is_null() {
+        unsafe {
+            write(1, b.ptr, b.len as usize);
+        }
+    }
+}
+
+/// Return the byte length of a Bytes value.
+///
+/// Signature: `(bytes: ptr) -> u32`
+///
+/// # Safety
+///
+/// `bytes` must be a valid pointer to a `TributeBytes` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_len(bytes: *const TributeBytes) -> u32 {
+    let b = unsafe { &*bytes };
+    b.len as u32
+}
+
+/// Concatenate two Bytes values, returning a new RC-managed Bytes.
+///
+/// Allocates a `TributeRc<TributeBytes>` (RC header + TributeBytes payload),
+/// copies both byte sequences into a fresh buffer, and returns a pointer
+/// to the payload area.
+///
+/// Signature: `(a: ptr, b: ptr) -> ptr`
+///
+/// # Safety
+///
+/// Both `a` and `b` must be valid pointers to `TributeBytes` payloads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_concat(
+    a: *const TributeBytes,
+    b: *const TributeBytes,
+) -> *mut TributeBytes {
+    let a_ref = unsafe { &*a };
+    let b_ref = unsafe { &*b };
+
+    let total_len = a_ref.len + b_ref.len;
+
+    // Allocate buffer for concatenated bytes
+    let buf = if total_len > 0 {
+        let buf = unsafe { __tribute_alloc(total_len) };
+        if buf.is_null() {
+            return core::ptr::null_mut();
+        }
+        if a_ref.len > 0 && !a_ref.ptr.is_null() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(a_ref.ptr, buf, a_ref.len as usize);
+            }
+        }
+        if b_ref.len > 0 && !b_ref.ptr.is_null() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    b_ref.ptr,
+                    buf.add(a_ref.len as usize),
+                    b_ref.len as usize,
+                );
+            }
+        }
+        buf
+    } else {
+        core::ptr::null_mut()
+    };
+
+    // Allocate RC header (8 bytes) + TributeBytes payload (16 bytes) = 24 bytes
+    const RC_HEADER_SIZE: u64 = 8;
+    let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
+    let raw = unsafe { __tribute_alloc(alloc_size) };
+    if raw.is_null() {
+        return core::ptr::null_mut();
+    }
+
+    // Store RC header: refcount=1, rtti_idx=0
+    unsafe {
+        *(raw as *mut u32) = 1; // refcount
+        *(raw.add(4) as *mut u32) = 0; // rtti_idx
+    }
+
+    // Payload pointer = raw + 8
+    let payload = unsafe { raw.add(RC_HEADER_SIZE as usize) as *mut TributeBytes };
+    unsafe {
+        (*payload).ptr = buf;
+        (*payload).len = total_len;
+    }
+
+    payload
+}
+
+// =============================================================================
 // Allocator
 // =============================================================================
 

@@ -137,6 +137,10 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         if ty == r.evidence_ty {
             return Some(r.core_ptr);
         }
+        // core.bytes → ptr (Bytes is a heap-allocated struct)
+        if is_bytes_type(ctx, ty) {
+            return Some(r.core_ptr);
+        }
         // ADT struct/enum/variant_instance/typeref → ptr
         if is_adt_ptr_type(ctx, ty) {
             return Some(r.core_ptr);
@@ -191,6 +195,13 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(arena_materialize_result_noop(value));
         }
         if from_ty == r.core_ptr && to_ty == r.evidence_ty {
+            return Some(arena_materialize_result_noop(value));
+        }
+        // core.bytes ↔ ptr: no-op (same representation in native)
+        if is_bytes_type(ctx, from_ty) && to_ty == r.core_ptr {
+            return Some(arena_materialize_result_noop(value));
+        }
+        if from_ty == r.core_ptr && is_bytes_type(ctx, to_ty) {
             return Some(arena_materialize_result_noop(value));
         }
 
@@ -377,6 +388,11 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         }
     }
 
+    // core.bytes (heap-allocated Bytes struct)
+    if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
+        return true;
+    }
+
     // core.array — but NOT evidence arrays
     if data.dialect == Symbol::new("core") && data.name == Symbol::new("array") && ty != evidence_ty
     {
@@ -433,6 +449,12 @@ fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.types.get(ty);
     data.dialect == Symbol::new("core") && data.name == Symbol::new("array")
+}
+
+/// Helper: Check if a type is core.bytes.
+fn is_bytes_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.types.get(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
 }
 
 impl NativeTypeRefs {
