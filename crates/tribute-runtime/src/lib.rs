@@ -588,9 +588,6 @@ mod tests {
         assert_eq!(c, a + 2);
     }
 
-    // test_alloc_oversized: removed because oversized allocation now aborts
-    // the process (oom_abort), which cannot be tested without subprocess spawning.
-
     #[test]
     fn test_dealloc_invalid_is_noop() {
         // Should not panic on null pointer or invalid size
