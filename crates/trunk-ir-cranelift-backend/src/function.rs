@@ -431,7 +431,10 @@ impl<'a> FunctionTranslator<'a> {
             } else if let Some(&gv) = self.data_refs.get(&sym) {
                 self.builder.ins().global_value(self.ptr_ty, gv)
             } else {
-                return Err(CompilationError::function_not_found(&sym.to_string()));
+                return Err(CompilationError::codegen(format!(
+                    "symbol not found in function or data refs: {}",
+                    sym
+                )));
             };
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);

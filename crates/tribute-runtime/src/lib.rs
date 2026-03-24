@@ -281,25 +281,24 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     // Allocate buffer for concatenated bytes
     let buf = if total_len > 0 {
         let buf = unsafe { __tribute_alloc(total_len) };
-        if !buf.is_null() {
-            if a_ref.len > 0 && !a_ref.ptr.is_null() {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(a_ref.ptr, buf, a_ref.len as usize);
-                }
-            }
-            if b_ref.len > 0 && !b_ref.ptr.is_null() {
-                unsafe {
-                    core::ptr::copy_nonoverlapping(
-                        b_ref.ptr,
-                        buf.add(a_ref.len as usize),
-                        b_ref.len as usize,
-                    );
-                }
-            }
-            buf
-        } else {
-            core::ptr::null_mut()
+        if buf.is_null() {
+            return core::ptr::null_mut();
         }
+        if a_ref.len > 0 && !a_ref.ptr.is_null() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(a_ref.ptr, buf, a_ref.len as usize);
+            }
+        }
+        if b_ref.len > 0 && !b_ref.ptr.is_null() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    b_ref.ptr,
+                    buf.add(a_ref.len as usize),
+                    b_ref.len as usize,
+                );
+            }
+        }
+        buf
     } else {
         core::ptr::null_mut()
     };

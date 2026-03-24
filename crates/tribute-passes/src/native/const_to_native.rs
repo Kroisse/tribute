@@ -308,7 +308,8 @@ fn emit_bytes_alloc(
     let store_len = arena_clif::store(ctx, loc, len_val, payload, 8);
     ops.push(store_len.op_ref());
 
-    // 7. Identity pass-through for result
+    // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
+    //    rewrite pattern can use as the replacement result.
     let zero_op = arena_clif::iconst(ctx, loc, i64_ty, 0);
     ops.push(zero_op.op_ref());
     let identity_op = arena_clif::iadd(ctx, loc, payload, zero_op.result(ctx), ptr_ty);
