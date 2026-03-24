@@ -328,16 +328,6 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     payload
 }
 
-/// Print a newline to stdout.
-///
-/// Signature: `() -> ()`
-#[unsafe(no_mangle)]
-pub extern "C" fn __tribute_print_newline() {
-    unsafe {
-        write(1, b"\n".as_ptr(), 1);
-    }
-}
-
 // =============================================================================
 // Allocator
 // =============================================================================
