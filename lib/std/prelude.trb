@@ -147,7 +147,10 @@ pub mod String {
 
     /// Convert a string to its underlying bytes (flattened).
     pub fn to_bytes(s: String) -> Bytes {
-        __string_to_bytes(s)
+        case s {
+            Leaf(bytes) -> bytes
+            Branch(left, right, _) -> __tribute_bytes_concat(left.to_bytes(), right.to_bytes())
+        }
     }
 }
 
@@ -235,16 +238,8 @@ pub mod Bytes {
 // I/O functions
 // =============================================================================
 
-/// Flatten a String rope to Bytes (top-level to avoid module name resolution issue).
-fn __string_to_bytes(s: String) -> Bytes {
-    case s {
-        Leaf(bytes) -> bytes
-        Branch(left, right, _) -> __tribute_bytes_concat(__string_to_bytes(left), __string_to_bytes(right))
-    }
-}
-
 /// Print a line to standard output.
 fn print_line(message: String) -> Nil {
-    __tribute_bytes_print(__string_to_bytes(message))
+    __tribute_bytes_print(message.to_bytes())
     __tribute_print_newline()
 }

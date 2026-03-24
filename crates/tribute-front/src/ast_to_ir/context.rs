@@ -225,6 +225,31 @@ impl<'db> IrLoweringCtx<'db> {
         self.active_prompt_tag_stack.last().copied()
     }
 
+    /// Qualify a name with the current module path.
+    ///
+    /// Matches resolve::build_env convention: the top-level module name
+    /// (derived from filename) is NOT part of internal qualified names.
+    /// Only nested `pub mod` blocks contribute to the path.
+    ///
+    /// - `["test", "String"]` + `"to_bytes"` → `"String::to_bytes"`
+    /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
+    pub fn qualify_name(&self, name: Symbol) -> Symbol {
+        // Skip the first segment (top-level module name from filename).
+        // Only nested module segments contribute to the qualified name.
+        let nested: Vec<_> = self.module_path.iter().skip(1).collect();
+        if nested.is_empty() {
+            return name;
+        }
+        let mut prefix = nested
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        prefix.push_str("::");
+        name.with_str(|s| prefix.push_str(s));
+        Symbol::from_dynamic(&prefix)
+    }
+
     /// Generate a unique lambda name qualified with module path.
     pub fn gen_lambda_name(&mut self) -> Symbol {
         let lambda_name = format!("__lambda_{}", self.lambda_counter);
