@@ -124,7 +124,7 @@ use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
 use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif};
 use trunk_ir_cranelift_backend::{
-    CompilationResult as NativeCompilationResult, emit_module_to_native,
+    CompilationResult as NativeCompilationResult, RodataEntry, emit_module_to_native,
 };
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
@@ -592,6 +592,13 @@ fn compile_module_to_native(
     // Phase -1 - Generate native entrypoint
     tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
 
+    // Phase -0.5 - Const analysis + lowering
+    // Analyze string/bytes constants and collect rodata entries.
+    // Lower adt.string_const → adt.variant_new + bytes alloc,
+    // and adt.bytes_const → clif alloc + rodata reference.
+    let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
+    tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis);
+
     // Phase 0 - Lower structured control flow to CFG-based control flow
     trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
 
@@ -677,7 +684,15 @@ fn compile_module_to_native(
 
     // Phase 4 - Validate and emit
     let _emit_span = tracing::info_span!("emit_module_to_native").entered();
-    emit_module_to_native(ctx, module)
+    let rodata: Vec<RodataEntry> = const_analysis
+        .rodata
+        .iter()
+        .map(|(sym, data)| RodataEntry {
+            symbol: *sym,
+            data: data.clone(),
+        })
+        .collect();
+    emit_module_to_native(ctx, module, &rodata)
 }
 
 /// Compile to native object bytes.

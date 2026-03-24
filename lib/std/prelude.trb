@@ -147,24 +147,28 @@ pub mod String {
 
     /// Convert a string to its underlying bytes (flattened).
     pub fn to_bytes(s: String) -> Bytes {
-        case s {
-            Leaf(bytes) -> bytes
-            Branch(left, right, _) -> __bytes_concat(left.to_bytes(), right.to_bytes())
-        }
+        __string_to_bytes(s)
     }
 }
 
 // =============================================================================
-// Intrinsic declarations
+// Intrinsic declarations (WASM backend)
 // =============================================================================
-// These functions are implemented by the backend (e.g., wasm).
+// These functions are implemented by the WASM backend.
 // The `__` prefix marks them as internal/reserved.
 
-extern "intrinsic" fn __bytes_len(bytes: Bytes) -> Nat
 extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
 extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
-extern "intrinsic" fn __bytes_concat(left: Bytes, right: Bytes) -> Bytes
-extern "intrinsic" fn __print_line(message: String) -> Nil
+
+// =============================================================================
+// Native extern "C" declarations
+// =============================================================================
+// These functions are provided by the tribute-runtime static library.
+
+extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
+extern "C" fn __tribute_bytes_concat(left: Bytes, right: Bytes) -> Bytes
+extern "C" fn __tribute_bytes_print(bytes: Bytes) -> Nil
+extern "C" fn __tribute_print_newline() -> Nil
 
 // =============================================================================
 // Bytes module
@@ -174,7 +178,7 @@ extern "intrinsic" fn __print_line(message: String) -> Nil
 pub mod Bytes {
     /// Get the length of a byte sequence.
     pub fn len(bytes: Bytes) -> Nat {
-        __bytes_len(bytes)
+        __tribute_bytes_len(bytes)
     }
 
     /// Get the byte at the given index.
@@ -191,7 +195,7 @@ pub mod Bytes {
 
     /// Concatenate two byte sequences.
     pub fn concat(left: Bytes, right: Bytes) -> Bytes {
-        __bytes_concat(left, right)
+        __tribute_bytes_concat(left, right)
     }
 
     /// Concatenation operator for byte sequences.
@@ -231,7 +235,16 @@ pub mod Bytes {
 // I/O functions
 // =============================================================================
 
+/// Flatten a String rope to Bytes (top-level to avoid module name resolution issue).
+fn __string_to_bytes(s: String) -> Bytes {
+    case s {
+        Leaf(bytes) -> bytes
+        Branch(left, right, _) -> __tribute_bytes_concat(__string_to_bytes(left), __string_to_bytes(right))
+    }
+}
+
 /// Print a line to standard output.
 fn print_line(message: String) -> Nil {
-    __print_line(message)
+    __tribute_bytes_print(__string_to_bytes(message))
+    __tribute_print_newline()
 }

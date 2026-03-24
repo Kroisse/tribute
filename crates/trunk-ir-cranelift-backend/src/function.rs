@@ -137,6 +137,8 @@ pub(crate) struct FunctionTranslator<'a> {
     pub(crate) values: HashMap<ValueRef, cl_ir::Value>,
     /// Maps function symbols to Cranelift FuncRefs.
     func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
+    /// Maps data symbols to Cranelift GlobalValues.
+    data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
     pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
     /// The ISA calling convention (used for indirect calls).
@@ -150,6 +152,7 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
         func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
+        data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
         call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
@@ -158,6 +161,7 @@ impl<'a> FunctionTranslator<'a> {
             builder,
             values: HashMap::new(),
             func_refs,
+            data_refs,
             block_map: HashMap::new(),
             call_conv,
             ptr_ty,
@@ -421,12 +425,14 @@ impl<'a> FunctionTranslator<'a> {
         // === Symbol Address ===
         if let Ok(sym_addr) = arena_clif::SymbolAddr::from_op(ctx, op) {
             let sym = sym_addr.sym(ctx);
-            let func_ref = self
-                .func_refs
-                .get(&sym)
-                .copied()
-                .ok_or_else(|| CompilationError::function_not_found(&sym.to_string()))?;
-            let val = self.builder.ins().func_addr(self.ptr_ty, func_ref);
+            // Check function refs first, then data refs
+            let val = if let Some(&func_ref) = self.func_refs.get(&sym) {
+                self.builder.ins().func_addr(self.ptr_ty, func_ref)
+            } else if let Some(&gv) = self.data_refs.get(&sym) {
+                self.builder.ins().global_value(self.ptr_ty, gv)
+            } else {
+                return Err(CompilationError::function_not_found(&sym.to_string()));
+            };
             let result = ctx.op_result(op, 0);
             self.values.insert(result, val);
             return Ok(());

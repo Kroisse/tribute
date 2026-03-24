@@ -288,3 +288,52 @@ fn main() {
         "6",
     );
 }
+
+// =============================================================================
+// String / print_line Tests
+// =============================================================================
+
+#[test]
+fn test_native_print_line() {
+    let output = compile_and_run_native(
+        "print_line.trb",
+        r#"
+fn main() {
+    print_line("Hello, World!")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    assert_eq!(stdout.trim(), "Hello, World!");
+}
+
+#[test]
+fn test_native_print_line_empty() {
+    let output = compile_and_run_native(
+        "print_line_empty.trb",
+        r#"
+fn main() {
+    print_line("")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+    // Empty string + newline
+    assert_eq!(stdout, "\n");
+}

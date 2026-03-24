@@ -307,6 +307,14 @@ fn build_dispatching_deep_release(
     builder.ins().return_(&[]);
 }
 
+/// Read-only data section entry for native code generation.
+pub struct RodataEntry {
+    /// Symbol name for this data section (e.g., `__tribute_rodata_0`).
+    pub symbol: Symbol,
+    /// Raw byte content.
+    pub data: Vec<u8>,
+}
+
 /// Emit a native object file from a lowered TrunkIR module.
 ///
 /// This function assumes the module has already been lowered to clif dialect
@@ -314,14 +322,25 @@ fn build_dispatching_deep_release(
 /// 1. Validates the IR (checks for non-clif ops)
 /// 2. Emits native code via Cranelift
 ///
+/// `rodata` provides read-only data sections that can be referenced via
+/// `clif.symbol_addr` operations.
+///
 /// For Tribute-specific compilation (including lowering from high-level IR),
 /// use the orchestration in the main crate's pipeline.
-pub fn emit_module_to_native(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
+pub fn emit_module_to_native(
+    ctx: &IrContext,
+    module: Module,
+    rodata: &[RodataEntry],
+) -> CompilationResult<Vec<u8>> {
     validate_clif_ir(ctx, module)?;
-    emit_module_impl(ctx, module)
+    emit_module_impl(ctx, module, rodata)
 }
 
-fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
+fn emit_module_impl(
+    ctx: &IrContext,
+    module: Module,
+    rodata: &[RodataEntry],
+) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
     let triple = Triple::host();
     let mut flag_builder = settings::builder();
@@ -390,6 +409,28 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     // 3c. RTTI infrastructure
     let rtti_info = collect_and_declare_rtti(&mut obj_module, &mut func_ids, call_conv)?;
 
+    // 3d. Declare and define rodata sections
+    let mut data_ids: HashMap<Symbol, cranelift_module::DataId> = HashMap::new();
+    for entry in rodata {
+        let data_id = obj_module
+            .declare_data(
+                &entry.symbol.to_string(),
+                Linkage::Local,
+                false, // not writable
+                false, // not TLS
+            )
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+
+        let mut data_desc = DataDescription::new();
+        data_desc.define(entry.data.clone().into_boxed_slice());
+        data_desc.set_align(1); // byte-aligned rodata
+        obj_module
+            .define_data(data_id, &data_desc)
+            .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+
+        data_ids.insert(entry.symbol, data_id);
+    }
+
     // 4. Second pass — define functions
     let mut fb_ctx = FunctionBuilderContext::new();
 
@@ -418,11 +459,18 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             func_refs.insert(sym, fref);
         }
 
+        // Declare all data sections as GlobalValues
+        let mut data_refs: HashMap<Symbol, cl_ir::GlobalValue> = HashMap::new();
+        for (&sym, &did) in &data_ids {
+            let gv = obj_module.declare_data_in_func(did, &mut cl_func);
+            data_refs.insert(sym, gv);
+        }
+
         // Build the function body
         {
             let builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
             let mut translator =
-                FunctionTranslator::new(ctx, builder, &func_refs, call_conv, ptr_ty);
+                FunctionTranslator::new(ctx, builder, &func_refs, &data_refs, call_conv, ptr_ty);
 
             let func_body = func_wrapped.body(ctx);
             let body_region = ctx.region(func_body);
