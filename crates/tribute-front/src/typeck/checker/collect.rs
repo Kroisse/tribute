@@ -340,6 +340,7 @@ impl<'db> TypeChecker<'db> {
                 op.name,
                 AbilityOpInfo {
                     name: op.name,
+                    kind: op.kind,
                     param_types,
                     return_type,
                 },

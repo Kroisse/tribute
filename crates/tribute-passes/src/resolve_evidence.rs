@@ -702,10 +702,16 @@ fn transform_shifts_in_block(
                 let tag_val = ctx.op_result(tag_call.op_ref(), 0);
                 ctx.insert_op_before(block, op, tag_call.op_ref());
 
-                // Null tr_dispatch_fn
-                let null_ptr = arith::r#const(ctx, loc, ptr_ty, Attribute::Int(0));
-                let tr_dispatch_fn_val = null_ptr.result(ctx);
-                ctx.insert_op_before(block, op, null_ptr.op_ref());
+                // Extract tr_dispatch_fn from handle_dispatch operand[2]
+                let tr_dispatch_fn_val = {
+                    let operands = ctx.op_operands(op).to_vec();
+                    let tr_fn_val = operands
+                        .get(2)
+                        .expect("handle_dispatch must have operand[2] (tr_dispatch_fn)");
+                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, *tr_fn_val, ptr_ty);
+                    ctx.insert_op_before(block, op, cast.op_ref());
+                    cast.result(ctx)
+                };
 
                 // Extract handler_fn from handle_dispatch operand[1]
                 let handler_dispatch_val = {

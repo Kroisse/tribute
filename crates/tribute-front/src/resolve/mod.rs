@@ -162,6 +162,7 @@ fn collect_definition<'db>(
                 let binding = Binding::AbilityOp {
                     ability: ability_id,
                     op: op.name,
+                    kind: op.kind,
                 };
                 env.add_to_namespace(a.name, op.name, binding);
             }

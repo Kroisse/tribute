@@ -6,11 +6,9 @@ core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
   func.func @get_state() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
-          func.return %1
-      }
-      %2 = ability.perform %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      func.return %2
+      %0 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %1 = core.unrealized_conversion_cast %0 : core.i32
+      func.return %1
   }
   func.func @run() -> core.i32 {
       %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0} {
@@ -43,31 +41,32 @@ core.module @test {
           }
           func.return %10
       }
-      %21 = ability.handle_dispatch %3, %4 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %21 = arith.const {value = 0} : tribute_rt.anyref
+      %22 = ability.handle_dispatch %3, %4, %21 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb8(%22: tribute_rt.anyref):
-              %23 = core.unrealized_conversion_cast %22 : core.i32
-              scf.yield %23
+            ^bb8(%23: tribute_rt.anyref):
+              %24 = core.unrealized_conversion_cast %23 : core.i32
+              scf.yield %24
           }
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @get} {
-            ^bb9(%24: tribute_rt.anyref, %25: tribute_rt.anyref):
-              %26 = arith.const {value = 42} : core.i32
-              %27 = core.unrealized_conversion_cast %26 : tribute_rt.anyref
-              %28 = core.unrealized_conversion_cast %24 : !t0
-              %29 = func.call_indirect %28, %27 : tribute_rt.anyref
-              scf.yield %29
+            ^bb9(%25: tribute_rt.anyref, %26: tribute_rt.anyref):
+              %27 = arith.const {value = 42} : core.i32
+              %28 = core.unrealized_conversion_cast %27 : tribute_rt.anyref
+              %29 = core.unrealized_conversion_cast %25 : !t0
+              %30 = func.call_indirect %29, %28 : tribute_rt.anyref
+              scf.yield %30
           }
           ability.suspend {ability_ref = core.ability_ref() {name = @State}, op_name = @set} {
-            ^bb10(%30: tribute_rt.anyref, %31: tribute_rt.anyref):
-              %32 = arith.const {value = unit} : core.nil
-              %33 = core.unrealized_conversion_cast %32 : tribute_rt.anyref
-              %34 = core.unrealized_conversion_cast %30 : !t0
-              %35 = func.call_indirect %34, %33 : tribute_rt.anyref
-              scf.yield %35
+            ^bb10(%31: tribute_rt.anyref, %32: tribute_rt.anyref):
+              %33 = arith.const {value = unit} : core.nil
+              %34 = core.unrealized_conversion_cast %33 : tribute_rt.anyref
+              %35 = core.unrealized_conversion_cast %31 : !t0
+              %36 = func.call_indirect %35, %34 : tribute_rt.anyref
+              scf.yield %36
           }
       }
-      %36 = core.unrealized_conversion_cast %21 : core.i32
-      func.return %36
+      %37 = core.unrealized_conversion_cast %22 : core.i32
+      func.return %37
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

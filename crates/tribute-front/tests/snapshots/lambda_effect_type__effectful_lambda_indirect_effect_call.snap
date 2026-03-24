@@ -3,22 +3,14 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
-
   func.func @counter() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
-          %2 = core.unrealized_conversion_cast %1 : core.i32
-          %3 = arith.const {value = 1} : core.i32
-          %4 = arith.add %2, %3 : core.i32
-          %5 = closure.lambda(%6: tribute_rt.anyref) -> tribute_rt.anyref [%2] {
-              %7 = core.unrealized_conversion_cast %6 : core.nil
-              %8 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
-              func.return %8
-          }
-          %9 = ability.perform %5, %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
-      }
-      %10 = ability.perform %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      func.return %10
+      %0 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %1 = core.unrealized_conversion_cast %0 : core.i32
+      %2 = arith.const {value = 1} : core.i32
+      %3 = arith.add %1, %2 : core.i32
+      %4 = ability.call %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+      %5 = core.unrealized_conversion_cast %4 : core.nil
+      func.return %1
   }
   func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
       %1 = closure.lambda() -> tribute_rt.anyref [%0] {
@@ -30,18 +22,21 @@ core.module @test {
       %5 = closure.lambda(%6: tribute_rt.anyref, %7: core.i32, %8: tribute_rt.anyref) -> tribute_rt.anyref {
           func.unreachable
       }
-      %9 = ability.handle_dispatch %4, %5 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
+      %9 = arith.const {value = 0} : tribute_rt.anyref
+      %10 = ability.handle_dispatch %4, %5, %9 {result_type = tribute_rt.anyref, tag = 0} : tribute_rt.anyref {
           ability.done {
-            ^bb4(%10: tribute_rt.anyref):
-              %11 = core.unrealized_conversion_cast %10 : core.i32
-              scf.yield %11
+            ^bb4(%11: tribute_rt.anyref):
+              %12 = core.unrealized_conversion_cast %11 : core.i32
+              scf.yield %12
           }
       }
-      %12 = core.unrealized_conversion_cast %9 : core.i32
-      %13 = arith.const {value = 0} : core.i32
-      %14 = arith.const {value = unit} : core.nil
-      %15 = arith.const {value = unit} : core.nil
-      func.return %15
+      %13 = core.unrealized_conversion_cast %10 : core.i32
+      %14 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %15 = core.unrealized_conversion_cast %14 : core.i32
+      %16 = arith.const {value = 0} : core.i32
+      %17 = arith.const {value = unit} : core.nil
+      %18 = arith.const {value = unit} : core.nil
+      func.return %18
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {

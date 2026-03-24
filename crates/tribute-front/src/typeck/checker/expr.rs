@@ -538,7 +538,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.error_type()
             }
             ResolvedRef::Builtin(builtin) => self.infer_builtin_with_ctx(ctx, builtin),
-            ResolvedRef::AbilityOp { ability, op } => {
+            ResolvedRef::AbilityOp { ability, op, .. } => {
                 // Look up the ability operation signature from the module type env
                 if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
                     // Create a function type from the operation signature

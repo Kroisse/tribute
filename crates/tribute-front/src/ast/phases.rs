@@ -13,6 +13,7 @@ use std::fmt::{self, Display, Formatter};
 use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
+use super::decl::OpDeclKind;
 use super::node_id::NodeId;
 use super::types::Type;
 
@@ -276,6 +277,8 @@ pub enum ResolvedRef<'db> {
         ability: AbilityId<'db>,
         /// The operation name (e.g., "get").
         op: Symbol,
+        /// Whether this is a `fn` (tail-resumptive) or `op` (general) operation.
+        kind: OpDeclKind,
     },
 
     /// Reference to an ability definition.
@@ -314,8 +317,8 @@ impl<'db> ResolvedRef<'db> {
     }
 
     /// Create an ability operation reference.
-    pub fn ability_op(ability: AbilityId<'db>, op: Symbol) -> Self {
-        Self::AbilityOp { ability, op }
+    pub fn ability_op(ability: AbilityId<'db>, op: Symbol, kind: OpDeclKind) -> Self {
+        Self::AbilityOp { ability, op, kind }
     }
 
     /// Create an ability reference.

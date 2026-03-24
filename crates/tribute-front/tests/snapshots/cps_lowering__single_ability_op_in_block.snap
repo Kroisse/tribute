@@ -4,11 +4,9 @@ expression: ir_text
 ---
 core.module @test {
   func.func @get_state() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
-          func.return %1
-      }
-      %2 = ability.perform %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      func.return %2
+      %0 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %1 = core.unrealized_conversion_cast %0 : core.i32
+      func.return %1
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

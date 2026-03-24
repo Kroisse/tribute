@@ -10,7 +10,9 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{AbilityId, CtorId, EffectRow, FuncDefId, Type, TypeKind, TypeParam, TypeScheme};
+use crate::ast::{
+    AbilityId, CtorId, EffectRow, FuncDefId, OpDeclKind, Type, TypeKind, TypeParam, TypeScheme,
+};
 
 // =========================================================================
 // ModuleTypeEnv: Module-level type information (read-only after collection)
@@ -26,6 +28,8 @@ pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
 pub struct AbilityOpInfo<'db> {
     /// Operation name.
     pub name: Symbol,
+    /// Whether this is a `fn` (tail-resumptive) or `op` (general) operation.
+    pub kind: OpDeclKind,
     /// Parameter types.
     pub param_types: Vec<Type<'db>>,
     /// Return type.
