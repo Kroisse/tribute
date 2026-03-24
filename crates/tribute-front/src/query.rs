@@ -214,7 +214,7 @@ pub fn tdnr_module<'db>(
     source: SourceCst,
 ) -> Option<Module<TypedRef<'db>>> {
     let module = typed_module(db, source)?;
-    Some(crate::tdnr::resolve_tdnr(db, module))
+    Some(crate::tdnr::resolve_tdnr(db, module, std::iter::empty()))
 }
 
 // =============================================================================

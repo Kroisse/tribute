@@ -86,6 +86,19 @@ impl<'db> TdnrResolver<'db> {
         self.index_decls(&module.decls, &mut prefix);
     }
 
+    /// Pre-populate the method index from an external module (e.g., prelude).
+    ///
+    /// This allows TDNR to resolve UFCS calls to methods defined in imported modules.
+    /// Must be called before `resolve_module` so that external methods are available
+    /// when indexing the target module.
+    ///
+    /// External module functions are indexed with their original qualified names
+    /// (no additional prefix), so FuncDefIds match what the rest of the pipeline expects.
+    pub fn index_external_module(&mut self, module: &Module<TypedRef<'db>>) {
+        let mut prefix = String::new();
+        self.index_decls(&module.decls, &mut prefix);
+    }
+
     /// Recursively index declarations, including nested modules.
     fn index_decls(&mut self, decls: &[Decl<TypedRef<'db>>], prefix: &mut String) {
         for decl in decls {

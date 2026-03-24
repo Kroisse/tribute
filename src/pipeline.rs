@@ -185,8 +185,8 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(resolved);
 
-    // TDNR
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
+    // TDNR — prelude has no imports of its own
+    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -796,8 +796,12 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    // Phase 5: TDNR (Type-Directed Name Resolution)
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module);
+    // Phase 5: TDNR (Type-Directed Name Resolution) — inject prelude as import
+    let tdnr_ast = ast_tdnr::resolve_tdnr(
+        db,
+        result.module,
+        prelude_module(db).iter().map(|p| p.module(db)),
+    );
     tracing::debug!("Phase 5: after TDNR, {} declarations", tdnr_ast.decls.len());
 
     Some(ast_typeck::TypeCheckOutput::new(
