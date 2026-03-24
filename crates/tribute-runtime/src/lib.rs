@@ -281,9 +281,6 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     // Allocate buffer for concatenated bytes
     let buf = if total_len > 0 {
         let buf = unsafe { __tribute_alloc(total_len) };
-        if buf.is_null() {
-            return core::ptr::null_mut();
-        }
         if a_ref.len > 0 && !a_ref.ptr.is_null() {
             unsafe {
                 core::ptr::copy_nonoverlapping(a_ref.ptr, buf, a_ref.len as usize);
@@ -307,9 +304,6 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     const RC_HEADER_SIZE: u64 = 8;
     let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
-    if raw.is_null() {
-        return core::ptr::null_mut();
-    }
 
     // Store RC header: refcount=1, rtti_idx=0
     unsafe {
@@ -331,25 +325,41 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
 // Allocator
 // =============================================================================
 
+pub(crate) fn oom_abort() -> ! {
+    unsafe extern "C" {
+        fn abort() -> !;
+    }
+    unsafe { abort() }
+}
+
 /// # Safety
 ///
 /// Caller must eventually free the returned pointer via `__tribute_dealloc`
 /// with the same `size`.
+///
+/// # Aborts
+///
+/// Aborts the process on allocation failure (OOM). The only case that returns
+/// null is `size == 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
     }
     let Ok(size) = usize::try_from(size) else {
-        return core::ptr::null_mut();
+        oom_abort();
     };
     if asan::is_enabled() {
         return unsafe { asan::alloc(size) };
     }
     let Ok(layout) = core::alloc::Layout::from_size_align(size, 8) else {
-        return core::ptr::null_mut();
+        oom_abort();
     };
-    unsafe { alloc::alloc::alloc(layout) }
+    let ptr = unsafe { alloc::alloc::alloc(layout) };
+    if ptr.is_null() {
+        oom_abort();
+    }
+    ptr
 }
 
 /// # Safety
@@ -578,15 +588,8 @@ mod tests {
         assert_eq!(c, a + 2);
     }
 
-    #[test]
-    fn test_alloc_oversized_returns_null() {
-        // Layout::from_size_align fails for sizes > isize::MAX - 7 (with align=8).
-        // Should return null instead of panicking across FFI boundary.
-        unsafe {
-            let ptr = __tribute_alloc(u64::MAX);
-            assert!(ptr.is_null());
-        }
-    }
+    // test_alloc_oversized: removed because oversized allocation now aborts
+    // the process (oom_abort), which cannot be tested without subprocess spawning.
 
     #[test]
     fn test_dealloc_invalid_is_noop() {
