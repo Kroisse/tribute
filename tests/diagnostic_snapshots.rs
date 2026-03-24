@@ -155,9 +155,6 @@ fn test() -> Point {
 // Ability / effect errors
 // =============================================================================
 
-/// Currently panics during ability lowering instead of emitting a diagnostic.
-/// See: https://github.com/Kroisse/tribute/issues/506
-#[ignore = "panics in lower_ability_perform instead of producing a diagnostic"]
 #[salsa_test]
 fn diag_unhandled_effect_in_main(db: &salsa::DatabaseImpl) {
     let source = source_from_str(
@@ -170,6 +167,49 @@ ability MyEffect {
 
 fn main() -> Int {
     MyEffect::do_something()
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_misspelled_ability_name(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        db,
+        "test.trb",
+        r#"
+ability MyEffect {
+    fn do_something() -> Int
+}
+
+fn test() ->{MyEffec} Int {
+    MyEffec::do_something()
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// Panics in func_context.rs debug_assert instead of producing a diagnostic.
+#[ignore = "arity mismatch panics in effect row merging"]
+#[salsa_test]
+fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
+    let source = source_from_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    fn get() -> s
+    fn set(value: s) -> Nil
+}
+
+fn test() ->{State(Int, Bool)} Int {
+    State::get()
 }
 "#,
     );

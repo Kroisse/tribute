@@ -95,10 +95,11 @@ impl RewritePattern for LowerPerformPattern {
 
         // === 1. Evidence lookup → marker ===
         let marker_ty = ability::marker_adt_type_ref(ctx);
-        let evidence_val = evidence_val.expect(
-            "ability.perform requires evidence parameter; \
-             enclosing function is missing evidence (was add_evidence_params skipped?)",
-        );
+        let Some(evidence_val) = evidence_val else {
+            // Missing evidence means the frontend detected unhandled effects
+            // and emitted a diagnostic. Skip this op gracefully.
+            return false;
+        };
         let lookup =
             ability::evidence_lookup(ctx, location, evidence_val, marker_ty, ability_ref_type);
         rewriter.insert_op(lookup.op_ref());
@@ -344,12 +345,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "ability.perform requires evidence parameter")]
-    fn test_lower_perform_no_evidence() {
+    fn test_lower_perform_no_evidence_skips_gracefully() {
         let mut ctx = IrContext::new();
         init_common_types(&mut ctx);
 
-        // Function without evidence parameter — should panic.
+        // Function without evidence parameter — should skip without panicking.
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
@@ -361,6 +361,13 @@ mod tests {
 }"#,
         );
 
+        // Should not panic; the perform op is left unchanged.
         lower_ability_perform(&mut ctx, module);
+
+        let ir = print_module(&ctx, module.op());
+        assert!(
+            ir.contains("ability.perform"),
+            "perform op should remain unchanged when evidence is missing, got:\n{ir}"
+        );
     }
 }
