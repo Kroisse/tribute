@@ -339,8 +339,12 @@ pub(crate) fn oom_abort() -> ! {
 ///
 /// # Aborts
 ///
-/// Aborts the process on allocation failure (OOM). The only case that returns
-/// null is `size == 0`.
+/// Aborts the process if any of the following occur:
+/// - `size` exceeds `usize::MAX` (u64-to-usize conversion failure)
+/// - `Layout::from_size_align` fails (size exceeds `isize::MAX - 7`)
+/// - The underlying allocator returns null (OOM)
+///
+/// The only case that returns null is `size == 0`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_alloc(size: u64) -> *mut u8 {
     if size == 0 {
