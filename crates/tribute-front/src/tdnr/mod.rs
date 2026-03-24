@@ -29,11 +29,17 @@ use crate::ast::{Module, TypedRef};
 
 /// Resolve method calls in a module using type information.
 ///
-/// This is the main entry point for TDNR.
+/// `imports` is an iterator of external modules whose methods should be available
+/// for UFCS resolution (e.g., the prelude). Import methods are pre-indexed before
+/// the target module's own methods, so they can be found by receiver type matching.
 pub fn resolve_tdnr<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
+    imports: impl IntoIterator<Item = &'db Module<TypedRef<'db>>>,
 ) -> Module<TypedRef<'db>> {
-    let resolver = TdnrResolver::new(db);
+    let mut resolver = TdnrResolver::new(db);
+    for imported in imports {
+        resolver.index_external_module(imported);
+    }
     resolver.resolve_module(module)
 }

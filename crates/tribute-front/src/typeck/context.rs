@@ -242,14 +242,14 @@ impl<'db> ModuleTypeEnv<'db> {
     // Export methods
     // =========================================================================
 
-    /// Export function type schemes as a Vec keyed by Symbol (function name).
+    /// Export function type schemes as a Vec keyed by Symbol (fully qualified function name).
     ///
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_function_types(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
         let mut result: Vec<_> = self
             .function_types
             .iter()
-            .map(|(id, scheme)| (id.name(self.db), *scheme))
+            .map(|(id, scheme)| (id.qualified(self.db), *scheme))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result

@@ -473,7 +473,7 @@ pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let module = ast_query::tdnr_module(db, source)?;
+    let module = tribute::pipeline::tdnr_module_with_prelude(db, source)?;
     let span_map = ast_query::span_map(db, source)?;
 
     Some(AstTypeIndex::build(db, &module, &span_map))

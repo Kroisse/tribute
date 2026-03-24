@@ -13,16 +13,33 @@ use crate::ast::{
 };
 use crate::{push_prefix, qualified_symbol};
 
+/// A candidate method entry in the TDNR method index.
+pub struct MethodEntry<'db> {
+    pub func_id: FuncDefId<'db>,
+    pub func_ty: Type<'db>,
+}
+
+impl<'db> MethodEntry<'db> {
+    /// Extract the receiver type from the function type's first parameter.
+    pub fn receiver_ty(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
+        match self.func_ty.kind(db) {
+            TypeKind::Func { params, .. } => params.first().copied(),
+            _ => None,
+        }
+    }
+}
+
 /// TDNR resolver for AST expressions.
 ///
 /// Resolves method calls by finding functions where the first parameter
 /// type matches the receiver's type.
 pub struct TdnrResolver<'db> {
     db: &'db dyn salsa::Database,
-    /// Map from (type_name, method_name) to candidate (FuncDefId, function type) pairs.
-    /// Multiple candidates arise when different modules define methods with the same name
-    /// on the same type. Ambiguity is checked at lookup time.
-    method_index: HashMap<(Symbol, Symbol), Vec<(FuncDefId<'db>, Type<'db>)>>,
+    /// Map from method_name to candidate entries.
+    /// Keyed by the method name only; receiver type filtering happens at lookup time.
+    /// Multiple candidates with different receiver types can share the same method name
+    /// (e.g., `String::len` and `Bytes::len` both register under `len`).
+    method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
 }
 
 impl<'db> TdnrResolver<'db> {
@@ -57,14 +74,27 @@ impl<'db> TdnrResolver<'db> {
     // Method index building
     // =========================================================================
 
-    /// Build an index of methods by (type_name, method_name).
+    /// Build an index of methods by method name.
     ///
-    /// This indexes functions by their first parameter's type name,
-    /// enabling efficient UFCS resolution.
+    /// This indexes functions by their method name only; the receiver type is
+    /// used for filtering at lookup time, not as part of the index key.
     fn build_method_index(&mut self, module: &Module<TypedRef<'db>>) {
         // Start with empty prefix — matches resolve::build_env convention.
         // The top-level module name (derived from filename) is not part of
         // internal qualified names. Only nested `pub mod` blocks extend the path.
+        let mut prefix = String::new();
+        self.index_decls(&module.decls, &mut prefix);
+    }
+
+    /// Pre-populate the method index from an external module (e.g., prelude).
+    ///
+    /// This allows TDNR to resolve UFCS calls to methods defined in imported modules.
+    /// Must be called before `resolve_module` so that external methods are available
+    /// when indexing the target module.
+    ///
+    /// External module functions are indexed with their original qualified names
+    /// (no additional prefix), so FuncDefIds match what the rest of the pipeline expects.
+    pub fn index_external_module(&mut self, module: &Module<TypedRef<'db>>) {
         let mut prefix = String::new();
         self.index_decls(&module.decls, &mut prefix);
     }
@@ -74,8 +104,20 @@ impl<'db> TdnrResolver<'db> {
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
-                    // Check if this function can be a method (has at least one parameter)
+                    // Check if this function can be a method (has at least one parameter
+                    // with a determinable receiver type). Functions with bare type variables
+                    // as their first parameter cannot be UFCS targets.
                     if func.params.is_empty() {
+                        continue;
+                    }
+
+                    // Skip if receiver type is not determinable (e.g., bare type variable).
+                    // This also prevents build_func_type from hitting open effect rows.
+                    let first_param = &func.params[0];
+                    if self
+                        .extract_receiver_type_from_annotation(&first_param.ty)
+                        .is_none()
+                    {
                         continue;
                     }
 
@@ -85,29 +127,20 @@ impl<'db> TdnrResolver<'db> {
                     let qualified = qualified_symbol(prefix, func_name);
                     let func_id = FuncDefId::new(self.db, qualified);
 
-                    // Try to extract the type name from the first parameter's type annotation
-                    let first_param = &func.params[0];
-                    let type_name = self.extract_type_name(&first_param.ty);
-
-                    // Skip if we can't determine the receiver type - no "_any" fallback
-                    let Some(type_name) = type_name else {
-                        continue;
-                    };
-
                     // Build function type from parameter and return type annotations
                     let func_ty = self.build_func_type(func);
 
-                    // Register with the actual type name for precise UFCS lookup
+                    // Register under method name only; receiver type filtering at lookup time
                     self.method_index
-                        .entry((type_name, func_name))
+                        .entry(func_name)
                         .or_default()
-                        .push((func_id, func_ty));
+                        .push(MethodEntry { func_id, func_ty });
                 }
                 Decl::Struct(s) => {
                     // Register each field as an accessor method
                     // e.g., struct Point { x: Int, y: Int } registers:
-                    //   - (Point, x) → fn x(self: Point) -> Int
-                    //   - (Point, y) → fn y(self: Point) -> Int
+                    //   - x → fn x(self: Point) -> Int  (receiver type filtering at lookup)
+                    //   - y → fn y(self: Point) -> Int
 
                     let struct_name = s.name;
 
@@ -166,11 +199,11 @@ impl<'db> TdnrResolver<'db> {
                             },
                         );
 
-                        // Register in method index
+                        // Register under field name only
                         self.method_index
-                            .entry((struct_name, field_name))
+                            .entry(field_name)
                             .or_default()
-                            .push((func_id, func_ty));
+                            .push(MethodEntry { func_id, func_ty });
                     }
 
                     prefix.truncate(saved);
@@ -296,34 +329,23 @@ impl<'db> TdnrResolver<'db> {
         }
     }
 
-    /// Extract the type name from a type annotation.
-    fn extract_type_name(&self, annotation: &Option<crate::ast::TypeAnnotation>) -> Option<Symbol> {
+    /// Check if a type annotation has a determinable type constructor name.
+    ///
+    /// Returns `Some(name)` for Named, Path, and App annotations.
+    /// Returns `None` for bare type variables and other non-determinable annotations.
+    /// Used as a guard before calling `build_func_type` to avoid open effect row panics.
+    fn extract_receiver_type_from_annotation(
+        &self,
+        annotation: &Option<crate::ast::TypeAnnotation>,
+    ) -> Option<Symbol> {
         use crate::ast::TypeAnnotationKind;
         let ann = annotation.as_ref()?;
         match &ann.kind {
             TypeAnnotationKind::Named(name) => Some(*name),
-            TypeAnnotationKind::Path(path) if !path.is_empty() => {
-                // Use the last segment of the path as the type name
-                path.last().copied()
-            }
-            TypeAnnotationKind::App { ctor, .. } => {
-                // Recursively extract from the constructor
-                self.extract_type_name_from_annotation(ctor)
-            }
-            _ => None,
-        }
-    }
-
-    /// Extract the type name from a TypeAnnotation (not Option).
-    fn extract_type_name_from_annotation(
-        &self,
-        annotation: &crate::ast::TypeAnnotation,
-    ) -> Option<Symbol> {
-        use crate::ast::TypeAnnotationKind;
-        match &annotation.kind {
-            TypeAnnotationKind::Named(name) => Some(*name),
             TypeAnnotationKind::Path(path) if !path.is_empty() => path.last().copied(),
-            TypeAnnotationKind::App { ctor, .. } => self.extract_type_name_from_annotation(ctor),
+            TypeAnnotationKind::App { ctor, .. } => {
+                self.extract_receiver_type_from_annotation(&Some((**ctor).clone()))
+            }
             _ => None,
         }
     }
@@ -492,11 +514,11 @@ impl<'db> TdnrResolver<'db> {
         let receiver_ty = self.get_expr_type(&receiver);
 
         // Try to find a matching method
-        if let Some((func_id, func_ty)) = self.lookup_method(receiver_ty, method) {
+        if let Some(entry) = self.lookup_method(receiver_ty, method) {
             // Found the method - transform to a Call
             let callee_ref = TypedRef {
-                resolved: ResolvedRef::Function { id: func_id },
-                ty: func_ty,
+                resolved: ResolvedRef::Function { id: entry.func_id },
+                ty: entry.func_ty,
             };
 
             // Build callee expression (a Var referencing the function)
@@ -618,7 +640,6 @@ impl<'db> TdnrResolver<'db> {
     }
 
     /// Look up a method for a given receiver type.
-    /// Returns (FuncDefId, function_type) if found.
     ///
     /// Returns `None` when no candidates exist **or** when multiple candidates
     /// are found (ambiguous). In the ambiguous case the `MethodCall` is kept
@@ -627,16 +648,31 @@ impl<'db> TdnrResolver<'db> {
         &self,
         receiver_ty: Option<Type<'db>>,
         method: Symbol,
-    ) -> Option<(FuncDefId<'db>, Type<'db>)> {
-        let ty = receiver_ty?;
-        let type_name = self.extract_type_name_from_type(ty)?;
+    ) -> Option<&MethodEntry<'db>> {
+        let receiver_ty = receiver_ty?;
+        let candidates = self.method_index.get(&method)?;
 
-        let candidates = self.method_index.get(&(type_name, method))?;
-        match candidates.as_slice() {
-            [] => None,
-            [single] => Some(*single),
-            _multiple => None, // ambiguous — keep as MethodCall for error reporting
+        let mut iter = candidates
+            .iter()
+            .filter(|entry| self.receiver_type_matches(entry, receiver_ty));
+        let matched = iter.next()?;
+        if iter.next().is_some() {
+            return None; // ambiguous — keep as MethodCall for error reporting
         }
+        Some(matched)
+    }
+
+    /// Check if an entry's receiver type matches the actual receiver type.
+    ///
+    /// Compares by type constructor name, allowing generic types to match
+    /// (e.g., `Option(a)` matches `Option(Int)`).
+    fn receiver_type_matches(&self, entry: &MethodEntry<'db>, actual: Type<'db>) -> bool {
+        let Some(declared) = entry.receiver_ty(self.db) else {
+            return false;
+        };
+        let declared_name = self.extract_type_name_from_type(declared);
+        let actual_name = self.extract_type_name_from_type(actual);
+        declared_name.is_some() && declared_name == actual_name
     }
 
     /// Extract the type name from a `Type` value.
@@ -1193,13 +1229,29 @@ mod tests {
         let type_name = Symbol::new("Foo");
         let method_name = Symbol::new("bar");
         let func_id = FuncDefId::new(db, method_name);
-        let func_ty = Type::new(db, TypeKind::Int);
+        // func_ty must be a Func type with Foo as the first param so receiver_ty() works
+        let foo_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![],
+            },
+        );
+        let effect = crate::ast::EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![foo_ty],
+                result: Type::new(db, TypeKind::Int),
+                effect,
+            },
+        );
 
         resolver
             .method_index
-            .entry((type_name, method_name))
+            .entry(method_name)
             .or_default()
-            .push((func_id, func_ty));
+            .push(MethodEntry { func_id, func_ty });
 
         let receiver_ty = Some(Type::new(
             db,
@@ -1228,18 +1280,39 @@ mod tests {
         let type_name = Symbol::new("Foo");
         let method_name = Symbol::new("bar");
 
-        // Two different functions with the same (type_name, method_name) key
-        let func_id_1 = FuncDefId::new(db, Symbol::new("bar"));
-        let func_ty_1 = Type::new(db, TypeKind::Int);
-        let func_id_2 = FuncDefId::new(db, Symbol::new("bar"));
-        let func_ty_2 = Type::new(db, TypeKind::Float);
+        // Two different functions with the same receiver type — ambiguous
+        let foo_ty = Type::new(
+            db,
+            TypeKind::Named {
+                name: type_name,
+                args: vec![],
+            },
+        );
+        let effect = crate::ast::EffectRow::pure(db);
+        let make_func_ty = |result_ty| {
+            Type::new(
+                db,
+                TypeKind::Func {
+                    params: vec![foo_ty],
+                    result: result_ty,
+                    effect,
+                },
+            )
+        };
+        let func_id_1 = FuncDefId::new(db, Symbol::new("bar1"));
+        let func_ty_1 = make_func_ty(Type::new(db, TypeKind::Int));
+        let func_id_2 = FuncDefId::new(db, Symbol::new("bar2"));
+        let func_ty_2 = make_func_ty(Type::new(db, TypeKind::Float));
 
-        let candidates = resolver
-            .method_index
-            .entry((type_name, method_name))
-            .or_default();
-        candidates.push((func_id_1, func_ty_1));
-        candidates.push((func_id_2, func_ty_2));
+        let candidates = resolver.method_index.entry(method_name).or_default();
+        candidates.push(MethodEntry {
+            func_id: func_id_1,
+            func_ty: func_ty_1,
+        });
+        candidates.push(MethodEntry {
+            func_id: func_id_2,
+            func_ty: func_ty_2,
+        });
 
         let receiver_ty = Some(Type::new(
             db,
@@ -1293,15 +1366,7 @@ mod tests {
         let type_name = Symbol::new("List");
         let method_name = Symbol::new("map");
         let func_id = FuncDefId::new(db, method_name);
-        let func_ty = Type::new(db, TypeKind::Int);
-
-        resolver
-            .method_index
-            .entry((type_name, method_name))
-            .or_default()
-            .push((func_id, func_ty));
-
-        // Receiver type is App { ctor: Named("List"), args: [Int] }
+        // func_ty must have Named("List") as the first param for receiver_type_matches
         let list_named = Type::new(
             db,
             TypeKind::Named {
@@ -1309,6 +1374,23 @@ mod tests {
                 args: vec![],
             },
         );
+        let effect = crate::ast::EffectRow::pure(db);
+        let func_ty = Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![list_named],
+                result: Type::new(db, TypeKind::Int),
+                effect,
+            },
+        );
+
+        resolver
+            .method_index
+            .entry(method_name)
+            .or_default()
+            .push(MethodEntry { func_id, func_ty });
+
+        // Receiver type is App { ctor: Named("List"), args: [Int] }
         let int_ty = Type::new(db, TypeKind::Int);
         let app_ty = Type::new(
             db,

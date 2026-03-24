@@ -189,7 +189,7 @@ pub fn typed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<TypedRef<'db>>> {
-    type_check_output(db, source).map(|o| o.module(db))
+    type_check_output(db, source).map(|o| o.module(db).clone())
 }
 
 /// Get function type schemes from type checking.
@@ -214,7 +214,7 @@ pub fn tdnr_module<'db>(
     source: SourceCst,
 ) -> Option<Module<TypedRef<'db>>> {
     let module = typed_module(db, source)?;
-    Some(crate::tdnr::resolve_tdnr(db, module))
+    Some(crate::tdnr::resolve_tdnr(db, module, std::iter::empty()))
 }
 
 // =============================================================================

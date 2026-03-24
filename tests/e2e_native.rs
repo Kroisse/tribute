@@ -410,3 +410,50 @@ fn main() {
     );
     assert_eq!(stdout, "echo\necho\n");
 }
+
+// =============================================================================
+// UFCS Tests — prelude module methods resolvable from user code (#577)
+// =============================================================================
+
+#[test]
+fn test_native_ufcs_string_len() {
+    // s.len() should resolve to String::len via TDNR
+    let output = compile_and_run_native(
+        "ufcs_string_len.trb",
+        r#"
+fn main() {
+    let s = "Hello"
+    let _ = s.len()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "s.len() UFCS should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn test_native_ufcs_method_disambiguation() {
+    // String::len and Bytes::len both register under "len" — receiver type disambiguates.
+    // to_bytes is called via fully-qualified name to keep the test focused on len disambiguation.
+    let output = compile_and_run_native(
+        "ufcs_method_disambiguation.trb",
+        r#"
+fn main() {
+    let s = "hello"
+    let bs = String::to_bytes(s)
+    let _ = s.len()
+    let _ = bs.len()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "String::len and Bytes::len should disambiguate by receiver type; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
