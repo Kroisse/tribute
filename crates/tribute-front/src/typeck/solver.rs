@@ -593,12 +593,11 @@ impl<'db> TypeSolver<'db> {
 
     /// Generate a fresh type variable for post-solve instantiation.
     ///
-    /// Uses `Anonymous` source with a high counter to avoid collision
-    /// with function-scoped UniVars.
+    /// Uses `UniVarSource::Solver` to prevent aliasing with function-scoped UniVars.
     pub fn fresh_type_var(&mut self, db: &'db dyn salsa::Database) -> Type<'db> {
         let counter = self.next_row_var;
         self.next_row_var += 1;
-        let id = UniVarId::new(db, UniVarSource::Anonymous(counter), 0);
+        let id = UniVarId::new(db, UniVarSource::Solver { index: counter }, 0);
         Type::new(db, TypeKind::UniVar { id })
     }
 

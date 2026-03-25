@@ -92,7 +92,7 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        self.resolve_deferred_methods(&mut solver, deferred_methods);
+        self.resolve_deferred_methods(&mut solver, deferred_methods, func.id);
 
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
@@ -200,6 +200,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
+        func_node_id: crate::ast::NodeId,
     ) {
         loop {
             let mut new_constraints = ConstraintSet::new();
@@ -275,7 +276,7 @@ impl<'db> TypeChecker<'db> {
             if let Err(error) = solver.solve(new_constraints) {
                 Diagnostic {
                     message: format!("type error during UFCS method resolution: {}", error),
-                    span: trunk_ir::Span::new(0, 0),
+                    span: self.get_span(func_node_id),
                     severity: DiagnosticSeverity::Error,
                     phase: CompilationPhase::TypeChecking,
                 }

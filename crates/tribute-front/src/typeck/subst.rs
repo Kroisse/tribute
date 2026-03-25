@@ -191,7 +191,12 @@ pub fn instantiate_scheme_for_solver<'db>(
         .iter()
         .map(|_| solver.fresh_type_var(db))
         .collect();
-    substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|_, _| scheme.body(db))
+    substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|index, max| {
+        panic!(
+            "BoundVar index out of range in post-solve instantiation: index={}, subst.len()={}",
+            index, max
+        )
+    })
 }
 
 #[cfg(test)]
