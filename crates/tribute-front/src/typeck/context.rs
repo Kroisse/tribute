@@ -706,7 +706,7 @@ mod tests {
 
         // Add items in random order
         for name in ["d", "b", "e", "a", "c"] {
-            let func_id = FuncDefId::new(db, Symbol::new(name));
+            let func_id = FuncDefId::new(db, Symbol::from_dynamic(name));
             env.register_function(func_id, scheme);
         }
 
@@ -731,5 +731,245 @@ mod tests {
                 Symbol::new("e")
             ]
         );
+    }
+
+    // =========================================================================
+    // UFCS utility function tests
+    // =========================================================================
+
+    use super::{MethodEntry, extract_type_name_from_type, receiver_type_matches};
+    use crate::ast::EffectRow;
+
+    /// Test helper: create a Named type from a string.
+    fn named<'db>(db: &'db dyn salsa::Database, name: &str) -> Type<'db> {
+        Type::new(
+            db,
+            TypeKind::Named {
+                name: Symbol::from_dynamic(name),
+                args: vec![],
+            },
+        )
+    }
+
+    /// Test helper: create a pure function type `fn(params) -> result`.
+    fn func<'db>(
+        db: &'db dyn salsa::Database,
+        params: &[Type<'db>],
+        result: Type<'db>,
+    ) -> Type<'db> {
+        Type::new(
+            db,
+            TypeKind::Func {
+                params: params.to_vec(),
+                result,
+                effect: EffectRow::pure(db),
+            },
+        )
+    }
+
+    /// Test helper: create a MethodEntry.
+    fn method_entry<'db>(
+        db: &'db dyn salsa::Database,
+        name: &str,
+        func_ty: Type<'db>,
+    ) -> MethodEntry<'db> {
+        MethodEntry {
+            func_id: FuncDefId::new(db, Symbol::from_dynamic(name)),
+            func_ty,
+        }
+    }
+
+    #[test]
+    fn test_extract_type_name_named() {
+        let db = salsa::DatabaseImpl::new();
+        assert_eq!(
+            extract_type_name_from_type(&db, named(&db, "Foo")),
+            Some(Symbol::new("Foo"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_app() {
+        let db = salsa::DatabaseImpl::new();
+        let list = named(&db, "List");
+        let int = Type::new(&db, TypeKind::Int);
+        let app = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: list,
+                args: vec![int],
+            },
+        );
+        assert_eq!(
+            extract_type_name_from_type(&db, app),
+            Some(Symbol::new("List"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_primitive() {
+        let db = salsa::DatabaseImpl::new();
+        assert_eq!(
+            extract_type_name_from_type(&db, Type::new(&db, TypeKind::Bytes)),
+            Some(Symbol::new("Bytes"))
+        );
+    }
+
+    #[test]
+    fn test_extract_type_name_univar_returns_none() {
+        let db = salsa::DatabaseImpl::new();
+        let id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        assert_eq!(
+            extract_type_name_from_type(&db, Type::new(&db, TypeKind::UniVar { id })),
+            None
+        );
+    }
+
+    #[test]
+    fn test_receiver_type_matches_same_type() {
+        let db = salsa::DatabaseImpl::new();
+        let foo = named(&db, "Foo");
+        let entry = method_entry(&db, "bar", func(&db, &[foo], Type::new(&db, TypeKind::Int)));
+        assert!(receiver_type_matches(&db, &entry, foo));
+    }
+
+    #[test]
+    fn test_receiver_type_matches_different_type() {
+        let db = salsa::DatabaseImpl::new();
+        let foo = named(&db, "Foo");
+        let bar = named(&db, "Bar");
+        let entry = method_entry(&db, "m", func(&db, &[foo], Type::new(&db, TypeKind::Int)));
+        assert!(!receiver_type_matches(&db, &entry, bar));
+    }
+
+    #[salsa_test]
+    fn test_lookup_method_single_match(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let foo = named(db, "Foo");
+        let ft = func(db, &[foo], Type::new(db, TypeKind::Int));
+        env.register_method(Symbol::new("bar"), method_entry(db, "bar", ft));
+        assert!(env.lookup_method(Symbol::new("bar"), foo).is_some());
+    }
+
+    #[salsa_test]
+    fn test_lookup_method_no_match(db: &dyn salsa::Database) {
+        let env = ModuleTypeEnv::new(db);
+        assert!(
+            env.lookup_method(Symbol::new("x"), named(db, "Foo"))
+                .is_none()
+        );
+    }
+
+    #[salsa_test]
+    fn test_lookup_method_ambiguous(db: &dyn salsa::Database) {
+        let mut env = ModuleTypeEnv::new(db);
+        let foo = named(db, "Foo");
+        let int = Type::new(db, TypeKind::Int);
+        let float = Type::new(db, TypeKind::Float);
+        env.register_method(
+            Symbol::new("m"),
+            method_entry(db, "m1", func(db, &[foo], int)),
+        );
+        env.register_method(
+            Symbol::new("m"),
+            method_entry(db, "m2", func(db, &[foo], float)),
+        );
+        // Two candidates with same receiver → ambiguous → None
+        assert!(env.lookup_method(Symbol::new("m"), foo).is_none());
+    }
+
+    // =========================================================================
+    // UFCS integration tests — parse Tribute source and verify resolution
+    // =========================================================================
+
+    use crate::ast::ExprKind;
+
+    fn parse_and_typecheck<'db>(
+        db: &'db dyn salsa::Database,
+        src: &str,
+    ) -> crate::ast::Module<crate::ast::TypedRef<'db>> {
+        let source = crate::SourceCst::from_source_str(db, "test.trb", src);
+        crate::query::typed_module(db, source).expect("should typecheck successfully")
+    }
+
+    /// Check that no MethodCall nodes remain in the typed AST (all resolved to Call).
+    fn has_method_call(expr: &crate::ast::Expr<crate::ast::TypedRef<'_>>) -> bool {
+        match &*expr.kind {
+            ExprKind::MethodCall { .. } => true,
+            ExprKind::Call { callee, args } => {
+                has_method_call(callee) || args.iter().any(has_method_call)
+            }
+            ExprKind::Block { stmts, value } => {
+                stmts.iter().any(|s| match s {
+                    crate::ast::Stmt::Let { value, .. } => has_method_call(value),
+                    crate::ast::Stmt::Expr { expr, .. } => has_method_call(expr),
+                }) || has_method_call(value)
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => has_method_call(lhs) || has_method_call(rhs),
+            ExprKind::Case { scrutinee, arms } => {
+                has_method_call(scrutinee) || arms.iter().any(|a| has_method_call(&a.body))
+            }
+            ExprKind::Lambda { body, .. } => has_method_call(body),
+            _ => false,
+        }
+    }
+
+    #[salsa_test]
+    fn test_ufcs_single_method_resolves(db: &salsa::DatabaseImpl) {
+        let module = parse_and_typecheck(
+            db,
+            r#"
+            struct Foo { value: Nat }
+            pub mod Foo {
+                pub fn get_value(f: Foo) -> Nat { f.value }
+            }
+            fn main() {
+                let f = Foo { value: 42 }
+                let _ = f.get_value()
+            }
+        "#,
+        );
+        for decl in &module.decls {
+            if let crate::ast::Decl::Function(func) = decl {
+                assert!(
+                    !has_method_call(&func.body),
+                    "MethodCall should be resolved in function '{}'",
+                    func.name
+                );
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn test_ufcs_disambiguation_by_receiver_type(db: &salsa::DatabaseImpl) {
+        let module = parse_and_typecheck(
+            db,
+            r#"
+            struct A { x: Nat }
+            struct B { x: Nat }
+            pub mod A {
+                pub fn get(a: A) -> Nat { a.x }
+            }
+            pub mod B {
+                pub fn get(b: B) -> Nat { b.x }
+            }
+            fn main() {
+                let a = A { x: 1 }
+                let b = B { x: 2 }
+                let _ = a.get()
+                let _ = b.get()
+            }
+        "#,
+        );
+        for decl in &module.decls {
+            if let crate::ast::Decl::Function(func) = decl {
+                if func.name.to_string() == "main" {
+                    assert!(
+                        !has_method_call(&func.body),
+                        "Both A::get and B::get should resolve by receiver type"
+                    );
+                }
+            }
+        }
     }
 }

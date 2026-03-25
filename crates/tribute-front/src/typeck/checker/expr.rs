@@ -182,6 +182,7 @@ impl<'db> TypeChecker<'db> {
                         .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
                         .collect();
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        node_id: expr.id,
                         receiver_ty,
                         method: *method,
                         result_ty,
@@ -549,6 +550,7 @@ impl<'db> TypeChecker<'db> {
                         .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
                         .collect();
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        node_id: expr.id,
                         receiver_ty,
                         method: *method,
                         result_ty,

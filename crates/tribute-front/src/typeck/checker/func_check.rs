@@ -205,19 +205,54 @@ impl<'db> TypeChecker<'db> {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
 
-            for mc in deferred {
+            for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
                 if let Some(entry) = self.env.lookup_method(mc.method, resolved_receiver) {
-                    // Method found — extract return type and add constraints
-                    let func_ty = entry.func_ty;
-                    if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
+                    // Method found — instantiate the TypeScheme to get fresh types
+                    let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
+                        crate::typeck::subst::instantiate_scheme_for_solver(
+                            self.db(),
+                            scheme,
+                            solver,
+                        )
+                    } else {
+                        entry.func_ty
+                    };
+
+                    if let TypeKind::Func {
+                        params,
+                        result,
+                        effect,
+                    } = func_ty.kind(self.db())
+                    {
+                        // Arity check
+                        if mc.arg_types.len() != params.len() {
+                            Diagnostic {
+                                message: format!(
+                                    "UFCS arity mismatch for '{}': expected {} args, got {}",
+                                    mc.method,
+                                    params.len(),
+                                    mc.arg_types.len(),
+                                ),
+                                span: self.get_span(mc.node_id),
+                                severity: DiagnosticSeverity::Error,
+                                phase: CompilationPhase::TypeChecking,
+                            }
+                            .accumulate(self.db());
+                        }
+
                         // Constrain result type
                         new_constraints.add_type_eq(mc.result_ty, *result);
-                        // Constrain arg types against function params
+
+                        // Constrain arg types against function params (min of both lengths)
                         for (arg, param) in mc.arg_types.iter().zip(params.iter()) {
                             new_constraints
                                 .add_type_eq(solver.type_subst().apply(self.db(), *arg), *param);
                         }
+
+                        // Propagate effect row
+                        let pure = crate::ast::EffectRow::pure(self.db());
+                        new_constraints.add_row_eq(*effect, pure);
                     }
                 } else {
                     remaining.push(mc);
@@ -225,10 +260,27 @@ impl<'db> TypeChecker<'db> {
             }
 
             if new_constraints.is_empty() {
+                // Emit diagnostics for methods that remain unresolved
+                for mc in &remaining {
+                    Diagnostic {
+                        message: format!("unresolved UFCS method '{}'", mc.method),
+                        span: self.get_span(mc.node_id),
+                        severity: DiagnosticSeverity::Error,
+                        phase: CompilationPhase::TypeChecking,
+                    }
+                    .accumulate(self.db());
+                }
                 break;
             }
-            // Re-solve with new constraints (errors are non-fatal here)
-            let _ = solver.solve(new_constraints);
+            if let Err(error) = solver.solve(new_constraints) {
+                Diagnostic {
+                    message: format!("type error during UFCS method resolution: {}", error),
+                    span: trunk_ir::Span::new(0, 0),
+                    severity: DiagnosticSeverity::Error,
+                    phase: CompilationPhase::TypeChecking,
+                }
+                .accumulate(self.db());
+            }
             deferred = remaining;
         }
     }

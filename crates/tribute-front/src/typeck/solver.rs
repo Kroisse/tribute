@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use trunk_ir::smallvec::SmallVec;
 
-use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId};
+use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeParam, UniVarId, UniVarSource};
 
 use super::constraint::{Constraint, ConstraintSet};
 
@@ -589,6 +589,17 @@ impl<'db> TypeSolver<'db> {
     /// Get the row substitution.
     pub fn row_subst(&self) -> &RowSubst<'db> {
         &self.row_subst
+    }
+
+    /// Generate a fresh type variable for post-solve instantiation.
+    ///
+    /// Uses `Anonymous` source with a high counter to avoid collision
+    /// with function-scoped UniVars.
+    pub fn fresh_type_var(&mut self, db: &'db dyn salsa::Database) -> Type<'db> {
+        let counter = self.next_row_var;
+        self.next_row_var += 1;
+        let id = UniVarId::new(db, UniVarSource::Anonymous(counter), 0);
+        Type::new(db, TypeKind::UniVar { id })
     }
 
     /// Generate a fresh row variable.

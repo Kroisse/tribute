@@ -101,6 +101,8 @@ pub struct FunctionInferenceContext<'a, 'db> {
 /// After solving, the receiver UniVar is resolved to a concrete type,
 /// enabling method lookup and additional type constraints.
 pub struct DeferredMethodCall<'db> {
+    /// The NodeId of the MethodCall expression (for span lookup in diagnostics).
+    pub node_id: NodeId,
     /// The receiver expression's type (UniVar at creation, resolved after solving).
     pub receiver_ty: Type<'db>,
     /// The method name being called.
