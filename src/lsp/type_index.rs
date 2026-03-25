@@ -43,6 +43,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
             let display_index = match id.source(db) {
                 UniVarSource::FunctionLocal { index, .. } => index as u32 + id.index(db),
                 UniVarSource::Anonymous(counter) => counter as u32 + id.index(db),
+                UniVarSource::Solver { index } => index as u32 + id.index(db),
             };
             let name = if display_index < 26 {
                 char::from_u32('a' as u32 + display_index).map(|c| c.to_string())
@@ -473,7 +474,7 @@ pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let module = tribute::pipeline::tdnr_module_with_prelude(db, source)?;
+    let module = ast_query::tdnr_module(db, source)?;
     let span_map = ast_query::span_map(db, source)?;
 
     Some(AstTypeIndex::build(db, &module, &span_map))

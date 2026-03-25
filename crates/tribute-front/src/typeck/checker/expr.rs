@@ -154,7 +154,9 @@ impl<'db> TypeChecker<'db> {
                 struct_ty
             }
             ExprKind::MethodCall {
-                receiver, method, ..
+                receiver,
+                method,
+                args,
             } => {
                 // Infer receiver type first
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
@@ -162,9 +164,31 @@ impl<'db> TypeChecker<'db> {
                 // Try to look up the method as a struct field accessor
                 if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
                     result_ty
+                } else if let Some(entry) = self.env.lookup_method(*method, receiver_ty) {
+                    // UFCS method found — record for conversion phase and extract return type
+                    let func_id = entry.func_id;
+                    let callee_ty = ctx
+                        .instantiate_function(func_id)
+                        .unwrap_or_else(|| ctx.fresh_type_var());
+                    ctx.record_resolved_method(expr.id, func_id, callee_ty);
+                    match callee_ty.kind(self.db()) {
+                        TypeKind::Func { result, .. } => *result,
+                        _ => ctx.fresh_type_var(),
+                    }
                 } else {
-                    // Method not found as field - leave as fresh type var for TDNR
-                    ctx.fresh_type_var()
+                    // Receiver not yet resolved — defer to post-solve
+                    let result_ty = ctx.fresh_type_var();
+                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
+                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .collect();
+                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        node_id: expr.id,
+                        receiver_ty,
+                        method: *method,
+                        result_ty,
+                        arg_types,
+                    });
+                    result_ty
                 }
             }
             ExprKind::BinOp { op, lhs, rhs } => {
@@ -437,8 +461,8 @@ impl<'db> TypeChecker<'db> {
         // Record node type
         ctx.record_node_type(expr.id, ty);
 
-        // Convert expression
-        let kind = self.convert_expr_kind_with_ctx(ctx, *expr.kind);
+        // Convert expression (MethodCall needs special handling for expr.id)
+        let kind = self.convert_expr_kind_with_ctx(ctx, expr.id, *expr.kind);
         Expr::new(expr.id, kind)
     }
 
@@ -502,6 +526,38 @@ impl<'db> TypeChecker<'db> {
                     ctx.pop_scope();
                 }
                 result_ty
+            }
+            ExprKind::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
+                    result_ty
+                } else if let Some(entry) = self.env.lookup_method(*method, receiver_ty) {
+                    let callee_ty = ctx
+                        .instantiate_function(entry.func_id)
+                        .unwrap_or_else(|| ctx.fresh_type_var());
+                    match callee_ty.kind(self.db()) {
+                        TypeKind::Func { result, .. } => *result,
+                        _ => ctx.fresh_type_var(),
+                    }
+                } else {
+                    // Defer to post-solve
+                    let result_ty = ctx.fresh_type_var();
+                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
+                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .collect();
+                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        node_id: expr.id,
+                        receiver_ty,
+                        method: *method,
+                        result_ty,
+                        arg_types,
+                    });
+                    result_ty
+                }
             }
             _ => ctx.fresh_type_var(),
         }
@@ -903,6 +959,7 @@ impl<'db> TypeChecker<'db> {
     fn convert_expr_kind_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
+        expr_id: crate::ast::NodeId,
         kind: ExprKind<ResolvedRef<'db>>,
     ) -> ExprKind<TypedRef<'db>> {
         match kind {
@@ -981,14 +1038,39 @@ impl<'db> TypeChecker<'db> {
                 receiver,
                 method,
                 args,
-            } => ExprKind::MethodCall {
-                receiver: self.check_expr_with_ctx(ctx, receiver, Mode::Infer),
-                method,
-                args: args
-                    .into_iter()
-                    .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
-                    .collect(),
-            },
+            } => {
+                let converted_receiver = self.check_expr_with_ctx(ctx, receiver, Mode::Infer);
+
+                if let Some((func_id, callee_ty)) = ctx.get_resolved_method(expr_id) {
+                    // Resolved during inference — transform to Call
+                    let callee_ref = TypedRef {
+                        resolved: ResolvedRef::Function { id: func_id },
+                        ty: callee_ty,
+                    };
+                    let callee = Expr::new(expr_id, ExprKind::Var(callee_ref));
+
+                    let mut all_args = vec![converted_receiver];
+                    all_args.extend(
+                        args.into_iter()
+                            .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer)),
+                    );
+
+                    ExprKind::Call {
+                        callee,
+                        args: all_args,
+                    }
+                } else {
+                    // Unresolved — keep as MethodCall
+                    ExprKind::MethodCall {
+                        receiver: converted_receiver,
+                        method,
+                        args: args
+                            .into_iter()
+                            .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
+                            .collect(),
+                    }
+                }
+            }
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op,
                 lhs: self.check_expr_with_ctx(ctx, lhs, Mode::Infer),

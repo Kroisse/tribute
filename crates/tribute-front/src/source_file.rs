@@ -26,6 +26,19 @@ impl SourceCst {
         let uri = path_to_uri(path.as_ref());
         Self::new(db, uri, text, tree)
     }
+
+    /// Create a SourceCst from a source string, parsing with tree-sitter.
+    ///
+    /// Convenience for tests that need a fully parsed source.
+    pub fn from_source_str(db: &dyn salsa::Database, path: &str, text: &str) -> Self {
+        let rope = Rope::from_str(text);
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_tribute::LANGUAGE.into())
+            .expect("Failed to set tree-sitter language");
+        let tree = parser.parse(text, None).expect("Failed to parse source");
+        Self::from_path(db, path, rope, Some(tree))
+    }
 }
 
 /// Convert a filesystem path to a file:// URI.

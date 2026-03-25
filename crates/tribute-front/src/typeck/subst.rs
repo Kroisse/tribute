@@ -3,7 +3,7 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
-use crate::ast::{Effect, EffectRow, Type, TypeKind};
+use crate::ast::{Effect, EffectRow, Type, TypeKind, TypeScheme};
 
 /// Result of BoundVar substitution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,6 +128,29 @@ pub fn substitute_bound_vars<'db>(
                 },
             ))
         }
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            let new_arg = match substitute_bound_vars(db, *arg, subst) {
+                SubstResult::Ok(ty) => ty,
+                err @ SubstResult::OutOfBounds { .. } => return err,
+            };
+            let new_result = match substitute_bound_vars(db, *result, subst) {
+                SubstResult::Ok(ty) => ty,
+                err @ SubstResult::OutOfBounds { .. } => return err,
+            };
+            let new_effect = substitute_effect_row(db, *effect, subst);
+            SubstResult::Ok(Type::new(
+                db,
+                TypeKind::Continuation {
+                    arg: new_arg,
+                    result: new_result,
+                    effect: new_effect,
+                },
+            ))
+        }
         // Primitive types and other type variables are unchanged
         _ => SubstResult::Ok(ty),
     }
@@ -174,6 +197,29 @@ pub fn substitute_effect_row<'db>(
     } else {
         row
     }
+}
+
+/// Instantiate a TypeScheme for use in the post-solve deferred resolution loop.
+///
+/// Replaces BoundVars with fresh UniVars from the solver. This is similar to
+/// `FunctionInferenceContext::instantiate_scheme` but works with the solver's
+/// type variable allocation instead of the context's.
+pub fn instantiate_scheme_for_solver<'db>(
+    db: &'db dyn salsa::Database,
+    scheme: TypeScheme<'db>,
+    solver: &mut super::solver::TypeSolver<'db>,
+) -> Type<'db> {
+    let subst: Vec<Type<'db>> = scheme
+        .type_params(db)
+        .iter()
+        .map(|_| solver.fresh_type_var(db))
+        .collect();
+    substitute_bound_vars(db, scheme.body(db), &subst).unwrap_or_else(|index, max| {
+        panic!(
+            "BoundVar index out of range in post-solve instantiation: index={}, subst.len()={}",
+            index, max
+        )
+    })
 }
 
 #[cfg(test)]

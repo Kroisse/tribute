@@ -28,7 +28,7 @@ pub mod subst;
 
 pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
-pub use context::ModuleTypeEnv;
+pub use context::{MethodEntry, ModuleTypeEnv, extract_type_name_from_type, receiver_type_matches};
 
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
@@ -94,6 +94,10 @@ pub struct PreludeExports<'db> {
     /// Enum variant information: enum_name → [variant_names].
     #[returns(ref)]
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
+
+    /// Method index for UFCS resolution: method_name → candidates.
+    #[returns(ref)]
+    pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
 }
 
 /// Type check a module.

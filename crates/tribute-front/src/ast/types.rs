@@ -41,6 +41,10 @@ pub enum UniVarSource<'db> {
     /// Anonymous type variable (for tests or contexts without a function name).
     /// The u64 is a unique counter value.
     Anonymous(u64),
+
+    /// Type variable created during post-solve deferred method resolution.
+    /// Distinct from FunctionLocal/Anonymous to prevent aliasing.
+    Solver { index: u64 },
 }
 
 /// A unification variable ID.

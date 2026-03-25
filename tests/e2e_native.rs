@@ -457,3 +457,61 @@ fn main() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[test]
+fn test_native_ufcs_chained() {
+    // Chained UFCS: s.to_bytes().len() requires post-solve deferred method resolution
+    // because to_bytes() return type is inferred after constraint solving
+    let output = compile_and_run_native(
+        "ufcs_chained.trb",
+        r#"
+fn main() {
+    let s = "hello"
+    let _ = s.to_bytes().len()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "chained UFCS s.to_bytes().len() should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn test_native_ufcs_triple_chain() {
+    // 3-level chained UFCS with user-defined types: each step's return type must be
+    // inferred via post-solve deferred resolution before the next step can resolve.
+    let output = compile_and_run_native(
+        "ufcs_triple_chain.trb",
+        r#"
+struct Foo { value: Nat }
+struct Bar { value: Nat }
+struct Baz { value: Nat }
+
+pub mod Foo {
+    pub fn to_bar(f: Foo) -> Bar { Bar { value: f.value + 1 } }
+}
+
+pub mod Bar {
+    pub fn to_baz(b: Bar) -> Baz { Baz { value: b.value + 1 } }
+}
+
+pub mod Baz {
+    pub fn get_value(b: Baz) -> Nat { b.value }
+}
+
+fn main() {
+    let f = Foo { value: 10 }
+    let _ = f.to_bar().to_baz().get_value()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "3-level chained UFCS should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}

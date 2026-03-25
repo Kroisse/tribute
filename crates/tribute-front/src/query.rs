@@ -204,10 +204,7 @@ pub fn function_schemes<'db>(
     type_check_output(db, source).map(|o| o.function_types(db).clone())
 }
 
-/// Type-directed name resolution (TDNR) on a module.
-///
-/// This resolves UFCS method calls that couldn't be resolved during
-/// initial name resolution because they required type information.
+/// TDNR on a typed module for remaining MethodCall transformations.
 #[salsa::tracked]
 pub fn tdnr_module<'db>(
     db: &'db dyn salsa::Database,

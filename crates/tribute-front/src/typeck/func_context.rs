@@ -85,6 +85,32 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// popped during the convert phase, so that handler arms can
     /// assign the body's effect row to continuation variables.
     handle_ctx_stack: Vec<HandleContext<'db>>,
+
+    /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
+    /// Populated during inference phase, consumed during conversion phase.
+    resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+
+    /// Deferred UFCS method calls whose receiver type is still a UniVar.
+    /// Resolved after constraint solving when UniVars have been substituted.
+    deferred_methods: Vec<DeferredMethodCall<'db>>,
+}
+
+/// A UFCS method call deferred until after constraint solving.
+///
+/// Created when the receiver type is a UniVar at inference time.
+/// After solving, the receiver UniVar is resolved to a concrete type,
+/// enabling method lookup and additional type constraints.
+pub struct DeferredMethodCall<'db> {
+    /// The NodeId of the MethodCall expression (for span lookup in diagnostics).
+    pub node_id: NodeId,
+    /// The receiver expression's type (UniVar at creation, resolved after solving).
+    pub receiver_ty: Type<'db>,
+    /// The method name being called.
+    pub method: Symbol,
+    /// Fresh UniVar for the method's return type — will be constrained after resolution.
+    pub result_ty: Type<'db>,
+    /// Argument types including receiver as first element.
+    pub arg_types: Vec<Type<'db>>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -112,6 +138,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             next_row_var: 1,
             current_effect: EffectRow::pure(db),
             handle_ctx_stack: Vec::new(),
+            resolved_methods: HashMap::new(),
+            deferred_methods: Vec::new(),
         }
     }
 
@@ -243,6 +271,31 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get the type of an AST node.
     pub fn get_node_type(&self, node: NodeId) -> Option<Type<'db>> {
         self.node_types.get(&node).copied()
+    }
+
+    /// Record a resolved UFCS method for later conversion to Call.
+    pub fn record_resolved_method(
+        &mut self,
+        node: NodeId,
+        func_id: FuncDefId<'db>,
+        callee_ty: Type<'db>,
+    ) {
+        self.resolved_methods.insert(node, (func_id, callee_ty));
+    }
+
+    /// Get a resolved UFCS method by node ID.
+    pub fn get_resolved_method(&self, node: NodeId) -> Option<(FuncDefId<'db>, Type<'db>)> {
+        self.resolved_methods.get(&node).copied()
+    }
+
+    /// Record a deferred UFCS method call for post-solve resolution.
+    pub fn record_deferred_method(&mut self, deferred: DeferredMethodCall<'db>) {
+        self.deferred_methods.push(deferred);
+    }
+
+    /// Take ownership of deferred method calls.
+    pub fn take_deferred_methods(&mut self) -> Vec<DeferredMethodCall<'db>> {
+        std::mem::take(&mut self.deferred_methods)
     }
 
     /// Take ownership of the node_types map.

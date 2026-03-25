@@ -185,7 +185,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(resolved);
 
-    // TDNR — prelude has no imports of its own
+    // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
 
     Some(ast_typeck::TypeCheckOutput::new(
@@ -796,13 +796,12 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    // Phase 5: TDNR (Type-Directed Name Resolution) — inject prelude as import
+    // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(
         db,
         result.module,
         prelude_module(db).iter().map(|p| p.module(db)),
     );
-    tracing::debug!("Phase 5: after TDNR, {} declarations", tdnr_ast.decls.len());
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -810,23 +809,6 @@ pub fn parse_and_lower_ast<'db>(
         result.function_types,
         result.node_types,
         span_map,
-    ))
-}
-
-/// TDNR with prelude imports for LSP queries.
-///
-/// Unlike `tribute_front::query::tdnr_module` (which has no imports),
-/// this injects prelude methods so UFCS calls to prelude functions resolve correctly.
-#[salsa::tracked]
-pub fn tdnr_module_with_prelude<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<tribute_front::ast::Module<tribute_front::ast::TypedRef<'db>>> {
-    let module = ast_query::typed_module(db, source)?;
-    Some(ast_tdnr::resolve_tdnr(
-        db,
-        module,
-        prelude_module(db).iter().map(|p| p.module(db)),
     ))
 }
 
