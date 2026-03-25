@@ -15,6 +15,7 @@ use crate::ast::{
     PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
 };
 
+use super::super::constraint::ConstraintSet;
 use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::{RowSubst, TypeSolver, TypeSubst};
 use super::{Mode, TypeChecker};
@@ -70,6 +71,8 @@ impl<'db> TypeChecker<'db> {
         let func_node_types = ctx.take_node_types();
         // Save the accumulated effect row from the body before dropping ctx
         let body_effect_row = ctx.current_effect();
+        // Take deferred methods for post-solve resolution
+        let deferred_methods = ctx.take_deferred_methods();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
 
@@ -85,6 +88,11 @@ impl<'db> TypeChecker<'db> {
             }
             .accumulate(self.db());
         }
+
+        // 4b. Post-solve: resolve deferred method calls
+        // After solving, UniVar receiver types may now be concrete.
+        // Look up methods and add type constraints for return types.
+        self.resolve_deferred_methods(&mut solver, deferred_methods);
 
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
@@ -180,6 +188,48 @@ impl<'db> TypeChecker<'db> {
             return_ty: func.return_ty,
             effects: func.effects,
             body,
+        }
+    }
+
+    /// Resolve deferred method calls after constraint solving.
+    ///
+    /// Iteratively resolves methods whose receiver types are now concrete after solving.
+    /// Each resolved method adds new type constraints (return type, param types),
+    /// which are re-solved. Repeats until no more progress.
+    fn resolve_deferred_methods(
+        &self,
+        solver: &mut TypeSolver<'db>,
+        mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
+    ) {
+        loop {
+            let mut new_constraints = ConstraintSet::new();
+            let mut remaining = Vec::new();
+
+            for mc in deferred {
+                let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
+                if let Some(entry) = self.env.lookup_method(mc.method, resolved_receiver) {
+                    // Method found — extract return type and add constraints
+                    let func_ty = entry.func_ty;
+                    if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
+                        // Constrain result type
+                        new_constraints.add_type_eq(mc.result_ty, *result);
+                        // Constrain arg types against function params
+                        for (arg, param) in mc.arg_types.iter().zip(params.iter()) {
+                            new_constraints
+                                .add_type_eq(solver.type_subst().apply(self.db(), *arg), *param);
+                        }
+                    }
+                } else {
+                    remaining.push(mc);
+                }
+            }
+
+            if new_constraints.is_empty() {
+                break;
+            }
+            // Re-solve with new constraints (errors are non-fatal here)
+            let _ = solver.solve(new_constraints);
+            deferred = remaining;
         }
     }
 

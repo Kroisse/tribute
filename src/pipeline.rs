@@ -185,7 +185,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(resolved);
 
-    // TDNR fallback for MethodCalls not resolved by typechecker
+    // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
 
     Some(ast_typeck::TypeCheckOutput::new(
@@ -796,7 +796,7 @@ pub fn parse_and_lower_ast<'db>(
         result.node_types.len()
     );
 
-    // TDNR fallback for MethodCalls not resolved by typechecker
+    // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(
         db,
         result.module,

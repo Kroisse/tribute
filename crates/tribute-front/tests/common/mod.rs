@@ -32,7 +32,6 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
     let checker = tribute_front::typeck::TypeChecker::new(db, span_map.clone());
     let result = checker.check_module(resolved);
 
-    // TDNR fallback for MethodCalls not resolved by typechecker
     let tdnr_ast = tribute_front::tdnr::resolve_tdnr(db, result.module, std::iter::empty());
 
     let function_types_map: std::collections::HashMap<_, _> =

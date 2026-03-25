@@ -89,6 +89,26 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
     /// Populated during inference phase, consumed during conversion phase.
     resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+
+    /// Deferred UFCS method calls whose receiver type is still a UniVar.
+    /// Resolved after constraint solving when UniVars have been substituted.
+    deferred_methods: Vec<DeferredMethodCall<'db>>,
+}
+
+/// A UFCS method call deferred until after constraint solving.
+///
+/// Created when the receiver type is a UniVar at inference time.
+/// After solving, the receiver UniVar is resolved to a concrete type,
+/// enabling method lookup and additional type constraints.
+pub struct DeferredMethodCall<'db> {
+    /// The receiver expression's type (UniVar at creation, resolved after solving).
+    pub receiver_ty: Type<'db>,
+    /// The method name being called.
+    pub method: Symbol,
+    /// Fresh UniVar for the method's return type — will be constrained after resolution.
+    pub result_ty: Type<'db>,
+    /// Argument types including receiver as first element.
+    pub arg_types: Vec<Type<'db>>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -117,6 +137,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             current_effect: EffectRow::pure(db),
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::new(),
+            deferred_methods: Vec::new(),
         }
     }
 
@@ -263,6 +284,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get a resolved UFCS method by node ID.
     pub fn get_resolved_method(&self, node: NodeId) -> Option<(FuncDefId<'db>, Type<'db>)> {
         self.resolved_methods.get(&node).copied()
+    }
+
+    /// Record a deferred UFCS method call for post-solve resolution.
+    pub fn record_deferred_method(&mut self, deferred: DeferredMethodCall<'db>) {
+        self.deferred_methods.push(deferred);
+    }
+
+    /// Take ownership of deferred method calls.
+    pub fn take_deferred_methods(&mut self) -> Vec<DeferredMethodCall<'db>> {
+        std::mem::take(&mut self.deferred_methods)
     }
 
     /// Take ownership of the node_types map.

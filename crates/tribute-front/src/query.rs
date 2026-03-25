@@ -204,7 +204,7 @@ pub fn function_schemes<'db>(
     type_check_output(db, source).map(|o| o.function_types(db).clone())
 }
 
-/// TDNR fallback for MethodCalls not resolved by typechecker.
+/// TDNR on a typed module for remaining MethodCall transformations.
 #[salsa::tracked]
 pub fn tdnr_module<'db>(
     db: &'db dyn salsa::Database,

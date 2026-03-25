@@ -154,7 +154,9 @@ impl<'db> TypeChecker<'db> {
                 struct_ty
             }
             ExprKind::MethodCall {
-                receiver, method, ..
+                receiver,
+                method,
+                args,
             } => {
                 // Infer receiver type first
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
@@ -174,8 +176,18 @@ impl<'db> TypeChecker<'db> {
                         _ => ctx.fresh_type_var(),
                     }
                 } else {
-                    // Method not found — leave as fresh type var for error reporting
-                    ctx.fresh_type_var()
+                    // Receiver not yet resolved — defer to post-solve
+                    let result_ty = ctx.fresh_type_var();
+                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
+                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .collect();
+                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        receiver_ty,
+                        method: *method,
+                        result_ty,
+                        arg_types,
+                    });
+                    result_ty
                 }
             }
             ExprKind::BinOp { op, lhs, rhs } => {
@@ -515,7 +527,9 @@ impl<'db> TypeChecker<'db> {
                 result_ty
             }
             ExprKind::MethodCall {
-                receiver, method, ..
+                receiver,
+                method,
+                args,
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
@@ -529,7 +543,18 @@ impl<'db> TypeChecker<'db> {
                         _ => ctx.fresh_type_var(),
                     }
                 } else {
-                    ctx.fresh_type_var()
+                    // Defer to post-solve
+                    let result_ty = ctx.fresh_type_var();
+                    let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
+                        .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
+                        .collect();
+                    ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
+                        receiver_ty,
+                        method: *method,
+                        result_ty,
+                        arg_types,
+                    });
+                    result_ty
                 }
             }
             _ => ctx.fresh_type_var(),
