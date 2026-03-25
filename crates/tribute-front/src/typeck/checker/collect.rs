@@ -11,7 +11,7 @@ use crate::ast::{
     AbilityDecl, AbilityId, CtorId, Decl, EffectRow, EffectVar, EnumDecl, FuncDecl, Module,
     ResolvedRef, StructDecl, Type, TypeKind, TypeParam, TypeScheme, is_type_variable,
 };
-use crate::typeck::context::{AbilityInfo, AbilityOpInfo};
+use crate::typeck::context::{AbilityInfo, AbilityOpInfo, MethodEntry};
 
 use super::TypeChecker;
 
@@ -132,6 +132,12 @@ impl<'db> TypeChecker<'db> {
         // Register the function with its FuncDefId
         let func_id = self.func_def_id(func.name);
         self.env.register_function(func_id, scheme);
+
+        // Register as UFCS method candidate if function has parameters
+        if !func.params.is_empty() {
+            self.env
+                .register_method(func.name, MethodEntry { func_id, func_ty });
+        }
     }
 
     /// Collect an extern function's type signature.
@@ -175,6 +181,12 @@ impl<'db> TypeChecker<'db> {
         // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(func.name);
         self.env.register_function(func_id, scheme);
+
+        // Register as UFCS method candidate if function has parameters
+        if !func.params.is_empty() {
+            self.env
+                .register_method(func.name, MethodEntry { func_id, func_ty });
+        }
     }
 
     /// Collect a struct definition.
