@@ -316,17 +316,17 @@ impl<'db> ModuleTypeEnv<'db> {
 
             // Register as UFCS method candidate if function has parameters
             let func_ty = scheme.body(self.db);
-            if let TypeKind::Func { params, .. } = func_ty.kind(self.db) {
-                if !params.is_empty() {
-                    let method_name = id.name(self.db);
-                    self.method_index
-                        .entry(method_name)
-                        .or_default()
-                        .push(MethodEntry {
-                            func_id: *id,
-                            func_ty,
-                        });
-                }
+            if let TypeKind::Func { params, .. } = func_ty.kind(self.db)
+                && !params.is_empty()
+            {
+                let method_name = id.name(self.db);
+                self.method_index
+                    .entry(method_name)
+                    .or_default()
+                    .push(MethodEntry {
+                        func_id: *id,
+                        func_ty,
+                    });
             }
         }
         for (id, scheme) in exports.constructor_types(self.db) {

@@ -85,6 +85,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// popped during the convert phase, so that handler arms can
     /// assign the body's effect row to continuation variables.
     handle_ctx_stack: Vec<HandleContext<'db>>,
+
+    /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
+    /// Populated during inference phase, consumed during conversion phase.
+    resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
 }
 
 impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
@@ -112,6 +116,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             next_row_var: 1,
             current_effect: EffectRow::pure(db),
             handle_ctx_stack: Vec::new(),
+            resolved_methods: HashMap::new(),
         }
     }
 
@@ -243,6 +248,21 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Get the type of an AST node.
     pub fn get_node_type(&self, node: NodeId) -> Option<Type<'db>> {
         self.node_types.get(&node).copied()
+    }
+
+    /// Record a resolved UFCS method for later conversion to Call.
+    pub fn record_resolved_method(
+        &mut self,
+        node: NodeId,
+        func_id: FuncDefId<'db>,
+        callee_ty: Type<'db>,
+    ) {
+        self.resolved_methods.insert(node, (func_id, callee_ty));
+    }
+
+    /// Get a resolved UFCS method by node ID.
+    pub fn get_resolved_method(&self, node: NodeId) -> Option<(FuncDefId<'db>, Type<'db>)> {
+        self.resolved_methods.get(&node).copied()
     }
 
     /// Take ownership of the node_types map.
