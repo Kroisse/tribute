@@ -962,13 +962,13 @@ mod tests {
         "#,
         );
         for decl in &module.decls {
-            if let crate::ast::Decl::Function(func) = decl {
-                if func.name.to_string() == "main" {
-                    assert!(
-                        !has_method_call(&func.body),
-                        "Both A::get and B::get should resolve by receiver type"
-                    );
-                }
+            if let crate::ast::Decl::Function(func) = decl
+                && func.name == Symbol::new("main")
+            {
+                assert!(
+                    !has_method_call(&func.body),
+                    "Both A::get and B::get should resolve by receiver type"
+                );
             }
         }
     }
