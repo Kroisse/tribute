@@ -128,6 +128,29 @@ pub fn substitute_bound_vars<'db>(
                 },
             ))
         }
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            let new_arg = match substitute_bound_vars(db, *arg, subst) {
+                SubstResult::Ok(ty) => ty,
+                err @ SubstResult::OutOfBounds { .. } => return err,
+            };
+            let new_result = match substitute_bound_vars(db, *result, subst) {
+                SubstResult::Ok(ty) => ty,
+                err @ SubstResult::OutOfBounds { .. } => return err,
+            };
+            let new_effect = substitute_effect_row(db, *effect, subst);
+            SubstResult::Ok(Type::new(
+                db,
+                TypeKind::Continuation {
+                    arg: new_arg,
+                    result: new_result,
+                    effect: new_effect,
+                },
+            ))
+        }
         // Primitive types and other type variables are unchanged
         _ => SubstResult::Ok(ty),
     }
