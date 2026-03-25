@@ -457,3 +457,24 @@ fn main() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[test]
+fn test_native_ufcs_chained() {
+    // Chained UFCS: s.to_bytes().len() requires post-solve deferred method resolution
+    // because to_bytes() return type is inferred after constraint solving
+    let output = compile_and_run_native(
+        "ufcs_chained.trb",
+        r#"
+fn main() {
+    let s = "hello"
+    let _ = s.to_bytes().len()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "chained UFCS s.to_bytes().len() should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
