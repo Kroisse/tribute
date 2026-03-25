@@ -11,23 +11,8 @@ use crate::ast::{
     Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
     ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
+use crate::typeck::{MethodEntry, receiver_type_matches};
 use crate::{push_prefix, qualified_symbol};
-
-/// A candidate method entry in the TDNR method index.
-pub struct MethodEntry<'db> {
-    pub func_id: FuncDefId<'db>,
-    pub func_ty: Type<'db>,
-}
-
-impl<'db> MethodEntry<'db> {
-    /// Extract the receiver type from the function type's first parameter.
-    pub fn receiver_ty(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
-        match self.func_ty.kind(db) {
-            TypeKind::Func { params, .. } => params.first().copied(),
-            _ => None,
-        }
-    }
-}
 
 /// TDNR resolver for AST expressions.
 ///
@@ -654,42 +639,12 @@ impl<'db> TdnrResolver<'db> {
 
         let mut iter = candidates
             .iter()
-            .filter(|entry| self.receiver_type_matches(entry, receiver_ty));
+            .filter(|entry| receiver_type_matches(self.db, entry, receiver_ty));
         let matched = iter.next()?;
         if iter.next().is_some() {
             return None; // ambiguous — keep as MethodCall for error reporting
         }
         Some(matched)
-    }
-
-    /// Check if an entry's receiver type matches the actual receiver type.
-    ///
-    /// Compares by type constructor name, allowing generic types to match
-    /// (e.g., `Option(a)` matches `Option(Int)`).
-    fn receiver_type_matches(&self, entry: &MethodEntry<'db>, actual: Type<'db>) -> bool {
-        let Some(declared) = entry.receiver_ty(self.db) else {
-            return false;
-        };
-        let declared_name = self.extract_type_name_from_type(declared);
-        let actual_name = self.extract_type_name_from_type(actual);
-        declared_name.is_some() && declared_name == actual_name
-    }
-
-    /// Extract the type name from a `Type` value.
-    ///
-    /// Handles `Named`, `App` (recursing into the constructor), and primitive
-    /// type kinds.
-    fn extract_type_name_from_type(&self, ty: Type<'db>) -> Option<Symbol> {
-        use crate::ast::TypeKind;
-        let kind = ty.kind(self.db);
-        if let Some(name) = kind.primitive_name() {
-            return Some(Symbol::new(name));
-        }
-        match kind {
-            TypeKind::Named { name, .. } => Some(*name),
-            TypeKind::App { ctor, .. } => self.extract_type_name_from_type(*ctor),
-            _ => None,
-        }
     }
 
     // =========================================================================
@@ -788,6 +743,7 @@ impl<'db> TdnrResolver<'db> {
 mod tests {
     use super::*;
     use crate::ast::{BinOpKind, CtorId, EffectRow, NodeId, ResolvedRef, TypeKind, TypedRef};
+    use crate::typeck::extract_type_name_from_type;
     use salsa_test_macros::salsa_test;
 
     fn test_db() -> salsa::DatabaseImpl {
@@ -1096,7 +1052,6 @@ mod tests {
     #[test]
     fn test_extract_type_name_from_named_type() {
         let db = test_db();
-        let resolver = TdnrResolver::new(&db);
 
         let ty = Type::new(
             &db,
@@ -1106,7 +1061,7 @@ mod tests {
             },
         );
         assert_eq!(
-            resolver.extract_type_name_from_type(ty),
+            extract_type_name_from_type(&db, ty),
             Some(Symbol::new("Foo"))
         );
     }
@@ -1114,8 +1069,6 @@ mod tests {
     #[test]
     fn test_extract_type_name_from_app_type() {
         let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
         // App { ctor: Named("List"), args: [Int] }
         let list_named = Type::new(
             &db,
@@ -1134,7 +1087,7 @@ mod tests {
         );
 
         assert_eq!(
-            resolver.extract_type_name_from_type(app_ty),
+            extract_type_name_from_type(&db, app_ty),
             Some(Symbol::new("List"))
         );
     }
@@ -1142,8 +1095,6 @@ mod tests {
     #[test]
     fn test_extract_type_name_from_nested_app_type() {
         let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
         // App { ctor: App { ctor: Named("Map"), args: [Int] }, args: [String] }
         let map_named = Type::new(
             &db,
@@ -1170,7 +1121,7 @@ mod tests {
         );
 
         assert_eq!(
-            resolver.extract_type_name_from_type(outer_app),
+            extract_type_name_from_type(&db, outer_app),
             Some(Symbol::new("Map"))
         );
     }
@@ -1178,8 +1129,6 @@ mod tests {
     #[test]
     fn test_extract_type_name_from_primitive_types() {
         let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
         let cases: Vec<(TypeKind, &str)> = vec![
             (TypeKind::Int, "Int"),
             (TypeKind::Nat, "Nat"),
@@ -1194,7 +1143,7 @@ mod tests {
         for (kind, expected_name) in cases {
             let ty = Type::new(&db, kind);
             assert_eq!(
-                resolver.extract_type_name_from_type(ty),
+                extract_type_name_from_type(&db, ty),
                 Some(Symbol::new(expected_name)),
                 "Expected type name '{}' for primitive type",
                 expected_name,
@@ -1205,8 +1154,6 @@ mod tests {
     #[test]
     fn test_extract_type_name_from_unsupported_type_returns_none() {
         let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
         // Tuple type has no single type name
         let ty = Type::new(
             &db,
@@ -1215,7 +1162,7 @@ mod tests {
                 Type::new(&db, TypeKind::Bool),
             ]),
         );
-        assert_eq!(resolver.extract_type_name_from_type(ty), None);
+        assert_eq!(extract_type_name_from_type(&db, ty), None);
     }
 
     // =========================================================================

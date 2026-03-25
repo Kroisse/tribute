@@ -28,7 +28,7 @@ pub mod subst;
 
 pub use checker::{Mode, TypeChecker};
 pub use constraint::{Constraint, ConstraintSet};
-pub use context::ModuleTypeEnv;
+pub use context::{MethodEntry, ModuleTypeEnv, extract_type_name_from_type, receiver_type_matches};
 
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;

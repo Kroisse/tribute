@@ -47,6 +47,61 @@ pub struct AbilityInfo<'db> {
     pub operations: HashMap<Symbol, AbilityOpInfo<'db>>,
 }
 
+/// A candidate method entry for UFCS resolution.
+///
+/// Stored in the method index, keyed by method name. Receiver type
+/// disambiguation happens at lookup time via `receiver_type_matches`.
+pub struct MethodEntry<'db> {
+    pub func_id: FuncDefId<'db>,
+    pub func_ty: Type<'db>,
+}
+
+impl<'db> MethodEntry<'db> {
+    /// Extract the receiver type from the function type's first parameter.
+    pub fn receiver_ty(&self, db: &'db dyn salsa::Database) -> Option<Type<'db>> {
+        match self.func_ty.kind(db) {
+            TypeKind::Func { params, .. } => params.first().copied(),
+            _ => None,
+        }
+    }
+}
+
+/// Extract the type constructor name from a `Type` value.
+///
+/// Handles `Named`, `App` (recursing into the constructor), and primitive
+/// type kinds. Used for receiver type matching in UFCS resolution.
+pub fn extract_type_name_from_type<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+) -> Option<Symbol> {
+    let kind = ty.kind(db);
+    if let Some(name) = kind.primitive_name() {
+        return Some(Symbol::new(name));
+    }
+    match kind {
+        TypeKind::Named { name, .. } => Some(*name),
+        TypeKind::App { ctor, .. } => extract_type_name_from_type(db, *ctor),
+        _ => None,
+    }
+}
+
+/// Check if a method entry's receiver type matches an actual receiver type.
+///
+/// Compares by type constructor name, allowing generic types to match
+/// (e.g., `Option(a)` matches `Option(Int)`).
+pub fn receiver_type_matches<'db>(
+    db: &'db dyn salsa::Database,
+    entry: &MethodEntry<'db>,
+    actual: Type<'db>,
+) -> bool {
+    let Some(declared) = entry.receiver_ty(db) else {
+        return false;
+    };
+    let declared_name = extract_type_name_from_type(db, declared);
+    let actual_name = extract_type_name_from_type(db, actual);
+    declared_name.is_some() && declared_name == actual_name
+}
+
 /// Module-level type environment.
 ///
 /// This struct holds type information that is shared across all functions in a module:
@@ -54,6 +109,7 @@ pub struct AbilityInfo<'db> {
 /// - Constructor type schemes (for enum variants)
 /// - Type definitions (struct/enum type schemes)
 /// - Struct field definitions for UFCS/accessor resolution
+/// - Method index for UFCS method resolution
 ///
 /// After `collect_declarations` populates this, it becomes read-only during
 /// function body type checking.
@@ -79,6 +135,11 @@ pub struct ModuleTypeEnv<'db> {
     /// Ability definitions: AbilityId → AbilityInfo
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
+
+    /// Method index for UFCS resolution: method_name → candidates.
+    /// Populated from function declarations (first param = receiver)
+    /// and struct field accessors.
+    method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
 }
 
 impl<'db> ModuleTypeEnv<'db> {
@@ -92,6 +153,7 @@ impl<'db> ModuleTypeEnv<'db> {
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
             ability_defs: HashMap::new(),
+            method_index: HashMap::new(),
         }
     }
 
@@ -107,6 +169,34 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Register a function's type scheme.
     pub fn register_function(&mut self, id: FuncDefId<'db>, scheme: TypeScheme<'db>) {
         self.function_types.insert(id, scheme);
+    }
+
+    /// Register a method for UFCS resolution.
+    pub fn register_method(&mut self, method_name: Symbol, entry: MethodEntry<'db>) {
+        self.method_index
+            .entry(method_name)
+            .or_default()
+            .push(entry);
+    }
+
+    /// Look up UFCS method candidates by method name and receiver type.
+    ///
+    /// Returns the matching `MethodEntry` if exactly one candidate matches,
+    /// `None` if no candidates or ambiguous (multiple matches).
+    pub fn lookup_method(
+        &self,
+        method_name: Symbol,
+        receiver_ty: Type<'db>,
+    ) -> Option<&MethodEntry<'db>> {
+        let candidates = self.method_index.get(&method_name)?;
+        let mut iter = candidates
+            .iter()
+            .filter(|entry| receiver_type_matches(self.db, entry, receiver_ty));
+        let matched = iter.next()?;
+        if iter.next().is_some() {
+            return None; // ambiguous
+        }
+        Some(matched)
     }
 
     /// Register a constructor's type scheme.
