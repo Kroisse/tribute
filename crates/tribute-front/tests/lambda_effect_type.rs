@@ -8,9 +8,10 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline_with_ir, source_from_str};
+use self::common::run_ast_pipeline_with_ir;
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_front::SourceCst;
 
 // ========================================================================
 // Pure Lambda Tests - No Effect Expected
@@ -19,7 +20,7 @@ use salsa_test_macros::salsa_test;
 /// Test that a pure lambda (no effects) is lifted without effect type.
 #[salsa_test]
 fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -38,7 +39,7 @@ fn main() -> Int {
 /// Test that a pure lambda capturing a variable has no effect type.
 #[salsa_test]
 fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -65,7 +66,7 @@ fn main() -> Int {
 /// in its lifted function type.
 #[salsa_test]
 fn test_effectful_lambda_direct_ability_call(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -98,7 +99,7 @@ fn main() -> Int {
 /// because `counter` has that effect.
 #[salsa_test]
 fn test_effectful_lambda_indirect_effect_call(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -134,7 +135,7 @@ fn main() -> Int {
 /// Test that multiple ability operations in lambda accumulate effects.
 #[salsa_test]
 fn test_effectful_lambda_multiple_operations(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -178,7 +179,7 @@ fn main() -> Int {
 /// from the outer handler context.
 #[salsa_test]
 fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -206,7 +207,7 @@ fn main() -> Int { 0 }
 /// Test the full ability_core pattern with multiple counter calls.
 #[salsa_test]
 fn test_ability_core_full_pattern(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -250,7 +251,7 @@ fn main() -> Int {
 /// Test nested lambdas where inner lambda has effect.
 #[salsa_test]
 fn test_nested_lambda_inner_effectful(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -289,7 +290,7 @@ fn main() -> Int {
 /// the lambda's effect should include State(s) with the row variable e.
 #[salsa_test]
 fn test_lambda_effect_row_unification(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"

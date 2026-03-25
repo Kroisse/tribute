@@ -5,9 +5,10 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline_with_ir, source_from_str};
+use self::common::run_ast_pipeline_with_ir;
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_front::SourceCst;
 
 // ========================================================================
 // Basic Case Expression Tests
@@ -17,7 +18,7 @@ use salsa_test_macros::salsa_test;
 /// Pattern type (Nat) should unify with scrutinee type (Nat).
 #[salsa_test]
 fn test_case_nat_literal(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -39,7 +40,7 @@ fn classify(x: Nat) -> Nat {
 /// Pattern type (Int) should unify with scrutinee type (Int).
 #[salsa_test]
 fn test_case_int_literal(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -60,7 +61,7 @@ fn sign(x: Int) -> Int {
 /// Test case expression with Bool patterns.
 #[salsa_test]
 fn test_case_bool_literal(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -80,7 +81,7 @@ fn invert(x: Bool) -> Bool {
 /// Test case expression with enum variant patterns.
 #[salsa_test]
 fn test_case_enum_variant(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -106,7 +107,7 @@ fn unwrap_or(opt: Option(Nat), default: Nat) -> Nat {
 /// All arm body types should unify with the case expression's result type.
 #[salsa_test]
 fn test_case_result_type_unification(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -126,7 +127,7 @@ fn to_nat(b: Bool) -> Nat {
 /// Test nested case expressions.
 #[salsa_test]
 fn test_case_nested(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"

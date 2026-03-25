@@ -5,15 +5,16 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir, source_from_str};
+use self::common::{run_ast_pipeline, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_front::SourceCst;
 
 /// Test basic record construction with correct field types.
 /// This should compile successfully.
 #[salsa_test]
 fn test_record_field_type_correct(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -31,7 +32,7 @@ fn make_point() -> Point {
 /// Test record construction with multiple field types.
 #[salsa_test]
 fn test_record_mixed_field_types(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -50,7 +51,7 @@ fn make_person() -> Person {
 /// The spread expression should be constrained to the struct type.
 #[salsa_test]
 fn test_record_spread_same_type(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -68,7 +69,7 @@ fn update_x(p: Point) -> Point {
 /// Test record construction with only spread (no explicit fields).
 #[salsa_test]
 fn test_record_spread_only(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -86,7 +87,7 @@ fn copy_config(c: Config) -> Config {
 /// Test record with generic type parameter.
 #[salsa_test]
 fn test_record_generic_type(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -104,7 +105,7 @@ fn make_pair() -> Pair(Int, Bool) {
 /// Test record field type inference in let binding.
 #[salsa_test]
 fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -127,7 +128,7 @@ fn test() -> Int {
 /// Snapshot test for basic record construction IR.
 #[salsa_test]
 fn test_snapshot_record_construction(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -146,7 +147,7 @@ fn make_point() -> Point {
 /// Snapshot test for record with spread operator.
 #[salsa_test]
 fn test_snapshot_record_spread(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -165,7 +166,7 @@ fn update_x(p: Point) -> Point {
 /// Snapshot test for generic record construction.
 #[salsa_test]
 fn test_snapshot_record_generic(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -185,7 +186,7 @@ fn make_pair() -> Pair(Int, Bool) {
 /// All fields should be extracted via `adt.struct_get` from the base.
 #[salsa_test]
 fn test_snapshot_record_spread_only(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -205,7 +206,7 @@ fn copy_config(c: Config) -> Config {
 /// Explicit fields should take priority over spread values.
 #[salsa_test]
 fn test_snapshot_record_spread_all_fields_explicit(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -224,7 +225,7 @@ fn replace_all(p: Point) -> Point {
 /// Test record spread with a function call as the spread expression.
 #[salsa_test]
 fn test_record_spread_complex_expr(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -254,7 +255,7 @@ fn shift_x() -> Point {
 /// before lowering, regardless of declaration order in the source.
 #[salsa_test]
 fn test_record_forward_reference(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"

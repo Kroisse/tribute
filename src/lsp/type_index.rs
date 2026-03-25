@@ -483,22 +483,10 @@ pub fn type_index<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ropey::Rope;
-    use tree_sitter::Parser;
     use tribute_front::ast::UniVarId;
-    use tribute_front::path_to_uri;
 
     fn make_source(db: &dyn salsa::Database, text: &str) -> SourceCst {
-        let uri = path_to_uri(std::path::Path::new("test.trb"));
-        let rope = Rope::from_str(text);
-
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_tribute::LANGUAGE.into())
-            .expect("Failed to set language");
-        let tree = parser.parse(text, None);
-
-        SourceCst::new(db, uri, rope, tree)
+        SourceCst::from_source_str(db, "test.trb", text)
     }
 
     #[test]

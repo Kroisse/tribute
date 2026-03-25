@@ -18,9 +18,9 @@
 
 mod common;
 
-use self::common::source_from_str;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_to_wasm_binary;
+use tribute_front::SourceCst;
 use tribute_passes::diagnostic::Diagnostic;
 
 // =============================================================================
@@ -29,7 +29,7 @@ use tribute_passes::diagnostic::Diagnostic;
 
 #[salsa_test]
 fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "literal.trb", "fn main() { 42 }");
+    let source = SourceCst::from_source_str(db, "literal.trb", "fn main() { 42 }");
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile literal return");
 
@@ -39,7 +39,7 @@ fn test_compile_simple_literal(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "arith.trb", "fn main() { 1 + 2 * 3 }");
+    let source = SourceCst::from_source_str(db, "arith.trb", "fn main() { 1 + 2 * 3 }");
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile arithmetic expression");
 }
@@ -50,7 +50,7 @@ fn test_compile_function_with_params(db: &salsa::DatabaseImpl) {
 fn add(a, b) { a + b }
 fn main() { add(1, 2) }
 "#;
-    let source = source_from_str(db, "params.trb", code);
+    let source = SourceCst::from_source_str(db, "params.trb", code);
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile function with params");
 }
@@ -66,7 +66,7 @@ extern "intrinsic" fn __print_line(message: String) -> Nil
 fn my_print(message: String) -> Nil { __print_line(message) }
 fn main() { my_print("Hello, World!") }
 "#;
-    let source = source_from_str(db, "hello.trb", code);
+    let source = SourceCst::from_source_str(db, "hello.trb", code);
     let binary = compile_to_wasm_binary(db, source);
 
     if binary.is_none() {
@@ -90,7 +90,7 @@ fn test_ops() {
 }
 fn main() { test_ops() }
 "#;
-    let source = source_from_str(db, "locals.trb", code);
+    let source = SourceCst::from_source_str(db, "locals.trb", code);
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile local variables");
 }
@@ -114,7 +114,7 @@ fn classify(n) {
 }
 fn main() { classify(1) }
 "#;
-    let source = source_from_str(db, "case_expr.trb", code);
+    let source = SourceCst::from_source_str(db, "case_expr.trb", code);
     let binary = compile_to_wasm_binary(db, source);
     assert!(binary.is_some(), "Should compile case expression");
 }
