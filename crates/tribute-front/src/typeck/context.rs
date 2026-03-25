@@ -733,6 +733,57 @@ mod tests {
         );
     }
 
+    #[salsa_test]
+    fn test_export_method_index_sorted(db: &dyn salsa::Database) {
+        use super::MethodEntry;
+        use crate::ast::EffectRow;
+
+        let mut env = ModuleTypeEnv::new(db);
+        let int_ty = Type::new(db, TypeKind::Int);
+        let effect = EffectRow::pure(db);
+
+        // Insert in non-alphabetical order
+        for name in ["zebra", "alpha", "middle"] {
+            let receiver = Type::new(
+                db,
+                TypeKind::Named {
+                    name: Symbol::new(name),
+                    args: vec![],
+                },
+            );
+            let func_ty = Type::new(
+                db,
+                TypeKind::Func {
+                    params: vec![receiver],
+                    result: int_ty,
+                    effect,
+                },
+            );
+            env.register_method(
+                Symbol::new(name),
+                MethodEntry {
+                    func_id: FuncDefId::new(db, Symbol::new(name)),
+                    func_ty,
+                },
+            );
+        }
+
+        let exported = env.export_method_index();
+        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            names,
+            vec![
+                Symbol::new("alpha"),
+                Symbol::new("middle"),
+                Symbol::new("zebra"),
+            ]
+        );
+        // Each entry should have exactly one MethodEntry
+        for (_, entries) in &exported {
+            assert_eq!(entries.len(), 1);
+        }
+    }
+
     // =========================================================================
     // UFCS utility function tests
     // =========================================================================
