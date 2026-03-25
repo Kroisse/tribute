@@ -94,6 +94,10 @@ pub struct PreludeExports<'db> {
     /// Enum variant information: enum_name → [variant_names].
     #[returns(ref)]
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
+
+    /// Method index for UFCS resolution: method_name → candidates.
+    #[returns(ref)]
+    pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
 }
 
 /// Type check a module.

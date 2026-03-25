@@ -197,6 +197,7 @@ impl<'db> TypeChecker<'db> {
         let type_defs = self.env.export_type_defs();
         let struct_fields = self.env.export_struct_fields();
         let enum_variants = self.env.export_enum_variants();
+        let method_index = self.env.export_method_index();
 
         PreludeExports::new(
             self.db(),
@@ -205,6 +206,7 @@ impl<'db> TypeChecker<'db> {
             type_defs,
             struct_fields,
             enum_variants,
+            method_index,
         )
     }
 

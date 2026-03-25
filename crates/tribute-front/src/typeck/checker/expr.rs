@@ -514,6 +514,24 @@ impl<'db> TypeChecker<'db> {
                 }
                 result_ty
             }
+            ExprKind::MethodCall {
+                receiver, method, ..
+            } => {
+                let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
+                    result_ty
+                } else if let Some(entry) = self.env.lookup_method(*method, receiver_ty) {
+                    let callee_ty = ctx
+                        .instantiate_function(entry.func_id)
+                        .unwrap_or_else(|| ctx.fresh_type_var());
+                    match callee_ty.kind(self.db()) {
+                        TypeKind::Func { result, .. } => *result,
+                        _ => ctx.fresh_type_var(),
+                    }
+                } else {
+                    ctx.fresh_type_var()
+                }
+            }
             _ => ctx.fresh_type_var(),
         }
     }

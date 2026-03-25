@@ -51,6 +51,7 @@ pub struct AbilityInfo<'db> {
 ///
 /// Stored in the method index, keyed by method name. Receiver type
 /// disambiguation happens at lookup time via `receiver_type_matches`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
 pub struct MethodEntry<'db> {
     pub func_id: FuncDefId<'db>,
     pub func_ty: Type<'db>,
@@ -313,21 +314,6 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
         for (id, scheme) in exports.function_types(self.db) {
             self.function_types.insert(*id, *scheme);
-
-            // Register as UFCS method candidate if function has parameters
-            let func_ty = scheme.body(self.db);
-            if let TypeKind::Func { params, .. } = func_ty.kind(self.db)
-                && !params.is_empty()
-            {
-                let method_name = id.name(self.db);
-                self.method_index
-                    .entry(method_name)
-                    .or_default()
-                    .push(MethodEntry {
-                        func_id: *id,
-                        func_ty,
-                    });
-            }
         }
         for (id, scheme) in exports.constructor_types(self.db) {
             self.constructor_types.insert(*id, *scheme);
@@ -340,6 +326,12 @@ impl<'db> ModuleTypeEnv<'db> {
         }
         for (name, variants) in exports.enum_variants(self.db) {
             self.enum_variants.insert(*name, variants.clone());
+        }
+        for (name, entries) in exports.method_index(self.db) {
+            self.method_index
+                .entry(*name)
+                .or_default()
+                .extend(entries.iter().copied());
         }
     }
 
@@ -416,6 +408,19 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn export_enum_variants(&self) -> Vec<(Symbol, Vec<Symbol>)> {
         let mut result: Vec<_> = self
             .enum_variants
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
+
+    /// Export method index for PreludeExports.
+    ///
+    /// Results are sorted alphabetically by method name for deterministic output.
+    pub fn export_method_index(&self) -> Vec<(Symbol, Vec<MethodEntry<'db>>)> {
+        let mut result: Vec<_> = self
+            .method_index
             .iter()
             .map(|(k, v)| (*k, v.clone()))
             .collect();
