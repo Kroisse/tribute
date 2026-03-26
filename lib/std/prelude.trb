@@ -238,6 +238,11 @@ pub mod Bytes {
 // I/O functions
 // =============================================================================
 
+/// Print a string to standard output (no trailing newline).
+fn print(message: String) -> Nil {
+    __tribute_bytes_print(message.to_bytes())
+}
+
 /// Print a line to standard output.
 fn print_line(message: String) -> Nil {
     __tribute_bytes_print(message.to_bytes())

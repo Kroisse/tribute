@@ -212,10 +212,6 @@ pub enum BuiltinRef {
     // List operations
     Cons,
     ListConcat,
-
-    // IO operations
-    Print,
-    ReadLine,
 }
 
 /// Module path reference for qualified imports.

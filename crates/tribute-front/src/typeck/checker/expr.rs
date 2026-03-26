@@ -714,16 +714,6 @@ impl<'db> TypeChecker<'db> {
                 let list_a = ctx.named_type(Symbol::new("List"), vec![a]);
                 ctx.func_type(vec![list_a, list_a], list_a, effect)
             }
-            // IO operations
-            BuiltinRef::Print => {
-                let a = ctx.fresh_type_var();
-                let io_effect = ctx.fresh_effect_row();
-                ctx.func_type(vec![a], ctx.nil_type(), io_effect)
-            }
-            BuiltinRef::ReadLine => {
-                let io_effect = ctx.fresh_effect_row();
-                ctx.func_type(vec![], ctx.string_type(), io_effect)
-            }
         }
     }
 
@@ -2359,55 +2349,6 @@ mod tests {
             assert!(effect.is_pure(db));
         } else {
             panic!("ListConcat should return Func type");
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_io_ops(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-        let nil_ty = Type::new(db, TypeKind::Nil);
-        let string_ty = Type::new(db, TypeKind::string());
-
-        // Print: (a) ->{?e} Nil
-        let print_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Print);
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = print_ty.kind(db)
-        {
-            assert_eq!(params.len(), 1);
-            // Param should be a fresh type var
-            assert!(matches!(params[0].kind(db), TypeKind::UniVar { .. }));
-            assert_eq!(*result, nil_ty);
-            // Effect should be open (fresh row var)
-            assert!(
-                effect.rest(db).is_some(),
-                "Print should have open effect row"
-            );
-        } else {
-            panic!("Print should return Func type");
-        }
-
-        // ReadLine: () ->{?e} String
-        let readline_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::ReadLine);
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = readline_ty.kind(db)
-        {
-            assert!(params.is_empty());
-            assert_eq!(*result, string_ty);
-            // Effect should be open (fresh row var)
-            assert!(
-                effect.rest(db).is_some(),
-                "ReadLine should have open effect row"
-            );
-        } else {
-            panic!("ReadLine should return Func type");
         }
     }
 
