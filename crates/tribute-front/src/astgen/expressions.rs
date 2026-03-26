@@ -14,7 +14,7 @@ use super::helpers::is_comment;
 use super::patterns::lower_pattern;
 
 /// Lower a CST expression node to an AST Expr.
-pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> {
+pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedName> {
     let id = ctx.fresh_id_with_span(&node);
 
     let kind = match node.kind() {
@@ -167,7 +167,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx, node: Node) -> Expr<UnresolvedName> 
     Expr::new(id, kind)
 }
 
-fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let lhs_node = node.child_by_field_name("left");
     let rhs_node = node.child_by_field_name("right");
     let op_node = node.child_by_field_name("operator");
@@ -201,7 +201,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     ExprKind::BinOp { op, lhs, rhs }
 }
 
-fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_call_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let callee_node = node.child_by_field_name("function");
     // Note: tree-sitter grammar doesn't define "arguments" field for call_expression,
     // so we find argument_list by kind instead
@@ -221,7 +221,7 @@ fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
     ExprKind::Call { callee, args }
 }
 
-fn lower_method_call(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let receiver_node = node.child_by_field_name("receiver");
     let method_node = node.child_by_field_name("method");
     // Note: tree-sitter grammar doesn't define an "arguments" field for
@@ -248,7 +248,7 @@ fn lower_method_call(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     }
 }
 
-fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let name_node = node.child_by_field_name("constructor");
 
     // argument_list doesn't have a field name in the grammar, so we find it by kind
@@ -271,7 +271,7 @@ fn lower_constructor_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unre
     ExprKind::Cons { ctor, args }
 }
 
-fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let type_node = node.child_by_field_name("type");
     let fields_node = node.child_by_field_name("fields");
 
@@ -316,7 +316,7 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
 }
 
 fn lower_field_initializer(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> Option<(Symbol, Expr<UnresolvedName>)> {
     let name_node = node.child_by_field_name("name")?;
@@ -328,7 +328,7 @@ fn lower_field_initializer(
     Some((name, value))
 }
 
-fn lower_field_access(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let expr_node = node.child_by_field_name("value");
     let field_node = node.child_by_field_name("field");
 
@@ -355,7 +355,7 @@ fn is_statement_node(node: &Node) -> bool {
     node.kind() == "let_statement"
 }
 
-fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_block(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let mut stmts = Vec::new();
     let mut cursor = node.walk();
 
@@ -404,7 +404,7 @@ fn lower_block(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName>
 }
 
 fn lower_block_item_as_stmt(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     child: &Node,
 ) -> Option<Stmt<UnresolvedName>> {
     match child.kind() {
@@ -431,7 +431,7 @@ fn lower_block_item_as_stmt(
     }
 }
 
-fn lower_block_item_as_expr(ctx: &mut AstLoweringCtx, child: &Node) -> Expr<UnresolvedName> {
+fn lower_block_item_as_expr(ctx: &mut AstLoweringCtx<'_>, child: &Node) -> Expr<UnresolvedName> {
     match child.kind() {
         "let_statement" => {
             // A let as the last item - block value is Nil, but we need to add the let as a stmt
@@ -460,7 +460,7 @@ fn lower_block_item_as_expr(ctx: &mut AstLoweringCtx, child: &Node) -> Expr<Unre
     }
 }
 
-fn lower_let_statement(ctx: &mut AstLoweringCtx, node: Node) -> Option<Stmt<UnresolvedName>> {
+fn lower_let_statement(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Stmt<UnresolvedName>> {
     let pattern_node = node.child_by_field_name("pattern")?;
     let value_node = node.child_by_field_name("value")?;
 
@@ -479,7 +479,7 @@ fn lower_let_statement(ctx: &mut AstLoweringCtx, node: Node) -> Option<Stmt<Unre
     })
 }
 
-fn lower_case_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_case_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let scrutinee_node = node.child_by_field_name("value");
 
     let Some(scrutinee_node) = scrutinee_node else {
@@ -502,7 +502,7 @@ fn lower_case_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
     ExprKind::Case { scrutinee, arms }
 }
 
-fn lower_case_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<Arm<UnresolvedName>> {
+fn lower_case_arm(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Arm<UnresolvedName>> {
     // case_arm has pattern and body as positional named children, not fields
     // Pattern is the first named child, body is the second
     let mut cursor = node.walk();
@@ -538,7 +538,7 @@ fn lower_case_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<Arm<Unresolved
     })
 }
 
-fn lower_lambda_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_lambda_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let params_node = node.child_by_field_name("params");
     let body_node = node.child_by_field_name("body");
 
@@ -554,7 +554,7 @@ fn lower_lambda_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     ExprKind::Lambda { params, body }
 }
 
-fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Param> {
+fn lower_param_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Param> {
     let mut params = Vec::new();
     let mut cursor = node.walk();
 
@@ -588,7 +588,7 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Param> {
     params
 }
 
-fn lower_tuple_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_tuple_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let mut elements = Vec::new();
     let mut cursor = node.walk();
 
@@ -601,7 +601,7 @@ fn lower_tuple_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolved
     ExprKind::Tuple(elements)
 }
 
-fn lower_list_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_list_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let mut elements = Vec::new();
     let mut cursor = node.walk();
 
@@ -614,7 +614,7 @@ fn lower_list_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
     ExprKind::List(elements)
 }
 
-fn lower_handle_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_handle_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     // grammar.js: field("expr", $._expression) for the body
     let expr_node = node.child_by_field_name("expr");
 
@@ -638,7 +638,10 @@ fn lower_handle_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     ExprKind::Handle { body, handlers }
 }
 
-fn lower_handler_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<UnresolvedName>> {
+fn lower_handler_arm(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Option<HandlerArm<UnresolvedName>> {
     // New grammar: handler_arm is a choice of completion_handler, fn_handler, op_handler
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -654,7 +657,7 @@ fn lower_handler_arm(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<
 
 /// Lower `do result { body }` handler arm.
 fn lower_completion_handler(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> Option<HandlerArm<UnresolvedName>> {
     let binding_node = node.child_by_field_name("binding")?;
@@ -672,7 +675,10 @@ fn lower_completion_handler(
 }
 
 /// Lower `fn Op(args) { body }` handler arm.
-fn lower_fn_handler(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<UnresolvedName>> {
+fn lower_fn_handler(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Option<HandlerArm<UnresolvedName>> {
     let (ability, op) = lower_handler_operation_path(ctx, node)?;
     let params = lower_handler_params(ctx, node);
     let body_node = node.child_by_field_name("body")?;
@@ -692,7 +698,10 @@ fn lower_fn_handler(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<U
 }
 
 /// Lower `op Op(args) { body }` handler arm.
-fn lower_op_handler(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<UnresolvedName>> {
+fn lower_op_handler(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Option<HandlerArm<UnresolvedName>> {
     let (ability, op) = lower_handler_operation_path(ctx, node)?;
     let params = lower_handler_params(ctx, node);
     let body_node = node.child_by_field_name("body")?;
@@ -715,7 +724,7 @@ fn lower_op_handler(ctx: &mut AstLoweringCtx, node: Node) -> Option<HandlerArm<U
 /// Parse the operation path from a fn_handler or op_handler node.
 /// Returns (ability, op_name).
 fn lower_handler_operation_path(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> Option<(UnresolvedName, Symbol)> {
     let op_node = node.child_by_field_name("operation")?;
@@ -730,7 +739,7 @@ fn lower_handler_operation_path(
 }
 
 /// Parse handler parameters (identifiers) from a fn_handler or op_handler node.
-fn lower_handler_params(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<UnresolvedName>> {
+fn lower_handler_params(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Pattern<UnresolvedName>> {
     let Some(params_node) = node.child_by_field_name("params") else {
         return Vec::new();
     };
@@ -745,7 +754,7 @@ fn lower_handler_params(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<Unr
 }
 
 /// Lower `resume expr` expression.
-fn lower_resume_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
+fn lower_resume_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
     let arg = match node.child_by_field_name("value") {
         Some(value_node) => lower_expr(ctx, value_node),
         None => {
@@ -763,7 +772,7 @@ fn lower_resume_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<Unresolve
     }
 }
 
-fn lower_argument_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Expr<UnresolvedName>> {
+fn lower_argument_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Expr<UnresolvedName>> {
     let mut args = Vec::new();
     let mut cursor = node.walk();
 

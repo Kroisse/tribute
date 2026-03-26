@@ -3,6 +3,7 @@
 use std::borrow::Cow;
 
 use ropey::Rope;
+use salsa::Accumulator;
 use tree_sitter::Node;
 use trunk_ir::{Span, Symbol};
 
@@ -10,27 +11,41 @@ use crate::ast::{NodeId, SpanMapBuilder};
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 
 /// Context for lowering CST to AST.
-pub struct AstLoweringCtx {
+pub struct AstLoweringCtx<'db> {
     pub source: Rope,
     /// Source hash for distinguishing parse sessions (derived from source URI).
     source_hash: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
-    /// Diagnostics collected during lowering.
-    diagnostics: Vec<Diagnostic>,
+    /// Salsa database for accumulating diagnostics directly.
+    /// `None` in test-only paths where diagnostics are discarded.
+    db: Option<&'db dyn salsa::Database>,
 }
 
-impl AstLoweringCtx {
-    /// Create a new lowering context.
+impl<'db> AstLoweringCtx<'db> {
+    /// Create a new lowering context without a database.
     ///
-    /// `source_hash` distinguishes parse sessions (derived from source URI via
-    /// [`crate::ast::node_id::source_hash`]).
+    /// Diagnostics emitted through this context will be silently discarded.
+    /// **Intended for tests and debugging only.** Production code should use
+    /// [`AstLoweringCtx::with_db`].
     pub fn new(source: Rope, source_hash: u64) -> Self {
         Self {
             source,
             source_hash,
             span_builder: SpanMapBuilder::new(),
-            diagnostics: Vec::new(),
+            db: None,
+        }
+    }
+
+    /// Create a new lowering context with a Salsa database.
+    ///
+    /// Diagnostics are accumulated directly into Salsa via the database.
+    pub fn with_db(db: &'db dyn salsa::Database, source: Rope, source_hash: u64) -> Self {
+        Self {
+            source,
+            source_hash,
+            span_builder: SpanMapBuilder::new(),
+            db: Some(db),
         }
     }
 
@@ -48,27 +63,33 @@ impl AstLoweringCtx {
 
     /// Emit a diagnostic error.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic::new(
-            message,
-            span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::AstGeneration,
-        ));
+        if let Some(db) = self.db {
+            Diagnostic::new(
+                message,
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::AstGeneration,
+            )
+            .accumulate(db);
+        }
     }
 
     /// Emit a parse error diagnostic for syntax errors.
     pub fn parse_error(&mut self, span: Span, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic::new(
-            message,
-            span,
-            DiagnosticSeverity::Error,
-            CompilationPhase::Parsing,
-        ));
+        if let Some(db) = self.db {
+            Diagnostic::new(
+                message,
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Parsing,
+            )
+            .accumulate(db);
+        }
     }
 
-    /// Consume the context and return the span builder and diagnostics.
-    pub fn finish(self) -> (SpanMapBuilder, Vec<Diagnostic>) {
-        (self.span_builder, self.diagnostics)
+    /// Consume the context and return the span builder.
+    pub fn finish(self) -> SpanMapBuilder {
+        self.span_builder
     }
 
     /// Get the text content of a node.

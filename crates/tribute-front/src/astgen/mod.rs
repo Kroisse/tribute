@@ -16,7 +16,7 @@ mod expressions;
 mod helpers;
 mod patterns;
 
-use crate::ast::{Module, SpanMap, SpanMapBuilder, UnresolvedName};
+use crate::ast::{Module, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
 use ropey::Rope;
@@ -31,40 +31,26 @@ pub use patterns::lower_pattern;
 // Entry Points
 // =============================================================================
 
-/// Internal result from CST → AST lowering (non-Salsa).
-struct LoweringResult {
-    module: Module<UnresolvedName>,
-    span_builder: SpanMapBuilder,
-    diagnostics: Vec<tribute_core::diagnostic::Diagnostic>,
-}
-
 /// Lower a parsed CST to an AST Module (internal, non-Salsa).
 ///
-/// Returns both the module and the span builder for creating a SpanMap.
-/// The `module_name` is derived from the source file path and passed through.
+/// Collects ERROR nodes and lowers the CST into an AST `Module`.
+/// Diagnostics are accumulated directly via the context's Salsa database
+/// (if present).
 fn lower_cst_to_ast_internal(
-    source: &Rope,
+    ctx: &mut AstLoweringCtx<'_>,
     cst: &ParsedCst,
     module_name: Option<trunk_ir::Symbol>,
-    source_hash: u64,
-) -> LoweringResult {
-    let mut ctx = AstLoweringCtx::new(source.clone(), source_hash);
+) -> Module<UnresolvedName> {
     let root = cst.root_node();
 
     // Check for ERROR nodes anywhere in the CST
-    collect_error_nodes(&mut ctx, root);
+    collect_error_nodes(ctx, root);
 
-    let module = lower_module(&mut ctx, root, module_name);
-    let (span_builder, diagnostics) = ctx.finish();
-    LoweringResult {
-        module,
-        span_builder,
-        diagnostics,
-    }
+    lower_module(ctx, root, module_name)
 }
 
 /// Recursively collect ERROR nodes from the CST and emit parse error diagnostics.
-fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
+fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
     if node.kind() == "ERROR" {
         let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
         ctx.parse_error(span, "syntax error: unexpected token");
@@ -90,7 +76,8 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx, node: tree_sitter::Node) {
 /// [`lower_source_to_parsed_ast`], which computes a proper source hash from
 /// the [`SourceCst`] URI and preserves span information.
 pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName> {
-    lower_cst_to_ast_internal(source, cst, None, 0).module
+    let mut ctx = AstLoweringCtx::new(source.clone(), 0);
+    lower_cst_to_ast_internal(&mut ctx, cst, None)
 }
 
 /// Salsa-tracked parsing result containing both Module and SpanMap.
@@ -131,17 +118,13 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     use crate::ast::node_id::source_hash;
     use crate::query::parse_cst;
 
-    use salsa::Accumulator;
-
     let cst = parse_cst(db, source)?;
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
-    let result = lower_cst_to_ast_internal(text, &cst, module_path, sh);
-    for diag in result.diagnostics {
-        diag.accumulate(db);
-    }
-    let span_map = result.span_builder.finish();
-    Some(ParsedAst::new(db, result.module, span_map))
+    let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh);
+    let module = lower_cst_to_ast_internal(&mut ctx, &cst, module_path);
+    let span_map = ctx.finish().finish();
+    Some(ParsedAst::new(db, module, span_map))
 }
 
 /// Derive a module name from a source file URI.

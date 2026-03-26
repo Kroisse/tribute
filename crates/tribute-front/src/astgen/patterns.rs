@@ -9,7 +9,7 @@ use super::context::AstLoweringCtx;
 use super::helpers::is_comment;
 
 /// Lower a CST pattern node to an AST Pattern.
-pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<UnresolvedName> {
+pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<UnresolvedName> {
     let id = ctx.fresh_id_with_span(&node);
 
     let kind = match node.kind() {
@@ -100,7 +100,10 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx, node: Node) -> Pattern<Unresolved
     Pattern::new(id, kind)
 }
 
-fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
+fn lower_constructor_pattern(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> PatternKind<UnresolvedName> {
     // grammar.js: field("name", $.type_identifier)
     //   + optional choice of:
     //     - Tuple-style: field("args", $.pattern_list)
@@ -140,7 +143,10 @@ fn lower_constructor_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKin
 }
 
 /// Lower struct-style pattern fields (pattern_fields) to a list of patterns.
-fn lower_constructor_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<UnresolvedName>> {
+fn lower_constructor_fields(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Vec<Pattern<UnresolvedName>> {
     let mut patterns = Vec::new();
     let mut cursor = node.walk();
 
@@ -173,7 +179,7 @@ fn lower_constructor_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern
     patterns
 }
 
-fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
+fn lower_record_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
     let type_node = node.child_by_field_name("type");
     let fields_node = node.child_by_field_name("fields");
 
@@ -223,7 +229,7 @@ fn lower_record_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unr
 }
 
 fn lower_field_pattern(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     node: Node,
 ) -> Option<FieldPattern<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
@@ -236,7 +242,7 @@ fn lower_field_pattern(
     Some(FieldPattern { id, name, pattern })
 }
 
-fn lower_tuple_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
+fn lower_tuple_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
     // tuple_pattern has field "elements" which is a pattern_list
     let elements_node = node.child_by_field_name("elements");
     let elements = elements_node
@@ -245,7 +251,7 @@ fn lower_tuple_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unre
     PatternKind::Tuple(elements)
 }
 
-fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
+fn lower_list_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
     let mut head = Vec::new();
     let mut has_rest = false;
     let mut rest: Option<Symbol> = None;
@@ -283,7 +289,7 @@ fn lower_list_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unres
     }
 }
 
-fn lower_as_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<UnresolvedName> {
+fn lower_as_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
     let pattern_node = node.child_by_field_name("pattern");
     // grammar.js uses "binding" field for the as-pattern name
     let name_node = node.child_by_field_name("binding");
@@ -302,7 +308,7 @@ fn lower_as_pattern(ctx: &mut AstLoweringCtx, node: Node) -> PatternKind<Unresol
     }
 }
 
-fn lower_pattern_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Pattern<UnresolvedName>> {
+fn lower_pattern_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Pattern<UnresolvedName>> {
     let mut patterns = Vec::new();
     let mut cursor = node.walk();
 
