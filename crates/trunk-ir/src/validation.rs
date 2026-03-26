@@ -69,7 +69,7 @@ impl fmt::Display for ArityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "arity mismatch in @{}: call to @{} has {} argument(s), expected {}",
+            "arity mismatch in '{}': call to '{}' has {} argument(s), expected {}",
             self.function_name, self.callee_name, self.actual_args, self.expected_args,
         )
     }
