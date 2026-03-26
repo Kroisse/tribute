@@ -907,7 +907,7 @@ fn parse_string_literal(text: &str) -> String {
             .get(prefix_len + 1..text.len().saturating_sub(1))
             .unwrap_or("");
         let bytes = process_escape_sequences(content);
-        String::from_utf8(bytes).unwrap_or_default()
+        String::from_utf8(bytes).expect("escape processing produced invalid UTF-8")
     } else {
         // Fallback
         text.to_string()
