@@ -177,13 +177,19 @@ url.get.await
 
 ## Ability 정의
 
+### Operation 종류
+
 Ability operation은 두 종류로 선언한다:
 
 - **`fn`**: Tail-resumptive operation. Handler가 값을 반환하면 자동으로 resume된다.
   Continuation을 캡처하지 않으므로 일반 함수 호출과 동등한 성능.
+  **선언부가 보증(guarantee)이다**: `fn`으로 선언된 operation은 모든 handler에서
+  반드시 `fn`으로 구현해야 한다.
 - **`op`**: General operation. Handler에서 `resume` 키워드를 통해
   resume 여부와 시점을 제어한다. `-> Never`를 반환하면 절대 resume하지 않는
   abort/exception 패턴을 표현한다.
+  `op`으로 선언된 operation은 handler에서 `fn`으로도 구현할 수 있다
+  (tail-resumptive가 충분한 경우).
 
 ```rust
 ability Http {
@@ -209,6 +215,51 @@ ability Fail {
     op fail(msg: Text) -> Never  // never resumes
 }
 ```
+
+### Operation의 Effect Row 규칙
+
+Ability operation은 **자신이 속한 ability의 effect만** 암시적으로 수행한다.
+Operation 시그니처에 effect annotation을 적을 수 없다:
+
+```rust
+// ✅ OK: effect는 암시적으로 부여됨
+ability Stream(a) {
+    op emit(value: a) -> Nil
+}
+
+// ❌ 불가: effect annotation 자체가 문법 오류
+ability Stream(a) {
+    op emit(value: a) ->{Stream(a)} Nil
+}
+
+// ❌ 불가: 다른 ability를 참조
+ability Cache(k, v) {
+    fn get(key: k) ->{Cache(k, v), IO} v
+}
+```
+
+다른 effect가 필요한 경우, operation 자체가 아닌 **handler 구현부**에서 처리한다:
+
+```rust
+// operation은 자신의 ability만 수행
+ability Cache(k, v) {
+    fn get(key: k) -> v
+    fn put(key: k, value: v) -> Nil
+}
+
+// handler가 IO effect를 사용하여 구현
+fn run_cache(comp: fn() ->{e, Cache(k, v)} a) ->{e, IO} a {
+    handle comp() {
+        do result { result }
+        fn Cache::get(key) { IO::read_from_disk(key) }
+        fn Cache::put(key, value) { IO::write_to_disk(key, value) }
+    }
+}
+```
+
+이 규칙은 ability를 **순수한 효과 선언**으로 유지하고,
+구체적인 효과 해석은 handler에 위임하기 위한 것이다.
+Koka, Unison 등 기존 algebraic effect 언어들도 동일한 제약을 채택하고 있다.
 
 ## Handler
 
@@ -237,10 +288,15 @@ computation의 실행 결과는 두 가지 중 하나:
 | arm | 대상 | 의미 |
 | --- | ---- | ---- |
 | `do value { expr }` | completion | Computation 완료, 결과값 바인딩 |
-| `fn Op(args) { body }` | `fn` operation | Tail-resumptive: body의 반환값이 resume 값 |
-| `op Op(args) { body }` | `op` operation | body에서 `resume`으로 명시적 resume |
+| `fn Op(args) { body }` | `fn`/`op` operation | Tail-resumptive: body의 반환값이 resume 값 |
+| `op Op(args) { body }` | `op` operation만 | body에서 `resume`으로 명시적 resume |
 
 Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
+
+**Handler arm과 선언의 관계:**
+
+- `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
+- `op`으로 선언된 operation → handler에서 `op` 또는 `fn`으로 구현 가능
 
 ### `fn` Operation Handler
 
@@ -388,9 +444,19 @@ fn main() ->{IO} Nil {
 
 | 선언 | resume | continuation 캡처 | handler arm | 용례 |
 | ---- | ------ | ----------------- | ----------- | ---- |
-| `fn print(msg: Text) -> Nil` | 1회, 암시적 | 없음 | `fn Console::print(msg) { ... }` | Console, Reader, Logger |
-| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op State::get() { ... }` | State, Coroutine |
-| `op fail(msg: Text) -> Never` | 0회 | 없음 | `op Fail::fail(msg) { ... }` | Fail, Exception |
+| `fn print(msg: Text) -> Nil` | 1회, 암시적 | 없음 | `fn`만 가능 | Console, Reader, Logger |
+| `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op` 또는 `fn` | State, Stream, Coroutine |
+| `op fail(msg: Text) -> Never` | 0회 | 없음 | `op` 또는 `fn` | Fail, Exception |
+
+### Operation 규칙
+
+| 규칙 | 설명 |
+| ---- | ---- |
+| 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
+| effect annotation 금지 | Operation 시그니처에 effect annotation을 적을 수 없음 |
+| 다른 effect 필요 시 | Handler 구현부에서 처리 |
+| `fn` 선언 보증 | `fn`으로 선언 → 모든 handler에서 `fn`으로 구현 필수 |
+| `op` handler 유연성 | `op`으로 선언 → handler에서 `fn` 또는 `op`으로 구현 가능 |
 
 ### 전체 문법 요약
 
