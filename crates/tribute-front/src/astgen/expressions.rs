@@ -991,55 +991,80 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
 /// Operates on raw bytes to avoid redundant UTF-8 decoding (the input is already
 /// validated by tree-sitter).
 fn process_escape_sequences(input: &str) -> Vec<u8> {
-    use winnow::combinator::{alt, repeat};
-    use winnow::prelude::*;
-    use winnow::token::{any, take};
+    let bytes = input.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
 
-    fn escape_sequence(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
-        b'\\'.parse_next(input)?;
-        alt((
-            b'n'.value(vec![b'\n']),
-            b'r'.value(vec![b'\r']),
-            b't'.value(vec![b'\t']),
-            b'0'.value(vec![b'\0']),
-            b'\\'.value(vec![b'\\']),
-            b'"'.value(vec![b'"']),
-            (b'x', take(2usize)).map(|(_, hex): (_, &[u8])| {
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            // Scan forward for the next backslash (or end), copy the whole run
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\\' {
+                i += 1;
+            }
+            result.extend_from_slice(&bytes[start..i]);
+            continue;
+        }
+        // Backslash — consume it and the escape character
+        i += 1; // skip '\'
+        if i >= bytes.len() {
+            result.push(b'\\');
+            break;
+        }
+        match bytes[i] {
+            b'n' => {
+                result.push(b'\n');
+                i += 1;
+            }
+            b'r' => {
+                result.push(b'\r');
+                i += 1;
+            }
+            b't' => {
+                result.push(b'\t');
+                i += 1;
+            }
+            b'0' => {
+                result.push(b'\0');
+                i += 1;
+            }
+            b'\\' => {
+                result.push(b'\\');
+                i += 1;
+            }
+            b'"' => {
+                result.push(b'"');
+                i += 1;
+            }
+            b'x' if i + 2 < bytes.len() => {
+                i += 1; // skip 'x'
+                let hex = &bytes[i..i + 2];
                 let byte =
                     u8::from_str_radix(std::str::from_utf8(hex).unwrap_or("00"), 16).unwrap_or(0);
-                vec![byte]
-            }),
-            (b'u', take(4usize)).map(|(_, hex): (_, &[u8])| {
-                let s = std::str::from_utf8(hex).unwrap_or("0000");
-                if let Some(ch) = u32::from_str_radix(s, 16).ok().and_then(char::from_u32) {
+                result.push(byte);
+                i += 2;
+            }
+            b'u' if i + 4 < bytes.len() => {
+                i += 1; // skip 'u'
+                let hex = &bytes[i..i + 4];
+                if let Some(ch) = std::str::from_utf8(hex)
+                    .ok()
+                    .and_then(|s| u32::from_str_radix(s, 16).ok())
+                    .and_then(char::from_u32)
+                {
                     let buf = &mut [0u8; 4];
-                    ch.encode_utf8(buf)[..ch.len_utf8()].as_bytes().to_vec()
-                } else {
-                    Vec::new()
+                    result.extend_from_slice(ch.encode_utf8(buf).as_bytes());
                 }
-            }),
-        ))
-        .parse_next(input)
+                i += 4;
+            }
+            _ => {
+                // Fallback: keep backslash as-is
+                result.push(b'\\');
+            }
+        }
     }
 
-    fn literal_byte(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
-        any.verify(|&b| b != b'\\')
-            .map(|b| vec![b])
-            .parse_next(input)
-    }
-
-    fn string_content(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
-        repeat(0.., alt((escape_sequence, literal_byte)))
-            .fold(Vec::new, |mut acc, chunk| {
-                acc.extend_from_slice(&chunk);
-                acc
-            })
-            .parse_next(input)
-    }
-
-    string_content
-        .parse(input.as_bytes())
-        .unwrap_or_else(|_| input.as_bytes().to_vec())
+    result
 }
 
 /// Parse a rune (character) literal.
