@@ -457,6 +457,18 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     Some((ctx, m))
 }
 
+/// Validate call arity and log mismatches.
+///
+/// TODO(#582): Promote to `Diagnostic::Error` accumulation once UFCS argument
+/// passing is fixed. Currently logs warnings because prelude UFCS wrappers
+/// trigger false positives.
+fn validate_and_report_arity(ctx: &IrContext, m: Module) {
+    let result = trunk_ir::validation::validate_call_arity(ctx, m);
+    for err in &result.arity_errors {
+        tracing::warn!("{}", err);
+    }
+}
+
 /// Lower continuation ops and run cleanup passes shared by both backends.
 ///
 /// Effects are handled via tail-call CPS through handler_dispatch closures.
@@ -523,6 +535,7 @@ pub fn dump_ir(
     let Some((mut ctx, m)) = run_shared_pipeline(db, source) else {
         return Ok(String::new());
     };
+    validate_and_report_arity(&ctx, m);
 
     if native {
         run_native_target_pipeline(&mut ctx, m)?;
@@ -542,6 +555,7 @@ pub fn dump_ir(
 #[salsa::tracked]
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
+    validate_and_report_arity(&ctx, m);
 
     if let Err(e) = run_wasm_target_pipeline(&mut ctx, m) {
         Diagnostic {
@@ -708,6 +722,7 @@ pub fn compile_to_native_binary<'db>(
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
+    validate_and_report_arity(&ctx, m);
 
     if let Err(e) = run_native_target_pipeline(&mut ctx, m) {
         Diagnostic {
@@ -819,7 +834,9 @@ pub fn parse_and_lower_ast<'db>(
 #[salsa::tracked]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
     // Run the shared pipeline; diagnostics are accumulated as side effects
-    let _ = run_shared_pipeline(db, source);
+    if let Some((ctx, m)) = run_shared_pipeline(db, source) {
+        validate_and_report_arity(&ctx, m);
+    }
 }
 
 /// Compile using the AST-based pipeline.
