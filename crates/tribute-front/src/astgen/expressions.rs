@@ -224,7 +224,12 @@ fn lower_call_expr(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedN
 fn lower_method_call(ctx: &mut AstLoweringCtx, node: Node) -> ExprKind<UnresolvedName> {
     let receiver_node = node.child_by_field_name("receiver");
     let method_node = node.child_by_field_name("method");
-    let args_node = node.child_by_field_name("arguments");
+    // Note: tree-sitter grammar doesn't define an "arguments" field for
+    // method_call_expression, so we find argument_list by kind instead
+    // (same approach as lower_call_expr).
+    let args_node = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "argument_list");
 
     let (Some(receiver_node), Some(method_node)) = (receiver_node, method_node) else {
         return ExprKind::Error;
