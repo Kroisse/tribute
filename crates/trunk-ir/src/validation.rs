@@ -20,6 +20,7 @@ use super::rewrite::Module;
 use super::walk;
 
 use crate::Symbol;
+use crate::location::Span;
 
 // ============================================================================
 // Error types
@@ -63,6 +64,8 @@ pub struct ArityError {
     pub expected_args: usize,
     /// Actual argument count at the call site.
     pub actual_args: usize,
+    /// Source span of the call operation.
+    pub span: Span,
 }
 
 impl fmt::Display for ArityError {
@@ -487,6 +490,7 @@ fn check_call_arity_in_region(
                     callee_name: callee_sym.to_string(),
                     expected_args: expected,
                     actual_args: actual,
+                    span: data.location.span,
                 });
             }
         }
