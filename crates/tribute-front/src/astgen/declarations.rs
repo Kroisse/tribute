@@ -18,7 +18,7 @@ use super::helpers::is_comment;
 /// The `module_name` parameter is the name derived from the source file path.
 /// If `None`, a later phase (or the IR lowering) can assign a default.
 pub fn lower_module(
-    ctx: &mut AstLoweringCtx,
+    ctx: &mut AstLoweringCtx<'_>,
     root: Node,
     module_name: Option<Symbol>,
 ) -> Module<UnresolvedName> {
@@ -47,7 +47,7 @@ pub fn lower_module(
 
 /// Lower a CST declaration node to an AST Decl.
 /// Returns a Vec because use declarations can expand to multiple items.
-fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>> {
+fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Decl<UnresolvedName>> {
     match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
@@ -69,7 +69,7 @@ fn lower_decl(ctx: &mut AstLoweringCtx, node: Node) -> Vec<Decl<UnresolvedName>>
 ///
 /// Returns either `Decl::Function` or `Decl::ExternFunction` depending on whether
 /// the function is `regular_function` or `extern_function`.
-fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<UnresolvedName>> {
+fn lower_function(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Decl<UnresolvedName>> {
     // function_definition always contains regular_function or extern_function
     let func_node = node
         .named_child(0)
@@ -157,7 +157,7 @@ fn lower_function(ctx: &mut AstLoweringCtx, node: Node) -> Option<Decl<Unresolve
 }
 
 /// Extract function name, handling operator names like `(<>)`.
-fn extract_function_name(ctx: &AstLoweringCtx, name_node: Node) -> Symbol {
+fn extract_function_name(ctx: &AstLoweringCtx<'_>, name_node: Node) -> Symbol {
     if name_node.kind() == "operator_name" {
         let text = ctx.node_text(&name_node);
         // Strip surrounding parentheses: "(<>)" -> "<>"
@@ -175,7 +175,7 @@ fn extract_function_name(ctx: &AstLoweringCtx, name_node: Node) -> Symbol {
 ///
 /// Handles both `parameter_list` (with `parameter` children) and
 /// `typed_parameter_list` (with `typed_parameter` children).
-fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
+fn lower_param_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ParamDecl> {
     let mut params = Vec::new();
     let mut cursor = node.walk();
 
@@ -202,7 +202,7 @@ fn lower_param_list(ctx: &mut AstLoweringCtx, node: Node) -> Vec<ParamDecl> {
 }
 
 /// Lower a type annotation.
-fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
+fn lower_type_annotation(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnotation> {
     // Check if the node itself is already a type node
     if matches!(
         node.kind(),
@@ -227,7 +227,7 @@ fn lower_type_annotation(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnn
 }
 
 /// Lower a type node directly (for variant tuple fields).
-fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
+fn lower_type_node(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnotation> {
     // Handle various type node kinds
     match node.kind() {
         // type_variable in grammar is just identifier, so we need to handle both
@@ -334,7 +334,7 @@ fn lower_type_node(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotatio
 /// Grammar: `ability_row = "{" ability_list? "}"`
 /// where `ability_list` contains `ability_item` (e.g. `State(Int)`) and
 /// `ability_tail` (row variable, e.g. `e`).
-fn lower_ability_row(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeAnnotation> {
+fn lower_ability_row(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeAnnotation> {
     let mut effects = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -368,7 +368,7 @@ fn lower_ability_row(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeAnnotation
 ///
 /// Grammar: `ability_item = type_identifier optional(type_arguments)`
 /// e.g. `Console` or `State(Int)`
-fn lower_ability_item(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnotation> {
+fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnotation> {
     let mut cursor = node.walk();
     let children: Vec<_> = node.named_children(&mut cursor).collect();
 
@@ -403,7 +403,7 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx, node: Node) -> Option<TypeAnnota
 /// Lower type parameters from a type_parameters node.
 ///
 /// Parses `(a, b, c)` into a list of TypeParamDecl.
-fn lower_type_parameters(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeParamDecl> {
+fn lower_type_parameters(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeParamDecl> {
     let mut params = Vec::new();
     let mut cursor = node.walk();
 
@@ -423,7 +423,7 @@ fn lower_type_parameters(ctx: &mut AstLoweringCtx, node: Node) -> Vec<TypeParamD
 }
 
 /// Lower a struct declaration.
-fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
+fn lower_struct(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<StructDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
@@ -447,7 +447,7 @@ fn lower_struct(ctx: &mut AstLoweringCtx, node: Node) -> Option<StructDecl> {
 }
 
 /// Lower struct fields from struct body.
-fn lower_struct_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
+fn lower_struct_fields(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<FieldDecl> {
     let mut fields = Vec::new();
     let mut cursor = node.walk();
 
@@ -480,7 +480,7 @@ fn lower_struct_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
 }
 
 /// Lower a single struct field.
-fn lower_struct_field(ctx: &mut AstLoweringCtx, node: Node) -> Option<FieldDecl> {
+fn lower_struct_field(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<FieldDecl> {
     let name_node = node.child_by_field_name("name")?;
     let type_node = node.child_by_field_name("type")?;
 
@@ -497,7 +497,7 @@ fn lower_struct_field(ctx: &mut AstLoweringCtx, node: Node) -> Option<FieldDecl>
 }
 
 /// Lower an enum declaration.
-fn lower_enum(ctx: &mut AstLoweringCtx, node: Node) -> Option<EnumDecl> {
+fn lower_enum(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<EnumDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
@@ -521,7 +521,7 @@ fn lower_enum(ctx: &mut AstLoweringCtx, node: Node) -> Option<EnumDecl> {
 }
 
 /// Lower enum variants from enum body.
-fn lower_enum_variants(ctx: &mut AstLoweringCtx, node: Node) -> Vec<VariantDecl> {
+fn lower_enum_variants(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<VariantDecl> {
     let mut variants = Vec::new();
     let mut cursor = node.walk();
 
@@ -546,7 +546,7 @@ fn lower_enum_variants(ctx: &mut AstLoweringCtx, node: Node) -> Vec<VariantDecl>
 }
 
 /// Lower a single enum variant.
-fn lower_enum_variant(ctx: &mut AstLoweringCtx, node: Node) -> Option<VariantDecl> {
+fn lower_enum_variant(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<VariantDecl> {
     let name_node = node.child_by_field_name("name")?;
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
@@ -562,7 +562,7 @@ fn lower_enum_variant(ctx: &mut AstLoweringCtx, node: Node) -> Option<VariantDec
 }
 
 /// Lower variant fields (tuple or struct style).
-fn lower_variant_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> {
+fn lower_variant_fields(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<FieldDecl> {
     let mut fields = Vec::new();
 
     // Handle the variant_fields wrapper which contains tuple_fields or struct_fields_block
@@ -609,7 +609,7 @@ fn lower_variant_fields(ctx: &mut AstLoweringCtx, node: Node) -> Vec<FieldDecl> 
 }
 
 /// Lower an ability declaration.
-fn lower_ability(ctx: &mut AstLoweringCtx, node: Node) -> Option<AbilityDecl> {
+fn lower_ability(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<AbilityDecl> {
     let name_node = node.child_by_field_name("name")?;
     let body_node = node.child_by_field_name("body")?;
 
@@ -633,7 +633,7 @@ fn lower_ability(ctx: &mut AstLoweringCtx, node: Node) -> Option<AbilityDecl> {
 }
 
 /// Lower ability operations from ability body.
-fn lower_ability_operations(ctx: &mut AstLoweringCtx, node: Node) -> Vec<OpDecl> {
+fn lower_ability_operations(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<OpDecl> {
     let mut operations = Vec::new();
     let mut cursor = node.walk();
 
@@ -667,7 +667,7 @@ fn lower_ability_operations(ctx: &mut AstLoweringCtx, node: Node) -> Vec<OpDecl>
 }
 
 /// Lower a single ability operation.
-fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDecl> {
+fn lower_ability_operation(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<OpDecl> {
     let name_node = node.child_by_field_name("name")?;
     let id = ctx.fresh_id_with_span(&node);
     let name = ctx.node_symbol(&name_node);
@@ -707,7 +707,7 @@ fn lower_ability_operation(ctx: &mut AstLoweringCtx, node: Node) -> Option<OpDec
 
 /// Lower a use declaration.
 /// Returns a Vec because `use std::{io, fmt}` expands to multiple UseDecls.
-fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Vec<UseDecl> {
+fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
     let Some(tree_node) = node.child_by_field_name("tree") else {
         return Vec::new();
     };
@@ -733,7 +733,7 @@ fn lower_use(ctx: &mut AstLoweringCtx, node: Node) -> Vec<UseDecl> {
 /// Expand a use tree into a list of (path, alias) pairs.
 /// Handles nested groups like `use std::{io, fmt, collections::{List, Map}}`.
 fn expand_use_tree(
-    ctx: &AstLoweringCtx,
+    ctx: &AstLoweringCtx<'_>,
     node: Node,
     prefix: &[Symbol],
 ) -> Vec<(Vec<Symbol>, Option<Symbol>)> {
@@ -794,7 +794,7 @@ fn expand_use_tree(
 }
 
 /// Lower a module declaration.
-fn lower_mod(ctx: &mut AstLoweringCtx, node: Node) -> Option<ModuleDecl<UnresolvedName>> {
+fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
 
     let id = ctx.fresh_id_with_span(&node);
