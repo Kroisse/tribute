@@ -40,6 +40,8 @@ impl Diagnostic {
                 message: message.into(),
                 span,
                 severity,
+                labels: Box::default(),
+                note: None,
             },
             phase,
         }
@@ -49,6 +51,23 @@ impl Diagnostic {
     /// compilation phase.
     pub fn from_ir(diag: trunk_ir::diagnostic::Diagnostic, phase: CompilationPhase) -> Self {
         Self { inner: diag, phase }
+    }
+
+    /// Add a secondary label pointing to a related source span.
+    pub fn with_label(mut self, span: trunk_ir::Span, message: impl Into<Box<str>>) -> Self {
+        let mut labels = self.inner.labels.into_vec();
+        labels.push(trunk_ir::diagnostic::Label {
+            span,
+            message: message.into(),
+        });
+        self.inner.labels = labels.into_boxed_slice();
+        self
+    }
+
+    /// Add a note providing extra context after the main message.
+    pub fn with_note(mut self, message: impl Into<Box<str>>) -> Self {
+        self.inner.note = Some(message.into());
+        self
     }
 }
 

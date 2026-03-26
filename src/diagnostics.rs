@@ -38,14 +38,31 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
         DiagnosticSeverity::Info => ReportKind::Advice,
     };
 
-    Report::build(report_kind, (file_path, start..end))
+    let mut report = Report::build(report_kind, (file_path, start..end))
         .with_code(format!("{:?}", diag.phase))
         .with_message(&diag.inner.message)
         .with_label(
             Label::new((file_path, start..end))
                 .with_message(&diag.inner.message)
                 .with_color(color),
-        )
+        );
+
+    // Add secondary labels
+    for label in diag.inner.labels.iter() {
+        let (ls, le) = normalize_span(label.span.start, label.span.end);
+        report = report.with_label(
+            Label::new((file_path, ls..le))
+                .with_message(label.message.as_ref())
+                .with_color(Color::Blue),
+        );
+    }
+
+    // Add note
+    if let Some(note) = &diag.inner.note {
+        report = report.with_note(note.as_ref());
+    }
+
+    report
         .finish()
         .eprint((file_path, Source::from(source_text)))
         .ok();

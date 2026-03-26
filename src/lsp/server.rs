@@ -9,12 +9,13 @@ use lsp_server::{Connection, Message, Notification, Request, RequestId, Response
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOptions, CodeActionOrCommand, CodeActionParams,
     CodeActionProviderCapability, CompletionItem, CompletionList, CompletionOptions,
-    CompletionParams, Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
-    DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind,
-    PrepareRenameResponse, PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams,
-    ServerCapabilities, SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
+    CompletionParams, Diagnostic, DiagnosticRelatedInformation, DiagnosticSeverity,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams,
+    GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+    InitializeParams, Location, MarkupContent, MarkupKind, PrepareRenameResponse,
+    PublishDiagnosticsParams, ReferenceParams, RenameOptions, RenameParams, ServerCapabilities,
+    SignatureHelp, SignatureHelpOptions, SignatureHelpParams, SymbolKind,
     TextDocumentContentChangeEvent, TextDocumentPositionParams, TextDocumentSyncCapability,
     TextDocumentSyncKind, TextDocumentSyncOptions, TextEdit, Uri, WorkspaceEdit,
     notification::{
@@ -708,10 +709,37 @@ impl LspServer {
             .attach(|db| tribute::compile_with_diagnostics(db, source_cst).diagnostics);
 
         // Convert to LSP diagnostics
+        let lsp_uri = uri.clone();
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
             .map(|d| {
                 let range = span_to_range(rope, d.inner.span);
+
+                // Convert secondary labels to related information
+                let related_information = if d.inner.labels.is_empty() {
+                    None
+                } else {
+                    Some(
+                        d.inner
+                            .labels
+                            .iter()
+                            .map(|label| DiagnosticRelatedInformation {
+                                location: Location {
+                                    uri: lsp_uri.clone(),
+                                    range: span_to_range(rope, label.span),
+                                },
+                                message: label.message.to_string(),
+                            })
+                            .collect(),
+                    )
+                };
+
+                // Append note to message if present
+                let message = match &d.inner.note {
+                    Some(note) => format!("{}\nnote: {note}", d.inner.message),
+                    None => d.inner.message.clone(),
+                };
+
                 Diagnostic {
                     range,
                     severity: Some(match d.inner.severity {
@@ -719,8 +747,9 @@ impl LspServer {
                         tribute_passes::DiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
                         tribute_passes::DiagnosticSeverity::Info => DiagnosticSeverity::INFORMATION,
                     }),
-                    message: d.inner.message.clone(),
+                    message,
                     source: Some("tribute".to_string()),
+                    related_information,
                     ..Default::default()
                 }
             })
