@@ -97,7 +97,14 @@ pub(super) fn lower_expr<'db>(
             Some(result)
         }
 
-        ExprKind::BytesLit(ref _bytes) => builder.emit_unsupported(location, "bytes literal"),
+        ExprKind::BytesLit(ref bytes) => {
+            let bytes_ty = builder.ctx.bytes_type(builder.ir);
+            let op = adt::bytes_const(builder.ir, location, bytes_ty, bytes.clone().into());
+            builder.ir.push_op(builder.block, op.op_ref());
+            let result = op.result(builder.ir);
+
+            Some(result)
+        }
 
         ExprKind::Nil => Some(builder.emit_nil(location)),
 
