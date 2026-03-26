@@ -11,7 +11,7 @@
 //!    exactly matches the actual operands of all operations. This is unique to
 //!    arena IR.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use super::context::IrContext;
@@ -53,6 +53,34 @@ impl fmt::Debug for StaleValueError {
     }
 }
 
+/// Describes an argument-count mismatch in a call operation.
+pub struct ArityError {
+    /// Name of the function containing the mismatched call.
+    pub function_name: String,
+    /// Symbol of the called function.
+    pub callee_name: String,
+    /// Expected argument count (from function definition signature).
+    pub expected_args: usize,
+    /// Actual argument count at the call site.
+    pub actual_args: usize,
+}
+
+impl fmt::Display for ArityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "arity mismatch in @{}: call to @{} has {} argument(s), expected {}",
+            self.function_name, self.callee_name, self.actual_args, self.expected_args,
+        )
+    }
+}
+
+impl fmt::Debug for ArityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 /// Describes a use-chain inconsistency.
 pub struct UseChainError {
     pub message: String,
@@ -74,11 +102,14 @@ impl fmt::Debug for UseChainError {
 pub struct ValidationResult {
     pub stale_errors: Vec<StaleValueError>,
     pub use_chain_errors: Vec<UseChainError>,
+    pub arity_errors: Vec<ArityError>,
 }
 
 impl ValidationResult {
     pub fn is_ok(&self) -> bool {
-        self.stale_errors.is_empty() && self.use_chain_errors.is_empty()
+        self.stale_errors.is_empty()
+            && self.use_chain_errors.is_empty()
+            && self.arity_errors.is_empty()
     }
 }
 
@@ -100,6 +131,12 @@ impl fmt::Display for ValidationResult {
                 self.use_chain_errors.len()
             )?;
             for err in &self.use_chain_errors {
+                writeln!(f, "  - {}", err)?;
+            }
+        }
+        if !self.arity_errors.is_empty() {
+            writeln!(f, "{} arity error(s) found:", self.arity_errors.len())?;
+            for err in &self.arity_errors {
                 writeln!(f, "  - {}", err)?;
             }
         }
@@ -201,6 +238,7 @@ pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationRe
             return ValidationResult {
                 stale_errors: errors,
                 use_chain_errors: vec![],
+                arity_errors: vec![],
             };
         }
     };
@@ -210,6 +248,7 @@ pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationRe
     ValidationResult {
         stale_errors: errors,
         use_chain_errors: vec![],
+        arity_errors: vec![],
     }
 }
 
@@ -271,6 +310,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
             return ValidationResult {
                 stale_errors: vec![],
                 use_chain_errors: errors,
+                arity_errors: vec![],
             };
         }
     };
@@ -336,6 +376,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
     ValidationResult {
         stale_errors: vec![],
         use_chain_errors: errors,
+        arity_errors: vec![],
     }
 }
 
@@ -352,13 +393,175 @@ fn collect_block_values(ctx: &IrContext, block: BlockRef, values: &mut HashSet<V
     }
 }
 
-/// Run both validations and combine results.
+// ============================================================================
+// Call arity validation
+// ============================================================================
+
+/// Collect function signatures from module-level function definitions.
+///
+/// Builds a map from function symbol to expected parameter count by inspecting
+/// `func.func`, `wasm.func`, and `clif.func` operations.
+fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashMap<Symbol, usize> {
+    let func_name_sym = Symbol::new("func");
+    let func_dialect = Symbol::new("func");
+    let wasm_dialect = Symbol::new("wasm");
+    let clif_dialect = Symbol::new("clif");
+
+    let core_dialect = Symbol::new("core");
+    let core_func_name = Symbol::new("func");
+    let sym_name_key = Symbol::new("sym_name");
+    let type_key = Symbol::new("type");
+
+    let mut signatures = HashMap::new();
+
+    for &block in &ctx.region(module_body).blocks {
+        for &op in &ctx.block(block).ops {
+            let data = ctx.op(op);
+            let is_function = (data.dialect == func_dialect
+                || data.dialect == wasm_dialect
+                || data.dialect == clif_dialect)
+                && data.name == func_name_sym;
+            if !is_function {
+                continue;
+            }
+
+            let sym_name = match data.attributes.get(&sym_name_key) {
+                Some(super::types::Attribute::Symbol(s)) => *s,
+                _ => continue,
+            };
+
+            let func_ty = match data.attributes.get(&type_key) {
+                Some(super::types::Attribute::Type(t)) => *t,
+                _ => continue,
+            };
+
+            let ty_data = ctx.types.get(func_ty);
+            if ty_data.dialect != core_dialect || ty_data.name != core_func_name {
+                continue;
+            }
+
+            // core.func layout: params[0] = Return, params[1..] = Params
+            let param_count = ty_data.params.len().saturating_sub(1);
+            signatures.insert(sym_name, param_count);
+        }
+    }
+
+    signatures
+}
+
+/// Walk all operations in a region tree and check call arity.
+fn check_call_arity_in_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    signatures: &HashMap<Symbol, usize>,
+    enclosing_fn: &str,
+    errors: &mut Vec<ArityError>,
+) {
+    let func_dialect = Symbol::new("func");
+    let call_name = Symbol::new("call");
+    let tail_call_name = Symbol::new("tail_call");
+    let callee_key = Symbol::new("callee");
+
+    walk::walk_region::<std::convert::Infallible>(ctx, region, &mut |op| {
+        let data = ctx.op(op);
+        if data.dialect != func_dialect {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        }
+
+        let is_call = data.name == call_name;
+        let is_tail_call = data.name == tail_call_name;
+        if !is_call && !is_tail_call {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        }
+
+        let callee_sym = match data.attributes.get(&callee_key) {
+            Some(super::types::Attribute::Symbol(s)) => *s,
+            _ => return std::ops::ControlFlow::Continue(walk::WalkAction::Advance),
+        };
+
+        if let Some(&expected) = signatures.get(&callee_sym) {
+            let actual = ctx.op_operands(op).len();
+            if actual != expected {
+                errors.push(ArityError {
+                    function_name: enclosing_fn.to_string(),
+                    callee_name: callee_sym.to_string(),
+                    expected_args: expected,
+                    actual_args: actual,
+                });
+            }
+        }
+
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+}
+
+/// Validate that all `func.call` and `func.tail_call` operations have the
+/// correct number of arguments matching the callee's function signature.
+pub fn validate_call_arity(ctx: &IrContext, module: Module) -> ValidationResult {
+    let mut errors = Vec::new();
+
+    let body = match module.body(ctx) {
+        Some(r) => r,
+        None => {
+            return ValidationResult {
+                stale_errors: vec![],
+                use_chain_errors: vec![],
+                arity_errors: errors,
+            };
+        }
+    };
+
+    let signatures = collect_function_signatures(ctx, body);
+
+    // Walk each function definition and check call sites within
+    let func_name_sym = Symbol::new("func");
+    let func_dialect = Symbol::new("func");
+    let wasm_dialect = Symbol::new("wasm");
+    let clif_dialect = Symbol::new("clif");
+    let sym_name_key = Symbol::new("sym_name");
+
+    for &block in &ctx.region(body).blocks {
+        for &op in &ctx.block(block).ops {
+            let data = ctx.op(op);
+            let is_function = (data.dialect == func_dialect
+                || data.dialect == wasm_dialect
+                || data.dialect == clif_dialect)
+                && data.name == func_name_sym;
+            if !is_function {
+                continue;
+            }
+
+            let fn_name = data
+                .attributes
+                .get(&sym_name_key)
+                .and_then(|a| match a {
+                    super::types::Attribute::Symbol(s) => Some(s.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "<unnamed>".to_string());
+
+            for &func_region in &data.regions {
+                check_call_arity_in_region(ctx, func_region, &signatures, &fn_name, &mut errors);
+            }
+        }
+    }
+
+    ValidationResult {
+        stale_errors: vec![],
+        use_chain_errors: vec![],
+        arity_errors: errors,
+    }
+}
+
+/// Run all validations and combine results.
 pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
+    let arity = validate_call_arity(ctx, module);
     ValidationResult {
         stale_errors: scope.stale_errors,
         use_chain_errors: uses.use_chain_errors,
+        arity_errors: arity.arity_errors,
     }
 }
 
@@ -1064,5 +1267,148 @@ mod tests {
         // Verify c1 now has the uses
         assert!(!ctx.has_uses(c0_val));
         assert!(ctx.has_uses(c1_val));
+    }
+
+    // ========================================================================
+    // Call arity validation tests (textual IR)
+    // ========================================================================
+
+    #[test]
+    fn call_arity_mismatch_too_few_args() {
+        // add expects 2 params, caller passes 1
+        let input = r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.add %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @add} : core.i32
+    func.return %1
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(!result.is_ok(), "Should detect arity mismatch");
+        assert_eq!(result.arity_errors.len(), 1);
+        assert_eq!(result.arity_errors[0].function_name, "main");
+        assert_eq!(result.arity_errors[0].callee_name, "add");
+        assert_eq!(result.arity_errors[0].expected_args, 2);
+        assert_eq!(result.arity_errors[0].actual_args, 1);
+    }
+
+    #[test]
+    fn call_arity_mismatch_too_many_args() {
+        // add expects 1 param, caller passes 3
+        let input = r#"core.module @test {
+  func.func @add(%0: core.i32) -> core.i32 {
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = arith.const {value = 2} : core.i32
+    %2 = arith.const {value = 3} : core.i32
+    %3 = func.call %0, %1, %2 {callee = @add} : core.i32
+    func.return %3
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(!result.is_ok(), "Should detect too many args");
+        assert_eq!(result.arity_errors.len(), 1);
+        assert_eq!(result.arity_errors[0].expected_args, 1);
+        assert_eq!(result.arity_errors[0].actual_args, 3);
+    }
+
+    #[test]
+    fn call_correct_arity_passes() {
+        let input = r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.add %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 40} : core.i32
+    %1 = arith.const {value = 2} : core.i32
+    %2 = func.call %0, %1 {callee = @add} : core.i32
+    func.return %2
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(result.is_ok(), "Correct arity should pass: {}", result);
+    }
+
+    #[test]
+    fn call_unknown_callee_skipped() {
+        // extern_fn is NOT defined in this module — should be skipped
+        let input = r#"core.module @test {
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @extern_fn} : core.i32
+    func.return %1
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(
+            result.is_ok(),
+            "Unknown callee should be skipped: {}",
+            result,
+        );
+    }
+
+    #[test]
+    fn tail_call_arity_mismatch_detected() {
+        // add expects 2 params, tail_call passes 1
+        let input = r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.add %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    func.tail_call %0 {callee = @add}
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(!result.is_ok(), "Should detect tail_call arity mismatch");
+        assert_eq!(result.arity_errors.len(), 1);
+        assert_eq!(result.arity_errors[0].callee_name, "add");
+        assert_eq!(result.arity_errors[0].expected_args, 2);
+        assert_eq!(result.arity_errors[0].actual_args, 1);
+    }
+
+    #[test]
+    fn zero_arg_function_called_with_args_detected() {
+        let input = r#"core.module @test {
+  func.func @unit() -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @unit} : core.i32
+    func.return %1
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let result = validate_call_arity(&ctx, module);
+        assert!(!result.is_ok(), "Should detect args to zero-param function");
+        assert_eq!(result.arity_errors[0].expected_args, 0);
+        assert_eq!(result.arity_errors[0].actual_args, 1);
     }
 }
