@@ -1495,6 +1495,7 @@ dependencies = [
  "tribute-core",
  "tribute-ir",
  "trunk-ir",
+ "winnow",
 ]
 
 [[package]]

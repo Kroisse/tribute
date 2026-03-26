@@ -984,51 +984,62 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
 
 /// Process escape sequences in a string/bytes literal content.
 ///
-/// Converts backslash escapes (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\xHH`)
+/// Converts backslash escapes (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\xHH`, `\uHHHH`)
 /// into their byte values. Unknown escapes are not reachable here because
 /// tree-sitter's grammar rejects them at parse time.
+///
+/// Operates on raw bytes to avoid redundant UTF-8 decoding (the input is already
+/// validated by tree-sitter).
 fn process_escape_sequences(input: &str) -> Vec<u8> {
-    let mut result = Vec::with_capacity(input.len());
-    let mut chars = input.chars();
+    use winnow::combinator::{alt, repeat};
+    use winnow::prelude::*;
+    use winnow::token::{any, take};
 
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => result.push(b'\n'),
-                Some('r') => result.push(b'\r'),
-                Some('t') => result.push(b'\t'),
-                Some('0') => result.push(b'\0'),
-                Some('\\') => result.push(b'\\'),
-                Some('"') => result.push(b'"'),
-                Some('x') => {
-                    let hi = chars.next().unwrap_or('0');
-                    let lo = chars.next().unwrap_or('0');
-                    let hex: String = [hi, lo].iter().collect();
-                    let byte = u8::from_str_radix(&hex, 16).unwrap_or(0);
-                    result.push(byte);
+    fn escape_sequence(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        b'\\'.parse_next(input)?;
+        alt((
+            b'n'.value(vec![b'\n']),
+            b'r'.value(vec![b'\r']),
+            b't'.value(vec![b'\t']),
+            b'0'.value(vec![b'\0']),
+            b'\\'.value(vec![b'\\']),
+            b'"'.value(vec![b'"']),
+            (b'x', take(2usize)).map(|(_, hex): (_, &[u8])| {
+                let byte =
+                    u8::from_str_radix(std::str::from_utf8(hex).unwrap_or("00"), 16).unwrap_or(0);
+                vec![byte]
+            }),
+            (b'u', take(4usize)).map(|(_, hex): (_, &[u8])| {
+                let s = std::str::from_utf8(hex).unwrap_or("0000");
+                if let Some(ch) = u32::from_str_radix(s, 16).ok().and_then(char::from_u32) {
+                    let buf = &mut [0u8; 4];
+                    ch.encode_utf8(buf)[..ch.len_utf8()].as_bytes().to_vec()
+                } else {
+                    Vec::new()
                 }
-                Some('u') => {
-                    let hex: String = (0..4).filter_map(|_| chars.next()).collect();
-                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
-                        let mut buf = [0u8; 4];
-                        result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-                    }
-                }
-                Some(other) => {
-                    // Fallback: keep as-is (should not happen with valid tree-sitter parse)
-                    result.push(b'\\');
-                    let mut buf = [0u8; 4];
-                    result.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
-                }
-                None => result.push(b'\\'),
-            }
-        } else {
-            let mut buf = [0u8; 4];
-            result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
-        }
+            }),
+        ))
+        .parse_next(input)
     }
 
-    result
+    fn literal_byte(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        any.verify(|&b| b != b'\\')
+            .map(|b| vec![b])
+            .parse_next(input)
+    }
+
+    fn string_content(input: &mut &[u8]) -> ModalResult<Vec<u8>> {
+        repeat(0.., alt((escape_sequence, literal_byte)))
+            .fold(Vec::new, |mut acc, chunk| {
+                acc.extend_from_slice(&chunk);
+                acc
+            })
+            .parse_next(input)
+    }
+
+    string_content
+        .parse(input.as_bytes())
+        .unwrap_or_else(|_| input.as_bytes().to_vec())
 }
 
 /// Parse a rune (character) literal.
