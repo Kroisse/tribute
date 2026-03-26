@@ -903,14 +903,15 @@ fn parse_string_literal(text: &str) -> String {
             .to_string()
     } else if text.get(prefix_len..prefix_len + 1) == Some("\"") {
         // Regular string: "..." or s"..."
-        text.get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .to_string()
+        let content = text
+            .get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("");
+        let bytes = process_escape_sequences(content);
+        String::from_utf8(bytes).unwrap_or_default()
     } else {
         // Fallback
         text.to_string()
     }
-    // TODO: proper escape handling for non-raw strings
 }
 
 fn parse_bytes_literal(text: &str) -> Vec<u8> {
@@ -974,12 +975,56 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
             .to_vec()
     } else {
         // Regular byte string: b"..."
-        // TODO: proper escape handling for non-raw byte strings
-        text.get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec()
+        let content = text
+            .get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("");
+        process_escape_sequences(content)
     }
+}
+
+/// Process escape sequences in a string/bytes literal content.
+///
+/// Converts backslash escapes (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\xHH`)
+/// into their byte values. Unknown escapes are not reachable here because
+/// tree-sitter's grammar rejects them at parse time.
+fn process_escape_sequences(input: &str) -> Vec<u8> {
+    let mut result = Vec::with_capacity(input.len());
+    let mut chars = input.chars();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => result.push(b'\n'),
+                Some('r') => result.push(b'\r'),
+                Some('t') => result.push(b'\t'),
+                Some('0') => result.push(b'\0'),
+                Some('\\') => result.push(b'\\'),
+                Some('"') => result.push(b'"'),
+                Some('x') => {
+                    let hi = chars.next().unwrap_or('0');
+                    let lo = chars.next().unwrap_or('0');
+                    let mut hex = [0u8; 2];
+                    hex[0] = hi as u8;
+                    hex[1] = lo as u8;
+                    let byte = u8::from_str_radix(std::str::from_utf8(&hex).unwrap_or("00"), 16)
+                        .unwrap_or(0);
+                    result.push(byte);
+                }
+                Some(other) => {
+                    // Fallback: keep as-is (should not happen with valid tree-sitter parse)
+                    result.push(b'\\');
+                    let mut buf = [0u8; 4];
+                    result.extend_from_slice(other.encode_utf8(&mut buf).as_bytes());
+                }
+                None => result.push(b'\\'),
+            }
+        } else {
+            let mut buf = [0u8; 4];
+            result.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+
+    result
 }
 
 /// Parse a rune (character) literal.

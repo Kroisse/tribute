@@ -316,6 +316,47 @@ fn main() {
 }
 
 #[test]
+fn test_native_string_escape_sequences() {
+    let output = compile_and_run_native(
+        "string_escape.trb",
+        r#"
+fn main() {
+    print_line("a\tb\nc")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout, "a\tb\nc\n");
+}
+
+#[test]
+fn test_native_string_escape_hex() {
+    // \x41 = 'A', \x42 = 'B'
+    let output = compile_and_run_native(
+        "string_escape_hex.trb",
+        r#"
+fn main() {
+    print_line("\x41\x42\x43")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), "ABC");
+}
+
+#[test]
 fn test_native_print_line_empty() {
     let output = compile_and_run_native(
         "print_line_empty.trb",
@@ -634,8 +675,6 @@ fn main() {
 
 #[test]
 fn test_native_bytes_literal_escape_sequences() {
-    // NOTE: Bytes literal escape handling is not yet implemented (#605).
-    // Escapes are currently kept as-is (literal backslash + char).
     let output = compile_and_run_native(
         "bytes_lit_escape.trb",
         r#"
@@ -652,8 +691,7 @@ fn main() {
         output.status,
         String::from_utf8_lossy(&output.stderr),
     );
-    // Backslash sequences are not processed — kept verbatim
-    assert_eq!(stdout.trim(), r"a\tb\nc");
+    assert_eq!(stdout, "a\tb\nc\n");
 }
 
 #[test]
