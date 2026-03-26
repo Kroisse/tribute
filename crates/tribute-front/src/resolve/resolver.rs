@@ -181,12 +181,12 @@ impl<'db> Resolver<'db> {
             format!("unresolved name `{}`; did you mean {}?", name, suggestions)
         };
 
-        Diagnostic {
+        Diagnostic::new(
             message,
             span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::NameResolution,
-        }
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
         .accumulate(self.db);
     }
 

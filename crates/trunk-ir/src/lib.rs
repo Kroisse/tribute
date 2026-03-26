@@ -11,6 +11,9 @@ pub mod symbol;
 // === ADT layout computation ===
 pub mod adt_layout;
 
+// === Diagnostic types ===
+pub mod diagnostic;
+
 // === Source location types ===
 pub mod location;
 

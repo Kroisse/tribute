@@ -69,16 +69,16 @@ fn compile_frontend_and_check(
 /// Helper to print diagnostics concisely (truncating long messages).
 fn print_diagnostics(diagnostics: &[tribute_passes::diagnostic::Diagnostic]) {
     for diag in diagnostics {
-        let msg = if diag.message.len() > 200 {
+        let msg = if diag.inner.message.len() > 200 {
             format!(
                 "{}... [truncated {} chars]",
-                &diag.message[..200],
-                diag.message.len() - 200
+                &diag.inner.message[..200],
+                diag.inner.message.len() - 200
             )
         } else {
-            diag.message.clone()
+            diag.inner.message.clone()
         };
-        eprintln!("[{:?}] {}: {}", diag.severity, diag.phase, msg);
+        eprintln!("[{:?}] {}: {}", diag.inner.severity, diag.phase, msg);
     }
 }
 
@@ -468,7 +468,7 @@ fn main() {
 
     let has_unhandled_effect_error = diagnostics
         .iter()
-        .any(|d| d.message.contains("unhandled effects"));
+        .any(|d| d.inner.message.contains("unhandled effects"));
     assert!(
         has_unhandled_effect_error,
         "Expected 'unhandled effects' error for main calling ability ops, got: {:?}",
@@ -498,7 +498,7 @@ fn main() {
 
     let has_unhandled_effect_error = diagnostics
         .iter()
-        .any(|d| d.message.contains("unhandled effects"));
+        .any(|d| d.inner.message.contains("unhandled effects"));
     assert!(
         has_unhandled_effect_error,
         "Expected 'unhandled effects' error when main calls effectful function, got: {:?}",
@@ -658,7 +658,7 @@ fn main() { }
     // Verify it's a type mismatch error
     let has_type_error = diagnostics
         .iter()
-        .any(|d| d.message.contains("expected") && d.message.contains("found"));
+        .any(|d| d.inner.message.contains("expected") && d.inner.message.contains("found"));
     assert!(
         has_type_error,
         "Expected type mismatch error, got: {:?}",

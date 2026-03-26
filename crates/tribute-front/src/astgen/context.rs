@@ -48,22 +48,22 @@ impl AstLoweringCtx {
 
     /// Emit a diagnostic error.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic {
-            message: message.into(),
+        self.diagnostics.push(Diagnostic::new(
+            message,
             span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::AstGeneration,
-        });
+            DiagnosticSeverity::Error,
+            CompilationPhase::AstGeneration,
+        ));
     }
 
     /// Emit a parse error diagnostic for syntax errors.
     pub fn parse_error(&mut self, span: Span, message: impl Into<String>) {
-        self.diagnostics.push(Diagnostic {
-            message: message.into(),
+        self.diagnostics.push(Diagnostic::new(
+            message,
             span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Parsing,
-        });
+            DiagnosticSeverity::Error,
+            CompilationPhase::Parsing,
+        ));
     }
 
     /// Consume the context and return the span builder and diagnostics.

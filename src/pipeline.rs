@@ -63,7 +63,7 @@
 //! ## Diagnostics
 //!
 //! Diagnostics are collected using Salsa accumulators. Each stage can emit
-//! diagnostics via `Diagnostic { ... }.accumulate(db)`, which are then
+//! diagnostics via `Diagnostic::new(...).accumulate(db)`, which are then
 //! collected at the end of compilation.
 
 use crate::SourceCst;
@@ -457,15 +457,14 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     Some((ctx, m))
 }
 
-/// Validate call arity and log mismatches.
+/// Validate call arity and report mismatches as diagnostics.
 ///
-/// TODO(#582): Promote to `Diagnostic::Error` accumulation once UFCS argument
-/// passing is fixed. Currently logs warnings because prelude UFCS wrappers
-/// trigger false positives.
-fn validate_and_report_arity(ctx: &IrContext, m: Module) {
-    let result = trunk_ir::validation::validate_call_arity(ctx, m);
-    for err in &result.arity_errors {
-        tracing::warn!("{}", err);
+/// Arity mismatches are collected into `IrContext` diagnostics by the
+/// validation function and then converted to Salsa `Diagnostic` accumulators.
+fn validate_and_report_arity(db: &dyn salsa::Database, ctx: &IrContext, m: Module) {
+    trunk_ir::validation::validate_call_arity(ctx, m);
+    for diag in ctx.diagnostics().iter() {
+        Diagnostic::from_ir(diag.clone(), CompilationPhase::Lowering).accumulate(db);
     }
 }
 
@@ -535,7 +534,7 @@ pub fn dump_ir(
     let Some((mut ctx, m)) = run_shared_pipeline(db, source) else {
         return Ok(String::new());
     };
-    validate_and_report_arity(&ctx, m);
+    validate_and_report_arity(db, &ctx, m);
 
     if native {
         run_native_target_pipeline(&mut ctx, m)?;
@@ -555,15 +554,15 @@ pub fn dump_ir(
 #[salsa::tracked]
 pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
-    validate_and_report_arity(&ctx, m);
+    validate_and_report_arity(db, &ctx, m);
 
     if let Err(e) = run_wasm_target_pipeline(&mut ctx, m) {
-        Diagnostic {
-            message: format!("Pipeline failed: {}", e),
-            span: Span::new(0, 0),
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Lowering,
-        }
+        Diagnostic::new(
+            format!("Pipeline failed: {}", e),
+            Span::new(0, 0),
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
         .accumulate(db);
         return None;
     }
@@ -572,12 +571,12 @@ pub fn compile_to_wasm_binary(db: &dyn salsa::Database, source: SourceCst) -> Op
     match compile_to_wasm(&mut ctx, m) {
         Ok(binary) => Some(binary.bytes),
         Err(e) => {
-            Diagnostic {
-                message: format!("WebAssembly compilation failed: {}", e),
-                span: Span::new(0, 0),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
+            Diagnostic::new(
+                format!("WebAssembly compilation failed: {}", e),
+                Span::new(0, 0),
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
             .accumulate(db);
             None
         }
@@ -722,15 +721,15 @@ pub fn compile_to_native_binary<'db>(
     config: CompilationConfig,
 ) -> Option<Vec<u8>> {
     let (mut ctx, m) = run_shared_pipeline(db, source)?;
-    validate_and_report_arity(&ctx, m);
+    validate_and_report_arity(db, &ctx, m);
 
     if let Err(e) = run_native_target_pipeline(&mut ctx, m) {
-        Diagnostic {
-            message: format!("Pipeline failed: {}", e),
-            span: Span::new(0, 0),
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Lowering,
-        }
+        Diagnostic::new(
+            format!("Pipeline failed: {}", e),
+            Span::new(0, 0),
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
         .accumulate(db);
         return None;
     }
@@ -740,12 +739,12 @@ pub fn compile_to_native_binary<'db>(
     match compile_module_to_native(&mut ctx, m, sanitize) {
         Ok(bytes) => Some(bytes),
         Err(e) => {
-            Diagnostic {
-                message: format!("Native compilation failed: {}", e),
-                span: Span::new(0, 0),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
+            Diagnostic::new(
+                format!("Native compilation failed: {}", e),
+                Span::new(0, 0),
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
             .accumulate(db);
             None
         }
@@ -835,7 +834,7 @@ pub fn parse_and_lower_ast<'db>(
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
     // Run the shared pipeline; diagnostics are accumulated as side effects
     if let Some((ctx, m)) = run_shared_pipeline(db, source) {
-        validate_and_report_arity(&ctx, m);
+        validate_and_report_arity(db, &ctx, m);
     }
 }
 
@@ -975,8 +974,8 @@ mod tests {
 
         // Check that the diagnostic message mentions the unresolved name
         let has_unresolved_error = result.diagnostics.iter().any(|d| {
-            d.message.contains("unresolved")
-                && d.severity == DiagnosticSeverity::Error
+            d.inner.message.contains("unresolved")
+                && d.inner.severity == DiagnosticSeverity::Error
                 && d.phase == CompilationPhase::NameResolution
         });
         assert!(
@@ -992,9 +991,9 @@ mod tests {
         let result = compile_with_diagnostics(db, source);
 
         let has_parse_error = result.diagnostics.iter().any(|d| {
-            d.severity == DiagnosticSeverity::Error
+            d.inner.severity == DiagnosticSeverity::Error
                 && d.phase == CompilationPhase::Parsing
-                && d.message.contains("syntax error")
+                && d.inner.message.contains("syntax error")
         });
         assert!(
             has_parse_error,
@@ -1019,7 +1018,7 @@ mod tests {
         let has_option_error = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("Option") || d.message.contains("None"));
+            .any(|d| d.inner.message.contains("Option") || d.inner.message.contains("None"));
         assert!(
             !has_option_error,
             "Option and None should be available from prelude, got: {:?}",
@@ -1037,7 +1036,7 @@ mod tests {
         let has_result_error = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("Result") || d.message.contains("Ok"));
+            .any(|d| d.inner.message.contains("Result") || d.inner.message.contains("Ok"));
         assert!(
             !has_result_error,
             "Result and Ok should be available from prelude, got: {:?}",
@@ -1064,7 +1063,7 @@ mod tests {
         let has_unresolved_y = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("unresolved") && d.message.contains("y"));
+            .any(|d| d.inner.message.contains("unresolved") && d.inner.message.contains("y"));
         assert!(
             !has_unresolved_y,
             "Pattern binding `y` should be resolved, got: {:?}",
@@ -1109,7 +1108,8 @@ mod tests {
 
         let result = compile_with_diagnostics(db, source);
         let has_non_exhaustive = result.diagnostics.iter().any(|d| {
-            d.message.contains("non-exhaustive") && d.severity == DiagnosticSeverity::Error
+            d.inner.message.contains("non-exhaustive")
+                && d.inner.severity == DiagnosticSeverity::Error
         });
         assert!(
             has_non_exhaustive,
@@ -1163,7 +1163,7 @@ mod tests {
         let has_unresolved_name = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("unresolved") && d.message.contains("name"));
+            .any(|d| d.inner.message.contains("unresolved") && d.inner.message.contains("name"));
         assert!(
             !has_unresolved_name,
             "TDNR should resolve user.name to User::name(user), got: {:?}",
@@ -1246,7 +1246,7 @@ mod tests {
         let has_main_error = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("must return Nil"));
+            .any(|d| d.inner.message.contains("must return Nil"));
         assert!(
             !has_main_error,
             "main() returning Nil should not produce an error, got: {:?}",
@@ -1260,8 +1260,8 @@ mod tests {
 
         let result = compile_with_diagnostics(db, source);
         let has_main_error = result.diagnostics.iter().any(|d| {
-            d.message.contains("must return Nil")
-                && d.severity == DiagnosticSeverity::Error
+            d.inner.message.contains("must return Nil")
+                && d.inner.severity == DiagnosticSeverity::Error
                 && d.phase == CompilationPhase::TypeChecking
         });
         assert!(
@@ -1279,7 +1279,7 @@ mod tests {
         let has_main_error = result
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("must return Nil"));
+            .any(|d| d.inner.message.contains("must return Nil"));
         assert!(
             !has_main_error,
             "non-main function returning Int should not produce main-specific error, got: {:?}",

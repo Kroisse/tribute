@@ -168,15 +168,15 @@ pub(super) fn lower_expr<'db>(
             | ResolvedRef::TypeDef { .. }
             | ResolvedRef::Ability { .. } => None,
             ResolvedRef::AbilityOp { ability, op, .. } => {
-                Diagnostic {
-                    message: format!(
+                Diagnostic::new(
+                    format!(
                         "ability operation `{}::{}` cannot be used as a value; it must be called directly",
                         ability.qualified(builder.db()), op
                     ),
-                    span: location.span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::Lowering,
-                }
+                    location.span,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::Lowering,
+                )
                 .accumulate(builder.db());
                 None
             }
@@ -446,23 +446,23 @@ pub(super) fn lower_expr<'db>(
             let mut field_map: HashMap<Symbol, ValueRef> = HashMap::new();
             for (name, expr) in fields {
                 if !valid_fields.contains(&name) {
-                    Diagnostic {
-                        message: format!("unknown field `{}` for struct `{}`", name, struct_name),
-                        span: location.span,
-                        severity: DiagnosticSeverity::Error,
-                        phase: CompilationPhase::Lowering,
-                    }
+                    Diagnostic::new(
+                        format!("unknown field `{}` for struct `{}`", name, struct_name),
+                        location.span,
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::Lowering,
+                    )
                     .accumulate(db);
                     continue;
                 }
 
                 if field_map.contains_key(&name) {
-                    Diagnostic {
-                        message: format!("duplicate field `{}`", name),
-                        span: location.span,
-                        severity: DiagnosticSeverity::Error,
-                        phase: CompilationPhase::Lowering,
-                    }
+                    Diagnostic::new(
+                        format!("duplicate field `{}`", name),
+                        location.span,
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::Lowering,
+                    )
                     .accumulate(db);
                     continue;
                 }
@@ -488,12 +488,12 @@ pub(super) fn lower_expr<'db>(
                     builder.ir.push_op(builder.block, get_op.op_ref());
                     ordered_values.push(get_op.result(builder.ir));
                 } else {
-                    Diagnostic {
-                        message: format!("missing field: {}", field_name),
-                        span: location.span,
-                        severity: DiagnosticSeverity::Error,
-                        phase: CompilationPhase::Lowering,
-                    }
+                    Diagnostic::new(
+                        format!("missing field: {}", field_name),
+                        location.span,
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::Lowering,
+                    )
                     .accumulate(db);
                     return Some(builder.emit_nil(location));
                 }
@@ -694,12 +694,12 @@ fn lower_binop<'db>(
         BinOpKind::And => emit_binop!(arith::and, bool_ty),
         BinOpKind::Or => emit_binop!(arith::or, bool_ty),
         BinOpKind::Concat => {
-            Diagnostic {
-                message: "string concatenation not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
+            Diagnostic::new(
+                "string concatenation not yet supported in IR lowering",
+                location.span,
+                DiagnosticSeverity::Warning,
+                CompilationPhase::Lowering,
+            )
             .accumulate(builder.db());
             builder.emit_nil(location)
         }
@@ -727,15 +727,13 @@ pub(super) fn lower_block_cps_for_expr<'db>(
             // Full expression-level CPS lifting is not yet implemented.
             if contains_nested_ability_op(&expr) {
                 let location = builder.location(expr.id);
-                Diagnostic {
-                    message:
-                        "ability operation in nested expression position is not yet supported; \
-                              extract to a let binding"
-                            .to_string(),
-                    span: location.span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::Lowering,
-                }
+                Diagnostic::new(
+                    "ability operation in nested expression position is not yet supported; \
+                          extract to a let binding",
+                    location.span,
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::Lowering,
+                )
                 .accumulate(builder.db());
                 return None;
             }
@@ -1033,12 +1031,12 @@ fn bind_stmt_pattern<'db>(
         }
         _ => {
             let location = builder.ctx.location(pattern.id);
-            Diagnostic {
-                message: "pattern destructuring not yet supported in IR lowering".to_string(),
-                span: location.span,
-                severity: DiagnosticSeverity::Warning,
-                phase: CompilationPhase::Lowering,
-            }
+            Diagnostic::new(
+                "pattern destructuring not yet supported in IR lowering",
+                location.span,
+                DiagnosticSeverity::Warning,
+                CompilationPhase::Lowering,
+            )
             .accumulate(builder.db());
         }
     }
