@@ -1054,7 +1054,6 @@ impl<'db> TypeChecker<'db> {
                         args.into_iter()
                             .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer)),
                     );
-
                     ExprKind::Call {
                         callee,
                         args: all_args,

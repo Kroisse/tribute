@@ -92,7 +92,8 @@ impl<'db> TypeChecker<'db> {
         // 4b. Post-solve: resolve deferred method calls
         // After solving, UniVar receiver types may now be concrete.
         // Look up methods and add type constraints for return types.
-        self.resolve_deferred_methods(&mut solver, deferred_methods, func.id);
+        let deferred_resolutions =
+            self.resolve_deferred_methods(&mut solver, deferred_methods, func.id);
 
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
@@ -169,7 +170,13 @@ impl<'db> TypeChecker<'db> {
         self.env.register_function(func_id, new_scheme);
 
         // 6. Apply substitution and generalization to all TypedRef types in the body
-        let body = self.apply_subst_to_body(body, type_subst, row_subst, &var_to_index);
+        let body = self.apply_subst_to_body(
+            body,
+            type_subst,
+            row_subst,
+            &var_to_index,
+            &deferred_resolutions,
+        );
 
         // 7. Collect node types from this function's context and apply substitution.
         // Note: We apply substitution but NOT generalization, because these types
@@ -201,7 +208,8 @@ impl<'db> TypeChecker<'db> {
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
         func_node_id: crate::ast::NodeId,
-    ) {
+    ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
+        let mut resolved = HashMap::new();
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
@@ -219,6 +227,9 @@ impl<'db> TypeChecker<'db> {
                     } else {
                         entry.func_ty
                     };
+
+                    // Record the resolution for MethodCall → Call conversion
+                    resolved.insert(mc.node_id, (entry.func_id, func_ty));
 
                     if let TypeKind::Func {
                         params,
@@ -284,6 +295,7 @@ impl<'db> TypeChecker<'db> {
             }
             deferred = remaining;
         }
+        resolved
     }
 
     /// Get function signature from the registered scheme.
@@ -327,18 +339,28 @@ impl<'db> TypeChecker<'db> {
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
     ) -> Expr<TypedRef<'db>> {
-        let kind = self.apply_subst_to_expr_kind(*body.kind, type_subst, row_subst, var_to_index);
+        let kind = self.apply_subst_to_expr_kind(
+            body.id,
+            *body.kind,
+            type_subst,
+            row_subst,
+            var_to_index,
+            deferred_resolutions,
+        );
         Expr::new(body.id, kind)
     }
 
     /// Apply substitution to an expression kind.
     fn apply_subst_to_expr_kind(
         &self,
+        node_id: crate::ast::NodeId,
         kind: ExprKind<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
     ) -> ExprKind<TypedRef<'db>> {
         match kind {
             ExprKind::NatLit(n) => ExprKind::NatLit(n),
@@ -358,17 +380,39 @@ impl<'db> TypeChecker<'db> {
                 var_to_index,
             )),
             ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.apply_subst_to_body(callee, type_subst, row_subst, var_to_index),
+                callee: self.apply_subst_to_body(
+                    callee,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
                 args: args
                     .into_iter()
-                    .map(|a| self.apply_subst_to_body(a, type_subst, row_subst, var_to_index))
+                    .map(|a| {
+                        self.apply_subst_to_body(
+                            a,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
             },
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
                 ctor: self.apply_subst_to_typed_ref(ctor, type_subst, row_subst, var_to_index),
                 args: args
                     .into_iter()
-                    .map(|a| self.apply_subst_to_body(a, type_subst, row_subst, var_to_index))
+                    .map(|a| {
+                        self.apply_subst_to_body(
+                            a,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
             },
             ExprKind::Record {
@@ -387,71 +431,201 @@ impl<'db> TypeChecker<'db> {
                     .map(|(name, expr)| {
                         (
                             name,
-                            self.apply_subst_to_body(expr, type_subst, row_subst, var_to_index),
+                            self.apply_subst_to_body(
+                                expr,
+                                type_subst,
+                                row_subst,
+                                var_to_index,
+                                deferred_resolutions,
+                            ),
                         )
                     })
                     .collect(),
-                spread: spread
-                    .map(|e| self.apply_subst_to_body(e, type_subst, row_subst, var_to_index)),
+                spread: spread.map(|e| {
+                    self.apply_subst_to_body(
+                        e,
+                        type_subst,
+                        row_subst,
+                        var_to_index,
+                        deferred_resolutions,
+                    )
+                }),
             },
             ExprKind::MethodCall {
                 receiver,
                 method,
                 args,
-            } => ExprKind::MethodCall {
-                receiver: self.apply_subst_to_body(receiver, type_subst, row_subst, var_to_index),
-                method,
-                args: args
+            } => {
+                let converted_receiver = self.apply_subst_to_body(
+                    receiver,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                );
+                let converted_args: Vec<_> = args
                     .into_iter()
-                    .map(|a| self.apply_subst_to_body(a, type_subst, row_subst, var_to_index))
-                    .collect(),
-            },
+                    .map(|a| {
+                        self.apply_subst_to_body(
+                            a,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
+                    .collect();
+
+                if let Some((func_id, callee_ty)) = deferred_resolutions.get(&node_id) {
+                    // Deferred method was resolved — convert to Call
+                    let substituted_ty =
+                        self.apply_subst_to_type(*callee_ty, type_subst, row_subst, var_to_index);
+                    let callee_ref = TypedRef {
+                        resolved: ResolvedRef::Function { id: *func_id },
+                        ty: substituted_ty,
+                    };
+                    let callee = Expr::new(node_id, ExprKind::Var(callee_ref));
+                    let mut all_args = vec![converted_receiver];
+                    all_args.extend(converted_args);
+                    ExprKind::Call {
+                        callee,
+                        args: all_args,
+                    }
+                } else {
+                    // Still unresolved — keep as MethodCall for TDNR
+                    ExprKind::MethodCall {
+                        receiver: converted_receiver,
+                        method,
+                        args: converted_args,
+                    }
+                }
+            }
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op,
-                lhs: self.apply_subst_to_body(lhs, type_subst, row_subst, var_to_index),
-                rhs: self.apply_subst_to_body(rhs, type_subst, row_subst, var_to_index),
+                lhs: self.apply_subst_to_body(
+                    lhs,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
+                rhs: self.apply_subst_to_body(
+                    rhs,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
             },
             ExprKind::Block { stmts, value } => ExprKind::Block {
                 stmts: stmts
                     .into_iter()
-                    .map(|s| self.apply_subst_to_stmt(s, type_subst, row_subst, var_to_index))
+                    .map(|s| {
+                        self.apply_subst_to_stmt(
+                            s,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
-                value: self.apply_subst_to_body(value, type_subst, row_subst, var_to_index),
+                value: self.apply_subst_to_body(
+                    value,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
             },
             ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-                scrutinee: self.apply_subst_to_body(scrutinee, type_subst, row_subst, var_to_index),
+                scrutinee: self.apply_subst_to_body(
+                    scrutinee,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
                 arms: arms
                     .into_iter()
-                    .map(|arm| self.apply_subst_to_arm(arm, type_subst, row_subst, var_to_index))
+                    .map(|arm| {
+                        self.apply_subst_to_arm(
+                            arm,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
             },
             ExprKind::Lambda { params, body } => ExprKind::Lambda {
                 params,
-                body: self.apply_subst_to_body(body, type_subst, row_subst, var_to_index),
+                body: self.apply_subst_to_body(
+                    body,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
             },
             ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.apply_subst_to_body(body, type_subst, row_subst, var_to_index),
+                body: self.apply_subst_to_body(
+                    body,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
                 handlers: handlers
                     .into_iter()
                     .map(|h| {
-                        self.apply_subst_to_handler_arm(h, type_subst, row_subst, var_to_index)
+                        self.apply_subst_to_handler_arm(
+                            h,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
                     })
                     .collect(),
             },
             ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.apply_subst_to_body(arg, type_subst, row_subst, var_to_index),
+                arg: self.apply_subst_to_body(
+                    arg,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
                 local_id,
             },
             ExprKind::Tuple(elems) => ExprKind::Tuple(
                 elems
                     .into_iter()
-                    .map(|e| self.apply_subst_to_body(e, type_subst, row_subst, var_to_index))
+                    .map(|e| {
+                        self.apply_subst_to_body(
+                            e,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
             ),
             ExprKind::List(elems) => ExprKind::List(
                 elems
                     .into_iter()
-                    .map(|e| self.apply_subst_to_body(e, type_subst, row_subst, var_to_index))
+                    .map(|e| {
+                        self.apply_subst_to_body(
+                            e,
+                            type_subst,
+                            row_subst,
+                            var_to_index,
+                            deferred_resolutions,
+                        )
+                    })
                     .collect(),
             ),
         }
@@ -493,6 +667,7 @@ impl<'db> TypeChecker<'db> {
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
     ) -> Stmt<TypedRef<'db>> {
         match stmt {
             Stmt::Let {
@@ -503,12 +678,24 @@ impl<'db> TypeChecker<'db> {
             } => Stmt::Let {
                 id,
                 pattern: self.apply_subst_to_pattern(pattern, type_subst, row_subst, var_to_index),
-                value: self.apply_subst_to_body(value, type_subst, row_subst, var_to_index),
+                value: self.apply_subst_to_body(
+                    value,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
                 ty,
             },
             Stmt::Expr { id, expr } => Stmt::Expr {
                 id,
-                expr: self.apply_subst_to_body(expr, type_subst, row_subst, var_to_index),
+                expr: self.apply_subst_to_body(
+                    expr,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                ),
             },
         }
     }
@@ -520,14 +707,27 @@ impl<'db> TypeChecker<'db> {
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
     ) -> Arm<TypedRef<'db>> {
         Arm {
             id: arm.id,
             pattern: self.apply_subst_to_pattern(arm.pattern, type_subst, row_subst, var_to_index),
-            guard: arm
-                .guard
-                .map(|g| self.apply_subst_to_body(g, type_subst, row_subst, var_to_index)),
-            body: self.apply_subst_to_body(arm.body, type_subst, row_subst, var_to_index),
+            guard: arm.guard.map(|g| {
+                self.apply_subst_to_body(
+                    g,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                    deferred_resolutions,
+                )
+            }),
+            body: self.apply_subst_to_body(
+                arm.body,
+                type_subst,
+                row_subst,
+                var_to_index,
+                deferred_resolutions,
+            ),
         }
     }
 
@@ -538,6 +738,7 @@ impl<'db> TypeChecker<'db> {
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
     ) -> HandlerArm<TypedRef<'db>> {
         let kind = match arm.kind {
             HandlerKind::Do { binding } => HandlerKind::Do {
@@ -583,7 +784,13 @@ impl<'db> TypeChecker<'db> {
         HandlerArm {
             id: arm.id,
             kind,
-            body: self.apply_subst_to_body(arm.body, type_subst, row_subst, var_to_index),
+            body: self.apply_subst_to_body(
+                arm.body,
+                type_subst,
+                row_subst,
+                var_to_index,
+                deferred_resolutions,
+            ),
         }
     }
 

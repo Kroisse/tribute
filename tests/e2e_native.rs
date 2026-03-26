@@ -515,3 +515,73 @@ fn main() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+#[test]
+fn test_native_ufcs_chained_multi_arg() {
+    // Chained UFCS where an intermediate method takes multiple arguments.
+    // Regression test for #582: extra arguments were dropped during codegen.
+    let output = compile_and_run_native(
+        "ufcs_chained_multi_arg.trb",
+        r#"
+struct Pair { x: Nat, y: Nat }
+struct Triple { x: Nat, y: Nat, z: Nat }
+
+pub mod Pair {
+    pub fn extend(p: Pair, z: Nat) -> Triple {
+        Triple { x: p.x, y: p.y, z: z }
+    }
+}
+
+pub mod Triple {
+    pub fn sum(t: Triple) -> Nat { t.x + t.y + t.z }
+    pub fn scale(t: Triple, factor: Nat) -> Triple {
+        Triple { x: t.x * factor, y: t.y * factor, z: t.z * factor }
+    }
+}
+
+fn main() {
+    let p = Pair { x: 1, y: 2 }
+    let _ = p.extend(3).scale(10).sum()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "chained UFCS with multi-arg method should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn test_native_ufcs_chained_multi_arg_user_defined() {
+    // Chained UFCS with user-defined types where intermediate methods have extra args.
+    let output = compile_and_run_native(
+        "ufcs_chained_multi_arg_user.trb",
+        r#"
+struct Pair { x: Nat, y: Nat }
+struct Triple { x: Nat, y: Nat, z: Nat }
+
+pub mod Pair {
+    pub fn extend(p: Pair, z: Nat) -> Triple {
+        Triple { x: p.x, y: p.y, z: z }
+    }
+}
+
+pub mod Triple {
+    pub fn sum(t: Triple) -> Nat { t.x + t.y + t.z }
+}
+
+fn main() {
+    let p = Pair { x: 1, y: 2 }
+    let _ = p.extend(3).sum()
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "chained UFCS with multi-arg user-defined method should compile and run; exit={:?}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
