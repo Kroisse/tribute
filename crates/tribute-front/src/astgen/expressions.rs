@@ -1003,12 +1003,16 @@ fn process_escape_sequences(input: &str) -> Vec<u8> {
                 Some('x') => {
                     let hi = chars.next().unwrap_or('0');
                     let lo = chars.next().unwrap_or('0');
-                    let mut hex = [0u8; 2];
-                    hex[0] = hi as u8;
-                    hex[1] = lo as u8;
-                    let byte = u8::from_str_radix(std::str::from_utf8(&hex).unwrap_or("00"), 16)
-                        .unwrap_or(0);
+                    let hex: String = [hi, lo].iter().collect();
+                    let byte = u8::from_str_radix(&hex, 16).unwrap_or(0);
                     result.push(byte);
+                }
+                Some('u') => {
+                    let hex: String = (0..4).filter_map(|_| chars.next()).collect();
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        let mut buf = [0u8; 4];
+                        result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                    }
                 }
                 Some(other) => {
                     // Fallback: keep as-is (should not happen with valid tree-sitter parse)

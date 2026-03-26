@@ -357,6 +357,27 @@ fn main() {
 }
 
 #[test]
+fn test_native_string_escape_unicode() {
+    // \u0041 = 'A', \u00E9 = 'é'
+    let output = compile_and_run_native(
+        "string_escape_unicode.trb",
+        r#"
+fn main() {
+    print_line("\u0041\u00E9")
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), "Aé");
+}
+
+#[test]
 fn test_native_print_line_empty() {
     let output = compile_and_run_native(
         "print_line_empty.trb",
