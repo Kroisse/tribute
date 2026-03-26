@@ -223,7 +223,7 @@ pub fn runes(s: String) ->{Stream(Rune)} Nil {
 fn count_vowels(s: String) -> Nat {
     let count = 0
     handle s.runes() {
-        emit(r) -> {
+        op Stream::emit(r) {
             case "aeiouAEIOU".contains(r.to_string()) {
                 True -> resume({ count = count + 1; Nil })
                 False -> resume(Nil)
@@ -237,7 +237,7 @@ fn count_vowels(s: String) -> Nat {
 fn first_word(s: String) -> String {
     let result = String::empty()
     handle s.runes() {
-        emit(r) -> {
+        op Stream::emit(r) {
             case r.is_whitespace() {
                 True -> result       // resume 안 함 → 중단
                 False -> {
