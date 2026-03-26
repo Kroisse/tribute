@@ -177,6 +177,8 @@ url.get.await
 
 ## Ability 정의
 
+### Operation 종류
+
 Ability operation은 두 종류로 선언한다:
 
 - **`fn`**: Tail-resumptive operation. Handler가 값을 반환하면 자동으로 resume된다.
@@ -209,6 +211,46 @@ ability Fail {
     op fail(msg: Text) -> Never  // never resumes
 }
 ```
+
+### Operation의 Effect Row 규칙
+
+Ability operation은 **자신이 속한 ability의 effect만** 수행한다.
+다른 ability를 operation의 시그니처에 포함할 수 없다:
+
+```rust
+// ✅ OK: effect annotation 생략 (자신의 ability가 암시적으로 부여됨)
+ability Stream(a) {
+    op emit(value: a) -> Nil
+}
+
+// ❌ 불가: 다른 ability를 참조
+ability Cache(k, v) {
+    fn get(key: k) ->{Cache(k, v), IO} v    // IO 참조 불가
+}
+```
+
+다른 effect가 필요한 경우, operation 자체가 아닌 **handler 구현부**에서 처리한다:
+
+```rust
+// operation은 자신의 ability만 수행
+ability Cache(k, v) {
+    fn get(key: k) -> v
+    fn put(key: k, value: v) -> Nil
+}
+
+// handler가 IO effect를 사용하여 구현
+fn run_cache(comp: fn() ->{e, Cache(k, v)} a) ->{e, IO} a {
+    handle comp() {
+        do result { result }
+        fn Cache::get(key) { IO::read_from_disk(key) }
+        fn Cache::put(key, value) { IO::write_to_disk(key, value) }
+    }
+}
+```
+
+이 규칙은 ability를 **순수한 효과 선언**으로 유지하고,
+구체적인 효과 해석은 handler에 위임하기 위한 것이다.
+Koka, Unison 등 기존 algebraic effect 언어들도 동일한 제약을 채택하고 있다.
 
 ## Handler
 
@@ -391,6 +433,14 @@ fn main() ->{IO} Nil {
 | `fn print(msg: Text) -> Nil` | 1회, 암시적 | 없음 | `fn Console::print(msg) { ... }` | Console, Reader, Logger |
 | `op get() -> s` | 0~1회, `resume` (affine) | 있음 | `op State::get() { ... }` | State, Coroutine |
 | `op fail(msg: Text) -> Never` | 0회 | 없음 | `op Fail::fail(msg) { ... }` | Fail, Exception |
+
+### Operation Effect Row 규칙
+
+| 규칙 | 설명 |
+| ---- | ---- |
+| 암시적 effect | Operation은 자신이 속한 ability의 effect를 암시적으로 수행 |
+| 단일 effect 제약 | 다른 ability를 operation 시그니처에 포함할 수 없음 |
+| 다른 effect 필요 시 | Handler 구현부에서 처리 |
 
 ### 전체 문법 요약
 

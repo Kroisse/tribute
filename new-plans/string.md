@@ -114,9 +114,9 @@ s.rune_count() -> Nat    // codepoint 수
 // 연결
 s1 <> s2 -> String
 
-// 접근 (byte 단위는 제공하지 않음)
-s.runes() -> Iterator(Rune)
-s.chars() -> Iterator(Rune)  // alias
+// 순회 (Stream ability 사용)
+s.runes() ->{Stream(Rune)} Nil
+s.chars() ->{Stream(Rune)} Nil  // alias
 
 // Slice (codepoint 단위)
 s.slice(start: Nat, end: Nat) -> String
@@ -186,37 +186,68 @@ rune.to_lower() -> Rune
 
 ---
 
-## String::runes - Lazy Rune Stream
+## Stream Ability
+
+순회는 `Stream` ability로 표현한다. Producer가 `emit`을 호출하고,
+handler가 소비 방식을 결정한다:
+
+```rust
+ability Stream(a) {
+    op emit(value: a) -> Nil
+}
+```
+
+Handler가 `resume` 여부를 선택할 수 있으므로 early termination도 자연스럽다.
+
+### String::runes
 
 `String`에서 `Rune` 시퀀스를 lazy하게 순회:
 
 ```rust
-fn count_vowels(s: String) -> Nat {
-    s.runes()
-        .filter(fn(r) "aeiouAEIOU".contains(r.to_string()))
-        .count()
-}
-
-fn first_word(s: String) -> String {
-    s.runes()
-        .take_while(fn(r) !r.is_whitespace())
-        .collect()  // Iterator(Rune) -> String
+pub fn runes(s: String) ->{Stream(Rune)} Nil {
+    // 각 leaf의 UTF-8 bytes를 디코딩하며 emit
+    case s {
+        Leaf(bytes) -> emit_runes_from_bytes(bytes)
+        Branch(left, right, _) -> {
+            left.runes()
+            right.runes()
+        }
+    }
 }
 ```
 
-### Iterator 타입
+### 사용 예시
 
 ```rust
-// String::runes()가 반환하는 타입
-struct RuneIterator {
-    s: String
-    byte_offset: Nat
+// 모든 rune 순회
+fn count_vowels(s: String) -> Nat {
+    let count = 0
+    handle s.runes() {
+        emit(r) -> {
+            case "aeiouAEIOU".contains(r.to_string()) {
+                True -> resume({ count = count + 1; Nil })
+                False -> resume(Nil)
+            }
+        }
+    }
+    count
 }
 
-impl Iterator for RuneIterator {
-    type Item = Rune
-
-    fn next(self) ->{} Option((Rune, RuneIterator))
+// Early termination: 첫 공백 전까지만
+fn first_word(s: String) -> String {
+    let result = String::empty()
+    handle s.runes() {
+        emit(r) -> {
+            case r.is_whitespace() {
+                True -> result       // resume 안 함 → 중단
+                False -> {
+                    result = result <> String::from_rune(r)
+                    resume(Nil)
+                }
+            }
+        }
+    }
+    result
 }
 ```
 
