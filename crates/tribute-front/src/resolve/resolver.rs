@@ -11,19 +11,12 @@ use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Arm, BuiltinRef, Decl, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl,
-    HandlerArm, HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind,
-    ResolvedRef, SpanMap, Stmt, StructDecl, UnresolvedName, UseDecl,
+    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm,
+    HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind, ResolvedRef,
+    SpanMap, Stmt, StructDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
-
-/// Builtin name → BuiltinRef mapping. Source of truth for both resolution and suggestions.
-const BUILTINS: &[(&str, BuiltinRef)] = &[
-    ("print", BuiltinRef::Print),
-    ("readLine", BuiltinRef::ReadLine),
-    ("read_line", BuiltinRef::ReadLine),
-];
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -154,11 +147,6 @@ impl<'db> Resolver<'db> {
                 return ResolvedRef::local(local_id, sym);
             }
 
-            // Check for builtin operators
-            if let Some(builtin) = self.resolve_builtin(sym) {
-                return ResolvedRef::builtin(builtin);
-            }
-
             // Check module environment (unqualified lookup)
             if let Some(binding) = self.env.lookup(sym) {
                 return self.binding_to_ref(binding, sym);
@@ -211,7 +199,6 @@ impl<'db> Resolver<'db> {
             .iter()
             .flat_map(|scope| scope.keys().copied())
             .chain(self.env.iter_all_names())
-            .chain(BUILTINS.iter().map(|(n, _)| Symbol::new(n)))
             .collect();
 
         let target = name.to_string();
@@ -240,11 +227,6 @@ impl<'db> Resolver<'db> {
             }
             Binding::Ability { id } => ResolvedRef::ability(*id),
         }
-    }
-
-    /// Check if a name refers to a builtin operation.
-    fn resolve_builtin(&self, name: Symbol) -> Option<BuiltinRef> {
-        BUILTINS.iter().find(|(n, _)| name == *n).map(|(_, r)| *r)
     }
 
     /// Resolve a module, transforming all declarations.
@@ -727,48 +709,6 @@ mod tests {
                 assert_eq!(name, param_name);
             }
             _ => panic!("Expected local variable, got {:?}", resolved),
-        }
-    }
-
-    #[salsa_test]
-    fn test_resolve_builtin_print(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
-        let resolver = Resolver::new(db, env, SpanMap::default());
-
-        // Create unresolved reference to print
-        let unresolved = UnresolvedName::new(Symbol::new("print"), NodeId::from_raw(1));
-
-        // Resolve the builtin
-        let resolved = resolver.resolve_name(&unresolved);
-
-        // Should resolve to a builtin
-        match resolved {
-            ResolvedRef::Builtin(BuiltinRef::Print) => {}
-            _ => panic!("Expected print builtin, got {:?}", resolved),
-        }
-    }
-
-    #[salsa_test]
-    fn test_local_shadows_builtin(db: &salsa::DatabaseImpl) {
-        let env = ModuleEnv::new();
-        let mut resolver = Resolver::new(db, env, SpanMap::default());
-
-        // Bind a local variable named 'print' (same as builtin)
-        let name = Symbol::new("print");
-        resolver.push_scope();
-        resolver.bind_local(name);
-
-        // Create unresolved reference
-        let unresolved = UnresolvedName::new(name, NodeId::from_raw(1));
-
-        // Resolve - should get local, not builtin
-        let resolved = resolver.resolve_name(&unresolved);
-
-        match resolved {
-            ResolvedRef::Local { name: n, .. } => {
-                assert_eq!(n, name);
-            }
-            _ => panic!("Expected local to shadow builtin, got {:?}", resolved),
         }
     }
 
