@@ -63,12 +63,12 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// Emit diagnostic for unimplemented expression and return nil placeholder.
     pub fn emit_unsupported(&mut self, location: Location, feature: &str) -> Option<ValueRef> {
-        Diagnostic {
-            message: format!("{feature} not yet supported in IR lowering"),
-            span: location.span,
-            severity: DiagnosticSeverity::Warning,
-            phase: CompilationPhase::Lowering,
-        }
+        Diagnostic::new(
+            format!("{feature} not yet supported in IR lowering"),
+            location.span,
+            DiagnosticSeverity::Warning,
+            CompilationPhase::Lowering,
+        )
         .accumulate(self.db());
         Some(self.emit_nil(location))
     }
@@ -255,15 +255,15 @@ pub(super) fn validate_nat_i31(
 ) -> Option<i32> {
     const I31_MAX: u64 = (1 << 30) - 1;
     if n > I31_MAX {
-        Diagnostic {
-            message: format!(
+        Diagnostic::new(
+            format!(
                 "natural number literal {} exceeds i31 range (max: {})",
                 n, I31_MAX
             ),
-            span: location.span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Lowering,
-        }
+            location.span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
         .accumulate(db);
         return None;
     }
@@ -281,15 +281,15 @@ pub(super) fn validate_int_i31(
     const I31_MIN: i64 = -(1 << 30);
     const I31_MAX: i64 = (1 << 30) - 1;
     if !(I31_MIN..=I31_MAX).contains(&n) {
-        Diagnostic {
-            message: format!(
+        Diagnostic::new(
+            format!(
                 "integer literal {} exceeds i31 range ({} to {})",
                 n, I31_MIN, I31_MAX
             ),
-            span: location.span,
-            severity: DiagnosticSeverity::Error,
-            phase: CompilationPhase::Lowering,
-        }
+            location.span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
         .accumulate(db);
         return None;
     }

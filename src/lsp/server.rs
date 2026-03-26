@@ -475,7 +475,7 @@ impl LspServer {
             // Find diagnostics that overlap with the requested range
             for diag in &result.diagnostics {
                 // Check if diagnostic overlaps with range
-                if diag.span.end < start_offset || diag.span.start > end_offset {
+                if diag.inner.span.end < start_offset || diag.inner.span.start > end_offset {
                     continue;
                 }
 
@@ -511,17 +511,18 @@ impl LspServer {
     ) -> Option<CodeAction> {
         // Pattern: "top-level function `{name}` must have an explicit return type annotation"
         if diag
+            .inner
             .message
             .contains("must have an explicit return type annotation")
         {
             // Try to find the inferred type at the diagnostic location
             let type_index = type_index?;
-            if let Some(entry) = type_index.type_at(db, diag.span.start) {
+            if let Some(entry) = type_index.type_at(db, diag.inner.span.start) {
                 let type_str = print_ast_type(db, entry.ty);
 
                 // Find the position after the closing parenthesis of parameters
                 // We need to insert ": Type" before the function body
-                let insert_pos = self.find_return_type_insert_position(rope, diag.span)?;
+                let insert_pos = self.find_return_type_insert_position(rope, diag.inner.span)?;
                 let (line, char) = position_from_offset(rope, insert_pos);
                 let pos = lsp_types::Position {
                     line,
@@ -544,8 +545,8 @@ impl LspServer {
                     title: format!("Add return type annotation: {}", type_str),
                     kind: Some(CodeActionKind::QUICKFIX),
                     diagnostics: Some(vec![Diagnostic {
-                        range: span_to_range(rope, diag.span),
-                        severity: Some(match diag.severity {
+                        range: span_to_range(rope, diag.inner.span),
+                        severity: Some(match diag.inner.severity {
                             tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
                             tribute_passes::DiagnosticSeverity::Warning => {
                                 DiagnosticSeverity::WARNING
@@ -554,7 +555,7 @@ impl LspServer {
                                 DiagnosticSeverity::INFORMATION
                             }
                         }),
-                        message: diag.message.clone(),
+                        message: diag.inner.message.clone(),
                         source: Some("tribute".to_string()),
                         ..Default::default()
                     }]),
@@ -570,9 +571,10 @@ impl LspServer {
 
         // Pattern: "parameter N of top-level function `{name}` must have an explicit type annotation"
         if diag
+            .inner
             .message
             .contains("must have an explicit type annotation")
-            && diag.message.contains("parameter")
+            && diag.inner.message.contains("parameter")
         {
             // For parameter annotations, we would need to find the parameter location
             // and its inferred type. This is more complex as we need to parse the message
@@ -709,15 +711,15 @@ impl LspServer {
         let diagnostics: Vec<Diagnostic> = diags
             .iter()
             .map(|d| {
-                let range = span_to_range(rope, d.span);
+                let range = span_to_range(rope, d.inner.span);
                 Diagnostic {
                     range,
-                    severity: Some(match d.severity {
+                    severity: Some(match d.inner.severity {
                         tribute_passes::DiagnosticSeverity::Error => DiagnosticSeverity::ERROR,
                         tribute_passes::DiagnosticSeverity::Warning => DiagnosticSeverity::WARNING,
                         tribute_passes::DiagnosticSeverity::Info => DiagnosticSeverity::INFORMATION,
                     }),
-                    message: d.message.clone(),
+                    message: d.inner.message.clone(),
                     source: Some("tribute".to_string()),
                     ..Default::default()
                 }

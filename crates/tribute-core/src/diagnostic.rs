@@ -1,24 +1,18 @@
 //! Diagnostic messages emitted during compilation.
 
 use serde::Serialize;
-use trunk_ir::Span;
 
-/// A diagnostic message (error, warning, or info) with source location.
+pub use trunk_ir::diagnostic::DiagnosticSeverity;
+
+/// A diagnostic message (error, warning, or info) with source location and
+/// compilation phase. Wraps [`trunk_ir::diagnostic::Diagnostic`] with
+/// Tribute-specific compilation phase information.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[salsa::accumulator]
 pub struct Diagnostic {
-    pub message: String,
-    pub span: Span,
-    pub severity: DiagnosticSeverity,
+    #[serde(flatten)]
+    pub inner: trunk_ir::diagnostic::Diagnostic,
     pub phase: CompilationPhase,
-}
-
-/// Severity level of a diagnostic.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
-pub enum DiagnosticSeverity {
-    Error,
-    Warning,
-    Info,
 }
 
 /// Compilation phase where a diagnostic was emitted.
@@ -33,13 +27,28 @@ pub enum CompilationPhase {
     Optimization,
 }
 
-impl std::fmt::Display for DiagnosticSeverity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DiagnosticSeverity::Error => write!(f, "ERROR"),
-            DiagnosticSeverity::Warning => write!(f, "WARNING"),
-            DiagnosticSeverity::Info => write!(f, "INFO"),
+impl Diagnostic {
+    /// Create a new diagnostic with the given message, span, severity, and phase.
+    pub fn new(
+        message: impl Into<String>,
+        span: trunk_ir::Span,
+        severity: DiagnosticSeverity,
+        phase: CompilationPhase,
+    ) -> Self {
+        Self {
+            inner: trunk_ir::diagnostic::Diagnostic {
+                message: message.into(),
+                span,
+                severity,
+            },
+            phase,
         }
+    }
+
+    /// Create a `Diagnostic` from a [`trunk_ir::diagnostic::Diagnostic`] and a
+    /// compilation phase.
+    pub fn from_ir(diag: trunk_ir::diagnostic::Diagnostic, phase: CompilationPhase) -> Self {
+        Self { inner: diag, phase }
     }
 }
 

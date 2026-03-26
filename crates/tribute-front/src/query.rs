@@ -635,7 +635,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .any(|d| d.message.contains("unresolved name")),
+                .any(|d| d.inner.message.contains("unresolved name")),
             "Diagnostic should mention unresolved name: {:?}",
             diagnostics
         );

@@ -20,7 +20,6 @@ use super::rewrite::Module;
 use super::walk;
 
 use crate::Symbol;
-use crate::location::Span;
 
 // ============================================================================
 // Error types
@@ -54,41 +53,6 @@ impl fmt::Debug for StaleValueError {
     }
 }
 
-/// Describes an argument-count mismatch in a call operation.
-pub struct ArityError {
-    /// Name of the function containing the mismatched call.
-    pub function_name: String,
-    /// Symbol of the called function.
-    pub callee_name: String,
-    /// Expected argument count (from function definition signature).
-    pub expected_args: usize,
-    /// Actual argument count at the call site.
-    pub actual_args: usize,
-    /// Source span of the call operation.
-    pub span: Span,
-}
-
-impl fmt::Display for ArityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "arity mismatch in '{}': call to '{}' has {} argument(s), expected {} (at {}..{})",
-            self.function_name,
-            self.callee_name,
-            self.actual_args,
-            self.expected_args,
-            self.span.start,
-            self.span.end,
-        )
-    }
-}
-
-impl fmt::Debug for ArityError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
 /// Describes a use-chain inconsistency.
 pub struct UseChainError {
     pub message: String,
@@ -110,14 +74,11 @@ impl fmt::Debug for UseChainError {
 pub struct ValidationResult {
     pub stale_errors: Vec<StaleValueError>,
     pub use_chain_errors: Vec<UseChainError>,
-    pub arity_errors: Vec<ArityError>,
 }
 
 impl ValidationResult {
     pub fn is_ok(&self) -> bool {
-        self.stale_errors.is_empty()
-            && self.use_chain_errors.is_empty()
-            && self.arity_errors.is_empty()
+        self.stale_errors.is_empty() && self.use_chain_errors.is_empty()
     }
 }
 
@@ -139,12 +100,6 @@ impl fmt::Display for ValidationResult {
                 self.use_chain_errors.len()
             )?;
             for err in &self.use_chain_errors {
-                writeln!(f, "  - {}", err)?;
-            }
-        }
-        if !self.arity_errors.is_empty() {
-            writeln!(f, "{} arity error(s) found:", self.arity_errors.len())?;
-            for err in &self.arity_errors {
                 writeln!(f, "  - {}", err)?;
             }
         }
@@ -246,7 +201,6 @@ pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationRe
             return ValidationResult {
                 stale_errors: errors,
                 use_chain_errors: vec![],
-                arity_errors: vec![],
             };
         }
     };
@@ -256,7 +210,6 @@ pub fn validate_value_integrity(ctx: &IrContext, module: Module) -> ValidationRe
     ValidationResult {
         stale_errors: errors,
         use_chain_errors: vec![],
-        arity_errors: vec![],
     }
 }
 
@@ -318,7 +271,6 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
             return ValidationResult {
                 stale_errors: vec![],
                 use_chain_errors: errors,
-                arity_errors: vec![],
             };
         }
     };
@@ -384,7 +336,6 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
     ValidationResult {
         stale_errors: vec![],
         use_chain_errors: errors,
-        arity_errors: vec![],
     }
 }
 
@@ -433,14 +384,15 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             }
 
-            let sym_name = match data.attributes.get(&sym_name_key) {
-                Some(super::types::Attribute::Symbol(s)) => *s,
-                _ => continue,
+            let Some(&super::types::Attribute::Symbol(sym_name)) =
+                data.attributes.get(&sym_name_key)
+            else {
+                continue;
             };
 
-            let func_ty = match data.attributes.get(&type_key) {
-                Some(super::types::Attribute::Type(t)) => *t,
-                _ => continue,
+            let Some(&super::types::Attribute::Type(func_ty)) = data.attributes.get(&type_key)
+            else {
+                continue;
             };
 
             let ty_data = ctx.types.get(func_ty);
@@ -463,7 +415,6 @@ fn check_call_arity_in_region(
     region: RegionRef,
     signatures: &HashMap<Symbol, usize>,
     enclosing_fn: &str,
-    errors: &mut Vec<ArityError>,
 ) {
     let func_dialect = Symbol::new("func");
     let call_name = Symbol::new("call");
@@ -482,21 +433,21 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let callee_sym = match data.attributes.get(&callee_key) {
-            Some(super::types::Attribute::Symbol(s)) => *s,
-            _ => return std::ops::ControlFlow::Continue(walk::WalkAction::Advance),
+        let Some(&super::types::Attribute::Symbol(callee_sym)) = data.attributes.get(&callee_key)
+        else {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
         if let Some(&expected) = signatures.get(&callee_sym) {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
-                errors.push(ArityError {
-                    function_name: enclosing_fn.to_string(),
-                    callee_name: callee_sym.to_string(),
-                    expected_args: expected,
-                    actual_args: actual,
-                    span: data.location.span,
-                });
+                ctx.report_warning(
+                    data.location.span,
+                    format!(
+                        "arity mismatch in '{}': call to '{}' has {} argument(s), expected {}",
+                        enclosing_fn, callee_sym, actual, expected,
+                    ),
+                );
             }
         }
 
@@ -506,18 +457,11 @@ fn check_call_arity_in_region(
 
 /// Validate that all `func.call` and `func.tail_call` operations have the
 /// correct number of arguments matching the callee's function signature.
-pub fn validate_call_arity(ctx: &IrContext, module: Module) -> ValidationResult {
-    let mut errors = Vec::new();
-
-    let body = match module.body(ctx) {
-        Some(r) => r,
-        None => {
-            return ValidationResult {
-                stale_errors: vec![],
-                use_chain_errors: vec![],
-                arity_errors: errors,
-            };
-        }
+///
+/// Arity mismatches are reported as warnings via `ctx.report_warning`.
+pub fn validate_call_arity(ctx: &IrContext, module: Module) {
+    let Some(body) = module.body(ctx) else {
+        return;
     };
 
     let signatures = collect_function_signatures(ctx, body);
@@ -550,15 +494,9 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) -> ValidationResult 
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
             for &func_region in &data.regions {
-                check_call_arity_in_region(ctx, func_region, &signatures, &fn_name, &mut errors);
+                check_call_arity_in_region(ctx, func_region, &signatures, &fn_name);
             }
         }
-    }
-
-    ValidationResult {
-        stale_errors: vec![],
-        use_chain_errors: vec![],
-        arity_errors: errors,
     }
 }
 
@@ -574,7 +512,6 @@ pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
     ValidationResult {
         stale_errors: scope.stale_errors,
         use_chain_errors: uses.use_chain_errors,
-        arity_errors: vec![],
     }
 }
 
@@ -1303,13 +1240,12 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(!result.is_ok(), "Should detect arity mismatch");
-        assert_eq!(result.arity_errors.len(), 1);
-        assert_eq!(result.arity_errors[0].function_name, "main");
-        assert_eq!(result.arity_errors[0].callee_name, "add");
-        assert_eq!(result.arity_errors[0].expected_args, 2);
-        assert_eq!(result.arity_errors[0].actual_args, 1);
+        validate_call_arity(&ctx, module);
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "Should detect arity mismatch");
+        assert!(diagnostics[0].message.contains("main"));
+        assert!(diagnostics[0].message.contains("add"));
+        assert!(diagnostics[0].message.contains("1 argument(s), expected 2"));
     }
 
     #[test]
@@ -1330,11 +1266,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(!result.is_ok(), "Should detect too many args");
-        assert_eq!(result.arity_errors.len(), 1);
-        assert_eq!(result.arity_errors[0].expected_args, 1);
-        assert_eq!(result.arity_errors[0].actual_args, 3);
+        validate_call_arity(&ctx, module);
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(diagnostics.len(), 1, "Should detect too many args");
+        assert!(diagnostics[0].message.contains("3 argument(s), expected 1"));
     }
 
     #[test]
@@ -1354,8 +1289,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(result.is_ok(), "Correct arity should pass: {}", result);
+        validate_call_arity(&ctx, module);
+        assert!(!ctx.has_diagnostics(), "Correct arity should pass");
     }
 
     #[test]
@@ -1371,12 +1306,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(
-            result.is_ok(),
-            "Unknown callee should be skipped: {}",
-            result,
-        );
+        validate_call_arity(&ctx, module);
+        assert!(!ctx.has_diagnostics(), "Unknown callee should be skipped");
     }
 
     #[test]
@@ -1395,12 +1326,15 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(!result.is_ok(), "Should detect tail_call arity mismatch");
-        assert_eq!(result.arity_errors.len(), 1);
-        assert_eq!(result.arity_errors[0].callee_name, "add");
-        assert_eq!(result.arity_errors[0].expected_args, 2);
-        assert_eq!(result.arity_errors[0].actual_args, 1);
+        validate_call_arity(&ctx, module);
+        let diagnostics = ctx.diagnostics();
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "Should detect tail_call arity mismatch"
+        );
+        assert!(diagnostics[0].message.contains("add"));
+        assert!(diagnostics[0].message.contains("1 argument(s), expected 2"));
     }
 
     #[test]
@@ -1419,9 +1353,12 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_call_arity(&ctx, module);
-        assert!(!result.is_ok(), "Should detect args to zero-param function");
-        assert_eq!(result.arity_errors[0].expected_args, 0);
-        assert_eq!(result.arity_errors[0].actual_args, 1);
+        validate_call_arity(&ctx, module);
+        let diagnostics = ctx.diagnostics();
+        assert!(
+            !diagnostics.is_empty(),
+            "Should detect args to zero-param function"
+        );
+        assert!(diagnostics[0].message.contains("1 argument(s), expected 0"));
     }
 }

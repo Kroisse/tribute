@@ -4,6 +4,7 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 
 use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
@@ -11,7 +12,9 @@ use smallvec::SmallVec;
 
 use super::refs::*;
 use super::types::*;
+use crate::diagnostic::{Diagnostic, DiagnosticSeverity};
 use crate::ir_mapping::IrMapping;
+use crate::location::Span;
 use crate::symbol::Symbol;
 
 // ============================================================================
@@ -110,6 +113,9 @@ pub struct IrContext {
     type_alias_by_name: HashMap<Symbol, TypeRef>,
     /// Reverse lookup: type → alias name (for printer).
     type_alias_by_type: HashMap<TypeRef, Symbol>,
+
+    /// Diagnostics collected during validation and transformation passes.
+    diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
 impl IrContext {
@@ -130,7 +136,50 @@ impl IrContext {
             type_aliases: Vec::new(),
             type_alias_by_name: HashMap::new(),
             type_alias_by_type: HashMap::new(),
+            diagnostics: RefCell::new(Vec::new()),
         }
+    }
+
+    // ========================================================================
+    // Diagnostics
+    // ========================================================================
+
+    /// Report a diagnostic.
+    pub fn report(&self, diag: Diagnostic) {
+        self.diagnostics.borrow_mut().push(diag);
+    }
+
+    /// Report an error diagnostic.
+    pub fn report_error(&self, span: Span, message: impl Into<String>) {
+        self.report(Diagnostic {
+            message: message.into(),
+            span,
+            severity: DiagnosticSeverity::Error,
+        });
+    }
+
+    /// Report a warning diagnostic.
+    pub fn report_warning(&self, span: Span, message: impl Into<String>) {
+        self.report(Diagnostic {
+            message: message.into(),
+            span,
+            severity: DiagnosticSeverity::Warning,
+        });
+    }
+
+    /// Take all collected diagnostics, leaving the internal buffer empty.
+    pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+        self.diagnostics.get_mut().drain(..).collect()
+    }
+
+    /// Return a reference to the collected diagnostics.
+    pub fn diagnostics(&self) -> std::cell::Ref<'_, [Diagnostic]> {
+        std::cell::Ref::map(self.diagnostics.borrow(), |v| v.as_slice())
+    }
+
+    /// Check whether any diagnostics have been reported.
+    pub fn has_diagnostics(&self) -> bool {
+        !self.diagnostics.borrow().is_empty()
     }
 
     // ========================================================================

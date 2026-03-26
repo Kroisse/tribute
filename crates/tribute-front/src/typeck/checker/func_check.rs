@@ -80,12 +80,12 @@ impl<'db> TypeChecker<'db> {
 
         if let Err(error) = solver.solve(constraints) {
             let span = self.get_span(func.id);
-            Diagnostic {
-                message: format!("type error in function '{}': {}", func.name, error),
+            Diagnostic::new(
+                format!("type error in function '{}': {}", func.name, error),
                 span,
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
             .accumulate(self.db());
         }
 
@@ -126,12 +126,12 @@ impl<'db> TypeChecker<'db> {
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
             && !matches!(result.kind(self.db()), TypeKind::Nil)
         {
-            Diagnostic {
-                message: format!("function 'main' must return Nil, but returns `{}`", result),
-                span: self.get_span(func.id),
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }
+            Diagnostic::new(
+                format!("function 'main' must return Nil, but returns `{}`", result),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
             .accumulate(self.db());
         }
 
@@ -144,15 +144,15 @@ impl<'db> TypeChecker<'db> {
             let resolved_effect = row_subst.apply(self.db(), body_effect_row);
             let effects = resolved_effect.effects(self.db());
             if !effects.is_empty() {
-                Diagnostic {
-                    message: format!(
+                Diagnostic::new(
+                    format!(
                         "function 'main' has unhandled effects: {}",
                         joined(", ", effects)
                     ),
-                    span: self.get_span(func.id),
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::TypeChecking,
-                }
+                    self.get_span(func.id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
                 .accumulate(self.db());
             }
         }
@@ -239,17 +239,17 @@ impl<'db> TypeChecker<'db> {
                     {
                         // Arity check
                         if mc.arg_types.len() != params.len() {
-                            Diagnostic {
-                                message: format!(
+                            Diagnostic::new(
+                                format!(
                                     "UFCS arity mismatch for '{}': expected {} args, got {}",
                                     mc.method,
                                     params.len(),
                                     mc.arg_types.len(),
                                 ),
-                                span: self.get_span(mc.node_id),
-                                severity: DiagnosticSeverity::Error,
-                                phase: CompilationPhase::TypeChecking,
-                            }
+                                self.get_span(mc.node_id),
+                                DiagnosticSeverity::Error,
+                                CompilationPhase::TypeChecking,
+                            )
                             .accumulate(self.db());
                         }
 
@@ -274,23 +274,23 @@ impl<'db> TypeChecker<'db> {
             if new_constraints.is_empty() {
                 // Emit diagnostics for methods that remain unresolved
                 for mc in &remaining {
-                    Diagnostic {
-                        message: format!("unresolved UFCS method '{}'", mc.method),
-                        span: self.get_span(mc.node_id),
-                        severity: DiagnosticSeverity::Error,
-                        phase: CompilationPhase::TypeChecking,
-                    }
+                    Diagnostic::new(
+                        format!("unresolved UFCS method '{}'", mc.method),
+                        self.get_span(mc.node_id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
                     .accumulate(self.db());
                 }
                 break;
             }
             if let Err(error) = solver.solve(new_constraints) {
-                Diagnostic {
-                    message: format!("type error during UFCS method resolution: {}", error),
-                    span: self.get_span(func_node_id),
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::TypeChecking,
-                }
+                Diagnostic::new(
+                    format!("type error during UFCS method resolution: {}", error),
+                    self.get_span(func_node_id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
                 .accumulate(self.db());
             }
             deferred = remaining;

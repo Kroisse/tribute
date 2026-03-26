@@ -104,7 +104,7 @@ fn compile_file(
                 }
                 if diagnostics
                     .iter()
-                    .any(|d| d.severity == DiagnosticSeverity::Error)
+                    .any(|d| d.inner.severity == DiagnosticSeverity::Error)
                 {
                     std::process::exit(1);
                 }
@@ -220,7 +220,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         } else {
             println!("Diagnostics ({} total):", result.diagnostics.len());
             for diag in &result.diagnostics {
-                println!("  [{:?}] {}", diag.phase, diag.message);
+                println!("  [{:?}] {}", diag.phase, diag.inner.message);
             }
         }
 

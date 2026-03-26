@@ -490,15 +490,15 @@ fn extract_ability_ref_and_op_name<'db>(
         ResolvedRef::Ability { id } => id.qualified(db),
         ResolvedRef::TypeDef { id } => id.qualified(db),
         other => {
-            Diagnostic {
-                message: format!(
+            Diagnostic::new(
+                format!(
                     "Expected ability type definition, got {:?}",
                     std::mem::discriminant(other)
                 ),
-                span: location.span,
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::Lowering,
-            }
+                location.span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::Lowering,
+            )
             .accumulate(db);
             Symbol::new("__unknown_ability__")
         }

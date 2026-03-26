@@ -1835,12 +1835,12 @@ impl<'db> TypeChecker<'db> {
         // Empty arms is definitely non-exhaustive
         if arms.is_empty() {
             let span = self.get_span(span_node_id);
-            Diagnostic {
-                message: "non-exhaustive case expression: no patterns provided".to_string(),
+            Diagnostic::new(
+                "non-exhaustive case expression: no patterns provided",
                 span,
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
             .accumulate(self.db());
             return;
         }
@@ -1882,25 +1882,24 @@ impl<'db> TypeChecker<'db> {
                     (false, true) => "True",
                     _ => "True, False",
                 };
-                Diagnostic {
-                    message: format!("non-exhaustive case expression: missing cases: {}", missing),
+                Diagnostic::new(
+                    format!("non-exhaustive case expression: missing cases: {}", missing),
                     span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::TypeChecking,
-                }
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
                 .accumulate(self.db());
                 return;
             }
             TypeKind::Int | TypeKind::Float | TypeKind::Nat => {
                 // Primitive types without catch-all are non-exhaustive
                 let span = self.get_span(span_node_id);
-                Diagnostic {
-                    message: "non-exhaustive case expression: not all cases are covered"
-                        .to_string(),
+                Diagnostic::new(
+                    "non-exhaustive case expression: not all cases are covered",
                     span,
-                    severity: DiagnosticSeverity::Error,
-                    phase: CompilationPhase::TypeChecking,
-                }
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
                 .accumulate(self.db());
                 return;
             }
@@ -1932,15 +1931,15 @@ impl<'db> TypeChecker<'db> {
         if !missing.is_empty() {
             let missing_names: Vec<_> = missing.iter().map(|s| s.to_string()).collect();
             let span = self.get_span(span_node_id);
-            Diagnostic {
-                message: format!(
+            Diagnostic::new(
+                format!(
                     "non-exhaustive case expression: missing variants: {}",
                     missing_names.join(", ")
                 ),
                 span,
-                severity: DiagnosticSeverity::Error,
-                phase: CompilationPhase::TypeChecking,
-            }
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
             .accumulate(self.db());
         }
     }
@@ -1995,12 +1994,12 @@ impl<'db> TypeChecker<'db> {
     /// Emit a warning for patterns we can't fully analyze.
     fn emit_exhaustiveness_warning(&self, span_node_id: crate::ast::NodeId) {
         let span = self.get_span(span_node_id);
-        Diagnostic {
-            message: "exhaustiveness check: unable to verify all cases are covered".to_string(),
+        Diagnostic::new(
+            "exhaustiveness check: unable to verify all cases are covered",
             span,
-            severity: DiagnosticSeverity::Warning,
-            phase: CompilationPhase::TypeChecking,
-        }
+            DiagnosticSeverity::Warning,
+            CompilationPhase::TypeChecking,
+        )
         .accumulate(self.db());
     }
 
