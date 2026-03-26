@@ -634,7 +634,7 @@ fn main() {
 
 #[test]
 fn test_native_bytes_literal_escape_sequences() {
-    // NOTE: Bytes literal escape handling is not yet implemented (see parse_bytes_literal TODO).
+    // NOTE: Bytes literal escape handling is not yet implemented (#605).
     // Escapes are currently kept as-is (literal backslash + char).
     let output = compile_and_run_native(
         "bytes_lit_escape.trb",
@@ -693,7 +693,7 @@ fn main() {
 }
 
 #[test]
-#[ignore = "segfaults — Bytes concat (<>) not yet working with bytes literals"]
+#[ignore = "segfaults — Bytes concat (<>) not yet working with bytes literals (#606)"]
 fn test_native_bytes_literal_concat() {
     let output = compile_and_run_native(
         "bytes_lit_concat.trb",
