@@ -384,14 +384,15 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             }
 
-            let sym_name = match data.attributes.get(&sym_name_key) {
-                Some(super::types::Attribute::Symbol(s)) => *s,
-                _ => continue,
+            let Some(&super::types::Attribute::Symbol(sym_name)) =
+                data.attributes.get(&sym_name_key)
+            else {
+                continue;
             };
 
-            let func_ty = match data.attributes.get(&type_key) {
-                Some(super::types::Attribute::Type(t)) => *t,
-                _ => continue,
+            let Some(&super::types::Attribute::Type(func_ty)) = data.attributes.get(&type_key)
+            else {
+                continue;
             };
 
             let ty_data = ctx.types.get(func_ty);
@@ -432,9 +433,9 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let callee_sym = match data.attributes.get(&callee_key) {
-            Some(super::types::Attribute::Symbol(s)) => *s,
-            _ => return std::ops::ControlFlow::Continue(walk::WalkAction::Advance),
+        let Some(&super::types::Attribute::Symbol(callee_sym)) = data.attributes.get(&callee_key)
+        else {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
         if let Some(&expected) = signatures.get(&callee_sym) {
@@ -459,9 +460,8 @@ fn check_call_arity_in_region(
 ///
 /// Arity mismatches are reported as warnings via `ctx.report_warning`.
 pub fn validate_call_arity(ctx: &IrContext, module: Module) {
-    let body = match module.body(ctx) {
-        Some(r) => r,
-        None => return,
+    let Some(body) = module.body(ctx) else {
+        return;
     };
 
     let signatures = collect_function_signatures(ctx, body);
