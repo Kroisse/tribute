@@ -585,3 +585,132 @@ fn main() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+// =========================================================================
+// Bytes literal tests
+// =========================================================================
+
+#[test]
+fn test_native_bytes_literal_basic() {
+    let output = compile_and_run_native(
+        "bytes_lit_basic.trb",
+        r#"
+fn main() {
+    let bs = b"hello"
+    print_line(String::from_bytes(bs))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), "hello");
+}
+
+#[test]
+fn test_native_bytes_literal_empty() {
+    let output = compile_and_run_native(
+        "bytes_lit_empty.trb",
+        r#"
+fn main() {
+    let bs = b""
+    print_line(String::from_bytes(bs))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout, "\n");
+}
+
+#[test]
+fn test_native_bytes_literal_escape_sequences() {
+    // NOTE: Bytes literal escape handling is not yet implemented (see parse_bytes_literal TODO).
+    // Escapes are currently kept as-is (literal backslash + char).
+    let output = compile_and_run_native(
+        "bytes_lit_escape.trb",
+        r#"
+fn main() {
+    let bs = b"a\tb\nc"
+    print_line(String::from_bytes(bs))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    // Backslash sequences are not processed — kept verbatim
+    assert_eq!(stdout.trim(), r"a\tb\nc");
+}
+
+#[test]
+fn test_native_bytes_literal_raw() {
+    // Raw bytes: backslash is literal, not an escape
+    let output = compile_and_run_native(
+        "bytes_lit_raw.trb",
+        r#"
+fn main() {
+    let bs = rb"\n\t"
+    print_line(String::from_bytes(bs))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), r"\n\t");
+}
+
+#[test]
+fn test_native_bytes_literal_len() {
+    assert_native_output(
+        "bytes_lit_len.trb",
+        r#"
+fn main() {
+    let bs = b"hello"
+    __tribute_print_nat(bs.len())
+}
+"#,
+        "5",
+    );
+}
+
+#[test]
+#[ignore = "segfaults — Bytes concat (<>) not yet working with bytes literals"]
+fn test_native_bytes_literal_concat() {
+    let output = compile_and_run_native(
+        "bytes_lit_concat.trb",
+        r#"
+fn main() {
+    let a = b"Hello, "
+    let b = b"World!"
+    print_line(String::from_bytes(a <> b))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), "Hello, World!");
+}
