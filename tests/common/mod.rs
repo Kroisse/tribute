@@ -4,22 +4,10 @@ use std::process::{Command, Output};
 
 use ropey::Rope;
 use salsa::Database;
-use tree_sitter::Parser;
 use tribute::TributeDatabaseImpl;
 use tribute::pipeline::{CompilationConfig, compile_to_native_binary, link_native_binary};
 use tribute_front::SourceCst;
 use tribute_passes::Diagnostic;
-
-/// Create a [`SourceCst`] from a source string, for use in tests with a Salsa database.
-#[allow(dead_code)]
-pub fn source_from_str(db: &dyn salsa::Database, path: &str, text: &str) -> SourceCst {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_tribute::LANGUAGE.into())
-        .expect("Failed to set language");
-    let tree = parser.parse(text, None).expect("Failed to parse");
-    SourceCst::from_path(db, path, Rope::from_str(text), Some(tree))
-}
 
 /// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]

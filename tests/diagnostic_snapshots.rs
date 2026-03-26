@@ -7,9 +7,9 @@
 
 mod common;
 
-use self::common::source_from_str;
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_with_diagnostics;
+use tribute_front::SourceCst;
 
 // =============================================================================
 // Name resolution errors
@@ -17,7 +17,7 @@ use tribute::pipeline::compile_with_diagnostics;
 
 #[salsa_test]
 fn diag_unresolved_name(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "test.trb", "fn main() -> Int { undefined_var }");
+    let source = SourceCst::from_source_str(db, "test.trb", "fn main() -> Int { undefined_var }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -25,7 +25,7 @@ fn diag_unresolved_name(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn diag_unresolved_name_with_suggestion(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -41,7 +41,7 @@ fn main() -> Int { compue(42) }
 
 #[salsa_test]
 fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "test.trb", "fn main() -> Foo { 42 }");
+    let source = SourceCst::from_source_str(db, "test.trb", "fn main() -> Foo { 42 }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -53,7 +53,7 @@ fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn diag_syntax_error(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "test.trb", "fn main( { }");
+    let source = SourceCst::from_source_str(db, "test.trb", "fn main( { }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -65,7 +65,7 @@ fn diag_syntax_error(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn diag_non_exhaustive_case(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -83,7 +83,7 @@ fn test(x: Nat) -> Nat {
 
 #[salsa_test]
 fn diag_type_mismatch_in_function(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -101,7 +101,7 @@ fn test() -> Int {
 
 #[salsa_test]
 fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(db, "test.trb", "fn main() -> Int { 42 }");
+    let source = SourceCst::from_source_str(db, "test.trb", "fn main() -> Int { 42 }");
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
@@ -115,7 +115,7 @@ fn diag_main_must_return_nil(db: &salsa::DatabaseImpl) {
 #[ignore = "lowering diagnostic accumulate panics outside tracked function"]
 #[salsa_test]
 fn diag_unknown_struct_field(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -135,7 +135,7 @@ fn test() -> Point {
 #[ignore = "lowering diagnostic accumulate panics outside tracked function"]
 #[salsa_test]
 fn diag_missing_struct_field(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -157,7 +157,7 @@ fn test() -> Point {
 
 #[salsa_test]
 fn diag_unhandled_effect_in_main(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -177,7 +177,7 @@ fn main() -> Int {
 
 #[salsa_test]
 fn diag_misspelled_ability_name(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -199,7 +199,7 @@ fn test() ->{MyEffec} Int {
 #[ignore = "arity mismatch panics in effect row merging"]
 #[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"

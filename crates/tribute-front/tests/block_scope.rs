@@ -5,9 +5,10 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline_with_ir, source_from_str};
+use self::common::run_ast_pipeline_with_ir;
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_front::SourceCst;
 
 // ========================================================================
 // Block Scope Tests - Success Cases
@@ -16,7 +17,7 @@ use salsa_test_macros::salsa_test;
 /// Test that let bindings inside a block are accessible within the block.
 #[salsa_test]
 fn test_block_let_binding_accessible_inside(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -36,7 +37,7 @@ fn example() -> Nat {
 /// Test nested blocks with let bindings at different levels.
 #[salsa_test]
 fn test_nested_blocks_separate_scopes(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -57,7 +58,7 @@ fn example() -> Nat {
 /// Test that outer scope variables are accessible in inner blocks.
 #[salsa_test]
 fn test_outer_scope_accessible_in_inner_block(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -78,7 +79,7 @@ fn example() -> Nat {
 /// Test multiple sequential blocks with independent scopes.
 #[salsa_test]
 fn test_sequential_blocks_independent_scopes(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -103,7 +104,7 @@ fn example() -> Nat {
 /// Test block with case expression containing let bindings in patterns.
 #[salsa_test]
 fn test_block_with_case_pattern_binding(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"

@@ -916,18 +916,10 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
 mod tests {
     use super::*;
     use salsa_test_macros::salsa_test;
-    use tree_sitter::Parser;
 
     fn source_from_str(path: &str, text: &str) -> SourceCst {
-        salsa::with_attached_database(|db| {
-            let mut parser = Parser::new();
-            parser
-                .set_language(&tree_sitter_tribute::LANGUAGE.into())
-                .expect("Failed to set language");
-            let tree = parser.parse(text, None).expect("tree");
-            SourceCst::from_path(db, path, text.into(), Some(tree))
-        })
-        .expect("attached db")
+        salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))
+            .expect("attached db")
     }
 
     #[salsa_test]

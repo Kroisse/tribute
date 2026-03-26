@@ -8,9 +8,10 @@
 
 mod common;
 
-use self::common::{run_ast_pipeline_with_ir, source_from_str};
+use self::common::run_ast_pipeline_with_ir;
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_front::SourceCst;
 
 // ========================================================================
 // Resume Expression Tests
@@ -20,7 +21,7 @@ use salsa_test_macros::salsa_test;
 /// on the continuation closure.
 #[salsa_test]
 fn test_resume_in_op_handler(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -53,7 +54,7 @@ fn main() { }
 /// with a trivial identity continuation.
 #[salsa_test]
 fn test_single_ability_op_in_block(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -78,7 +79,7 @@ fn main() { }
 /// `ability.perform` with a continuation that evaluates the remaining code.
 #[salsa_test]
 fn test_ability_op_then_pure_expr(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -104,7 +105,7 @@ fn main() { }
 /// the first continuation contains the second `ability.perform`.
 #[salsa_test]
 fn test_sequential_ability_ops(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -136,7 +137,7 @@ fn main() { }
 /// - A dispatch body region with `ability.done` and `ability.suspend` ops
 #[salsa_test]
 fn test_handle_with_do_and_op_arms(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -169,7 +170,7 @@ fn main() { }
 /// should work without explicit `resume`.
 #[salsa_test]
 fn test_handle_with_fn_handler(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
@@ -206,7 +207,7 @@ fn main() { }
 /// before passing to `ability.perform`.
 #[salsa_test]
 fn test_multi_arg_ability_op(db: &salsa::DatabaseImpl) {
-    let source = source_from_str(
+    let source = SourceCst::from_source_str(
         db,
         "test.trb",
         r#"
