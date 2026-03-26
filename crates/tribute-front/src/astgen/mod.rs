@@ -730,10 +730,91 @@ mod tests {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::MethodCall { method, .. } = value.kind.as_ref() else {
+        let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
             panic!("Expected method call, got {:?}", value.kind);
         };
         assert_eq!(method.to_string(), "map");
+        assert_eq!(args.len(), 1, "method call should have 1 explicit argument");
+    }
+
+    #[test]
+    fn test_method_call_with_multiple_args() {
+        let source = "fn main() { bytes.slice(0, 5) }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", value.kind);
+        };
+        let ExprKind::Var(name) = receiver.kind.as_ref() else {
+            panic!("Expected var receiver");
+        };
+        assert_eq!(name.name().to_string(), "bytes");
+        assert_eq!(method.to_string(), "slice");
+        assert_eq!(
+            args.len(),
+            2,
+            "method call should have 2 explicit arguments"
+        );
+    }
+
+    #[test]
+    fn test_chained_method_call_with_args() {
+        // Regression test for #582: chained method calls must preserve arguments
+        let source = "fn main() { x.foo().bar(1, 2).baz() }";
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        // Outermost: .baz() — no args
+        let ExprKind::MethodCall {
+            receiver: baz_recv,
+            method: baz_method,
+            args: baz_args,
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", value.kind);
+        };
+        assert_eq!(baz_method.to_string(), "baz");
+        assert_eq!(baz_args.len(), 0);
+
+        // Middle: .bar(1, 2) — 2 args
+        let ExprKind::MethodCall {
+            receiver: bar_recv,
+            method: bar_method,
+            args: bar_args,
+        } = baz_recv.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", baz_recv.kind);
+        };
+        assert_eq!(bar_method.to_string(), "bar");
+        assert_eq!(bar_args.len(), 2, "bar should have 2 explicit arguments");
+
+        // Innermost: .foo() — no args
+        let ExprKind::MethodCall {
+            method: foo_method,
+            args: foo_args,
+            ..
+        } = bar_recv.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", bar_recv.kind);
+        };
+        assert_eq!(foo_method.to_string(), "foo");
+        assert_eq!(foo_args.len(), 0);
     }
 
     // =============================================================================

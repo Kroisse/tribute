@@ -1,0 +1,49 @@
+---
+source: crates/tribute-front/tests/ufcs_method_call.rs
+assertion_line: 138
+expression: ir_text
+---
+core.module @test {
+  !Triple = adt.struct() {fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}
+
+  core.module @Pair {
+    !Pair = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}
+    !Pair_1 = adt.typeref() {name = @Pair}
+
+    func.func @"Pair::x"(%0: !Pair_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
+        func.return %1
+    }
+    func.func @"Pair::y"(%0: !Pair_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
+        func.return %1
+    }
+  }
+  core.module @Triple {
+    !Triple_1 = adt.typeref() {name = @Triple}
+
+    func.func @"Triple::x"(%0: !Triple_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+        func.return %1
+    }
+    func.func @"Triple::y"(%0: !Triple_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+        func.return %1
+    }
+    func.func @"Triple::z"(%0: !Triple_1) -> core.i32 {
+        %1 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+        func.return %1
+    }
+  }
+  func.func @"Pair::extend"(%0: tribute_rt.anyref, %1: core.i32) -> tribute_rt.anyref {
+      %2 = func.call %0 {callee = @"Pair::x"} : core.i32
+      %3 = func.call %0 {callee = @"Pair::y"} : core.i32
+      %4 = adt.struct_new %2, %3, %1 {type = !Triple} : adt.typeref() {name = @Triple}
+      func.return %4
+  }
+  func.func @test(%0: tribute_rt.anyref) -> tribute_rt.anyref {
+      %1 = arith.const {value = 3} : core.i32
+      %2 = func.call %0, %1 {callee = @"Pair::extend"} : tribute_rt.anyref
+      func.return %2
+  }
+}
