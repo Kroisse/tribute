@@ -3,6 +3,7 @@
 use ariadne::{Color, Label, Report, ReportKind, Source};
 use ropey::Rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic};
+use trunk_ir::diagnostic::DiagnosticSeverity;
 
 use tribute::SourceCst;
 use tribute::pipeline::compile_with_diagnostics;
@@ -31,7 +32,13 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
     let color = phase_color(&diag.phase);
     let source_text: String = source.to_string();
 
-    Report::build(ReportKind::Error, (file_path, start..end))
+    let report_kind = match diag.inner.severity {
+        DiagnosticSeverity::Error => ReportKind::Error,
+        DiagnosticSeverity::Warning => ReportKind::Warning,
+        DiagnosticSeverity::Info => ReportKind::Advice,
+    };
+
+    Report::build(report_kind, (file_path, start..end))
         .with_code(format!("{:?}", diag.phase))
         .with_message(&diag.inner.message)
         .with_label(
