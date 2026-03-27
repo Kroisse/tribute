@@ -774,6 +774,117 @@ fn main() {
 }
 
 // =========================================================================
+// Bytes operations tests
+// =========================================================================
+
+#[test]
+#[ignore = "__bytes_get_or_panic is an intrinsic not available on native backend"]
+fn test_native_bytes_get_or_panic() {
+    assert_native_output(
+        "bytes_get_or_panic.trb",
+        r#"
+fn main() {
+    let bs = b"abc"
+    __tribute_print_nat(bs.get_or_panic(0))
+    __tribute_print_nat(bs.get_or_panic(1))
+    __tribute_print_nat(bs.get_or_panic(2))
+}
+"#,
+        "979899",
+    );
+}
+
+#[test]
+#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+fn test_native_bytes_get_safe() {
+    assert_native_output(
+        "bytes_get_safe.trb",
+        r#"
+fn main() {
+    let bs = b"hi"
+    let a = bs.get(0)
+    let b = bs.get(2)
+    case a {
+        Some(v) -> __tribute_print_nat(v)
+        None -> print("none")
+    }
+    case b {
+        Some(v) -> __tribute_print_nat(v)
+        None -> print("none")
+    }
+}
+"#,
+        "104none",
+    );
+}
+
+#[test]
+#[ignore = "__bytes_slice_or_panic is an intrinsic not available on native backend"]
+fn test_native_bytes_slice_or_panic() {
+    assert_native_output(
+        "bytes_slice_or_panic.trb",
+        r#"
+fn main() {
+    let bs = b"hello world"
+    let sl = bs.slice_or_panic(0, 5)
+    print(String::from_bytes(sl))
+}
+"#,
+        "hello",
+    );
+}
+
+#[test]
+#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+fn test_native_bytes_slice_safe() {
+    assert_native_output(
+        "bytes_slice_safe.trb",
+        r#"
+fn main() {
+    let bs = b"hello world"
+    let sl = bs.slice(6, 11)
+    print(String::from_bytes(sl))
+}
+"#,
+        "world",
+    );
+}
+
+#[test]
+#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+fn test_native_bytes_slice_clamping() {
+    assert_native_output(
+        "bytes_slice_clamp.trb",
+        r#"
+fn main() {
+    let bs = b"hello"
+    let sl = bs.slice(3, 100)
+    __tribute_print_nat(sl.len())
+}
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_native_bytes_as_function_arg() {
+    assert_native_output(
+        "bytes_fn_arg.trb",
+        r#"
+fn print_bytes_len(bs: Bytes) -> Nil {
+    __tribute_print_nat(bs.len())
+}
+
+fn main() {
+    let bs = b"test"
+    print_bytes_len(bs)
+}
+"#,
+        "4",
+    );
+}
+
+// =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================
 
