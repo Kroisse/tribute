@@ -178,3 +178,61 @@ fn main() {
         "",
     );
 }
+
+// =============================================================================
+// Float comparison with branching (regression test for is_float operand type check)
+// =============================================================================
+
+#[test]
+fn test_float_comparison_branch_eq() {
+    assert_native_output(
+        "float_cmp_branch_eq.trb",
+        r#"
+fn main() {
+    let a = 1.5
+    let b = 1.5
+    case a == b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_float_comparison_branch_lt() {
+    assert_native_output(
+        "float_cmp_branch_lt.trb",
+        r#"
+fn main() {
+    let a = 1.0
+    let b = 2.0
+    case a < b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_float_comparison_branch_ne() {
+    assert_native_output(
+        "float_cmp_branch_ne.trb",
+        r#"
+fn main() {
+    let a = 1.0
+    let b = 2.0
+    case a != b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}
