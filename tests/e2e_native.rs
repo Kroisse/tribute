@@ -773,3 +773,35 @@ fn main() {
     );
     assert_eq!(stdout.trim(), "Hello, World!");
 }
+
+// =========================================================================
+// String::empty() and Bytes::empty() tests
+// =========================================================================
+
+#[test]
+fn test_native_string_empty() {
+    assert_native_output(
+        "string_empty.trb",
+        r#"
+fn main() {
+    let s = String::empty()
+    __tribute_print_nat(s.len())
+}
+"#,
+        "0",
+    );
+}
+
+#[test]
+fn test_native_bytes_empty() {
+    assert_native_output(
+        "bytes_empty.trb",
+        r#"
+fn main() {
+    let bs = Bytes::empty()
+    __tribute_print_nat(bs.len())
+}
+"#,
+        "0",
+    );
+}
