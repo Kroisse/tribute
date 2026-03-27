@@ -262,9 +262,6 @@ pub enum BinOpKind {
     // Boolean
     And,
     Or,
-
-    // String
-    Concat, // `<>`
 }
 
 /// Wrapper for f64 that implements Eq and Hash.

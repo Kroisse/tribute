@@ -65,7 +65,6 @@ pub fn binop_kind() -> impl Strategy<Value = BinOpKind> {
         Just(BinOpKind::Ge),
         Just(BinOpKind::And),
         Just(BinOpKind::Or),
-        Just(BinOpKind::Concat),
     ]
 }
 

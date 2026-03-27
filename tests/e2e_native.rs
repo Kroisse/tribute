@@ -752,7 +752,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "segfaults — Bytes concat (<>) not yet working with bytes literals (#606)"]
 fn test_native_bytes_literal_concat() {
     let output = compile_and_run_native(
         "bytes_lit_concat.trb",
