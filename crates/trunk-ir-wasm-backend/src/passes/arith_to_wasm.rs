@@ -112,7 +112,7 @@ impl RewritePattern for ArithConstPattern {
     }
 }
 
-/// Pattern for `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
+/// Pattern for `arith.{addi,addf,subi,...}` -> `wasm.{type}_{op}`
 struct ArithBinOpPattern;
 
 impl RewritePattern for ArithBinOpPattern {
@@ -127,17 +127,6 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         }
 
-        let name = data.name;
-        let is_binop = name == Symbol::new("add")
-            || name == Symbol::new("sub")
-            || name == Symbol::new("mul")
-            || name == Symbol::new("div")
-            || name == Symbol::new("rem");
-
-        if !is_binop {
-            return false;
-        }
-
         let result_types = ctx.op_result_types(op);
         let Some(&result_ty) = result_types.first() else {
             return false;
@@ -148,43 +137,72 @@ impl RewritePattern for ArithBinOpPattern {
         };
         let suffix = type_suffix(ctx, Some(result_ty));
         let loc = ctx.op(op).location;
+        let name = data.name;
 
-        let new_op = if name == Symbol::new("add") {
+        let new_op = if name == Symbol::new("addi") {
             match suffix {
                 "i32" => wasm_dialect::i32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "i64" => wasm_dialect::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("addf") {
+            match suffix {
                 "f32" => wasm_dialect::f32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "f64" => wasm_dialect::f64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("sub") {
+        } else if name == Symbol::new("subi") {
             match suffix {
                 "i32" => wasm_dialect::i32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "i64" => wasm_dialect::i64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("subf") {
+            match suffix {
                 "f32" => wasm_dialect::f32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "f64" => wasm_dialect::f64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("mul") {
+        } else if name == Symbol::new("muli") {
             match suffix {
                 "i32" => wasm_dialect::i32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "i64" => wasm_dialect::i64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("mulf") {
+            match suffix {
                 "f32" => wasm_dialect::f32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "f64" => wasm_dialect::f64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("div") {
+        } else if name == Symbol::new("divsi") {
             match suffix {
                 "i32" => wasm_dialect::i32_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "i64" => wasm_dialect::i64_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("divui") {
+            match suffix {
+                "i32" => wasm_dialect::i32_div_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_div_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("divf") {
+            match suffix {
                 "f32" => wasm_dialect::f32_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "f64" => wasm_dialect::f64_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("rem") {
+        } else if name == Symbol::new("remsi") {
             match suffix {
                 "i32" => wasm_dialect::i32_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 "i64" => wasm_dialect::i64_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            }
+        } else if name == Symbol::new("remui") {
+            match suffix {
+                "i32" => wasm_dialect::i32_rem_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::i64_rem_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,
             }
         } else {
@@ -196,7 +214,7 @@ impl RewritePattern for ArithBinOpPattern {
     }
 }
 
-/// Pattern for `arith.cmp_*` -> `wasm.{type}_{cmp}`
+/// Pattern for `arith.cmpi` / `arith.cmpf` -> `wasm.{type}_{cmp}`
 struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
@@ -206,96 +224,69 @@ impl RewritePattern for ArithCmpPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
-            return false;
-        }
-
-        let name = data.name;
-        let is_cmp = name == Symbol::new("cmp_eq")
-            || name == Symbol::new("cmp_ne")
-            || name == Symbol::new("cmp_lt")
-            || name == Symbol::new("cmp_le")
-            || name == Symbol::new("cmp_gt")
-            || name == Symbol::new("cmp_ge");
-
-        if !is_cmp {
-            return false;
-        }
-
-        // Get operand type from first operand
-        let operands = ctx.op_operands(op).to_vec();
-        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
-        };
-        let operand_ty = Some(ctx.value_ty(lhs));
-        let suffix = type_suffix_opt(ctx, operand_ty);
-        let is_integer = matches!(suffix, "i32" | "i64");
-
         let result_types = ctx.op_result_types(op);
         let Some(&result_ty) = result_types.first() else {
             return false;
         };
-        let loc = ctx.op(op).location;
-
-        let new_op = if name == Symbol::new("cmp_eq") {
-            match suffix {
-                "i32" => wasm_dialect::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => wasm_dialect::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("cmp_ne") {
-            match suffix {
-                "i32" => wasm_dialect::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f32" => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("cmp_lt") {
-            match (suffix, is_integer) {
-                ("i32", true) => wasm_dialect::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => wasm_dialect::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => wasm_dialect::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => wasm_dialect::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("cmp_le") {
-            match (suffix, is_integer) {
-                ("i32", true) => wasm_dialect::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => wasm_dialect::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => wasm_dialect::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => wasm_dialect::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("cmp_gt") {
-            match (suffix, is_integer) {
-                ("i32", true) => wasm_dialect::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => wasm_dialect::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => wasm_dialect::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => wasm_dialect::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("cmp_ge") {
-            match (suffix, is_integer) {
-                ("i32", true) => wasm_dialect::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", true) => wasm_dialect::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", false) => wasm_dialect::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", false) => wasm_dialect::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => return false,
-            }
-        } else {
+        let operands = ctx.op_operands(op).to_vec();
+        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
+        let loc = ctx.op(op).location;
 
-        rewriter.replace_op(new_op);
-        true
+        if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
+            let predicate = cmpi.predicate(ctx);
+            let operand_ty = Some(ctx.value_ty(lhs));
+            let suffix = type_suffix_opt(ctx, operand_ty);
+
+            let pred_str = predicate.to_string();
+            let new_op = match (suffix, pred_str.as_str()) {
+                ("i32", "eq") => wasm_dialect::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "eq") => wasm_dialect::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "ne") => wasm_dialect::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "ne") => wasm_dialect::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "slt") => wasm_dialect::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "slt") => wasm_dialect::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "sle") => wasm_dialect::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "sle") => wasm_dialect::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "sgt") => wasm_dialect::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "sgt") => wasm_dialect::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "sge") => wasm_dialect::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i64", "sge") => wasm_dialect::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            };
+            rewriter.replace_op(new_op);
+            true
+        } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
+            let predicate = cmpf.predicate(ctx);
+            let operand_ty = Some(ctx.value_ty(lhs));
+            let suffix = type_suffix_opt(ctx, operand_ty);
+
+            let pred_str = predicate.to_string();
+            let new_op = match (suffix, pred_str.as_str()) {
+                ("f32", "oeq") => wasm_dialect::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "oeq") => wasm_dialect::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "one") => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "one") => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "olt") => wasm_dialect::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "olt") => wasm_dialect::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "ole") => wasm_dialect::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "ole") => wasm_dialect::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "ogt") => wasm_dialect::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "ogt") => wasm_dialect::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "oge") => wasm_dialect::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "oge") => wasm_dialect::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                _ => return false,
+            };
+            rewriter.replace_op(new_op);
+            true
+        } else {
+            false
+        }
     }
 }
 
-/// Pattern for `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
+/// Pattern for `arith.negi` / `arith.negf` -> wasm ops
 struct ArithNegPattern;
 
 impl RewritePattern for ArithNegPattern {
@@ -305,38 +296,46 @@ impl RewritePattern for ArithNegPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arith::Neg::from_op(ctx, op) else {
-            return false;
-        };
-
-        let result_types = ctx.op_result_types(op);
-        let result_ty = result_types.first().copied();
-        let suffix = type_suffix(ctx, result_ty);
         let loc = ctx.op(op).location;
-        let operand = neg_op.operand(ctx);
 
-        match suffix {
-            "f32" => {
-                let f32_ty = result_ty.unwrap_or_else(|| intern_f32_type(ctx));
-                let new_op = wasm_dialect::f32_neg(ctx, loc, operand, f32_ty);
-                rewriter.replace_op(new_op.op_ref());
-                true
+        if let Ok(negf) = arith::Negf::from_op(ctx, op) {
+            let result_types = ctx.op_result_types(op);
+            let result_ty = result_types.first().copied();
+            let suffix = type_suffix(ctx, result_ty);
+            let operand = negf.operand(ctx);
+
+            match suffix {
+                "f32" => {
+                    let f32_ty = result_ty.unwrap_or_else(|| intern_f32_type(ctx));
+                    rewriter.replace_op(wasm_dialect::f32_neg(ctx, loc, operand, f32_ty).op_ref());
+                    true
+                }
+                "f64" => {
+                    let f64_ty = result_ty.unwrap_or_else(|| intern_f64_type(ctx));
+                    rewriter.replace_op(wasm_dialect::f64_neg(ctx, loc, operand, f64_ty).op_ref());
+                    true
+                }
+                _ => false,
             }
-            "f64" => {
-                let f64_ty = result_ty.unwrap_or_else(|| intern_f64_type(ctx));
-                let new_op = wasm_dialect::f64_neg(ctx, loc, operand, f64_ty);
-                rewriter.replace_op(new_op.op_ref());
-                true
+        } else if let Ok(negi) = arith::Negi::from_op(ctx, op) {
+            let result_types = ctx.op_result_types(op);
+            let result_ty = result_types.first().copied();
+            let suffix = type_suffix(ctx, result_ty);
+            let operand = negi.operand(ctx);
+
+            match suffix {
+                "i64" => {
+                    let i64_ty = intern_i64_type(ctx);
+                    let zero = wasm_dialect::i64_const(ctx, loc, i64_ty, 0);
+                    let sub = wasm_dialect::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
+                    rewriter.insert_op(zero.op_ref());
+                    rewriter.replace_op(sub.op_ref());
+                    true
+                }
+                _ => false,
             }
-            "i64" => {
-                let i64_ty = intern_i64_type(ctx);
-                let zero = wasm_dialect::i64_const(ctx, loc, i64_ty, 0);
-                let sub = wasm_dialect::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
-                rewriter.insert_op(zero.op_ref());
-                rewriter.replace_op(sub.op_ref());
-                true
-            }
-            _ => false,
+        } else {
+            false
         }
     }
 }

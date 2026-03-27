@@ -665,7 +665,7 @@ mod tests {
         });
         let x = ctx.block_arg(entry, 0);
         let y = ctx.block_arg(entry, 1);
-        let add = arith::add(&mut ctx, loc, x, y, i32_ty);
+        let add = arith::addi(&mut ctx, loc, x, y, i32_ty);
         ctx.push_op(entry, add.op_ref());
         let add_val = add.result(&ctx);
         let ret = func::r#return(&mut ctx, loc, [add_val]);
@@ -736,7 +736,7 @@ mod tests {
         let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let sum = arith::add(&mut ctx, loc, param, c1_val, i32_ty);
+        let sum = arith::addi(&mut ctx, loc, param, c1_val, i32_ty);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -1002,7 +1002,7 @@ mod tests {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
       %1 = arith.const {value = 1} : core.i32
-      %2 = arith.add %0, %1 : core.i32
+      %2 = arith.addi %0, %1 : core.i32
       func.return %2
   }
 }"#;
@@ -1022,7 +1022,7 @@ mod tests {
   func.func @f(%0: core.i32) -> core.i32 {
     ^bb0:
       %1 = arith.const {value = 1} : core.i32
-      %2 = arith.add %0, %1 : core.i32
+      %2 = arith.addi %0, %1 : core.i32
       func.return %2
   }
 }"#;
@@ -1041,7 +1041,7 @@ mod tests {
         let input = r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
     ^bb0:
-      %2 = arith.add %0, %1 : core.i32
+      %2 = arith.addi %0, %1 : core.i32
       func.return %2
   }
   func.func @main() -> core.i32 {

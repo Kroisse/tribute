@@ -183,57 +183,38 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         }
 
-        let name = data.name;
-        let is_binop = name == Symbol::new("add")
-            || name == Symbol::new("sub")
-            || name == Symbol::new("mul")
-            || name == Symbol::new("div")
-            || name == Symbol::new("rem");
-        if !is_binop {
-            return false;
-        }
-
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-        // Use raw (pre-conversion) result type for signedness check, since
-        // the type converter maps nat/bool → core.i32/i8, losing unsigned info.
-        let raw_result_ty = ctx.op_result_types(op).first().copied();
         let operands = ctx.op_operands(op).to_vec();
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
-        let category = type_category(ctx, Some(result_ty));
         let loc = ctx.op(op).location;
-        let is_unsigned = is_unsigned_int(ctx, raw_result_ty);
+        let name = data.name;
 
-        let new_op = if name == Symbol::new("add") {
-            match category {
-                "f32" | "f64" => arena_clif::fadd(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_clif::iadd(ctx, loc, lhs, rhs, result_ty).op_ref(),
-            }
-        } else if name == Symbol::new("sub") {
-            match category {
-                "f32" | "f64" => arena_clif::fsub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_clif::isub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-            }
-        } else if name == Symbol::new("mul") {
-            match category {
-                "f32" | "f64" => arena_clif::fmul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_clif::imul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-            }
-        } else if name == Symbol::new("div") {
-            match category {
-                "f32" | "f64" => arena_clif::fdiv(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ if is_unsigned => arena_clif::udiv(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_clif::sdiv(ctx, loc, lhs, rhs, result_ty).op_ref(),
-            }
-        } else if name == Symbol::new("rem") {
-            match category {
-                "f32" | "f64" => return false,
-                _ if is_unsigned => arena_clif::urem(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                _ => arena_clif::srem(ctx, loc, lhs, rhs, result_ty).op_ref(),
-            }
+        let new_op = if name == Symbol::new("addi") {
+            arena_clif::iadd(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("addf") {
+            arena_clif::fadd(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("subi") {
+            arena_clif::isub(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("subf") {
+            arena_clif::fsub(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("muli") {
+            arena_clif::imul(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("mulf") {
+            arena_clif::fmul(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("divsi") {
+            arena_clif::sdiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("divui") {
+            arena_clif::udiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("divf") {
+            arena_clif::fdiv(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("remsi") {
+            arena_clif::srem(ctx, loc, lhs, rhs, result_ty).op_ref()
+        } else if name == Symbol::new("remui") {
+            arena_clif::urem(ctx, loc, lhs, rhs, result_ty).op_ref()
         } else {
             return false;
         };
@@ -252,86 +233,39 @@ impl RewritePattern for ArithCmpPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
-            return false;
-        }
-
-        let name = data.name;
-        let is_cmp = name == Symbol::new("cmp_eq")
-            || name == Symbol::new("cmp_ne")
-            || name == Symbol::new("cmp_lt")
-            || name == Symbol::new("cmp_le")
-            || name == Symbol::new("cmp_gt")
-            || name == Symbol::new("cmp_ge");
-        if !is_cmp {
-            return false;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
-            return false;
-        };
-
-        let operand_ty = Some(ctx.value_ty(lhs));
-        let category = type_category(ctx, operand_ty);
-        let is_float = matches!(category, "f32" | "f64");
-        let is_unsigned = !is_float && is_unsigned_int(ctx, operand_ty);
-
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
         let loc = ctx.op(op).location;
 
-        let (cond, use_fcmp) = if name == Symbol::new("cmp_eq") {
-            ("eq", is_float)
-        } else if name == Symbol::new("cmp_ne") {
-            ("ne", is_float)
-        } else if name == Symbol::new("cmp_lt") {
-            if is_float {
-                ("lt", true)
-            } else if is_unsigned {
-                ("ult", false)
-            } else {
-                ("slt", false)
-            }
-        } else if name == Symbol::new("cmp_le") {
-            if is_float {
-                ("le", true)
-            } else if is_unsigned {
-                ("ule", false)
-            } else {
-                ("sle", false)
-            }
-        } else if name == Symbol::new("cmp_gt") {
-            if is_float {
-                ("gt", true)
-            } else if is_unsigned {
-                ("ugt", false)
-            } else {
-                ("sgt", false)
-            }
-        } else if name == Symbol::new("cmp_ge") {
-            if is_float {
-                ("ge", true)
-            } else if is_unsigned {
-                ("uge", false)
-            } else {
-                ("sge", false)
-            }
+        if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
+            let lhs = cmpi.lhs(ctx);
+            let rhs = cmpi.rhs(ctx);
+            let cond = cmpi.predicate(ctx);
+            let new_op = arena_clif::icmp(ctx, loc, lhs, rhs, result_ty, cond).op_ref();
+            rewriter.replace_op(new_op);
+            true
+        } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
+            let lhs = cmpf.lhs(ctx);
+            let rhs = cmpf.rhs(ctx);
+            let predicate = cmpf.predicate(ctx);
+            // Map arith ordered predicates to clif conditions
+            let cond_str = predicate.to_string();
+            let cond = match cond_str.as_str() {
+                "oeq" => Symbol::new("eq"),
+                "one" => Symbol::new("ne"),
+                "olt" => Symbol::new("lt"),
+                "ole" => Symbol::new("le"),
+                "ogt" => Symbol::new("gt"),
+                "oge" => Symbol::new("ge"),
+                _ => predicate,
+            };
+            let new_op = arena_clif::fcmp(ctx, loc, lhs, rhs, result_ty, cond).op_ref();
+            rewriter.replace_op(new_op);
+            true
         } else {
-            return false;
-        };
-
-        let cond_sym = Symbol::new(cond);
-        let new_op = if use_fcmp {
-            arena_clif::fcmp(ctx, loc, lhs, rhs, result_ty, cond_sym).op_ref()
-        } else {
-            arena_clif::icmp(ctx, loc, lhs, rhs, result_ty, cond_sym).op_ref()
-        };
-
-        rewriter.replace_op(new_op);
-        true
+            false
+        }
     }
 }
 
@@ -344,25 +278,22 @@ impl RewritePattern for ArithNegPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(neg_op) = arith::Neg::from_op(ctx, op) else {
+        let Some(ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-
-        let result_ty = rewriter.result_type(ctx, op, 0);
-        let Some(ty) = result_ty else {
-            return false;
-        };
-        let category = type_category(ctx, result_ty);
         let loc = ctx.op(op).location;
-        let operand = neg_op.operand(ctx);
 
-        let new_op = match category {
-            "f32" | "f64" => arena_clif::fneg(ctx, loc, operand, ty).op_ref(),
-            _ => arena_clif::ineg(ctx, loc, operand, ty).op_ref(),
-        };
-
-        rewriter.replace_op(new_op);
-        true
+        if let Ok(negi) = arith::Negi::from_op(ctx, op) {
+            let operand = negi.operand(ctx);
+            rewriter.replace_op(arena_clif::ineg(ctx, loc, operand, ty).op_ref());
+            true
+        } else if let Ok(negf) = arith::Negf::from_op(ctx, op) {
+            let operand = negf.operand(ctx);
+            rewriter.replace_op(arena_clif::fneg(ctx, loc, operand, ty).op_ref());
+            true
+        } else {
+            false
+        }
     }
 }
 

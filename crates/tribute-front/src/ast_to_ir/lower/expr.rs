@@ -190,9 +190,11 @@ pub(super) fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
+            // Check operand type (lhs), not result type, since comparisons
+            // return Bool but need to know if operands are float.
             let is_float = builder
                 .ctx
-                .get_node_type(expr_node_id)
+                .get_node_type(lhs.id)
                 .map(|ty| matches!(ty.kind(builder.db()), TypeKind::Float))
                 .unwrap_or(false);
             let lhs_val = lower_expr(builder, lhs)?;
@@ -686,18 +688,58 @@ fn lower_binop<'db>(
         }};
     }
 
+    macro_rules! emit_cmpi {
+        ($predicate:expr) => {{
+            let op = arith::cmpi(
+                builder.ir,
+                location,
+                lhs,
+                rhs,
+                bool_ty,
+                Symbol::new($predicate),
+            );
+            builder.ir.push_op(builder.block, op.op_ref());
+            op.result(builder.ir)
+        }};
+    }
+
+    macro_rules! emit_cmpf {
+        ($predicate:expr) => {{
+            let op = arith::cmpf(
+                builder.ir,
+                location,
+                lhs,
+                rhs,
+                bool_ty,
+                Symbol::new($predicate),
+            );
+            builder.ir.push_op(builder.block, op.op_ref());
+            op.result(builder.ir)
+        }};
+    }
+
     let result = match op {
-        BinOpKind::Add => emit_binop!(arith::add, result_ty),
-        BinOpKind::Sub => emit_binop!(arith::sub, result_ty),
-        BinOpKind::Mul => emit_binop!(arith::mul, result_ty),
-        BinOpKind::Div => emit_binop!(arith::div, result_ty),
-        BinOpKind::Mod => emit_binop!(arith::rem, result_ty),
-        BinOpKind::Eq => emit_binop!(arith::cmp_eq, bool_ty),
-        BinOpKind::Ne => emit_binop!(arith::cmp_ne, bool_ty),
-        BinOpKind::Lt => emit_binop!(arith::cmp_lt, bool_ty),
-        BinOpKind::Le => emit_binop!(arith::cmp_le, bool_ty),
-        BinOpKind::Gt => emit_binop!(arith::cmp_gt, bool_ty),
-        BinOpKind::Ge => emit_binop!(arith::cmp_ge, bool_ty),
+        BinOpKind::Add if is_float => emit_binop!(arith::addf, result_ty),
+        BinOpKind::Add => emit_binop!(arith::addi, result_ty),
+        BinOpKind::Sub if is_float => emit_binop!(arith::subf, result_ty),
+        BinOpKind::Sub => emit_binop!(arith::subi, result_ty),
+        BinOpKind::Mul if is_float => emit_binop!(arith::mulf, result_ty),
+        BinOpKind::Mul => emit_binop!(arith::muli, result_ty),
+        BinOpKind::Div if is_float => emit_binop!(arith::divf, result_ty),
+        BinOpKind::Div => emit_binop!(arith::divsi, result_ty),
+        BinOpKind::Mod => emit_binop!(arith::remsi, result_ty),
+        BinOpKind::Eq if is_float => emit_cmpf!("oeq"),
+        BinOpKind::Eq => emit_cmpi!("eq"),
+        BinOpKind::Ne if is_float => emit_cmpf!("one"),
+        BinOpKind::Ne => emit_cmpi!("ne"),
+        BinOpKind::Lt if is_float => emit_cmpf!("olt"),
+        BinOpKind::Lt => emit_cmpi!("slt"),
+        BinOpKind::Le if is_float => emit_cmpf!("ole"),
+        BinOpKind::Le => emit_cmpi!("sle"),
+        BinOpKind::Gt if is_float => emit_cmpf!("ogt"),
+        BinOpKind::Gt => emit_cmpi!("sgt"),
+        BinOpKind::Ge if is_float => emit_cmpf!("oge"),
+        BinOpKind::Ge => emit_cmpi!("sge"),
         BinOpKind::And => emit_binop!(arith::and, bool_ty),
         BinOpKind::Or => emit_binop!(arith::or, bool_ty),
     };

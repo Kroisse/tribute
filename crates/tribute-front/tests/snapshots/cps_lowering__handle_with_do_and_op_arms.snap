@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/cps_lowering.rs
+assertion_line: 166
 expression: ir_text
 ---
 core.module @test {
@@ -19,7 +20,7 @@ core.module @test {
       %3 = func.call_indirect %0 : tribute_rt.anyref
       %4 = closure.lambda(%5: tribute_rt.anyref, %6: core.i32, %7: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0} {
           %8 = arith.const {value = 1972422014} : core.i32
-          %9 = arith.cmp_eq %6, %8 : core.i1
+          %9 = arith.cmpi %6, %8 {predicate = @eq} : core.i1
           %10 = scf.if %9 : tribute_rt.anyref {
               %11 = arith.const {value = 42} : core.i32
               %12 = core.unrealized_conversion_cast %11 : tribute_rt.anyref

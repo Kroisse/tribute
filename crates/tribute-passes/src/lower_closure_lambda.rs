@@ -638,7 +638,7 @@ mod tests {
         });
         let x_val = ctx.block_arg(lambda_entry, 0);
 
-        let add_op = arith::add(&mut ctx, loc, a_val, x_val, i32_ty);
+        let add_op = arith::addi(&mut ctx, loc, a_val, x_val, i32_ty);
         ctx.push_op(lambda_entry, add_op.op_ref());
         let add_result = add_op.result(&ctx);
 

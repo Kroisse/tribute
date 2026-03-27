@@ -583,7 +583,7 @@ mod tests {
         ctx.push_op(entry_block, c1.op_ref());
         let c1_val = c1.result(ctx);
 
-        let add_op = arith::add(ctx, loc, c0_val, c1_val, i32_ty);
+        let add_op = arith::addi(ctx, loc, c0_val, c1_val, i32_ty);
         ctx.push_op(entry_block, add_op.op_ref());
         let sum = add_op.result(ctx);
 
@@ -816,7 +816,7 @@ mod tests {
         let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let sum = arith::add(&mut ctx, loc, param, c1_val, i32_ty);
+        let sum = arith::addi(&mut ctx, loc, param, c1_val, i32_ty);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -919,7 +919,7 @@ mod tests {
         let local = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry_b, local.op_ref());
         let local_val = local.result(&ctx);
-        let add_op = arith::add(&mut ctx, loc, value_from_a, local_val, i32_ty);
+        let add_op = arith::addi(&mut ctx, loc, value_from_a, local_val, i32_ty);
         ctx.push_op(entry_b, add_op.op_ref());
         let ret_b = func::r#return(&mut ctx, loc, [value_from_a]);
         ctx.push_op(entry_b, ret_b.op_ref());
@@ -1173,7 +1173,7 @@ mod tests {
         let c1_val = c1.result(&ctx);
 
         // Use c0 in two places
-        let add = arith::add(&mut ctx, loc, c0_val, c0_val, i32_ty);
+        let add = arith::addi(&mut ctx, loc, c0_val, c0_val, i32_ty);
         ctx.push_op(entry, add.op_ref());
         let add_val = add.result(&ctx);
 
@@ -1228,7 +1228,7 @@ mod tests {
         // add expects 2 params, caller passes 1
         let input = r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.add %0, %1 : core.i32
+    %2 = arith.addi %0, %1 : core.i32
     func.return %2
   }
   func.func @main() -> core.i32 {
@@ -1276,7 +1276,7 @@ mod tests {
     fn call_correct_arity_passes() {
         let input = r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.add %0, %1 : core.i32
+    %2 = arith.addi %0, %1 : core.i32
     func.return %2
   }
   func.func @main() -> core.i32 {
@@ -1315,7 +1315,7 @@ mod tests {
         // add expects 2 params, tail_call passes 1
         let input = r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.add %0, %1 : core.i32
+    %2 = arith.addi %0, %1 : core.i32
     func.return %2
   }
   func.func @main() -> core.i32 {

@@ -536,7 +536,7 @@ mod tests {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 10} : core.i32
     %1 = closure.lambda(%2: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 42} [%0] {
-        %3 = arith.add %2, %0 : core.i32
+        %3 = arith.addi %2, %0 : core.i32
         func.return %3
     }
     func.return %1
@@ -596,9 +596,9 @@ mod tests {
     %0 = arith.const {value = 1} : core.i32
     %1 = arith.const {value = 2} : core.i32
     %2 = closure.lambda(%3: core.i32, %4: core.i32) -> core.i32 [%0, %1] {
-        %5 = arith.add %3, %4 : core.i32
-        %6 = arith.add %5, %0 : core.i32
-        %7 = arith.add %6, %1 : core.i32
+        %5 = arith.addi %3, %4 : core.i32
+        %6 = arith.addi %5, %0 : core.i32
+        %7 = arith.addi %6, %1 : core.i32
         func.return %7
     }
     func.return %2

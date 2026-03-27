@@ -66,7 +66,7 @@ impl PureOps {
     ///
     /// Use the `register_pure_op!` macro instead:
     /// ```text
-    /// register_pure_op!(arith.add);
+    /// register_pure_op!(arith.addi);
     /// ```
     #[doc(hidden)]
     pub const fn register(dialect: &'static str, op_name: &'static str) -> PureOpRegistration {
@@ -89,7 +89,7 @@ impl PureOps {
 ///
 /// # Example
 /// ```text
-/// register_pure_op!(arith.add);
+/// register_pure_op!(arith.addi);
 /// register_pure_op!(adt.struct_new);
 /// ```
 ///

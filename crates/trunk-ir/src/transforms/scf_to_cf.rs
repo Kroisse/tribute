@@ -369,7 +369,14 @@ fn lower_scf_switch(ctx: &mut IrContext, block: BlockRef, scf_op: OpRef, loc: Lo
             let i1_ty = ctx.types.intern(
                 crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1")).build(),
             );
-            let cmp = arith::cmp_eq(ctx, loc, discriminant, case_const.result(ctx), i1_ty);
+            let cmp = arith::cmpi(
+                ctx,
+                loc,
+                discriminant,
+                case_const.result(ctx),
+                i1_ty,
+                Symbol::new("eq"),
+            );
             ctx.push_op(current_block, cmp.op_ref());
 
             let else_target = if is_last {
@@ -919,8 +926,8 @@ mod tests {
             "missing cf.cond_br: {names:?}"
         );
         assert!(
-            names.iter().any(|n| n == "arith.cmp_eq"),
-            "missing arith.cmp_eq: {names:?}"
+            names.iter().any(|n| n == "arith.cmpi"),
+            "missing arith.cmpi: {names:?}"
         );
     }
 
@@ -1120,7 +1127,7 @@ mod tests {
         ctx.push_op(entry, if_op.op_ref());
 
         // Use the if result in an add
-        let add = arith::add(&mut ctx, loc, if_result, if_result, i32_ty);
+        let add = arith::addi(&mut ctx, loc, if_result, if_result, i32_ty);
         let add_result = add.result(&ctx);
         ctx.push_op(entry, add.op_ref());
 
@@ -1150,7 +1157,7 @@ mod tests {
         let add_op = merge_ops
             .iter()
             .find(|&&op| {
-                ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("add")
+                ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("addi")
             })
             .unwrap();
         let operands = ctx.op_operands(*add_op);

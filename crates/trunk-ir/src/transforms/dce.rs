@@ -285,10 +285,10 @@ mod tests {
             let a = arith::r#const(ctx, loc, i32_ty, Attribute::Int(1));
             ctx.push_op(entry, a.op_ref());
 
-            let b = arith::add(ctx, loc, a.result(ctx), a.result(ctx), i32_ty);
+            let b = arith::addi(ctx, loc, a.result(ctx), a.result(ctx), i32_ty);
             ctx.push_op(entry, b.op_ref());
 
-            let c = arith::add(ctx, loc, b.result(ctx), a.result(ctx), i32_ty);
+            let c = arith::addi(ctx, loc, b.result(ctx), a.result(ctx), i32_ty);
             ctx.push_op(entry, c.op_ref());
 
             let ret = func::r#return(ctx, loc, std::iter::empty());
@@ -313,7 +313,7 @@ mod tests {
             ctx.push_op(entry, a.op_ref());
             let b = arith::r#const(ctx, loc, i32_ty, Attribute::Int(2));
             ctx.push_op(entry, b.op_ref());
-            let c = arith::add(ctx, loc, a.result(ctx), b.result(ctx), i32_ty);
+            let c = arith::addi(ctx, loc, a.result(ctx), b.result(ctx), i32_ty);
             ctx.push_op(entry, c.op_ref());
             let ret = func::r#return(ctx, loc, [c.result(ctx)]);
             ctx.push_op(entry, ret.op_ref());
