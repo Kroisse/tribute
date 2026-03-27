@@ -730,7 +730,7 @@ fn lower_binop<'db>(
         BinOpKind::Mod => emit_binop!(arith::remsi, result_ty),
         BinOpKind::Eq if is_float => emit_cmpf!("oeq"),
         BinOpKind::Eq => emit_cmpi!("eq"),
-        BinOpKind::Ne if is_float => emit_cmpf!("one"),
+        BinOpKind::Ne if is_float => emit_cmpf!("une"),
         BinOpKind::Ne => emit_cmpi!("ne"),
         BinOpKind::Lt if is_float => emit_cmpf!("olt"),
         BinOpKind::Lt => emit_cmpi!("slt"),

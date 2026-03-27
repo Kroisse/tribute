@@ -249,11 +249,11 @@ impl RewritePattern for ArithCmpPattern {
             let lhs = cmpf.lhs(ctx);
             let rhs = cmpf.rhs(ctx);
             let predicate = cmpf.predicate(ctx);
-            // Map arith ordered predicates to clif conditions
+            // Map arith float predicates to clif conditions
             let cond_str = predicate.to_string();
             let cond = match cond_str.as_str() {
                 "oeq" => Symbol::new("eq"),
-                "one" => Symbol::new("ne"),
+                "une" => Symbol::new("ne"),
                 "olt" => Symbol::new("lt"),
                 "ole" => Symbol::new("le"),
                 "ogt" => Symbol::new("gt"),

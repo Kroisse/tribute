@@ -266,8 +266,8 @@ impl RewritePattern for ArithCmpPattern {
             let new_op = match (suffix, pred_str.as_str()) {
                 ("f32", "oeq") => wasm_dialect::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("f64", "oeq") => wasm_dialect::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "one") => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "one") => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "une") => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f64", "une") => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("f32", "olt") => wasm_dialect::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("f64", "olt") => wasm_dialect::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 ("f32", "ole") => wasm_dialect::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
