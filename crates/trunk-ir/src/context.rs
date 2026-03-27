@@ -155,6 +155,8 @@ impl IrContext {
             message: message.into(),
             span,
             severity: DiagnosticSeverity::Error,
+            labels: Box::default(),
+            note: None,
         });
     }
 
@@ -164,6 +166,8 @@ impl IrContext {
             message: message.into(),
             span,
             severity: DiagnosticSeverity::Warning,
+            labels: Box::default(),
+            note: None,
         });
     }
 
