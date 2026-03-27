@@ -124,6 +124,9 @@ enum String {
 }
 
 pub mod String {
+    /// Create an empty string.
+    pub fn empty() -> String { Leaf(b"") }
+
     /// Create a string from a byte sequence (assumed UTF-8).
     pub fn from_bytes(bytes: Bytes) -> String { Leaf(bytes) }
 
@@ -179,6 +182,9 @@ extern "C" fn __tribute_print_newline() -> Nil
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
+    /// Create an empty byte sequence.
+    pub fn empty() -> Bytes { b"" }
+
     /// Get the length of a byte sequence.
     pub fn len(bytes: Bytes) -> Nat {
         __tribute_bytes_len(bytes)
