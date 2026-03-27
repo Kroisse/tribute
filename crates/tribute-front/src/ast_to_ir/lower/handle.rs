@@ -912,7 +912,14 @@ fn build_tr_dispatch_chain<'db>(
         let expected_const =
             arith::r#const(ir, location, i32_ty, Attribute::Int(expected_idx as i128));
         ir.push_op(block, expected_const.op_ref());
-        let cmp = arith::cmp_eq(ir, location, op_idx_val, expected_const.result(ir), i1_ty);
+        let cmp = arith::cmpi(
+            ir,
+            location,
+            op_idx_val,
+            expected_const.result(ir),
+            i1_ty,
+            Symbol::new("eq"),
+        );
         ir.push_op(block, cmp.op_ref());
 
         // Build else region with remaining arms
@@ -1097,7 +1104,14 @@ fn build_handler_dispatch_chain<'db>(
         let expected_const =
             arith::r#const(ir, location, i32_ty, Attribute::Int(expected_idx as i128));
         ir.push_op(block, expected_const.op_ref());
-        let cmp = arith::cmp_eq(ir, location, op_idx_val, expected_const.result(ir), i1_ty);
+        let cmp = arith::cmpi(
+            ir,
+            location,
+            op_idx_val,
+            expected_const.result(ir),
+            i1_ty,
+            Symbol::new("eq"),
+        );
         ir.push_op(block, cmp.op_ref());
 
         // Build else region with remaining arms

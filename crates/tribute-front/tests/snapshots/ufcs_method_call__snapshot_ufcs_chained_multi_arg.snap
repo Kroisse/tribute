@@ -44,9 +44,9 @@ core.module @test {
   func.func @"Triple::sum"(%0: tribute_rt.anyref) -> core.i32 {
       %1 = func.call %0 {callee = @"Triple::x"} : core.i32
       %2 = func.call %0 {callee = @"Triple::y"} : core.i32
-      %3 = arith.add %1, %2 : core.i32
+      %3 = arith.addi %1, %2 : core.i32
       %4 = func.call %0 {callee = @"Triple::z"} : core.i32
-      %5 = arith.add %3, %4 : core.i32
+      %5 = arith.addi %3, %4 : core.i32
       func.return %5
   }
   func.func @test(%0: tribute_rt.anyref) -> core.i32 {

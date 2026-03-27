@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
-assertion_line: 127
+assertion_line: 134
 expression: ir_text
 ---
 core.module @test {
@@ -14,7 +14,7 @@ core.module @test {
       %4 = adt.struct_get %3 {field = 0, type = !__tuple_i32_i32_i32} : core.i32
       %5 = adt.struct_get %3 {field = 1, type = !__tuple_i32_i32_i32} : core.i32
       %6 = adt.struct_get %3 {field = 2, type = !__tuple_i32_i32_i32} : core.i32
-      %7 = arith.add %4, %6 : core.i32
+      %7 = arith.addi %4, %6 : core.i32
       func.return %7
   }
 }

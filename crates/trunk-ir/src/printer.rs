@@ -1026,12 +1026,12 @@ mod tests {
         let v1 = c1.result(&ctx);
         let v2 = c2.result(&ctx);
 
-        let add = arith::add(&mut ctx, loc, v1, v2, i32_ty);
+        let add = arith::addi(&mut ctx, loc, v1, v2, i32_ty);
         // Printer assigns names based on what it sees - standalone op print
         // only numbers the result of THIS op since it can't see c1/c2
         let output = print_op(&ctx, add.op_ref());
-        // %0 = arith.add %?, %? : core.i32 (operands unknown since not in scope)
-        assert!(output.contains("arith.add"));
+        // %0 = arith.addi %?, %? : core.i32 (operands unknown since not in scope)
+        assert!(output.contains("arith.addi"));
         assert!(output.contains("core.i32"));
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
         // x + y
         let x = ctx.block_arg(entry_block, 0);
         let y = ctx.block_arg(entry_block, 1);
-        let add = arith::add(&mut ctx, loc, x, y, i32_ty);
+        let add = arith::addi(&mut ctx, loc, x, y, i32_ty);
         ctx.push_op(entry_block, add.op_ref());
 
         // return result
@@ -1084,7 +1084,7 @@ mod tests {
         assert!(output.contains("func.func @add"));
         assert!(output.contains("%0: core.i32"));
         assert!(output.contains("%1: core.i32"));
-        assert!(output.contains("arith.add %0, %1"));
+        assert!(output.contains("arith.addi %0, %1"));
         assert!(output.contains("func.return %2"));
     }
 
@@ -1611,7 +1611,7 @@ core.module @test {
         ctx.push_op(entry, c2.op_ref());
         let v2 = c2.result(&ctx);
 
-        let add = arith::add(&mut ctx, loc, v1, v1, i32_ty);
+        let add = arith::addi(&mut ctx, loc, v1, v1, i32_ty);
         ctx.push_op(entry, add.op_ref());
 
         // RAUW: replace v1 with v2

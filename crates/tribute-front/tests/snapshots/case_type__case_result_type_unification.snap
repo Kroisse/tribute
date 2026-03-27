@@ -1,11 +1,12 @@
 ---
 source: crates/tribute-front/tests/case_type.rs
+assertion_line: 124
 expression: ir_text
 ---
 core.module @test {
   func.func @to_nat(%0: core.i1) -> core.i32 {
       %1 = arith.const {value = true} : core.i1
-      %2 = arith.cmp_eq %0, %1 : core.i1
+      %2 = arith.cmpi %0, %1 {predicate = @eq} : core.i1
       %3 = scf.if %2 : core.i32 {
           %4 = arith.const {value = 1} : core.i32
           scf.yield %4

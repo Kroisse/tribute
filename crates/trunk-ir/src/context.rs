@@ -1625,7 +1625,7 @@ mod tests {
             r#"core.module @test {
   func.func @original() -> core.i32 {
     %0 = arith.const {value = 7} : core.i32
-    %1 = arith.neg %0 : core.i32
+    %1 = arith.negi %0 : core.i32
     func.return %1
   }
 }"#,

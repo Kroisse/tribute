@@ -190,7 +190,7 @@ mod tests {
         ^bb0(%v: tribute_rt.anyref):
           %one = arith.const {value = 1} : core.i32
           %cast = core.unrealized_conversion_cast %v : core.i32
-          %sum = arith.add %cast, %one : core.i32
+          %sum = arith.addi %cast, %one : core.i32
           scf.yield %sum
       }
     }

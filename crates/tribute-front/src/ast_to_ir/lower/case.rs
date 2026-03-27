@@ -4,6 +4,7 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
+use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, func, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
@@ -204,7 +205,14 @@ fn emit_literal_check<'db>(
                 arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, const_op.op_ref());
             let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::cmp_eq(builder.ir, location, scrutinee, const_val, bool_ty);
+            let cmp_op = arith::cmpi(
+                builder.ir,
+                location,
+                scrutinee,
+                const_val,
+                bool_ty,
+                Symbol::new("eq"),
+            );
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
         }
@@ -214,7 +222,14 @@ fn emit_literal_check<'db>(
                 arith::r#const(builder.ir, location, i32_ty, Attribute::Int(value as i128));
             builder.ir.push_op(builder.block, const_op.op_ref());
             let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::cmp_eq(builder.ir, location, scrutinee, const_val, bool_ty);
+            let cmp_op = arith::cmpi(
+                builder.ir,
+                location,
+                scrutinee,
+                const_val,
+                bool_ty,
+                Symbol::new("eq"),
+            );
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
         }
@@ -222,7 +237,14 @@ fn emit_literal_check<'db>(
             let const_op = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(*b));
             builder.ir.push_op(builder.block, const_op.op_ref());
             let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::cmp_eq(builder.ir, location, scrutinee, const_val, bool_ty);
+            let cmp_op = arith::cmpi(
+                builder.ir,
+                location,
+                scrutinee,
+                const_val,
+                bool_ty,
+                Symbol::new("eq"),
+            );
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
         }
