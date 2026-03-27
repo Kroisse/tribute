@@ -206,9 +206,6 @@ pub enum BuiltinRef {
     Or,
     Not,
 
-    // String operations
-    Concat,
-
     // List operations
     Cons,
     ListConcat,

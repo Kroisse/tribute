@@ -221,11 +221,6 @@ impl<'db> TypeChecker<'db> {
                         ctx.constrain_eq(rhs_ty, bool_ty);
                         bool_ty
                     }
-                    // String concatenation: operands must be Text, result is Text
-                    BinOpKind::Concat => {
-                        ctx.constrain_eq(lhs_ty, rhs_ty);
-                        lhs_ty
-                    }
                 }
             }
             ExprKind::Block { stmts, value } => {
@@ -696,12 +691,6 @@ impl<'db> TypeChecker<'db> {
             ),
             // Boolean unary op: Bool -> Bool
             BuiltinRef::Not => ctx.func_type(vec![ctx.bool_type()], ctx.bool_type(), effect),
-            // String concatenation: (String, String) -> String
-            BuiltinRef::Concat => ctx.func_type(
-                vec![ctx.string_type(), ctx.string_type()],
-                ctx.string_type(),
-                effect,
-            ),
             // List cons: (a, List a) -> List a
             BuiltinRef::Cons => {
                 let a = ctx.fresh_type_var();
@@ -2260,32 +2249,6 @@ mod tests {
             assert!(effect.is_pure(db));
         } else {
             panic!("Not should return Func type");
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_concat(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-        let string_ty = Type::new(db, TypeKind::string());
-
-        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Concat);
-
-        // Should be fn(String, String) -> String
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = ty.kind(db)
-        {
-            assert_eq!(params.len(), 2);
-            assert_eq!(params[0], string_ty);
-            assert_eq!(params[1], string_ty);
-            assert_eq!(*result, string_ty);
-            assert!(effect.is_pure(db));
-        } else {
-            panic!("Concat should return Func type");
         }
     }
 

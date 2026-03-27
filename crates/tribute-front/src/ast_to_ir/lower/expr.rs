@@ -700,18 +700,6 @@ fn lower_binop<'db>(
         BinOpKind::Ge => emit_binop!(arith::cmp_ge, bool_ty),
         BinOpKind::And => emit_binop!(arith::and, bool_ty),
         BinOpKind::Or => emit_binop!(arith::or, bool_ty),
-        BinOpKind::Concat => {
-            // Concat (<>) is desugared to MethodCall in astgen, so this
-            // branch should not be reached. Emit a warning as fallback.
-            Diagnostic::new(
-                "string concatenation not yet supported in IR lowering",
-                location.span,
-                DiagnosticSeverity::Warning,
-                CompilationPhase::Lowering,
-            )
-            .accumulate(builder.db());
-            builder.emit_nil(location)
-        }
     };
 
     Some(result)
