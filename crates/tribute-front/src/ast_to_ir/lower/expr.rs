@@ -190,14 +190,16 @@ pub(super) fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            let is_float = builder
-                .ctx
-                .get_node_type(expr_node_id)
+            let node_type = builder.ctx.get_node_type(expr_node_id);
+            let is_float = node_type
                 .map(|ty| matches!(ty.kind(builder.db()), TypeKind::Float))
+                .unwrap_or(false);
+            let is_bytes = node_type
+                .map(|ty| matches!(ty.kind(builder.db()), TypeKind::Bytes))
                 .unwrap_or(false);
             let lhs_val = lower_expr(builder, lhs)?;
             let rhs_val = lower_expr(builder, rhs)?;
-            lower_binop(builder, op, lhs_val, rhs_val, is_float, location)
+            lower_binop(builder, op, lhs_val, rhs_val, is_float, is_bytes, location)
         }
 
         ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
@@ -669,6 +671,7 @@ fn lower_binop<'db>(
     lhs: ValueRef,
     rhs: ValueRef,
     is_float: bool,
+    is_bytes: bool,
     location: Location,
 ) -> Option<ValueRef> {
     let bool_ty = builder.ctx.bool_type(builder.ir);
@@ -701,14 +704,22 @@ fn lower_binop<'db>(
         BinOpKind::And => emit_binop!(arith::and, bool_ty),
         BinOpKind::Or => emit_binop!(arith::or, bool_ty),
         BinOpKind::Concat => {
-            Diagnostic::new(
-                "string concatenation not yet supported in IR lowering",
-                location.span,
-                DiagnosticSeverity::Warning,
-                CompilationPhase::Lowering,
-            )
-            .accumulate(builder.db());
-            builder.emit_nil(location)
+            if is_bytes {
+                let result_ty = builder.ctx.bytes_type(builder.ir);
+                let callee = Symbol::from_dynamic("Bytes::<>");
+                let op = func::call(builder.ir, location, [lhs, rhs], result_ty, callee);
+                builder.ir.push_op(builder.block, op.op_ref());
+                op.result(builder.ir)
+            } else {
+                Diagnostic::new(
+                    "string concatenation not yet supported in IR lowering",
+                    location.span,
+                    DiagnosticSeverity::Warning,
+                    CompilationPhase::Lowering,
+                )
+                .accumulate(builder.db());
+                builder.emit_nil(location)
+            }
         }
     };
 
