@@ -903,14 +903,15 @@ fn parse_string_literal(text: &str) -> String {
             .to_string()
     } else if text.get(prefix_len..prefix_len + 1) == Some("\"") {
         // Regular string: "..." or s"..."
-        text.get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .to_string()
+        let content = text
+            .get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("");
+        let bytes = process_escape_sequences(content);
+        String::from_utf8(bytes).expect("escape processing produced invalid UTF-8")
     } else {
         // Fallback
         text.to_string()
     }
-    // TODO: proper escape handling for non-raw strings
 }
 
 fn parse_bytes_literal(text: &str) -> Vec<u8> {
@@ -974,12 +975,96 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
             .to_vec()
     } else {
         // Regular byte string: b"..."
-        // TODO: proper escape handling for non-raw byte strings
-        text.get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec()
+        let content = text
+            .get(prefix_len + 1..text.len().saturating_sub(1))
+            .unwrap_or("");
+        process_escape_sequences(content)
     }
+}
+
+/// Process escape sequences in a string/bytes literal content.
+///
+/// Converts backslash escapes (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\xHH`, `\uHHHH`)
+/// into their byte values. Unknown escapes are not reachable here because
+/// tree-sitter's grammar rejects them at parse time.
+///
+/// Operates on raw bytes to avoid redundant UTF-8 decoding (the input is already
+/// validated by tree-sitter).
+fn process_escape_sequences(input: &str) -> Vec<u8> {
+    let bytes = input.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            // Scan forward for the next backslash (or end), copy the whole run
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'\\' {
+                i += 1;
+            }
+            result.extend_from_slice(&bytes[start..i]);
+            continue;
+        }
+        // Backslash — consume it and the escape character
+        i += 1; // skip '\'
+        if i >= bytes.len() {
+            result.push(b'\\');
+            break;
+        }
+        match bytes[i] {
+            b'n' => {
+                result.push(b'\n');
+                i += 1;
+            }
+            b'r' => {
+                result.push(b'\r');
+                i += 1;
+            }
+            b't' => {
+                result.push(b'\t');
+                i += 1;
+            }
+            b'0' => {
+                result.push(b'\0');
+                i += 1;
+            }
+            b'\\' => {
+                result.push(b'\\');
+                i += 1;
+            }
+            b'"' => {
+                result.push(b'"');
+                i += 1;
+            }
+            b'x' if i + 2 < bytes.len() => {
+                i += 1; // skip 'x'
+                let hex = &bytes[i..i + 2];
+                let byte =
+                    u8::from_str_radix(std::str::from_utf8(hex).unwrap_or("00"), 16).unwrap_or(0);
+                result.push(byte);
+                i += 2;
+            }
+            b'u' if i + 4 < bytes.len() => {
+                i += 1; // skip 'u'
+                let hex = &bytes[i..i + 4];
+                if let Some(ch) = std::str::from_utf8(hex)
+                    .ok()
+                    .and_then(|s| u32::from_str_radix(s, 16).ok())
+                    .and_then(char::from_u32)
+                {
+                    let buf = &mut [0u8; 4];
+                    result.extend_from_slice(ch.encode_utf8(buf).as_bytes());
+                }
+                i += 4;
+            }
+            _ => {
+                // Fallback: keep backslash as-is
+                result.push(b'\\');
+            }
+        }
+    }
+
+    result
 }
 
 /// Parse a rune (character) literal.
