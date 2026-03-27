@@ -622,10 +622,12 @@ mod tests {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::BinOp { op, .. } = value.kind.as_ref() else {
-            panic!("Expected binary op");
+        // `<>` is desugared to a MethodCall in astgen
+        let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+            panic!("Expected method call, got {:?}", value.kind);
         };
-        assert_eq!(*op, crate::ast::BinOpKind::Concat);
+        assert_eq!(method.to_string(), "<>");
+        assert_eq!(args.len(), 1);
     }
 
     // =============================================================================

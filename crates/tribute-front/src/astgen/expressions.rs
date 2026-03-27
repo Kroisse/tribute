@@ -194,7 +194,14 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         ">=" => BinOpKind::Ge,
         "&&" => BinOpKind::And,
         "||" => BinOpKind::Or,
-        "<>" => BinOpKind::Concat,
+        "<>" => {
+            // Desugar `a <> b` to `a.(<>)(b)` — resolved by TDNR
+            return ExprKind::MethodCall {
+                receiver: lhs,
+                method: Symbol::new("<>"),
+                args: vec![rhs],
+            };
+        }
         _ => return ExprKind::Error,
     };
 
