@@ -691,18 +691,6 @@ impl<'db> TypeChecker<'db> {
             ),
             // Boolean unary op: Bool -> Bool
             BuiltinRef::Not => ctx.func_type(vec![ctx.bool_type()], ctx.bool_type(), effect),
-            // List cons: (a, List a) -> List a
-            BuiltinRef::Cons => {
-                let a = ctx.fresh_type_var();
-                let list_a = ctx.named_type(Symbol::new("List"), vec![a]);
-                ctx.func_type(vec![a, list_a], list_a, effect)
-            }
-            // List concatenation: (List a, List a) -> List a
-            BuiltinRef::ListConcat => {
-                let a = ctx.fresh_type_var();
-                let list_a = ctx.named_type(Symbol::new("List"), vec![a]);
-                ctx.func_type(vec![list_a, list_a], list_a, effect)
-            }
         }
     }
 
@@ -2249,67 +2237,6 @@ mod tests {
             assert!(effect.is_pure(db));
         } else {
             panic!("Not should return Func type");
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_list_ops(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // Cons: (a, List a) -> List a
-        let cons_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Cons);
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = cons_ty.kind(db)
-        {
-            assert_eq!(params.len(), 2);
-            // First param is element type
-            let elem_ty = params[0];
-            // Second param is List(elem_ty)
-            if let TypeKind::Named { name, args } = params[1].kind(db) {
-                assert_eq!(*name, Symbol::new("List"));
-                assert_eq!(args.len(), 1);
-                assert_eq!(args[0], elem_ty);
-            } else {
-                panic!("Cons second param should be Named(List)");
-            }
-            // Result is List(elem_ty)
-            if let TypeKind::Named { name, args } = result.kind(db) {
-                assert_eq!(*name, Symbol::new("List"));
-                assert_eq!(args.len(), 1);
-                assert_eq!(args[0], elem_ty);
-            } else {
-                panic!("Cons result should be Named(List)");
-            }
-            assert!(effect.is_pure(db));
-        } else {
-            panic!("Cons should return Func type");
-        }
-
-        // ListConcat: (List a, List a) -> List a
-        let list_concat_ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::ListConcat);
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = list_concat_ty.kind(db)
-        {
-            assert_eq!(params.len(), 2);
-            // Both params should be List types
-            assert_eq!(params[0], params[1]);
-            assert_eq!(params[0], *result);
-            if let TypeKind::Named { name, .. } = params[0].kind(db) {
-                assert_eq!(*name, Symbol::new("List"));
-            } else {
-                panic!("ListConcat params should be Named(List)");
-            }
-            assert!(effect.is_pure(db));
-        } else {
-            panic!("ListConcat should return Func type");
         }
     }
 

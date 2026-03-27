@@ -205,10 +205,6 @@ pub enum BuiltinRef {
     And,
     Or,
     Not,
-
-    // List operations
-    Cons,
-    ListConcat,
 }
 
 /// Module path reference for qualified imports.
