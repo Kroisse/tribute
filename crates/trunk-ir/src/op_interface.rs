@@ -96,7 +96,7 @@ impl PureOps {
 /// This expands to an inventory registration:
 /// ```text
 /// inventory::submit! {
-///     op_interface::PureOps::register("arith", "add")
+///     op_interface::PureOps::register("arith", "addi")
 /// }
 /// ```
 #[macro_export]

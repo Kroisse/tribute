@@ -324,6 +324,14 @@ impl RewritePattern for ArithNegPattern {
             let operand = negi.operand(ctx);
 
             match suffix {
+                "i32" => {
+                    let i32_ty = intern_i32_type(ctx);
+                    let zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
+                    let sub = wasm_dialect::i32_sub(ctx, loc, zero.result(ctx), operand, i32_ty);
+                    rewriter.insert_op(zero.op_ref());
+                    rewriter.replace_op(sub.op_ref());
+                    true
+                }
                 "i64" => {
                     let i64_ty = intern_i64_type(ctx);
                     let zero = wasm_dialect::i64_const(ctx, loc, i64_ty, 0);
@@ -567,6 +575,13 @@ fn type_suffix_opt(ctx: &IrContext, ty: Option<TypeRef>) -> &'static str {
             "i32"
         }
     }
+}
+
+/// Intern a core.i32 type.
+pub(crate) fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
+    use trunk_ir::types::TypeDataBuilder;
+    ctx.types
+        .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
 }
 
 /// Intern a core.i64 type.

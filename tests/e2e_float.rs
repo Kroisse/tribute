@@ -236,3 +236,57 @@ fn main() {
         "1",
     );
 }
+
+#[test]
+fn test_float_comparison_branch_gt() {
+    assert_native_output(
+        "float_cmp_branch_gt.trb",
+        r#"
+fn main() {
+    let a = 2.0
+    let b = 1.0
+    case a > b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_float_comparison_branch_le() {
+    assert_native_output(
+        "float_cmp_branch_le.trb",
+        r#"
+fn main() {
+    let a = 1.0
+    let b = 2.0
+    case a <= b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}
+
+#[test]
+fn test_float_comparison_branch_ge() {
+    assert_native_output(
+        "float_cmp_branch_ge.trb",
+        r#"
+fn main() {
+    let a = 2.0
+    let b = 2.0
+    case a >= b {
+        true -> __tribute_print_int(1)
+        false -> __tribute_print_int(0)
+    }
+}
+"#,
+        "1",
+    );
+}

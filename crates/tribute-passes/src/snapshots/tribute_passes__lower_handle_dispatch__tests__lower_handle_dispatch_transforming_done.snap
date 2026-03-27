@@ -8,7 +8,7 @@ core.module @test {
       %1 = arith.const {value = 0} : tribute_rt.anyref
       %2 = arith.const {value = 1} : core.i32
       %3 = core.unrealized_conversion_cast %0 : core.i32
-      %4 = arith.add %3, %2 : core.i32
+      %4 = arith.addi %3, %2 : core.i32
       func.return %4
   }
 }
