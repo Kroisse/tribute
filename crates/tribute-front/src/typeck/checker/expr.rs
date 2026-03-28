@@ -10,9 +10,8 @@ use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, Arm, BinOpKind, BuiltinRef, Effect, EffectRow, Expr, ExprKind, FieldPattern,
-    HandlerArm, HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type,
-    TypeKind, TypedRef,
+    AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
+    HandlerKind, LiteralPattern, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypedRef,
 };
 
 use super::super::func_context::FunctionInferenceContext;
@@ -172,15 +171,46 @@ impl<'db> TypeChecker<'db> {
                         .unwrap_or_else(|| ctx.fresh_type_var());
                     ctx.record_resolved_method(expr.id, func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
-                        TypeKind::Func { result, .. } => *result,
+                        TypeKind::Func { params, result, .. } => {
+                            // Constrain receiver against the method's first param
+                            if let Some(first_param) = params.first() {
+                                ctx.constrain_eq(receiver_ty, *first_param);
+                            }
+                            // Infer arg types and constrain against method's parameter types
+                            for (arg, param_ty) in args.iter().zip(params.iter().skip(1)) {
+                                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+                                ctx.constrain_eq(arg_ty, *param_ty);
+                            }
+                            *result
+                        }
                         _ => ctx.fresh_type_var(),
                     }
                 } else {
                     // Receiver not yet resolved — defer to post-solve
-                    let result_ty = ctx.fresh_type_var();
                     let arg_types: Vec<Type<'db>> = std::iter::once(receiver_ty)
                         .chain(args.iter().map(|a| self.infer_expr_type_with_ctx(ctx, a)))
                         .collect();
+
+                    // For known operator methods, add type constraints eagerly
+                    // so that type inference can propagate even before TDNR resolves the method.
+                    let result_ty = match method.to_string().as_str() {
+                        "+" | "-" | "*" | "/" | "%" => {
+                            // Arithmetic: all operands same type, result = operand type
+                            if let Some(rhs_ty) = arg_types.get(1) {
+                                ctx.constrain_eq(receiver_ty, *rhs_ty);
+                            }
+                            receiver_ty
+                        }
+                        "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+                            // Comparison: operands same type, result = Bool
+                            if let Some(rhs_ty) = arg_types.get(1) {
+                                ctx.constrain_eq(receiver_ty, *rhs_ty);
+                            }
+                            ctx.bool_type()
+                        }
+                        _ => ctx.fresh_type_var(),
+                    };
+
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
                         receiver_ty,
@@ -195,26 +225,6 @@ impl<'db> TypeChecker<'db> {
                 let lhs_ty = self.infer_expr_type_with_ctx(ctx, lhs);
                 let rhs_ty = self.infer_expr_type_with_ctx(ctx, rhs);
                 match op {
-                    // Arithmetic operators: operands must be same type, result is that type
-                    BinOpKind::Add
-                    | BinOpKind::Sub
-                    | BinOpKind::Mul
-                    | BinOpKind::Div
-                    | BinOpKind::Mod => {
-                        ctx.constrain_eq(lhs_ty, rhs_ty);
-                        lhs_ty
-                    }
-                    // Comparison operators: operands must be same type, result is Bool
-                    BinOpKind::Eq
-                    | BinOpKind::Ne
-                    | BinOpKind::Lt
-                    | BinOpKind::Le
-                    | BinOpKind::Gt
-                    | BinOpKind::Ge => {
-                        ctx.constrain_eq(lhs_ty, rhs_ty);
-                        ctx.bool_type()
-                    }
-                    // Boolean operators: operands must be Bool, result is Bool
                     BinOpKind::And | BinOpKind::Or => {
                         let bool_ty = ctx.bool_type();
                         ctx.constrain_eq(lhs_ty, bool_ty);
@@ -554,6 +564,36 @@ impl<'db> TypeChecker<'db> {
                     result_ty
                 }
             }
+            ExprKind::Lambda { params, body } => {
+                // Infer parameter types from annotations (or fresh vars)
+                let param_types: Vec<Type<'db>> = params
+                    .iter()
+                    .map(|p| match &p.ty {
+                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
+                        None => ctx.fresh_type_var(),
+                    })
+                    .collect();
+
+                let outer_effect = ctx.current_effect();
+                let fresh_effect = ctx.fresh_effect_row();
+                ctx.set_current_effect(fresh_effect);
+
+                ctx.push_scope();
+                for (param, ty) in params.iter().zip(param_types.iter()) {
+                    if let Some(local_id) = param.local_id {
+                        ctx.bind_local(local_id, *ty);
+                    }
+                    ctx.bind_local_by_name(param.name, *ty);
+                }
+
+                let body_ty = self.infer_expr_type_with_ctx(ctx, body);
+                let inferred_effect = ctx.current_effect();
+
+                ctx.pop_scope();
+                ctx.set_current_effect(outer_effect);
+
+                ctx.func_type(param_types, body_ty, inferred_effect)
+            }
             _ => ctx.fresh_type_var(),
         }
     }
@@ -588,7 +628,6 @@ impl<'db> TypeChecker<'db> {
                 // directly without a variant like `Some` or `None`.
                 ctx.error_type()
             }
-            ResolvedRef::Builtin(builtin) => self.infer_builtin_with_ctx(ctx, builtin),
             ResolvedRef::AbilityOp { ability, op, .. } => {
                 // Look up the ability operation signature from the module type env
                 if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
@@ -648,49 +687,6 @@ impl<'db> TypeChecker<'db> {
                 // They are only valid in handler patterns to identify which ability is being handled.
                 ctx.error_type()
             }
-        }
-    }
-
-    /// Infer the type of a builtin reference.
-    fn infer_builtin_with_ctx(
-        &self,
-        ctx: &mut FunctionInferenceContext<'_, 'db>,
-        builtin: &BuiltinRef,
-    ) -> Type<'db> {
-        let effect = EffectRow::pure(self.db());
-        match builtin {
-            // Arithmetic operations: (a, a) -> a
-            BuiltinRef::Add
-            | BuiltinRef::Sub
-            | BuiltinRef::Mul
-            | BuiltinRef::Div
-            | BuiltinRef::Mod => {
-                let a = ctx.fresh_type_var();
-                ctx.func_type(vec![a, a], a, effect)
-            }
-            // Unary negation: a -> a
-            BuiltinRef::Neg => {
-                let a = ctx.fresh_type_var();
-                ctx.func_type(vec![a], a, effect)
-            }
-            // Comparison operations: (a, a) -> Bool
-            BuiltinRef::Eq
-            | BuiltinRef::Ne
-            | BuiltinRef::Lt
-            | BuiltinRef::Le
-            | BuiltinRef::Gt
-            | BuiltinRef::Ge => {
-                let a = ctx.fresh_type_var();
-                ctx.func_type(vec![a, a], ctx.bool_type(), effect)
-            }
-            // Boolean binary ops: (Bool, Bool) -> Bool
-            BuiltinRef::And | BuiltinRef::Or => ctx.func_type(
-                vec![ctx.bool_type(), ctx.bool_type()],
-                ctx.bool_type(),
-                effect,
-            ),
-            // Boolean unary op: Bool -> Bool
-            BuiltinRef::Not => ctx.func_type(vec![ctx.bool_type()], ctx.bool_type(), effect),
         }
     }
 
@@ -1096,7 +1092,34 @@ impl<'db> TypeChecker<'db> {
                 let outer_effect = ctx.current_effect();
                 let fresh_effect = ctx.fresh_effect_row();
                 ctx.set_current_effect(fresh_effect);
+
+                // Bind lambda parameters so that references to them in the body
+                // resolve to their concrete types (not fresh UniVars). Without this,
+                // TDNR cannot determine receiver types for method calls inside lambdas.
+                let param_types: Vec<Type<'db>> = params
+                    .iter()
+                    .map(|p| match &p.ty {
+                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
+                        None => ctx.fresh_type_var(),
+                    })
+                    .collect();
+                ctx.push_scope();
+                for (param, ty) in params.iter().zip(param_types.iter()) {
+                    tracing::debug!(
+                        "convert Lambda: binding param '{}' (local_id={:?}) to {:?}",
+                        param.name,
+                        param.local_id,
+                        ty.kind(self.db())
+                    );
+                    if let Some(local_id) = param.local_id {
+                        ctx.bind_local(local_id, *ty);
+                    }
+                    ctx.bind_local_by_name(param.name, *ty);
+                }
+
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+
+                ctx.pop_scope();
                 ctx.set_current_effect(outer_effect);
                 ExprKind::Lambda {
                     params,
@@ -2041,8 +2064,7 @@ mod tests {
     use trunk_ir::Symbol;
 
     use crate::ast::{
-        BuiltinRef, EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation,
-        TypeAnnotationKind, TypeKind,
+        EffectRow, FuncDefId, NodeId, SpanMap, Type, TypeAnnotation, TypeAnnotationKind, TypeKind,
     };
     use crate::typeck::{FunctionInferenceContext, ModuleTypeEnv};
 
@@ -2067,176 +2089,6 @@ mod tests {
         TypeAnnotation {
             id: NodeId::from_raw(0),
             kind,
-        }
-    }
-
-    // =========================================================================
-    // infer_builtin_with_ctx tests
-    // =========================================================================
-
-    #[salsa_test]
-    fn test_builtin_arithmetic_ops(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        for builtin in [
-            BuiltinRef::Add,
-            BuiltinRef::Sub,
-            BuiltinRef::Mul,
-            BuiltinRef::Div,
-            BuiltinRef::Mod,
-        ] {
-            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
-
-            // Should be fn(?a, ?a) -> ?a
-            if let TypeKind::Func {
-                params,
-                result,
-                effect,
-            } = ty.kind(db)
-            {
-                assert_eq!(params.len(), 2, "{:?} should have 2 params", builtin);
-                assert_eq!(
-                    params[0], params[1],
-                    "{:?} params should be same type",
-                    builtin
-                );
-                assert_eq!(
-                    params[0], *result,
-                    "{:?} param and result should be same",
-                    builtin
-                );
-                // Effect should be pure
-                assert!(effect.is_pure(db), "{:?} should be pure", builtin);
-                // Params should be UniVar (fresh type var)
-                assert!(
-                    matches!(params[0].kind(db), TypeKind::UniVar { .. }),
-                    "{:?} param should be UniVar",
-                    builtin
-                );
-            } else {
-                panic!(
-                    "{:?} should return Func type, got {:?}",
-                    builtin,
-                    ty.kind(db)
-                );
-            }
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_neg(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Neg);
-
-        // Should be fn(?a) -> ?a
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = ty.kind(db)
-        {
-            assert_eq!(params.len(), 1);
-            assert_eq!(params[0], *result);
-            assert!(effect.is_pure(db));
-            assert!(matches!(params[0].kind(db), TypeKind::UniVar { .. }));
-        } else {
-            panic!("Neg should return Func type");
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_comparison_ops(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-
-        for builtin in [
-            BuiltinRef::Eq,
-            BuiltinRef::Ne,
-            BuiltinRef::Lt,
-            BuiltinRef::Le,
-            BuiltinRef::Gt,
-            BuiltinRef::Ge,
-        ] {
-            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
-
-            // Should be fn(?a, ?a) -> Bool
-            if let TypeKind::Func {
-                params,
-                result,
-                effect,
-            } = ty.kind(db)
-            {
-                assert_eq!(params.len(), 2, "{:?} should have 2 params", builtin);
-                assert_eq!(
-                    params[0], params[1],
-                    "{:?} params should be same type",
-                    builtin
-                );
-                assert_eq!(*result, bool_ty, "{:?} result should be Bool", builtin);
-                assert!(effect.is_pure(db), "{:?} should be pure", builtin);
-            } else {
-                panic!("{:?} should return Func type", builtin);
-            }
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_boolean_binary_ops(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-
-        for builtin in [BuiltinRef::And, BuiltinRef::Or] {
-            let ty = checker.infer_builtin_with_ctx(&mut ctx, &builtin);
-
-            // Should be fn(Bool, Bool) -> Bool
-            if let TypeKind::Func {
-                params,
-                result,
-                effect,
-            } = ty.kind(db)
-            {
-                assert_eq!(params.len(), 2);
-                assert_eq!(params[0], bool_ty);
-                assert_eq!(params[1], bool_ty);
-                assert_eq!(*result, bool_ty);
-                assert!(effect.is_pure(db));
-            } else {
-                panic!("{:?} should return Func type", builtin);
-            }
-        }
-    }
-
-    #[salsa_test]
-    fn test_builtin_boolean_not(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-
-        let ty = checker.infer_builtin_with_ctx(&mut ctx, &BuiltinRef::Not);
-
-        // Should be fn(Bool) -> Bool
-        if let TypeKind::Func {
-            params,
-            result,
-            effect,
-        } = ty.kind(db)
-        {
-            assert_eq!(params.len(), 1);
-            assert_eq!(params[0], bool_ty);
-            assert_eq!(*result, bool_ty);
-            assert!(effect.is_pure(db));
-        } else {
-            panic!("Not should return Func type");
         }
     }
 

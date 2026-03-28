@@ -274,12 +274,18 @@ fn lower_extern_function<'db>(
 ) {
     let location = ctx.location(func_decl.id);
     let func_name = func_decl.name;
+    let qualified_name = ctx.qualify_name(func_name);
 
     let (param_ir_types, return_ty, effect_ir) = {
         let scheme = ctx
-            .lookup_function_type(func_name)
+            .lookup_function_type(qualified_name)
             .cloned()
-            .expect("extern function should have TypeScheme from type checking");
+            .unwrap_or_else(|| {
+                panic!(
+                    "extern function '{}' should have TypeScheme from type checking",
+                    qualified_name
+                )
+            });
         let body = scheme.body(ctx.db);
         match body.kind(ctx.db) {
             TypeKind::Func {

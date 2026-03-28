@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/tuple_pattern.rs
-assertion_line: 115
 expression: ir_text
 ---
 core.module @test {
@@ -18,8 +17,10 @@ core.module @test {
       %6 = adt.struct_get %4 {field = 1, type = !__tuple_i32_anyref} : tribute_rt.anyref
       %7 = adt.struct_get %6 {field = 0, type = !__tuple_anyref_anyref} : tribute_rt.anyref
       %8 = adt.struct_get %6 {field = 1, type = !__tuple_anyref_anyref} : tribute_rt.anyref
-      %9 = arith.addi %5, %7 : core.i32
-      %10 = arith.addi %9, %8 : core.i32
-      func.return %10
+      %9 = core.unrealized_conversion_cast %7 : core.i32
+      %10 = func.call %5, %9 {callee = @"Nat::+"} : core.i32
+      %11 = core.unrealized_conversion_cast %8 : core.i32
+      %12 = func.call %10, %11 {callee = @"Nat::+"} : core.i32
+      func.return %12
   }
 }

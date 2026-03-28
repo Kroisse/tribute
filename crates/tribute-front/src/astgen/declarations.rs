@@ -202,7 +202,10 @@ fn lower_param_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<ParamDecl> 
 }
 
 /// Lower a type annotation.
-fn lower_type_annotation(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnotation> {
+pub(super) fn lower_type_annotation(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: Node,
+) -> Option<TypeAnnotation> {
     // Check if the node itself is already a type node
     if matches!(
         node.kind(),

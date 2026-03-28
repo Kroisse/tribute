@@ -47,7 +47,7 @@ fn test_compile_arithmetic_expr(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn test_compile_function_with_params(db: &salsa::DatabaseImpl) {
     let code = r#"
-fn add(a, b) { a + b }
+fn add(a: Nat, b: Nat) -> Nat { a + b }
 fn main() { add(1, 2) }
 "#;
     let source = SourceCst::from_source_str(db, "params.trb", code);

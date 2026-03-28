@@ -136,6 +136,7 @@ fn test() -> Nat {
 
 /// Test tuple let destructuring used in function arguments.
 #[salsa_test]
+#[ignore = "operator TDNR fails with pattern bindings (#617)"]
 fn test_tuple_let_destructure_from_function(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

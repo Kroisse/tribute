@@ -113,6 +113,53 @@ pub mod Result {
 }
 
 // =============================================================================
+// Numeric operator intrinsics
+// =============================================================================
+// Arithmetic and comparison operators for primitive numeric types.
+// These are resolved via TDNR and lowered to arith dialect operations.
+
+pub mod Int {
+    extern "intrinsic" fn (+)(left: Int, right: Int) -> Int
+    extern "intrinsic" fn (-)(left: Int, right: Int) -> Int
+    extern "intrinsic" fn (*)(left: Int, right: Int) -> Int
+    extern "intrinsic" fn (/)(left: Int, right: Int) -> Int
+    extern "intrinsic" fn (%)(left: Int, right: Int) -> Int
+    extern "intrinsic" fn (==)(left: Int, right: Int) -> Bool
+    extern "intrinsic" fn (!=)(left: Int, right: Int) -> Bool
+    extern "intrinsic" fn (<)(left: Int, right: Int) -> Bool
+    extern "intrinsic" fn (<=)(left: Int, right: Int) -> Bool
+    extern "intrinsic" fn (>)(left: Int, right: Int) -> Bool
+    extern "intrinsic" fn (>=)(left: Int, right: Int) -> Bool
+}
+
+pub mod Nat {
+    extern "intrinsic" fn (+)(left: Nat, right: Nat) -> Nat
+    extern "intrinsic" fn (-)(left: Nat, right: Nat) -> Nat
+    extern "intrinsic" fn (*)(left: Nat, right: Nat) -> Nat
+    extern "intrinsic" fn (/)(left: Nat, right: Nat) -> Nat
+    extern "intrinsic" fn (%)(left: Nat, right: Nat) -> Nat
+    extern "intrinsic" fn (==)(left: Nat, right: Nat) -> Bool
+    extern "intrinsic" fn (!=)(left: Nat, right: Nat) -> Bool
+    extern "intrinsic" fn (<)(left: Nat, right: Nat) -> Bool
+    extern "intrinsic" fn (<=)(left: Nat, right: Nat) -> Bool
+    extern "intrinsic" fn (>)(left: Nat, right: Nat) -> Bool
+    extern "intrinsic" fn (>=)(left: Nat, right: Nat) -> Bool
+}
+
+pub mod Float {
+    extern "intrinsic" fn (+)(left: Float, right: Float) -> Float
+    extern "intrinsic" fn (-)(left: Float, right: Float) -> Float
+    extern "intrinsic" fn (*)(left: Float, right: Float) -> Float
+    extern "intrinsic" fn (/)(left: Float, right: Float) -> Float
+    extern "intrinsic" fn (==)(left: Float, right: Float) -> Bool
+    extern "intrinsic" fn (!=)(left: Float, right: Float) -> Bool
+    extern "intrinsic" fn (<)(left: Float, right: Float) -> Bool
+    extern "intrinsic" fn (<=)(left: Float, right: Float) -> Bool
+    extern "intrinsic" fn (>)(left: Float, right: Float) -> Bool
+    extern "intrinsic" fn (>=)(left: Float, right: Float) -> Bool
+}
+
+// =============================================================================
 // String type (UTF-8 rope)
 // =============================================================================
 

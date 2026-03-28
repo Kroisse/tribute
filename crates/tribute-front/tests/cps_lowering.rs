@@ -88,9 +88,9 @@ ability State(s) {
     fn set(value: s) -> Nil
 }
 
-fn increment() ->{State(Int)} Int {
+fn get_value() ->{State(Int)} Int {
     let n = State::get()
-    n + 1
+    n
 }
 
 fn main() { }

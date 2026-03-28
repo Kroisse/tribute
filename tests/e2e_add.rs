@@ -183,7 +183,7 @@ fn test_generic_indirect_call() {
         r#"
 fn compute() ->{} Int {
     let f = fn(x) { x }
-    f(42)
+    f(+42)
 }
 fn main() { }
 "#,
@@ -378,7 +378,7 @@ fn test_lambda_identity() {
         r#"
 fn compute() ->{} Int {
     let f = fn(x) { x }
-    f(42)
+    f(+42)
 }
 fn main() { }
 "#,
@@ -442,9 +442,9 @@ fn test_lambda_with_capture() {
     let source_code = Rope::from_str(
         r#"
 fn test_capture() ->{} Int {
-    let a = 10
+    let a = +10
     let f = fn(x) { x + a }
-    f(32)
+    f(+32)
 }
 
 fn main() { }
@@ -529,7 +529,7 @@ fn test_indirect_call_ir_generation() {
         r#"
 fn compute() ->{} Int {
     let f = fn(x) { x }
-    f(42)
+    f(+42)
 }
 fn main() { }
 "#,

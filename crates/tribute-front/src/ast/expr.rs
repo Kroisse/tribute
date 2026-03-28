@@ -242,24 +242,11 @@ pub struct Param {
 }
 
 /// Binary operators.
+///
+/// Only boolean operators remain here. Arithmetic and comparison operators
+/// are desugared to MethodCall in astgen and resolved via TDNR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
-    // Arithmetic
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-
-    // Comparison
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-
-    // Boolean
     And,
     Or,
 }

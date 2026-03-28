@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 36
 expression: ir_text
 ---
 core.module @test {
@@ -9,9 +8,9 @@ core.module @test {
       func.return %2
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda(%1: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 1000} {
+      %0 = closure.lambda(%1: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 1002} {
           %2 = arith.const {value = 1} : core.i32
-          %3 = arith.addi %1, %2 : core.i32
+          %3 = func.call %1, %2 {callee = @"Nat::+"} : core.i32
           func.return %3
       }
       %4 = arith.const {value = 41} : core.i32

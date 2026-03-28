@@ -29,9 +29,9 @@ fn diag_unresolved_name_with_suggestion(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn compute(value: Int) -> Int { value + 1 }
+fn compute(value: Int) -> Int { value + +1 }
 
-fn main() -> Int { compue(42) }
+fn main() -> Int { compue(+42) }
 "#,
     );
     let result = compile_with_diagnostics(db, source);

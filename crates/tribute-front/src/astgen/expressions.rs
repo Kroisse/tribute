@@ -180,28 +180,35 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
     let rhs = lower_expr(ctx, rhs_node);
     let op_text = ctx.node_text(&op_node);
 
+    // Desugar arithmetic, comparison, and concatenation operators to MethodCall.
+    // TDNR resolves these to type-specific intrinsic functions (e.g., Int::(+), Float::(==)).
+    // Only boolean operators (&&, ||) remain as BinOp for future short-circuit evaluation.
+    let method_sym = match &*op_text {
+        "+" => Some(Symbol::new("+")),
+        "-" => Some(Symbol::new("-")),
+        "*" => Some(Symbol::new("*")),
+        "/" => Some(Symbol::new("/")),
+        "%" => Some(Symbol::new("%")),
+        "==" => Some(Symbol::new("==")),
+        "!=" => Some(Symbol::new("!=")),
+        "<" => Some(Symbol::new("<")),
+        "<=" => Some(Symbol::new("<=")),
+        ">" => Some(Symbol::new(">")),
+        ">=" => Some(Symbol::new(">=")),
+        "<>" => Some(Symbol::new("<>")),
+        _ => None,
+    };
+    if let Some(method) = method_sym {
+        return ExprKind::MethodCall {
+            receiver: lhs,
+            method,
+            args: vec![rhs],
+        };
+    }
+
     let op = match &*op_text {
-        "+" => BinOpKind::Add,
-        "-" => BinOpKind::Sub,
-        "*" => BinOpKind::Mul,
-        "/" => BinOpKind::Div,
-        "%" => BinOpKind::Mod,
-        "==" => BinOpKind::Eq,
-        "!=" => BinOpKind::Ne,
-        "<" => BinOpKind::Lt,
-        "<=" => BinOpKind::Le,
-        ">" => BinOpKind::Gt,
-        ">=" => BinOpKind::Ge,
         "&&" => BinOpKind::And,
         "||" => BinOpKind::Or,
-        "<>" => {
-            // Desugar `a <> b` to `a.(<>)(b)` — resolved by TDNR
-            return ExprKind::MethodCall {
-                receiver: lhs,
-                method: Symbol::new("<>"),
-                args: vec![rhs],
-            };
-        }
         _ => return ExprKind::Error,
     };
 
@@ -566,19 +573,20 @@ fn lower_param_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Param> {
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "parameter" {
-            // Extract name from the "name" field, not the full parameter text
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let id = ctx.fresh_id_with_span(&child);
-                let name = ctx.node_symbol(&name_node);
-                // TODO: type annotation from "type" field
-                params.push(Param {
-                    id,
-                    name,
-                    ty: None,
-                    local_id: None,
-                });
-            }
+        if (child.kind() == "parameter" || child.kind() == "typed_parameter")
+            && let Some(name_node) = child.child_by_field_name("name")
+        {
+            let id = ctx.fresh_id_with_span(&child);
+            let name = ctx.node_symbol(&name_node);
+            let ty = child
+                .child_by_field_name("type")
+                .and_then(|n| super::declarations::lower_type_annotation(ctx, n));
+            params.push(Param {
+                id,
+                name,
+                ty,
+                local_id: None,
+            });
         } else if child.kind() == "identifier" {
             // Simple identifier parameter (no type annotation)
             let id = ctx.fresh_id_with_span(&child);

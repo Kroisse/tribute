@@ -802,9 +802,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             ResolvedRef::TypeDef { id } => ResolvedTarget::Type {
                 name: id.name(self.db),
             },
-            ResolvedRef::Builtin(_) => ResolvedTarget::Other {
-                name: Symbol::new("builtin"),
-            },
             ResolvedRef::Module { .. } => ResolvedTarget::Other {
                 name: Symbol::new("module"),
             },

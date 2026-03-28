@@ -132,8 +132,8 @@ fn test_salsa_multiple_functions(db: &salsa::DatabaseImpl) {
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
     let text = r#"
-fn add(a, b) { a + b }
-fn multiply(a, b) { a * b }
+fn add(a: Nat, b: Nat) -> Nat { a + b }
+fn multiply(a: Nat, b: Nat) -> Nat { a * b }
 fn main() { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
