@@ -343,7 +343,6 @@ fn lower_extern_function<'db>(
         parent_op: None,
     });
 
-    let qualified_name = ctx.qualify_name(func_name);
     let func_op = func::func(ir, location, qualified_name, func_type, body_region);
 
     // Mark as extern so the backend treats it as Import linkage
