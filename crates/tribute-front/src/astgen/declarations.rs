@@ -369,23 +369,21 @@ fn lower_ability_row(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<TypeAnnota
 
 /// Lower an ability_item into a TypeAnnotation.
 ///
-/// Grammar: `ability_item = type_identifier optional(type_arguments)`
-/// e.g. `Console` or `State(Int)`
+/// Grammar: `ability_item = ability_path optional(type_arguments)`
+/// e.g. `Console`, `State(Int)`, or `abilities::Throw(Nat)`
 fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAnnotation> {
     let mut cursor = node.walk();
     let children: Vec<_> = node.named_children(&mut cursor).collect();
 
-    let name_node = children.first().filter(|n| n.kind() == "type_identifier")?;
+    let path_node = children
+        .first()
+        .filter(|n| n.kind() == "ability_path" || n.kind() == "type_identifier")?;
     let id = ctx.fresh_id_with_span(&node);
-    let name = ctx.node_symbol(name_node);
+    let name_ann = lower_ability_path(ctx, *path_node);
 
     // Check for type_arguments (e.g. State(Int))
     let type_args_node = children.iter().find(|n| n.kind() == "type_arguments");
     if let Some(args_node) = type_args_node {
-        let ctor = Box::new(TypeAnnotation {
-            id: ctx.fresh_id_with_span(name_node),
-            kind: TypeAnnotationKind::Named(name),
-        });
         let mut args_cursor = args_node.walk();
         let args: Vec<TypeAnnotation> = args_node
             .named_children(&mut args_cursor)
@@ -393,13 +391,53 @@ fn lower_ability_item(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<TypeAn
             .collect();
         Some(TypeAnnotation {
             id,
-            kind: TypeAnnotationKind::App { ctor, args },
+            kind: TypeAnnotationKind::App {
+                ctor: Box::new(name_ann),
+                args,
+            },
         })
     } else {
-        Some(TypeAnnotation {
+        Some(name_ann)
+    }
+}
+
+/// Lower an ability_path into a TypeAnnotation.
+///
+/// Single segment (`Abort`) → `Named`, multi-segment (`abilities::Throw`) → `Path`.
+fn lower_ability_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
+    let id = ctx.fresh_id_with_span(&node);
+
+    // Single segment: ability_path is just a type_identifier
+    if node.kind() == "type_identifier" {
+        let name = ctx.node_symbol(&node);
+        return TypeAnnotation {
             id,
             kind: TypeAnnotationKind::Named(name),
-        })
+        };
+    }
+
+    // Multi-segment or single-segment ability_path
+    let mut segments = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "path_segment" | "path_keyword" | "type_identifier" => {
+                segments.push(ctx.node_symbol(&child));
+            }
+            _ => {}
+        }
+    }
+
+    if segments.len() == 1 {
+        TypeAnnotation {
+            id,
+            kind: TypeAnnotationKind::Named(segments[0]),
+        }
+    } else {
+        TypeAnnotation {
+            id,
+            kind: TypeAnnotationKind::Path(segments),
+        }
     }
 }
 

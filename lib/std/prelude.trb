@@ -288,6 +288,24 @@ pub mod Bytes {
 }
 
 // =============================================================================
+// Standard Abilities
+// =============================================================================
+
+pub mod abilities {
+    /// A non-resumptive ability that aborts the current computation.
+    /// The handler provides an alternative result.
+    pub ability Abort {
+        op abort() -> Never
+    }
+
+    /// A parameterized non-resumptive ability for typed error handling.
+    /// The handler receives the thrown error value of type `e`.
+    pub ability Throw(e) {
+        op throw(error: e) -> Never
+    }
+}
+
+// =============================================================================
 // I/O functions
 // =============================================================================
 
