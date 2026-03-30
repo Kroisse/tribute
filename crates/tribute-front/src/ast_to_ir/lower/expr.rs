@@ -8,10 +8,9 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, arith, core, func, scf};
+use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
-use trunk_ir::{BlockData, RegionData};
 
 use crate::ast::{BinOpKind, Expr, ExprKind, PatternKind, ResolvedRef, Stmt, TypeKind, TypedRef};
 
@@ -190,43 +189,22 @@ pub(super) fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            // Short-circuit evaluation for boolean operators:
-            //   a && b  →  scf.if(a, then={yield b}, else={yield false})
-            //   a || b  →  scf.if(a, then={yield true}, else={yield b})
             let lhs_val = lower_expr(builder, lhs)?;
+            let rhs_val = lower_expr(builder, rhs)?;
             let bool_ty = builder.ctx.bool_type(builder.ir);
-
-            let (then_region, else_region) = match op {
+            let result = match op {
                 BinOpKind::And => {
-                    // then: evaluate rhs and yield it
-                    let then_region =
-                        build_short_circuit_rhs_region(builder, location, bool_ty, rhs);
-                    // else: yield false
-                    let else_region =
-                        build_short_circuit_const_region(builder.ir, location, bool_ty, false);
-                    (then_region, else_region)
+                    let op = arith::and(builder.ir, location, lhs_val, rhs_val, bool_ty);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    op.result(builder.ir)
                 }
                 BinOpKind::Or => {
-                    // then: yield true
-                    let then_region =
-                        build_short_circuit_const_region(builder.ir, location, bool_ty, true);
-                    // else: evaluate rhs and yield it
-                    let else_region =
-                        build_short_circuit_rhs_region(builder, location, bool_ty, rhs);
-                    (then_region, else_region)
+                    let op = arith::or(builder.ir, location, lhs_val, rhs_val, bool_ty);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    op.result(builder.ir)
                 }
             };
-
-            let if_op = scf::r#if(
-                builder.ir,
-                location,
-                lhs_val,
-                bool_ty,
-                then_region,
-                else_region,
-            );
-            builder.ir.push_op(builder.block, if_op.op_ref());
-            Some(if_op.result(builder.ir))
+            Some(result)
         }
 
         ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
@@ -1253,69 +1231,4 @@ pub(super) fn ability_args_tuple_type(ir: &mut IrContext, num_fields: usize) -> 
             .attr("fields", Attribute::List(fields_attr))
             .build(),
     )
-}
-
-/// Build a region that evaluates an expression and yields its result.
-/// Used for short-circuit evaluation of boolean operators.
-fn build_short_circuit_rhs_region<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    location: Location,
-    bool_ty: TypeRef,
-    rhs: Expr<TypedRef<'db>>,
-) -> trunk_ir::refs::RegionRef {
-    let block = builder.ir.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: Default::default(),
-        parent_region: None,
-    });
-
-    let rhs_val = {
-        let mut inner = IrBuilder::new(builder.ctx, builder.ir, block);
-        lower_expr(&mut inner, rhs)
-    };
-
-    let yield_val = match rhs_val {
-        Some(v) => v,
-        None => {
-            let op = arith::r#const(builder.ir, location, bool_ty, Attribute::Bool(false));
-            builder.ir.push_op(block, op.op_ref());
-            op.result(builder.ir)
-        }
-    };
-    let yield_op = scf::r#yield(builder.ir, location, [yield_val]);
-    builder.ir.push_op(block, yield_op.op_ref());
-
-    builder.ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![block],
-        parent_op: None,
-    })
-}
-
-/// Build a region that yields a boolean constant.
-/// Used for short-circuit evaluation of boolean operators.
-fn build_short_circuit_const_region(
-    ir: &mut IrContext,
-    location: Location,
-    bool_ty: TypeRef,
-    value: bool,
-) -> trunk_ir::refs::RegionRef {
-    let block = ir.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: Default::default(),
-        parent_region: None,
-    });
-
-    let const_op = arith::r#const(ir, location, bool_ty, Attribute::Bool(value));
-    ir.push_op(block, const_op.op_ref());
-    let yield_op = scf::r#yield(ir, location, [const_op.result(ir)]);
-    ir.push_op(block, yield_op.op_ref());
-
-    ir.create_region(RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![block],
-        parent_op: None,
-    })
 }
