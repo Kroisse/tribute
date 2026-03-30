@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use salsa::Accumulator as _;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -152,14 +151,12 @@ impl<'db> Resolver<'db> {
                 return self.binding_to_ref(binding, sym);
             }
         } else {
-            // Qualified path: e.g., State::get, Option::Some
+            // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
             if let Some(namespace) = name.namespace()
-                && namespace.is_simple()
                 && let Some(binding) = self.env.lookup_qualified(namespace, sym)
             {
                 return self.binding_to_ref(binding, sym);
             }
-            // TODO: Support multi-level paths (e.g., std::io::Reader)
         }
 
         // Not found - emit diagnostic and return unresolved sentinel

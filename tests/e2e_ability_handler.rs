@@ -742,26 +742,24 @@ fn main() {
 
 // =============================================================================
 // Throw(e) Ability Tests (#193)
+//
+// These tests use the prelude-defined abilities (abilities::Abort, abilities::Throw).
 // =============================================================================
 
-/// Test basic Throw(e) ability: parameterized non-resumptive effect.
+/// Test basic Throw(e) ability from prelude.
 ///
 /// Throw(e) combines parameterized ability (like State(s)) with Never return
 /// type (like Abort). The handler catches the thrown error value.
 #[test]
 fn test_throw_basic() {
-    let code = r#"ability Throw(e) {
-    op throw(error: e) -> Never
-}
-
-fn do_throw() ->{Throw(Nat)} Nat {
-    Throw::throw(42)
+    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
+    abilities::Throw::throw(42)
 }
 
 fn main() {
     let result = handle do_throw() {
         do result { result }
-        op Throw::throw(error) { error }
+        op abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -775,18 +773,14 @@ fn main() {
 /// an alternative result.
 #[test]
 fn test_throw_with_payload() {
-    let code = r#"ability Throw(e) {
-    op throw(error: e) -> Never
-}
-
-fn check_positive(x: Nat) ->{Throw(Nat)} Nat {
-    Throw::throw(x + 100)
+    let code = r#"fn throw_with_offset(x: Nat) ->{abilities::Throw(Nat)} Nat {
+    abilities::Throw::throw(x + 100)
 }
 
 fn main() {
-    let result = handle check_positive(5) {
+    let result = handle throw_with_offset(5) {
         do result { result }
-        op Throw::throw(error) { error }
+        op abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
@@ -805,19 +799,15 @@ fn main() {
 #[test]
 #[ignore = "CPS continuation applied to non-resumptive op result in sequential let bindings (#624)"]
 fn test_throw_multiple_operations() {
-    let code = r#"ability Throw(e) {
-    op throw(error: e) -> Never
-}
-
-fn no_throw() ->{Throw(Nat)} Nat {
+    let code = r#"fn no_throw() ->{abilities::Throw(Nat)} Nat {
     10
 }
 
-fn must_throw() ->{Throw(Nat)} Nat {
-    Throw::throw(77)
+fn must_throw() ->{abilities::Throw(Nat)} Nat {
+    abilities::Throw::throw(77)
 }
 
-fn do_work() ->{Throw(Nat)} Nat {
+fn do_work() ->{abilities::Throw(Nat)} Nat {
     let a = no_throw()
     let b = must_throw()
     a + b
@@ -826,10 +816,28 @@ fn do_work() ->{Throw(Nat)} Nat {
 fn main() {
     let result = handle do_work() {
         do result { result }
-        op Throw::throw(error) { error }
+        op abilities::Throw::throw(error) { error }
     }
     __tribute_print_nat(result)
 }
 "#;
     assert_native_output("throw_multiple_ops.trb", code, "77");
+}
+
+/// Test Abort ability from prelude.
+#[test]
+fn test_prelude_abort() {
+    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
+    abilities::Abort::abort()
+}
+
+fn main() {
+    let result = handle do_abort() {
+        do result { result }
+        op abilities::Abort::abort() { 99 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("prelude_abort.trb", code, "99");
 }
