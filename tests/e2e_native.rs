@@ -795,7 +795,7 @@ fn main() {
 }
 
 #[test]
-#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+#[ignore = "depends on __bytes_get_or_panic intrinsic not available on native backend"]
 fn test_native_bytes_get_safe() {
     assert_native_output(
         "bytes_get_safe.trb",
@@ -835,7 +835,7 @@ fn main() {
 }
 
 #[test]
-#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+#[ignore = "depends on __bytes_slice_or_panic intrinsic not available on native backend"]
 fn test_native_bytes_slice_safe() {
     assert_native_output(
         "bytes_slice_safe.trb",
@@ -851,7 +851,7 @@ fn main() {
 }
 
 #[test]
-#[ignore = "Bool comparison codegen issue — icmp.i8 type mismatch in Cranelift"]
+#[ignore = "depends on __bytes_slice_or_panic intrinsic not available on native backend"]
 fn test_native_bytes_slice_clamping() {
     assert_native_output(
         "bytes_slice_clamp.trb",
