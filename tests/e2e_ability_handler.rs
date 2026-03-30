@@ -841,3 +841,43 @@ fn main() {
 "#;
     assert_native_output("prelude_abort.trb", code, "99");
 }
+
+// =============================================================================
+// Effect-Directed Name Resolution Tests (#629)
+// =============================================================================
+
+/// Test effect-directed resolution: `abort()` resolves from effect row.
+#[test]
+fn test_effect_directed_abort() {
+    let code = r#"fn do_abort() ->{abilities::Abort} Nat {
+    abort()
+}
+
+fn main() {
+    let result = handle do_abort() {
+        do result { result }
+        op abilities::Abort::abort() { 99 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("effect_directed_abort.trb", code, "99");
+}
+
+/// Test effect-directed resolution: `throw(x)` resolves from effect row.
+#[test]
+fn test_effect_directed_throw() {
+    let code = r#"fn do_throw() ->{abilities::Throw(Nat)} Nat {
+    throw(42)
+}
+
+fn main() {
+    let result = handle do_throw() {
+        do result { result }
+        op abilities::Throw::throw(error) { error }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("effect_directed_throw.trb", code, "42");
+}

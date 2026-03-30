@@ -12,7 +12,7 @@ use trunk_ir::Symbol;
 use crate::ast::{
     AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm,
     HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind, ResolvedRef,
-    SpanMap, Stmt, StructDecl, UnresolvedName, UseDecl,
+    SpanMap, Stmt, StructDecl, TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -91,6 +91,9 @@ pub struct Resolver<'db> {
     span_map: SpanMap,
     /// Stack of LocalIds for `resume` in `op` handler arms.
     resume_local_id_stack: Vec<LocalId>,
+    /// Ability operations injected from effect annotations (effect-directed resolution).
+    /// Maps unqualified operation name → Binding. Cleared on each function scope.
+    effect_ops: HashMap<Symbol, Binding<'db>>,
 }
 
 impl<'db> Resolver<'db> {
@@ -103,6 +106,7 @@ impl<'db> Resolver<'db> {
             local_id_gen: LocalIdGen::new(),
             resume_local_id_stack: Vec::new(),
             span_map,
+            effect_ops: HashMap::new(),
         }
     }
 
@@ -148,6 +152,11 @@ impl<'db> Resolver<'db> {
 
             // Check module environment (unqualified lookup)
             if let Some(binding) = self.env.lookup(sym) {
+                return self.binding_to_ref(binding, sym);
+            }
+
+            // Check effect-injected ability operations (effect-directed resolution)
+            if let Some(binding) = self.effect_ops.get(&sym) {
                 return self.binding_to_ref(binding, sym);
             }
         } else {
@@ -288,9 +297,18 @@ impl<'db> Resolver<'db> {
             })
             .collect();
 
+        // Inject ability operations from effect annotations into scope.
+        // This enables effect-directed name resolution: when a function declares
+        // an effect like `->{abilities::Abort}`, its operations (e.g., `abort()`)
+        // become directly callable without qualification.
+        if let Some(effects) = &func.effects {
+            self.inject_ability_operations(effects);
+        }
+
         // Resolve body
         let body = self.resolve_expr(func.body);
 
+        self.effect_ops.clear();
         self.pop_scope();
 
         FuncDecl {
@@ -302,6 +320,57 @@ impl<'db> Resolver<'db> {
             return_ty: func.return_ty,
             effects: func.effects,
             body,
+        }
+    }
+
+    /// Inject ability operations from effect annotations into the current scope.
+    ///
+    /// For each ability in the effect row, look up its operations in the module
+    /// environment and make them available as unqualified names. This enables
+    /// calling `abort()` instead of `abilities::Abort::abort()` when the function
+    /// declares `->{abilities::Abort}`.
+    ///
+    /// Parameters and local variables take precedence (already bound before this).
+    fn inject_ability_operations(&mut self, effects: &[TypeAnnotation]) {
+        self.effect_ops.clear();
+        for ann in effects {
+            let Some(ability_name) = Self::extract_ability_name(ann) else {
+                continue;
+            };
+
+            for (op_name, binding) in self.env.iter_namespace(ability_name) {
+                if matches!(binding, Binding::AbilityOp { .. }) {
+                    // Don't override existing entries (first ability wins;
+                    // TODO: detect ambiguity when multiple abilities export same op name)
+                    self.effect_ops.entry(op_name).or_insert(binding.clone());
+                }
+            }
+        }
+    }
+
+    /// Extract the ability name (as a Symbol) from a type annotation.
+    ///
+    /// - `Named(sym)` → sym (e.g., `Abort`)
+    /// - `Path(segs)` → qualified symbol (e.g., `abilities::Throw`)
+    /// - `App { ctor, .. }` → recurse into ctor (e.g., `Throw` from `Throw(Nat)`)
+    fn extract_ability_name(ann: &TypeAnnotation) -> Option<Symbol> {
+        match &ann.kind {
+            TypeAnnotationKind::Named(sym) => Some(*sym),
+            TypeAnnotationKind::Path(segs) => {
+                if segs.is_empty() {
+                    None
+                } else {
+                    Some(Symbol::from_dynamic(
+                        &segs
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                    ))
+                }
+            }
+            TypeAnnotationKind::App { ctor, .. } => Self::extract_ability_name(ctor),
+            _ => None,
         }
     }
 
