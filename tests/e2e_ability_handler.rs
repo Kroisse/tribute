@@ -272,6 +272,93 @@ fn main() {
     assert_native_output("handler_op_never_abort.trb", code, "99");
 }
 
+/// Test Abort ability with a parameterized abort operation.
+///
+/// The abort operation carries a Nat payload, and the handler uses it
+/// as an alternative result.
+#[test]
+fn test_abort_with_payload() {
+    let code = r#"ability Abort {
+    op abort(code: Nat) -> Never
+}
+
+fn do_abort() ->{Abort} Nat {
+    Abort::abort(99)
+}
+
+fn main() {
+    let result = handle do_abort() {
+        do result { result }
+        op Abort::abort(code) { code }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("abort_with_payload.trb", code, "99");
+}
+
+/// Test Abort ability: handler provides fallback for multiple abort calls.
+///
+/// Two separate handle expressions each handle their own abort independently.
+#[test]
+fn test_abort_multiple_handles() {
+    let code = r#"ability Abort {
+    op abort() -> Never
+}
+
+fn always_abort() ->{Abort} Nat {
+    Abort::abort()
+}
+
+fn main() {
+    let a = handle always_abort() {
+        do result { result }
+        op Abort::abort() { 10 }
+    }
+    let b = handle always_abort() {
+        do result { result }
+        op Abort::abort() { 20 }
+    }
+    __tribute_print_nat(a + b)
+}
+"#;
+    assert_native_output("abort_multiple_handles.trb", code, "30");
+}
+
+/// Test conditional abort with case expression (codegen limitation).
+///
+/// When `case` branches have different types (Never vs Nat), Cranelift
+/// codegen currently has a type mismatch. This test is ignored until fixed.
+#[test]
+#[ignore = "Cranelift codegen type mismatch with Never in case branches"]
+fn test_abort_conditional() {
+    let code = r#"ability Abort {
+    op abort() -> Never
+}
+
+fn might_abort(should_abort: Bool) ->{Abort} Nat {
+    case should_abort {
+        True -> Abort::abort()
+        False -> 42
+    }
+}
+
+fn main() {
+    let a = handle might_abort(True) {
+        do result { result }
+        op Abort::abort() { 0 }
+    }
+    let b = handle might_abort(False) {
+        do result { result }
+        op Abort::abort() { 0 }
+    }
+    __tribute_print_nat(a)
+    __tribute_print_nat(b)
+}
+"#;
+    assert_native_output("abort_conditional.trb", code, "0\n42");
+}
+
 /// Test handling an ability declared inside a module.
 ///
 /// The handler arm uses a module-qualified path (MyMod::Counter::inc)

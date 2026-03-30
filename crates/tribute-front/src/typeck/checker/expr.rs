@@ -56,6 +56,7 @@ fn type_contains_univar<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> boo
         | TypeKind::Bytes
         | TypeKind::Rune
         | TypeKind::Nil
+        | TypeKind::Never
         | TypeKind::BoundVar { .. }
         | TypeKind::Error => false,
     }
@@ -1692,23 +1693,37 @@ impl<'db> TypeChecker<'db> {
                 params,
                 resume_local_id,
             } => {
+                // Check if the operation has a `-> Never` return type (non-resumptive).
+                let is_non_resumptive = self
+                    .extract_ability_id_from_ref(&ability)
+                    .and_then(|aid| self.env.lookup_ability_op(aid, op))
+                    .map(|info| matches!(info.return_type.kind(self.db()), TypeKind::Never))
+                    .unwrap_or(false);
+
                 // Bind the synthetic `resume` local with a Continuation type
                 // so that `resume(value)` calls inside `op` arms are typed correctly.
+                // For `-> Never` operations, skip binding — resume cannot be used.
                 if let Some(k_local_id) = resume_local_id {
-                    let arg_ty = ctx.fresh_type_var();
-                    let result_ty = ctx.fresh_type_var();
-                    let cont_effect = handle_ctx
-                        .map(|hc| hc.body_effect)
-                        .unwrap_or_else(|| ctx.fresh_effect_row());
-                    let cont_ty = Type::new(
-                        self.db(),
-                        TypeKind::Continuation {
-                            arg: arg_ty,
-                            result: result_ty,
-                            effect: cont_effect,
-                        },
-                    );
-                    ctx.bind_local(k_local_id, cont_ty);
+                    if is_non_resumptive {
+                        // Bind to Error type so that any use of `resume` in the body
+                        // produces a type error without cascading.
+                        ctx.bind_local(k_local_id, ctx.error_type());
+                    } else {
+                        let arg_ty = ctx.fresh_type_var();
+                        let result_ty = ctx.fresh_type_var();
+                        let cont_effect = handle_ctx
+                            .map(|hc| hc.body_effect)
+                            .unwrap_or_else(|| ctx.fresh_effect_row());
+                        let cont_ty = Type::new(
+                            self.db(),
+                            TypeKind::Continuation {
+                                arg: arg_ty,
+                                result: result_ty,
+                                effect: cont_effect,
+                            },
+                        );
+                        ctx.bind_local(k_local_id, cont_ty);
+                    }
                 }
 
                 HandlerKind::Op {
@@ -1761,6 +1776,8 @@ impl<'db> TypeChecker<'db> {
                     ctx.rune_type()
                 } else if *name == "Nil" {
                     ctx.nil_type()
+                } else if *name == "Never" {
+                    ctx.never_type()
                 } else {
                     ctx.named_type(*name, vec![])
                 }

@@ -694,6 +694,9 @@ impl<'db> TypeSolver<'db> {
             // Error types unify with anything
             (&TypeKind::Error, _) | (_, &TypeKind::Error) => Ok(()),
 
+            // Never (bottom type) unifies with anything
+            (&TypeKind::Never, _) | (_, &TypeKind::Never) => Ok(()),
+
             // Structural unification for compound types
             (
                 &TypeKind::Named {
@@ -1169,6 +1172,8 @@ impl<'db> TypeSolver<'db> {
             (TypeKind::UniVar { .. }, _) | (_, TypeKind::UniVar { .. }) => true,
             // Error type unifies with anything
             (TypeKind::Error, _) | (_, TypeKind::Error) => true,
+            // Never (bottom type) unifies with anything
+            (TypeKind::Never, _) | (_, TypeKind::Never) => true,
             // Same kind, check recursively
             (TypeKind::Int, TypeKind::Int)
             | (TypeKind::Nat, TypeKind::Nat)
@@ -1768,6 +1773,59 @@ mod tests {
         // Error should unify with any type
         assert!(solver.unify_types(error_ty, int_ty).is_ok());
         assert!(solver.unify_types(bool_ty, error_ty).is_ok());
+    }
+
+    #[test]
+    fn test_never_type_unifies_with_anything() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let never_ty = Type::new(&db, TypeKind::Never);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let nat_ty = Type::new(&db, TypeKind::Nat);
+
+        // Never (bottom type) should unify with any type
+        assert!(solver.unify_types(never_ty, int_ty).is_ok());
+        assert!(solver.unify_types(bool_ty, never_ty).is_ok());
+        assert!(solver.unify_types(never_ty, nat_ty).is_ok());
+
+        // UniVar should unify with Never, then resolve to Never
+        let var = fresh_var(&db, 0);
+        assert!(solver.unify_types(var, never_ty).is_ok());
+        assert_eq!(solver.type_subst.apply(&db, var), never_ty);
+
+        // UniVar bound to Never should then unify with any concrete type
+        let var2 = fresh_var(&db, 1);
+        assert!(solver.unify_types(var2, never_ty).is_ok());
+        assert!(solver.unify_types(var2, int_ty).is_ok());
+    }
+
+    #[test]
+    fn test_never_in_named_type_args() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let never_ty = Type::new(&db, TypeKind::Never);
+        let int_ty = Type::new(&db, TypeKind::Int);
+
+        // Named("List", [Never]) should unify with Named("List", [Int])
+        // because Never is a bottom type
+        let list_never = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![never_ty],
+            },
+        );
+        let list_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("List"),
+                args: vec![int_ty],
+            },
+        );
+        assert!(solver.unify_types(list_never, list_int).is_ok());
     }
 
     #[test]
@@ -2491,6 +2549,12 @@ mod tests {
         // Two type variables are unifiable
         let var_ty2 = fresh_var(&db, 1);
         assert!(solver.types_unifiable(var_ty, var_ty2));
+
+        // Never (bottom type) is unifiable with any type
+        let never_ty = Type::new(&db, TypeKind::Never);
+        assert!(solver.types_unifiable(never_ty, int_ty));
+        assert!(solver.types_unifiable(bool_ty, never_ty));
+        assert!(solver.types_unifiable(never_ty, var_ty));
     }
 
     #[test]

@@ -488,6 +488,11 @@ impl<'db> ModuleTypeEnv<'db> {
         Type::new(self.db, TypeKind::Nil)
     }
 
+    /// Create the Never (bottom) type.
+    pub fn never_type(&self) -> Type<'db> {
+        Type::new(self.db, TypeKind::Never)
+    }
+
     /// Create an error type.
     pub fn error_type(&self) -> Type<'db> {
         Type::new(self.db, TypeKind::Error)

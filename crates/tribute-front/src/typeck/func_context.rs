@@ -562,6 +562,11 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.env.nil_type()
     }
 
+    /// Create the Never (bottom) type.
+    pub fn never_type(&self) -> Type<'db> {
+        self.env.never_type()
+    }
+
     /// Create an error type.
     pub fn error_type(&self) -> Type<'db> {
         self.env.error_type()

@@ -328,6 +328,12 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bool => self.bool_type(ir),
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
+            TypeKind::Never => {
+                // TODO(#621): Never values are never produced at runtime; using
+                // anyref as a placeholder causes Cranelift type mismatches in
+                // case branches mixing Never with concrete types.
+                self.anyref_type(ir)
+            }
             TypeKind::BoundVar { .. } => {
                 // Quantified type variable in TypeScheme body → type-erased any
                 self.anyref_type(ir)
