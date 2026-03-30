@@ -321,6 +321,59 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     payload
 }
 
+/// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
+/// original buffer (zero-copy).
+///
+/// Panics (aborts) if `start > end` or `end > bytes.len`.
+///
+/// Signature: `(bytes: ptr, start: u32, end: u32) -> ptr`
+///
+/// # Safety
+///
+/// `bytes` must be a valid pointer to a `TributeBytes` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
+    bytes: *const TributeBytes,
+    start: u32,
+    end: u32,
+) -> *mut TributeBytes {
+    let b = unsafe { &*bytes };
+    let s = start as u64;
+    let e = end as u64;
+
+    // Bounds check
+    if s > e || e > b.len {
+        oom_abort();
+    }
+
+    let new_len = e - s;
+    let new_ptr = if new_len > 0 && !b.ptr.is_null() {
+        unsafe { b.ptr.add(s as usize) }
+    } else {
+        core::ptr::null()
+    };
+
+    // Allocate RC header (8 bytes) + TributeBytes payload (16 bytes) = 24 bytes
+    const RC_HEADER_SIZE: u64 = 8;
+    let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
+    let raw = unsafe { __tribute_alloc(alloc_size) };
+
+    // Store RC header: refcount=1, rtti_idx=0
+    unsafe {
+        *(raw as *mut u32) = 1; // refcount
+        *(raw.add(4) as *mut u32) = 0; // rtti_idx
+    }
+
+    // Payload pointer = raw + 8
+    let payload = unsafe { raw.add(RC_HEADER_SIZE as usize) as *mut TributeBytes };
+    unsafe {
+        (*payload).ptr = new_ptr;
+        (*payload).len = new_len;
+    }
+
+    payload
+}
+
 // =============================================================================
 // Allocator
 // =============================================================================

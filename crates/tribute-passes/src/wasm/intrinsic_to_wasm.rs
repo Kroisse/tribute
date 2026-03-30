@@ -246,7 +246,6 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &IntrinsicAnalysis) 
     applicator = applicator
         .add_pattern(BytesLenPattern)
         .add_pattern(BytesGetOrPanicPattern)
-        .add_pattern(BytesSliceOrPanicPattern)
         .add_pattern(BytesConcatPattern);
 
     applicator.apply_partial(ctx, module);
@@ -502,94 +501,6 @@ impl RewritePattern for BytesGetOrPanicPattern {
 
     fn name(&self) -> &'static str {
         "BytesGetOrPanicPattern"
-    }
-}
-
-/// Pattern for `Bytes::slice_or_panic(bytes, start, end)` -> new struct with adjusted offset/len
-///
-/// Start and end are i32 (Nat), returns Bytes.
-struct BytesSliceOrPanicPattern;
-
-impl RewritePattern for BytesSliceOrPanicPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, "__bytes_slice_or_panic") {
-            return false;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        if operands.len() < 3 {
-            return false;
-        }
-        let bytes_ref = operands[0];
-        let start = operands[1]; // i32 (Nat)
-        let end = operands[2]; // i32 (Nat)
-
-        let location = ctx.op(op).location;
-        let i32_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
-        let i8_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
-        let bytes_ty = arena_core::bytes(ctx).as_type_ref();
-
-        // Get data array ref (field 0) - shared, zero-copy
-        let array_ty = arena_core::array(ctx, i8_ty).as_type_ref();
-        let array_ref_ty = arena_core::r#ref(ctx, array_ty, false).as_type_ref();
-        let get_data = wasm_dialect::struct_get(
-            ctx,
-            location,
-            bytes_ref,
-            array_ref_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_DATA_FIELD,
-        );
-
-        // Get current offset (field 1)
-        let get_offset = wasm_dialect::struct_get(
-            ctx,
-            location,
-            bytes_ref,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_OFFSET_FIELD,
-        );
-
-        // new_offset = offset + start
-        let new_offset =
-            wasm_dialect::i32_add(ctx, location, get_offset.result(ctx), start, i32_ty);
-
-        // new_len = end - start
-        let new_len = wasm_dialect::i32_sub(ctx, location, end, start, i32_ty);
-
-        // struct.new to create new Bytes (shares the underlying array)
-        let struct_new = wasm_dialect::struct_new(
-            ctx,
-            location,
-            vec![
-                get_data.result(ctx),
-                new_offset.result(ctx),
-                new_len.result(ctx),
-            ],
-            bytes_ty,
-            BYTES_STRUCT_IDX,
-        );
-
-        rewriter.insert_op(get_data.op_ref());
-        rewriter.insert_op(get_offset.op_ref());
-        rewriter.insert_op(new_offset.op_ref());
-        rewriter.insert_op(new_len.op_ref());
-        rewriter.replace_op(struct_new.op_ref());
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "BytesSliceOrPanicPattern"
     }
 }
 
