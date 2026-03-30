@@ -355,7 +355,16 @@ impl<'db> Resolver<'db> {
     /// - `App { ctor, .. }` → recurse into ctor (e.g., `Throw` from `Throw(Nat)`)
     fn extract_ability_name(ann: &TypeAnnotation) -> Option<Symbol> {
         match &ann.kind {
-            TypeAnnotationKind::Named(sym) => Some(*sym),
+            TypeAnnotationKind::Named(sym) => {
+                // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
+                sym.with_str(|s| {
+                    if s.starts_with(|c: char| c.is_ascii_uppercase()) {
+                        Some(*sym)
+                    } else {
+                        None
+                    }
+                })
+            }
             TypeAnnotationKind::Path(segs) => {
                 if segs.is_empty() {
                     None

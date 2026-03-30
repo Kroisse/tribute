@@ -881,3 +881,25 @@ fn main() {
 "#;
     assert_native_output("effect_directed_throw.trb", code, "42");
 }
+
+/// Test that a local variable shadows an effect-injected operation.
+///
+/// The parameter `abort` shadows `abilities::Abort::abort`, so calling
+/// `abort()` invokes the parameter (a function), not the ability operation.
+#[test]
+fn test_effect_directed_local_shadows_op() {
+    let code = r#"fn use_local(abort: fn() -> Nat) ->{abilities::Abort} Nat {
+    abort()
+}
+
+fn main() {
+    let result = handle use_local(fn() 77) {
+        do result { result }
+        op abilities::Abort::abort() { 0 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    // abort() calls the parameter (returns 77), not the ability op (would return 0)
+    assert_native_output("effect_directed_shadow.trb", code, "77");
+}
