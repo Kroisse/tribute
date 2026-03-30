@@ -1,5 +1,6 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
+assertion_line: 319
 expression: ir_text
 ---
 core.module @test {
@@ -41,6 +42,7 @@ core.module @test {
       %2 = arith.const {value = 42} : core.i32
       %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
       %4 = func.call %0, %3 {callee = @with_state} : tribute_rt.anyref
-      func.return %4
+      %5 = core.unrealized_conversion_cast %4 : core.i32
+      func.return %5
   }
 }

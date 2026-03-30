@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 210
+assertion_line: 222
 expression: ir_text
 ---
 core.module @test {
@@ -22,6 +22,7 @@ core.module @test {
       %1 = arith.const {value = 1} : core.i32
       %2 = arith.const {value = 2} : core.i32
       %3 = adt.struct_new %1, %2 {type = !Point} : adt.typeref() {name = @Point}
-      func.return %3
+      %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+      func.return %4
   }
 }

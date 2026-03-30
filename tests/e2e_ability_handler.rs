@@ -330,7 +330,6 @@ fn main() {
 /// When `case` branches have different types (Never vs Nat), Cranelift
 /// codegen currently has a type mismatch. This test is ignored until fixed.
 #[test]
-#[ignore = "Cranelift codegen type mismatch with Never in case branches"]
 fn test_abort_conditional() {
     let code = r#"ability Abort {
     op abort() -> Never

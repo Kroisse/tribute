@@ -39,7 +39,8 @@ core.module @test {
       %2 = func.call %0 {callee = @"Pair::x"} : core.i32
       %3 = func.call %0 {callee = @"Pair::y"} : core.i32
       %4 = adt.struct_new %2, %3, %1 {type = !Triple} : adt.typeref() {name = @Triple}
-      func.return %4
+      %5 = core.unrealized_conversion_cast %4 : tribute_rt.anyref
+      func.return %5
   }
   func.func @test(%0: tribute_rt.anyref) -> tribute_rt.anyref {
       %1 = arith.const {value = 3} : core.i32
