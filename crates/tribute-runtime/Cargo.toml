@@ -10,4 +10,5 @@ crate-type = ["lib"]
 [dependencies]
 itoa.workspace = true
 smallvec.workspace = true
+tribute-rc.workspace = true
 zmij.workspace = true

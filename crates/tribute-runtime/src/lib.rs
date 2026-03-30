@@ -300,25 +300,14 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
         core::ptr::null_mut()
     };
 
-    // Allocate RC header (8 bytes) + TributeBytes payload (16 bytes) = 24 bytes
-    const RC_HEADER_SIZE: u64 = 8;
-    let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
+    // Allocate RcBox<TributeBytes>
+    let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
+    rc_box.payload.ptr = buf;
+    rc_box.payload.len = total_len;
 
-    // Store RC header: refcount=1, rtti_idx=0
-    unsafe {
-        *(raw as *mut u32) = 1; // refcount
-        *(raw.add(4) as *mut u32) = 0; // rtti_idx
-    }
-
-    // Payload pointer = raw + 8
-    let payload = unsafe { raw.add(RC_HEADER_SIZE as usize) as *mut TributeBytes };
-    unsafe {
-        (*payload).ptr = buf;
-        (*payload).len = total_len;
-    }
-
-    payload
+    &mut rc_box.payload as *mut TributeBytes
 }
 
 /// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
@@ -353,12 +342,10 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     }
 
     // Retain the original so its data buffer stays alive while the slice
-    // points into it. The RC header sits immediately before the payload.
-    const RC_HEADER_SIZE: u64 = 8;
+    // points into it.
     unsafe {
-        let rc_header = (bytes as *mut u8).sub(RC_HEADER_SIZE as usize);
-        let refcount = &*(rc_header as *const core::sync::atomic::AtomicU32);
-        refcount.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let rc_box = &*tribute_rc::RcBox::from_payload_ptr(bytes);
+        rc_box.retain();
     }
 
     let new_len = e - s;
@@ -368,24 +355,14 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
         core::ptr::null()
     };
 
-    // Allocate RC header (8 bytes) + TributeBytes payload (16 bytes) = 24 bytes
-    let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
+    // Allocate RcBox<TributeBytes>
+    let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
+    let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
+    rc_box.payload.ptr = new_ptr;
+    rc_box.payload.len = new_len;
 
-    // Store RC header: refcount=1, rtti_idx=0
-    unsafe {
-        *(raw as *mut u32) = 1; // refcount
-        *(raw.add(4) as *mut u32) = 0; // rtti_idx
-    }
-
-    // Payload pointer = raw + 8
-    let payload = unsafe { raw.add(RC_HEADER_SIZE as usize) as *mut TributeBytes };
-    unsafe {
-        (*payload).ptr = new_ptr;
-        (*payload).len = new_len;
-    }
-
-    payload
+    &mut rc_box.payload as *mut TributeBytes
 }
 
 fn bounds_check_abort() -> ! {
