@@ -306,10 +306,11 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
     let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    rc_box.payload.ptr = buf;
-    rc_box.payload.len = total_len;
-
-    &raw mut rc_box.payload
+    unsafe {
+        (*rc_box).payload.ptr = buf;
+        (*rc_box).payload.len = total_len;
+        &raw mut (*rc_box).payload
+    }
 }
 
 /// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
@@ -361,10 +362,11 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     let alloc_size = tribute_rc::HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
     let rc_box = unsafe { tribute_rc::RcBox::<TributeBytes>::init(raw, 0) };
-    rc_box.payload.ptr = new_ptr;
-    rc_box.payload.len = new_len;
-
-    &raw mut rc_box.payload
+    unsafe {
+        (*rc_box).payload.ptr = new_ptr;
+        (*rc_box).payload.len = new_len;
+        &raw mut (*rc_box).payload
+    }
 }
 
 fn bounds_check_abort() -> ! {
