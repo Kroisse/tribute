@@ -44,7 +44,9 @@ impl RewritePattern for MemLoadPattern {
         };
         let loc = ctx.op(op).location;
         let ptr = load_op.ptr(ctx);
-        let offset = i32::try_from(load_op.offset(ctx)).expect("mem.load offset out of i32 range");
+        let Ok(offset) = i32::try_from(load_op.offset(ctx)) else {
+            return false;
+        };
         let new_op = arena_clif::load(ctx, loc, ptr, result_ty, offset).op_ref();
         rewriter.replace_op(new_op);
         true
@@ -66,8 +68,9 @@ impl RewritePattern for MemStorePattern {
         let loc = ctx.op(op).location;
         let ptr = store_op.ptr(ctx);
         let value = store_op.value(ctx);
-        let offset =
-            i32::try_from(store_op.offset(ctx)).expect("mem.store offset out of i32 range");
+        let Ok(offset) = i32::try_from(store_op.offset(ctx)) else {
+            return false;
+        };
         // clif.store operand order: (value, addr)
         let new_op = arena_clif::store(ctx, loc, value, ptr, offset).op_ref();
         rewriter.replace_op(new_op);

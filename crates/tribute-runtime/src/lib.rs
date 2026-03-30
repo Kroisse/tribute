@@ -357,8 +357,8 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     const RC_HEADER_SIZE: u64 = 8;
     unsafe {
         let rc_header = (bytes as *mut u8).sub(RC_HEADER_SIZE as usize);
-        let refcount = rc_header as *mut u32;
-        *refcount += 1;
+        let refcount = &*(rc_header as *const core::sync::atomic::AtomicU32);
+        refcount.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     }
 
     let new_len = e - s;
