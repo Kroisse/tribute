@@ -12,17 +12,15 @@ core.module @test {
     ^bb1:
       %3 = clif.iconst {value = 8} : core.i64
       %4 = clif.isub %0, %3 : core.ptr
-      %5 = clif.load %4 {offset = 0} : core.i32
-      %6 = clif.iconst {value = 1} : core.i32
-      %7 = clif.isub %5, %6 : core.i32
-      clif.store %7, %4 {offset = 0}
-      %8 = clif.iconst {value = 0} : core.i32
-      %9 = clif.icmp %7, %8 {cond = @eq} : core.i8
-      clif.brif %9 [^bb2, ^bb3]
+      %5 = clif.iconst {value = 1} : core.i32
+      %6 = clif.atomic_rmw %4, %5 {offset = 0, op = @sub} : core.i32
+      %7 = clif.iconst {value = 1} : core.i32
+      %8 = clif.icmp %6, %7 {cond = @eq} : core.i8
+      clif.brif %8 [^bb2, ^bb3]
 
     ^bb2:
-      %10 = clif.iconst {value = 12} : core.i64
-      %11 = clif.call %0, %10 {callee = @__tribute_deep_release} : core.nil
+      %9 = clif.iconst {value = 12} : core.i64
+      %10 = clif.call %0, %9 {callee = @__tribute_deep_release} : core.nil
       clif.jump [^bb3]
 
     ^bb3:

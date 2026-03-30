@@ -91,6 +91,9 @@ mod clif {
     #[attr(offset: i32)]
     fn store(value: (), addr: ()) {}
 
+    #[attr(op: Symbol, offset: i32)]
+    fn atomic_rmw(addr: (), value: ()) -> result {}
+
     #[attr(size: u32, align: u32)]
     fn stack_slot() -> result {}
 
