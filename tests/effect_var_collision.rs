@@ -32,7 +32,7 @@ ability State(s) {
 }
 
 fn effectful_with_lambda() ->{State(Int)} Int {
-    let f = fn(x: Int) { x + 1 }
+    let f = fn(x: Int) { x + +1 }
     let n = State::get()
     f(n)
 }
@@ -64,8 +64,8 @@ ability State(s) {
 }
 
 fn effectful_with_multiple_lambdas() ->{State(Int)} Int {
-    let f1 = fn(x: Int) { x + 1 }
-    let f2 = fn(x: Int) { x * 2 }
+    let f1 = fn(x: Int) { x + +1 }
+    let f2 = fn(x: Int) { x * +2 }
     let n = State::get()
     f2(f1(n))
 }
@@ -112,7 +112,7 @@ fn apply_pure(f: fn(Int) ->{} Int, x: Int) ->{} Int {
 
 fn effectful_using_pure(init: Int) ->{State(Int)} Int {
     // This lambda should be pure (empty effect row)
-    let pure_fn = fn(x: Int) { x * 2 }
+    let pure_fn = fn(x: Int) { x * +2 }
 
     // Calling apply_pure requires a pure function
     // If effect vars collide, pure_fn might be typed as ->{State(Int)} Int
@@ -166,7 +166,7 @@ fn should_fail() ->{State(Int)} Int {
     }
 
     // This should fail - effectful_fn is NOT pure
-    apply_pure(effectful_fn, 0)
+    apply_pure(effectful_fn, +0)
 }
 
 fn main() { }
@@ -195,7 +195,7 @@ ability State(s) {
 
 fn nested_lambdas() ->{State(Int)} Int {
     let outer = fn(x: Int) {
-        let inner = fn(y: Int) { y + 1 }
+        let inner = fn(y: Int) { y + +1 }
         inner(x)
     }
     let n = State::get()
@@ -234,7 +234,7 @@ fn apply(f: fn(Int) -> Int, x: Int) -> Int {
 }
 
 fn test_lambda() -> Int {
-    let double = fn(x: Int) { x * 2 }
+    let double = fn(x: Int) { x * +2 }
     apply(double, -21)
 }
 
@@ -265,8 +265,8 @@ fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
 }
 
 fn test_compose() -> Int {
-    let add_one = fn(x: Int) { x + 1 }
-    let double = fn(x: Int) { x * 2 }
+    let add_one = fn(x: Int) { x + +1 }
+    let double = fn(x: Int) { x * +2 }
     compose(add_one, double, -10)
 }
 
@@ -294,8 +294,8 @@ fn test_nested_pure_lambdas(db: &salsa::DatabaseImpl) {
     let code = r#"
 fn test_nested() -> Int {
     let outer = fn(x: Int) {
-        let inner = fn(y: Int) { y + 1 }
-        inner(x) * 2
+        let inner = fn(y: Int) { y + +1 }
+        inner(x) * +2
     }
     outer(-20)
 }

@@ -15,6 +15,7 @@ pub mod diagnostic;
 pub mod boxing;
 pub mod closure_lower;
 pub mod evidence;
+pub mod intrinsic_to_arith;
 pub mod lower_ability_perform;
 pub mod lower_closure_lambda;
 pub mod lower_handle_dispatch;

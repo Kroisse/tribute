@@ -33,7 +33,7 @@ core.module @test {
       func.return %1
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda() -> core.i32 effects core.effect_row() {tail_var_id = 1000} {
+      %0 = closure.lambda() -> core.i32 effects core.effect_row() {tail_var_id = 1005} {
           %1 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
               %2 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
               func.return %2

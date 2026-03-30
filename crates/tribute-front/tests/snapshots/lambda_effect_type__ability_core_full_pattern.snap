@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 244
 expression: ir_text
 ---
 core.module @test {
@@ -8,12 +7,12 @@ core.module @test {
       %0 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
       %1 = core.unrealized_conversion_cast %0 : core.i32
       %2 = arith.const {value = 1} : core.i32
-      %3 = arith.addi %1, %2 : core.i32
+      %3 = func.call %1, %2 {callee = @"Int::+"} : core.i32
       %4 = ability.call %3 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
       %5 = core.unrealized_conversion_cast %4 : core.nil
       func.return %1
   }
-  func.func @run_state(%0: core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 1012}}, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 1012} {
+  func.func @run_state(%0: core.func(tribute_rt.anyref) {effect = core.effect_row(core.ability_ref(tribute_rt.anyref) {name = @State}) {tail_var_id = 1016}}, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 1016} {
       %2 = closure.lambda() -> tribute_rt.anyref [%0] {
           %3 = func.call_indirect %0 : tribute_rt.anyref
           func.return %3
@@ -30,12 +29,12 @@ core.module @test {
           }
       }
       %12 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      %13 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 31} [%1] {
+      %13 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 43} [%1] {
           %14 = arith.const {value = unit} : core.nil
           func.return %14
       }
       %15 = func.call %13, %1 {callee = @run_state} : tribute_rt.anyref
-      %16 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 54} {
+      %16 = closure.lambda() -> tribute_rt.anyref effects core.effect_row() {tail_var_id = 70} {
           %17 = arith.const {value = unit} : core.nil
           %18 = arith.const {value = unit} : core.nil
           func.return %18
@@ -44,7 +43,7 @@ core.module @test {
       func.return %19
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 3} {
+      %0 = closure.lambda() -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 11} {
           %1 = func.call {callee = @counter} : core.i32
           %2 = func.call {callee = @counter} : core.i32
           %3 = func.call {callee = @counter} : core.i32

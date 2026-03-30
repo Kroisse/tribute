@@ -526,14 +526,8 @@ mod tests {
 
     #[test]
     fn test_binary_all_arithmetic() {
-        // Test all arithmetic operators
-        for (op_str, expected_op) in [
-            ("+", crate::ast::BinOpKind::Add),
-            ("-", crate::ast::BinOpKind::Sub),
-            ("*", crate::ast::BinOpKind::Mul),
-            ("/", crate::ast::BinOpKind::Div),
-            ("%", crate::ast::BinOpKind::Mod),
-        ] {
+        // Arithmetic operators are desugared to MethodCall
+        for op_str in ["+", "-", "*", "/", "%"] {
             let source = format!("fn main() {{ 1 {} 2 }}", op_str);
             let module = parse_and_lower(&source);
 
@@ -543,27 +537,23 @@ mod tests {
             let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
                 panic!("Expected block");
             };
-            let ExprKind::BinOp { op, .. } = value.kind.as_ref() else {
-                panic!("Expected binary op for {}", op_str);
+            let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+                panic!("Expected MethodCall for {}, got {:?}", op_str, value.kind);
             };
             assert_eq!(
-                *op, expected_op,
+                method.to_string(),
+                op_str,
                 "Operator {} not matched correctly",
                 op_str
             );
+            assert_eq!(args.len(), 1, "MethodCall should have 1 arg for {}", op_str);
         }
     }
 
     #[test]
     fn test_binary_all_comparison() {
-        for (op_str, expected_op) in [
-            ("==", crate::ast::BinOpKind::Eq),
-            ("!=", crate::ast::BinOpKind::Ne),
-            ("<", crate::ast::BinOpKind::Lt),
-            ("<=", crate::ast::BinOpKind::Le),
-            (">", crate::ast::BinOpKind::Gt),
-            (">=", crate::ast::BinOpKind::Ge),
-        ] {
+        // Comparison operators are desugared to MethodCall
+        for op_str in ["==", "!=", "<", "<=", ">", ">="] {
             let source = format!("fn main() {{ 1 {} 2 }}", op_str);
             let module = parse_and_lower(&source);
 
@@ -573,14 +563,16 @@ mod tests {
             let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
                 panic!("Expected block");
             };
-            let ExprKind::BinOp { op, .. } = value.kind.as_ref() else {
-                panic!("Expected binary op for {}", op_str);
+            let ExprKind::MethodCall { method, args, .. } = value.kind.as_ref() else {
+                panic!("Expected MethodCall for {}, got {:?}", op_str, value.kind);
             };
             assert_eq!(
-                *op, expected_op,
+                method.to_string(),
+                op_str,
                 "Operator {} not matched correctly",
                 op_str
             );
+            assert_eq!(args.len(), 1, "MethodCall should have 1 arg for {}", op_str);
         }
     }
 
@@ -905,8 +897,8 @@ mod tests {
             panic!("Expected block");
         };
         assert_eq!(stmts.len(), 2);
-        let ExprKind::BinOp { .. } = value.kind.as_ref() else {
-            panic!("Expected binary op as value");
+        let ExprKind::MethodCall { .. } = value.kind.as_ref() else {
+            panic!("Expected method call (desugared binary op) as value");
         };
     }
 
@@ -1133,10 +1125,16 @@ mod tests {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected outer block");
         };
-        let ExprKind::BinOp { op, lhs, .. } = value.kind.as_ref() else {
-            panic!("Expected binary op, got {:?}", value.kind);
+        // {1 + 2} * 3 is desugared to MethodCall with receiver={1 + 2}, method="*"
+        let ExprKind::MethodCall {
+            method,
+            receiver: lhs,
+            ..
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected MethodCall, got {:?}", value.kind);
         };
-        assert_eq!(*op, crate::ast::BinOpKind::Mul);
+        assert_eq!(method.to_string(), "*");
         // lhs should be a block containing 1 + 2
         let ExprKind::Block {
             value: inner_value, ..
@@ -1144,10 +1142,14 @@ mod tests {
         else {
             panic!("Expected inner block, got {:?}", lhs.kind);
         };
-        let ExprKind::BinOp { op: inner_op, .. } = inner_value.kind.as_ref() else {
-            panic!("Expected inner binary op");
+        let ExprKind::MethodCall {
+            method: inner_method,
+            ..
+        } = inner_value.kind.as_ref()
+        else {
+            panic!("Expected inner MethodCall");
         };
-        assert_eq!(*inner_op, crate::ast::BinOpKind::Add);
+        assert_eq!(inner_method.to_string(), "+");
     }
 
     #[test]
@@ -1199,11 +1201,11 @@ mod tests {
         // The let statement should be in stmts
         assert_eq!(stmts.len(), 1);
 
-        // The block value should be the binary expression
-        let ExprKind::BinOp { op, .. } = value.kind.as_ref() else {
-            panic!("Expected binary op as block value, got {:?}", value.kind);
+        // The block value should be a MethodCall (x + 1 is desugared)
+        let ExprKind::MethodCall { method, .. } = value.kind.as_ref() else {
+            panic!("Expected MethodCall as block value, got {:?}", value.kind);
         };
-        assert_eq!(*op, crate::ast::BinOpKind::Add);
+        assert_eq!(method.to_string(), "+");
     }
 
     // =============================================================================

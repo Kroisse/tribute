@@ -182,31 +182,6 @@ impl<'db> AbilityId<'db> {
     }
 }
 
-/// Reference to a builtin operation or value.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
-pub enum BuiltinRef {
-    // Arithmetic operations
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Mod,
-    Neg,
-
-    // Comparison operations
-    Eq,
-    Ne,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-
-    // Boolean operations
-    And,
-    Or,
-    Not,
-}
-
 /// Module path reference for qualified imports.
 #[salsa::tracked(debug)]
 pub struct ModulePath<'db> {
@@ -250,9 +225,6 @@ pub enum ResolvedRef<'db> {
         /// The type definition ID.
         id: TypeDefId<'db>,
     },
-
-    /// Reference to a builtin operation.
-    Builtin(BuiltinRef),
 
     /// Reference to a module (for qualified paths).
     Module { path: ModulePath<'db> },
@@ -298,11 +270,6 @@ impl<'db> ResolvedRef<'db> {
     /// Create a type definition reference.
     pub fn type_def(id: TypeDefId<'db>) -> Self {
         Self::TypeDef { id }
-    }
-
-    /// Create a builtin reference.
-    pub fn builtin(builtin: BuiltinRef) -> Self {
-        Self::Builtin(builtin)
     }
 
     /// Create an ability operation reference.

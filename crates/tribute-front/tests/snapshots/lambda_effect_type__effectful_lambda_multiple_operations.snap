@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 166
 expression: ir_text
 ---
 core.module @test {
@@ -35,7 +34,7 @@ core.module @test {
           %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           %2 = core.unrealized_conversion_cast %1 : core.i32
           %3 = arith.const {value = 1} : core.i32
-          %4 = arith.addi %2, %3 : core.i32
+          %4 = func.call %2, %3 {callee = @"Nat::+"} : core.i32
           %5 = ability.call %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
           %6 = core.unrealized_conversion_cast %5 : core.nil
           %7 = core.unrealized_conversion_cast %2 : tribute_rt.anyref

@@ -38,34 +38,9 @@ fn node_id() -> impl Strategy<Value = NodeId> {
 // Leaf strategies
 // ============================================================================
 
-/// Strategy for arithmetic binary operators only.
-pub fn arith_op() -> impl Strategy<Value = BinOpKind> {
-    prop_oneof![
-        Just(BinOpKind::Add),
-        Just(BinOpKind::Sub),
-        Just(BinOpKind::Mul),
-        Just(BinOpKind::Div),
-        Just(BinOpKind::Mod),
-    ]
-}
-
-/// Strategy for all `BinOpKind` variants.
+/// Strategy for all `BinOpKind` variants (only boolean operators remain).
 pub fn binop_kind() -> impl Strategy<Value = BinOpKind> {
-    prop_oneof![
-        Just(BinOpKind::Add),
-        Just(BinOpKind::Sub),
-        Just(BinOpKind::Mul),
-        Just(BinOpKind::Div),
-        Just(BinOpKind::Mod),
-        Just(BinOpKind::Eq),
-        Just(BinOpKind::Ne),
-        Just(BinOpKind::Lt),
-        Just(BinOpKind::Le),
-        Just(BinOpKind::Gt),
-        Just(BinOpKind::Ge),
-        Just(BinOpKind::And),
-        Just(BinOpKind::Or),
-    ]
+    prop_oneof![Just(BinOpKind::And), Just(BinOpKind::Or),]
 }
 
 /// Strategy that produces literal expressions (leaf nodes).

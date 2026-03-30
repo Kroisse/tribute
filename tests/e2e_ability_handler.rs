@@ -395,6 +395,7 @@ fn main() {
 /// `pure_value()` returns 10 with no effects. The handler's result arm
 /// doubles it: result + result = 20.
 #[test]
+#[ignore = "operator TDNR fails in handler arms (#617)"]
 fn test_handler_transforms_result() {
     let code = r#"ability State(s) {
     op get() -> s

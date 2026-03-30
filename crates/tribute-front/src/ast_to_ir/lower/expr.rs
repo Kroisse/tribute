@@ -170,8 +170,7 @@ pub(super) fn lower_expr<'db>(
                     }
                 }
             }
-            ResolvedRef::Builtin(_)
-            | ResolvedRef::Module { .. }
+            ResolvedRef::Module { .. }
             | ResolvedRef::TypeDef { .. }
             | ResolvedRef::Ability { .. } => None,
             ResolvedRef::AbilityOp { ability, op, .. } => {
@@ -190,16 +189,22 @@ pub(super) fn lower_expr<'db>(
         },
 
         ExprKind::BinOp { op, lhs, rhs } => {
-            // Check operand type (lhs), not result type, since comparisons
-            // return Bool but need to know if operands are float.
-            let is_float = builder
-                .ctx
-                .get_node_type(lhs.id)
-                .map(|ty| matches!(ty.kind(builder.db()), TypeKind::Float))
-                .unwrap_or(false);
             let lhs_val = lower_expr(builder, lhs)?;
             let rhs_val = lower_expr(builder, rhs)?;
-            lower_binop(builder, op, lhs_val, rhs_val, is_float, location)
+            let bool_ty = builder.ctx.bool_type(builder.ir);
+            let result = match op {
+                BinOpKind::And => {
+                    let op = arith::and(builder.ir, location, lhs_val, rhs_val, bool_ty);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    op.result(builder.ir)
+                }
+                BinOpKind::Or => {
+                    let op = arith::or(builder.ir, location, lhs_val, rhs_val, bool_ty);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    op.result(builder.ir)
+                }
+            };
+            Some(result)
         }
 
         ExprKind::Block { stmts, value } => lower_block(builder, stmts, value),
@@ -662,89 +667,6 @@ pub(super) fn lower_expr<'db>(
 
         ExprKind::Error => Some(builder.emit_nil(location)),
     }
-}
-
-/// Lower a binary operation.
-fn lower_binop<'db>(
-    builder: &mut IrBuilder<'_, 'db>,
-    op: BinOpKind,
-    lhs: ValueRef,
-    rhs: ValueRef,
-    is_float: bool,
-    location: Location,
-) -> Option<ValueRef> {
-    let bool_ty = builder.ctx.bool_type(builder.ir);
-    let result_ty = if is_float {
-        builder.ctx.f64_type(builder.ir)
-    } else {
-        builder.ctx.i32_type(builder.ir)
-    };
-
-    macro_rules! emit_binop {
-        ($op_fn:path, $ty:expr) => {{
-            let op = $op_fn(builder.ir, location, lhs, rhs, $ty);
-            builder.ir.push_op(builder.block, op.op_ref());
-            op.result(builder.ir)
-        }};
-    }
-
-    macro_rules! emit_cmpi {
-        ($predicate:expr) => {{
-            let op = arith::cmpi(
-                builder.ir,
-                location,
-                lhs,
-                rhs,
-                bool_ty,
-                Symbol::new($predicate),
-            );
-            builder.ir.push_op(builder.block, op.op_ref());
-            op.result(builder.ir)
-        }};
-    }
-
-    macro_rules! emit_cmpf {
-        ($predicate:expr) => {{
-            let op = arith::cmpf(
-                builder.ir,
-                location,
-                lhs,
-                rhs,
-                bool_ty,
-                Symbol::new($predicate),
-            );
-            builder.ir.push_op(builder.block, op.op_ref());
-            op.result(builder.ir)
-        }};
-    }
-
-    let result = match op {
-        BinOpKind::Add if is_float => emit_binop!(arith::addf, result_ty),
-        BinOpKind::Add => emit_binop!(arith::addi, result_ty),
-        BinOpKind::Sub if is_float => emit_binop!(arith::subf, result_ty),
-        BinOpKind::Sub => emit_binop!(arith::subi, result_ty),
-        BinOpKind::Mul if is_float => emit_binop!(arith::mulf, result_ty),
-        BinOpKind::Mul => emit_binop!(arith::muli, result_ty),
-        BinOpKind::Div if is_float => emit_binop!(arith::divf, result_ty),
-        BinOpKind::Div => emit_binop!(arith::divsi, result_ty),
-        BinOpKind::Mod => emit_binop!(arith::remsi, result_ty),
-        BinOpKind::Eq if is_float => emit_cmpf!("oeq"),
-        BinOpKind::Eq => emit_cmpi!("eq"),
-        BinOpKind::Ne if is_float => emit_cmpf!("une"),
-        BinOpKind::Ne => emit_cmpi!("ne"),
-        BinOpKind::Lt if is_float => emit_cmpf!("olt"),
-        BinOpKind::Lt => emit_cmpi!("slt"),
-        BinOpKind::Le if is_float => emit_cmpf!("ole"),
-        BinOpKind::Le => emit_cmpi!("sle"),
-        BinOpKind::Gt if is_float => emit_cmpf!("ogt"),
-        BinOpKind::Gt => emit_cmpi!("sgt"),
-        BinOpKind::Ge if is_float => emit_cmpf!("oge"),
-        BinOpKind::Ge => emit_cmpi!("sge"),
-        BinOpKind::And => emit_binop!(arith::and, bool_ty),
-        BinOpKind::Or => emit_binop!(arith::or, bool_ty),
-    };
-
-    Some(result)
 }
 
 /// CPS-lower an expression (used by handle body lowering).

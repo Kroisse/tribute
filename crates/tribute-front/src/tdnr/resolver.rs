@@ -574,20 +574,13 @@ impl<'db> TdnrResolver<'db> {
             ExprKind::RuneLit(_) => Some(Type::new(self.db, crate::ast::TypeKind::Rune)),
             ExprKind::Nil => Some(Type::new(self.db, crate::ast::TypeKind::Nil)),
 
-            // Binary operations: comparison ops return Bool, arithmetic returns operand type
-            ExprKind::BinOp { op, lhs, .. } => {
+            // Binary operations: only boolean ops remain
+            ExprKind::BinOp { op, .. } => {
                 use crate::ast::BinOpKind;
                 match op {
-                    BinOpKind::Eq
-                    | BinOpKind::Ne
-                    | BinOpKind::Lt
-                    | BinOpKind::Le
-                    | BinOpKind::Gt
-                    | BinOpKind::Ge
-                    | BinOpKind::And
-                    | BinOpKind::Or => Some(Type::new(self.db, crate::ast::TypeKind::Bool)),
-                    // Arithmetic operations return the same type as their operands
-                    _ => self.get_expr_type(lhs),
+                    BinOpKind::And | BinOpKind::Or => {
+                        Some(Type::new(self.db, crate::ast::TypeKind::Bool))
+                    }
                 }
             }
 
@@ -797,17 +790,17 @@ mod tests {
     }
 
     #[test]
-    fn test_get_expr_type_binop_comparison_returns_bool() {
+    fn test_get_expr_type_binop_and_returns_bool() {
         let db = test_db();
         let resolver = TdnrResolver::new(&db);
 
-        // Create: 1 < 2
-        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
-        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
+        // Create: true && false
+        let lhs = Expr::new(fresh_node_id(), ExprKind::BoolLit(true));
+        let rhs = Expr::new(fresh_node_id(), ExprKind::BoolLit(false));
         let expr = Expr::new(
             fresh_node_id(),
             ExprKind::BinOp {
-                op: BinOpKind::Lt,
+                op: BinOpKind::And,
                 lhs,
                 rhs,
             },
@@ -816,51 +809,6 @@ mod tests {
         let ty = resolver.get_expr_type(&expr);
         assert!(ty.is_some());
         assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
-    }
-
-    #[test]
-    fn test_get_expr_type_binop_eq_returns_bool() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        // Create: 1 == 2
-        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
-        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
-        let expr = Expr::new(
-            fresh_node_id(),
-            ExprKind::BinOp {
-                op: BinOpKind::Eq,
-                lhs,
-                rhs,
-            },
-        );
-
-        let ty = resolver.get_expr_type(&expr);
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
-    }
-
-    #[test]
-    fn test_get_expr_type_binop_add_returns_operand_type() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        // Create: 1 + 2
-        let lhs = Expr::new(fresh_node_id(), ExprKind::IntLit(1));
-        let rhs = Expr::new(fresh_node_id(), ExprKind::IntLit(2));
-        let expr = Expr::new(
-            fresh_node_id(),
-            ExprKind::BinOp {
-                op: BinOpKind::Add,
-                lhs,
-                rhs,
-            },
-        );
-
-        let ty = resolver.get_expr_type(&expr);
-        assert!(ty.is_some());
-        // Add returns the type of the lhs (Int)
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
     }
 
     #[test]
