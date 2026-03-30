@@ -260,11 +260,12 @@ fn build_dispatching_deep_release(
     let payload_ptr = builder.block_params(entry)[0];
     let alloc_size = builder.block_params(entry)[1];
 
-    // raw_ptr = payload_ptr - 8
+    // raw_ptr = payload_ptr - HEADER_SIZE (8)
+    // See tribute_rc::RcBox for the RC header layout.
     let neg8 = builder.ins().iconst(ptr_ty, -8);
     let raw_ptr = builder.ins().iadd(payload_ptr, neg8);
 
-    // rtti_idx = load i32 from raw_ptr + 4
+    // rtti_idx = load i32 from raw_ptr + RTTI_IDX_OFFSET (4)
     let rtti_idx = builder
         .ins()
         .load(cl_types::I32, cl_ir::MemFlags::trusted(), raw_ptr, 4);

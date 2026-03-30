@@ -28,7 +28,7 @@
 //! reference types. Most conversions between pointer types are no-ops.
 
 use tribute_ir::dialect::tribute_rt as arena_tribute_rt;
-use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
+use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif as arena_clif;
@@ -319,16 +319,28 @@ fn box_primitive(
     ops.push(call_op.op_ref());
     let raw_ptr = call_op.result(ctx);
 
-    // 3. Store refcount = 1 at raw_ptr + 0
+    // 3. Store refcount = 1
     let rc_one = arena_clif::iconst(ctx, location, i32_ty, 1);
     ops.push(rc_one.op_ref());
-    let store_rc = arena_clif::store(ctx, location, rc_one.result(ctx), raw_ptr, 0);
+    let store_rc = arena_clif::store(
+        ctx,
+        location,
+        rc_one.result(ctx),
+        raw_ptr,
+        REFCOUNT_OFFSET as i32,
+    );
     ops.push(store_rc.op_ref());
 
-    // 4. Store rtti_idx = 0 at raw_ptr + 4
+    // 4. Store rtti_idx = 0
     let rtti_zero = arena_clif::iconst(ctx, location, i32_ty, 0);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = arena_clif::store(ctx, location, rtti_zero.result(ctx), raw_ptr, 4);
+    let store_rtti = arena_clif::store(
+        ctx,
+        location,
+        rtti_zero.result(ctx),
+        raw_ptr,
+        RTTI_IDX_OFFSET as i32,
+    );
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8

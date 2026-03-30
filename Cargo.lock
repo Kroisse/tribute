@@ -1504,6 +1504,7 @@ dependencies = [
  "inventory",
  "rustc-hash",
  "tracing",
+ "tribute-rc",
  "trunk-ir",
  "winnow",
 ]

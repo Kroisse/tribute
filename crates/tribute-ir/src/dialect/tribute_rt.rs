@@ -26,14 +26,18 @@ mod tribute_rt {
 }
 
 // === RC Header Layout ===
+// Re-exported from `tribute-rc` for use in compiler passes.
 
-/// RC header size in bytes: 4 bytes refcount + 4 bytes rtti_idx = 8 bytes.
+/// RC header size in bytes (refcount: u32 + rtti_idx: u32 = 8 bytes).
 ///
-/// All heap-allocated objects are prefixed with this header. The allocation
-/// functions receive `payload_size + RC_HEADER_SIZE` and return a raw pointer.
-/// Callers store the header at the raw pointer and use `raw_ptr + RC_HEADER_SIZE`
-/// as the payload pointer.
-pub const RC_HEADER_SIZE: u64 = 8;
+/// See [`tribute_rc::RcBox`] for the full layout definition.
+pub const RC_HEADER_SIZE: u64 = tribute_rc::HEADER_SIZE;
+
+/// Byte offset of the refcount field within the RC header.
+pub const REFCOUNT_OFFSET: usize = tribute_rc::REFCOUNT_OFFSET;
+
+/// Byte offset of the rtti_idx field within the RC header.
+pub const RTTI_IDX_OFFSET: usize = tribute_rc::RTTI_IDX_OFFSET;
 
 // === Pure operation registrations ===
 // Boxing and unboxing operations are pure (no side effects)

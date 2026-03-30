@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
+use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use trunk_ir::context::IrContext;
@@ -129,11 +129,11 @@ impl RewritePattern for StructNewPattern {
         let raw_ptr = call_op.result(ctx);
         ops.push(call_op.op_ref());
 
-        // 3. Store refcount = 1 at raw_ptr + 0
+        // 3. Store refcount = 1
         let rc_one = clif::iconst(ctx, loc, self.i32_ty, 1);
         let rc_one_val = rc_one.result(ctx);
         ops.push(rc_one.op_ref());
-        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, 0);
+        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, REFCOUNT_OFFSET as i32);
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
@@ -147,7 +147,7 @@ impl RewritePattern for StructNewPattern {
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
-        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, 4);
+        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, RTTI_IDX_OFFSET as i32);
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
@@ -262,11 +262,11 @@ impl RewritePattern for VariantNewPattern {
         let raw_ptr = call_op.result(ctx);
         ops.push(call_op.op_ref());
 
-        // 3. Store refcount = 1 at raw_ptr + 0
+        // 3. Store refcount = 1
         let rc_one = clif::iconst(ctx, loc, self.i32_ty, 1);
         let rc_one_val = rc_one.result(ctx);
         ops.push(rc_one.op_ref());
-        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, 0);
+        let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, REFCOUNT_OFFSET as i32);
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
@@ -280,7 +280,7 @@ impl RewritePattern for VariantNewPattern {
         let rtti_val = clif::iconst(ctx, loc, self.i32_ty, rtti_idx);
         let rtti_val_v = rtti_val.result(ctx);
         ops.push(rtti_val.op_ref());
-        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, 4);
+        let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, RTTI_IDX_OFFSET as i32);
         ops.push(store_rtti.op_ref());
 
         // 5. Compute payload pointer = raw_ptr + 8
