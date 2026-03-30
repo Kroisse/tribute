@@ -160,6 +160,17 @@ impl<'db> ModuleEnv<'db> {
         self.namespaces.get(&namespace)?.get(&name)
     }
 
+    /// Iterate over all bindings in a namespace.
+    pub fn iter_namespace(
+        &self,
+        namespace: Symbol,
+    ) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        self.namespaces
+            .get(&namespace)
+            .into_iter()
+            .flat_map(|bindings| bindings.iter().map(|(k, v)| (*k, v)))
+    }
+
     /// Check whether a namespace exists.
     pub fn has_namespace(&self, namespace: Symbol) -> bool {
         self.namespaces.contains_key(&namespace)
