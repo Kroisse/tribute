@@ -29,7 +29,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
+use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -283,15 +283,27 @@ fn emit_bytes_alloc(
     ops.push(call_op.op_ref());
     let raw_ptr = call_op.result(ctx);
 
-    // 4. Store RC header: refcount=1 at raw+0, rtti_idx=0 at raw+4
+    // 4. Store RC header: refcount=1, rtti_idx=0
     let rc_one = arena_clif::iconst(ctx, loc, i32_ty, 1);
     ops.push(rc_one.op_ref());
-    let store_rc = arena_clif::store(ctx, loc, rc_one.result(ctx), raw_ptr, 0);
+    let store_rc = arena_clif::store(
+        ctx,
+        loc,
+        rc_one.result(ctx),
+        raw_ptr,
+        REFCOUNT_OFFSET as i32,
+    );
     ops.push(store_rc.op_ref());
 
     let rtti_zero = arena_clif::iconst(ctx, loc, i32_ty, 0);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = arena_clif::store(ctx, loc, rtti_zero.result(ctx), raw_ptr, 4);
+    let store_rtti = arena_clif::store(
+        ctx,
+        loc,
+        rtti_zero.result(ctx),
+        raw_ptr,
+        RTTI_IDX_OFFSET as i32,
+    );
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw + 8

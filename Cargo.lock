@@ -1504,6 +1504,7 @@ dependencies = [
  "inventory",
  "rustc-hash",
  "tracing",
+ "tribute-rc",
  "trunk-ir",
  "winnow",
 ]
@@ -1523,11 +1524,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tribute-rc"
+version = "0.1.0"
+
+[[package]]
 name = "tribute-runtime"
 version = "0.1.0"
 dependencies = [
  "itoa",
  "smallvec",
+ "tribute-rc",
  "zmij",
 ]
 
