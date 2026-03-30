@@ -739,3 +739,97 @@ fn main() {
 "#;
     assert_native_output("handler_multi_param_op.trb", code, "60");
 }
+
+// =============================================================================
+// Throw(e) Ability Tests (#193)
+// =============================================================================
+
+/// Test basic Throw(e) ability: parameterized non-resumptive effect.
+///
+/// Throw(e) combines parameterized ability (like State(s)) with Never return
+/// type (like Abort). The handler catches the thrown error value.
+#[test]
+fn test_throw_basic() {
+    let code = r#"ability Throw(e) {
+    op throw(error: e) -> Never
+}
+
+fn do_throw() ->{Throw(Nat)} Nat {
+    Throw::throw(42)
+}
+
+fn main() {
+    let result = handle do_throw() {
+        do result { result }
+        op Throw::throw(error) { error }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("throw_basic.trb", code, "42");
+}
+
+/// Test Throw(e) with error payload used in handler computation.
+///
+/// The handler receives the thrown error value and uses it to compute
+/// an alternative result.
+#[test]
+fn test_throw_with_payload() {
+    let code = r#"ability Throw(e) {
+    op throw(error: e) -> Never
+}
+
+fn check_positive(x: Nat) ->{Throw(Nat)} Nat {
+    Throw::throw(x + 100)
+}
+
+fn main() {
+    let result = handle check_positive(5) {
+        do result { result }
+        op Throw::throw(error) { error }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("throw_with_payload.trb", code, "105");
+}
+
+/// Test Throw(e) with multiple throwing operations composed sequentially.
+///
+/// Two functions share the same Throw(Nat) effect. The first succeeds,
+/// the second throws, and the handler catches the error.
+///
+/// Currently fails because CPS transformation applies the continuation
+/// to the error value for non-resumptive operations in sequential let
+/// bindings (produces 87 = 10 + 77 instead of 77).
+#[test]
+#[ignore = "CPS continuation applied to non-resumptive op result in sequential let bindings (#624)"]
+fn test_throw_multiple_operations() {
+    let code = r#"ability Throw(e) {
+    op throw(error: e) -> Never
+}
+
+fn no_throw() ->{Throw(Nat)} Nat {
+    10
+}
+
+fn must_throw() ->{Throw(Nat)} Nat {
+    Throw::throw(77)
+}
+
+fn do_work() ->{Throw(Nat)} Nat {
+    let a = no_throw()
+    let b = must_throw()
+    a + b
+}
+
+fn main() {
+    let result = handle do_work() {
+        do result { result }
+        op Throw::throw(error) { error }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("throw_multiple_ops.trb", code, "77");
+}
