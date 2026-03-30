@@ -17,10 +17,8 @@
 //! ^do_retain_block:
 //!   %hdr_sz  = clif.iconst(8) : core.i64
 //!   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
-//!   %rc      = clif.load(%rc_addr, offset=0) : core.i32
 //!   %one     = clif.iconst(1) : core.i32
-//!   %new_rc  = clif.iadd(%rc, %one) : core.i32
-//!   clif.store(%new_rc, %rc_addr, offset=0)
+//!   %old_rc  = clif.atomic_rmw(%rc_addr, %one, op=@add, offset=0) : core.i32
 //!   clif.jump(^skip_block)
 //!
 //! ^skip_block:
@@ -36,15 +34,13 @@
 //! clif.brif(%is_null, ^skip_block, ^do_release_block)
 //!
 //! ^do_release_block:
-//!   %hdr_sz  = clif.iconst(8) : core.i64
-//!   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
-//!   %rc      = clif.load(%rc_addr, offset=0) : core.i32
-//!   %one     = clif.iconst(1) : core.i32
-//!   %new_rc  = clif.isub(%rc, %one) : core.i32
-//!   clif.store(%new_rc, %rc_addr, offset=0)
-//!   %zero    = clif.iconst(0) : core.i32
-//!   %is_zero = clif.icmp(%new_rc, %zero, eq) : core.i8
-//!   clif.brif(%is_zero, ^free_block, ^skip_block)
+//!   %hdr_sz     = clif.iconst(8) : core.i64
+//!   %rc_addr    = clif.isub(ptr, %hdr_sz) : core.ptr
+//!   %one        = clif.iconst(1) : core.i32
+//!   %old_rc     = clif.atomic_rmw(%rc_addr, %one, op=@sub, offset=0) : core.i32
+//!   %one2       = clif.iconst(1) : core.i32
+//!   %is_last    = clif.icmp(%old_rc, %one2, eq) : core.i8
+//!   clif.brif(%is_last, ^free_block, ^skip_block)
 //!
 //! ^free_block:
 //!   clif.call @__tribute_deep_release(ptr, size)
@@ -276,7 +272,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             ctx.push_op(current_block, brif_op.op_ref());
 
             // Generate release decrement ops in do_release_block
-            let is_zero_val = gen_release_decrement(
+            let is_last_val = gen_release_decrement(
                 ctx,
                 loc,
                 do_release_block,
@@ -287,9 +283,9 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 i8_ty,
             );
 
-            // brif: if zero → free, else → skip
-            let zero_brif = clif::brif(ctx, loc, is_zero_val, free_block, skip_block);
-            ctx.push_op(do_release_block, zero_brif.op_ref());
+            // brif: if last ref → free, else → skip
+            let last_brif = clif::brif(ctx, loc, is_last_val, free_block, skip_block);
+            ctx.push_op(do_release_block, last_brif.op_ref());
 
             // Generate free block ops
             gen_deep_release_call(
@@ -399,19 +395,19 @@ fn gen_release_decrement(
     ctx.push_op(block, old_rc.op_ref());
 
     // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
-    let one_check = clif::iconst(ctx, loc, i32_ty, 1);
-    ctx.push_op(block, one_check.op_ref());
-    let is_zero = clif::icmp(
+    let one_cmp = clif::iconst(ctx, loc, i32_ty, 1);
+    ctx.push_op(block, one_cmp.op_ref());
+    let is_last = clif::icmp(
         ctx,
         loc,
         old_rc.result(ctx),
-        one_check.result(ctx),
+        one_cmp.result(ctx),
         i8_ty,
         Symbol::new("eq"),
     );
-    ctx.push_op(block, is_zero.op_ref());
+    ctx.push_op(block, is_last.op_ref());
 
-    is_zero.result(ctx)
+    is_last.result(ctx)
 }
 
 /// Generate deep release call + jump in the free block.
