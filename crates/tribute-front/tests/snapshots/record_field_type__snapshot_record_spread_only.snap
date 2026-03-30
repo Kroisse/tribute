@@ -1,6 +1,6 @@
 ---
 source: crates/tribute-front/tests/record_field_type.rs
-assertion_line: 191
+assertion_line: 202
 expression: ir_text
 ---
 core.module @test {
@@ -22,6 +22,7 @@ core.module @test {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : tribute_rt.anyref
       %2 = adt.struct_get %0 {field = 1, type = !Config} : tribute_rt.anyref
       %3 = adt.struct_new %1, %2 {type = !Config} : adt.typeref() {name = @Config}
-      func.return %3
+      %4 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+      func.return %4
   }
 }

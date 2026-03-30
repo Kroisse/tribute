@@ -241,6 +241,7 @@ fn lower_function<'db>(
         // Lower function body
         let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
         if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
+            let result = builder.cast_if_needed(location, result, return_ty);
             let ret_op = func::r#return(builder.ir, location, [result]);
             builder.ir.push_op(builder.block, ret_op.op_ref());
         } else {
