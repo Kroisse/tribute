@@ -334,7 +334,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
         .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
 }
 
-/// Generate retain RC ops (load, increment, store) in a block.
+/// Generate retain RC ops (atomic increment) in a block.
 fn gen_retain_rc_ops(
     ctx: &mut IrContext,
     loc: trunk_ir::Location,
@@ -366,7 +366,7 @@ fn gen_retain_rc_ops(
 }
 
 /// Generate release decrement ops in a block.
-/// Returns the `is_zero` value.
+/// Returns a flag indicating the old refcount was 1 (i.e., now zero after atomic decrement).
 #[allow(clippy::too_many_arguments)]
 fn gen_release_decrement(
     ctx: &mut IrContext,
