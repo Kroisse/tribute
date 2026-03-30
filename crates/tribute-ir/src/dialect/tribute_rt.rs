@@ -26,18 +26,11 @@ mod tribute_rt {
 }
 
 // === RC Header Layout ===
-// Re-exported from `tribute-rc` for use in compiler passes.
+// Re-exported from `tribute-rc`. See `tribute_rc::RcBox` for the layout definition.
 
-/// RC header size in bytes (refcount: u32 + rtti_idx: u32 = 8 bytes).
-///
-/// See [`tribute_rc::RcBox`] for the full layout definition.
-pub const RC_HEADER_SIZE: u64 = tribute_rc::HEADER_SIZE;
-
-/// Byte offset of the refcount field within the RC header.
-pub const REFCOUNT_OFFSET: usize = tribute_rc::REFCOUNT_OFFSET;
-
-/// Byte offset of the rtti_idx field within the RC header.
-pub const RTTI_IDX_OFFSET: usize = tribute_rc::RTTI_IDX_OFFSET;
+pub use tribute_rc::HEADER_SIZE as RC_HEADER_SIZE;
+pub use tribute_rc::REFCOUNT_OFFSET;
+pub use tribute_rc::RTTI_IDX_OFFSET;
 
 // === Pure operation registrations ===
 // Boxing and unboxing operations are pure (no side effects)
