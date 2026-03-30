@@ -122,7 +122,9 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif};
+use trunk_ir_cranelift_backend::passes::{
+    adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif,
+};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, RodataEntry, emit_module_to_native,
 };
@@ -615,6 +617,9 @@ fn compile_module_to_native(
     let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
     tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis);
 
+    // Phase -0.3 - Lower bytes intrinsic calls to mem.load operations
+    tribute_passes::native::intrinsic_to_native::lower(ctx, module);
+
     // Phase 0 - Lower structured control flow to CFG-based control flow
     trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
 
@@ -657,6 +662,13 @@ fn compile_module_to_native(
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         arith_to_clif::lower(ctx, module, type_converter);
+    }
+
+    // Phase 2.6 - Lower mem dialect to clif dialect
+    {
+        let (type_converter, _) =
+            tribute_passes::native::type_converter::native_type_converter(ctx);
+        mem_to_clif::lower(ctx, module, type_converter);
     }
 
     // Phase 2.7-2.8 - tribute_rt_to_clif + RC insertion

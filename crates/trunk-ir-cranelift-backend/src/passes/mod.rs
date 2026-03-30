@@ -6,3 +6,4 @@ pub mod adt_to_clif;
 pub mod arith_to_clif;
 pub mod cf_to_clif;
 pub mod func_to_clif;
+pub mod mem_to_clif;
