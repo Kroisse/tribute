@@ -779,12 +779,12 @@ fn test_throw_with_payload() {
     op throw(error: e) -> Never
 }
 
-fn check_positive(x: Nat) ->{Throw(Nat)} Nat {
+fn throw_with_offset(x: Nat) ->{Throw(Nat)} Nat {
     Throw::throw(x + 100)
 }
 
 fn main() {
-    let result = handle check_positive(5) {
+    let result = handle throw_with_offset(5) {
         do result { result }
         op Throw::throw(error) { error }
     }
