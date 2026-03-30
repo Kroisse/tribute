@@ -324,6 +324,12 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
 /// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
 /// original buffer (zero-copy).
 ///
+/// The returned slice shares the original's data buffer. To prevent
+/// use-after-free, this function bumps the original object's refcount so
+/// it stays alive at least as long as the slice. The extra retain is
+/// balanced when the compiler's RC insertion pass releases the original
+/// at the caller's scope boundary.
+///
 /// Panics (aborts) if `start > end` or `end > bytes.len`.
 ///
 /// Signature: `(bytes: ptr, start: u32, end: u32) -> ptr`
@@ -343,7 +349,16 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
 
     // Bounds check
     if s > e || e > b.len {
-        oom_abort();
+        bounds_check_abort();
+    }
+
+    // Retain the original so its data buffer stays alive while the slice
+    // points into it. The RC header sits immediately before the payload.
+    const RC_HEADER_SIZE: u64 = 8;
+    unsafe {
+        let rc_header = (bytes as *mut u8).sub(RC_HEADER_SIZE as usize);
+        let refcount = rc_header as *mut u32;
+        *refcount += 1;
     }
 
     let new_len = e - s;
@@ -354,7 +369,6 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     };
 
     // Allocate RC header (8 bytes) + TributeBytes payload (16 bytes) = 24 bytes
-    const RC_HEADER_SIZE: u64 = 8;
     let alloc_size = RC_HEADER_SIZE + core::mem::size_of::<TributeBytes>() as u64;
     let raw = unsafe { __tribute_alloc(alloc_size) };
 
@@ -372,6 +386,10 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     }
 
     payload
+}
+
+fn bounds_check_abort() -> ! {
+    oom_abort();
 }
 
 // =============================================================================

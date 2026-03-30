@@ -224,6 +224,28 @@ impl RewritePattern for ArithBinOpPattern {
     }
 }
 
+/// Emit the comparison result, extending from i8 to the expected width if needed.
+///
+/// Cranelift's `icmp`/`fcmp` always return i8. If the converted result type
+/// is wider (e.g. i32), insert a `clif.uextend` after the comparison.
+fn finalize_cmp(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    rewriter: &mut trunk_ir::rewrite::PatternRewriter<'_>,
+    cmp_op: OpRef,
+    cmp_result: trunk_ir::refs::ValueRef,
+    result_ty: TypeRef,
+    i8_ty: TypeRef,
+) {
+    if result_ty == i8_ty {
+        rewriter.replace_op(cmp_op);
+    } else {
+        rewriter.insert_op(cmp_op);
+        let ext_op = arena_clif::uextend(ctx, loc, cmp_result, result_ty).op_ref();
+        rewriter.replace_op(ext_op);
+    }
+}
+
 struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
@@ -249,13 +271,15 @@ impl RewritePattern for ArithCmpPattern {
             let rhs = cmpi.rhs(ctx);
             let cond = cmpi.predicate(ctx);
             let cmp_op = arena_clif::icmp(ctx, loc, lhs, rhs, i8_ty, cond);
-            if result_ty == i8_ty {
-                rewriter.replace_op(cmp_op.op_ref());
-            } else {
-                rewriter.insert_op(cmp_op.op_ref());
-                let ext_op = arena_clif::uextend(ctx, loc, cmp_op.result(ctx), result_ty).op_ref();
-                rewriter.replace_op(ext_op);
-            }
+            finalize_cmp(
+                ctx,
+                loc,
+                rewriter,
+                cmp_op.op_ref(),
+                cmp_op.result(ctx),
+                result_ty,
+                i8_ty,
+            );
             true
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
@@ -273,13 +297,15 @@ impl RewritePattern for ArithCmpPattern {
                 _ => predicate,
             };
             let cmp_op = arena_clif::fcmp(ctx, loc, lhs, rhs, i8_ty, cond);
-            if result_ty == i8_ty {
-                rewriter.replace_op(cmp_op.op_ref());
-            } else {
-                rewriter.insert_op(cmp_op.op_ref());
-                let ext_op = arena_clif::uextend(ctx, loc, cmp_op.result(ctx), result_ty).op_ref();
-                rewriter.replace_op(ext_op);
-            }
+            finalize_cmp(
+                ctx,
+                loc,
+                rewriter,
+                cmp_op.op_ref(),
+                cmp_op.result(ctx),
+                result_ty,
+                i8_ty,
+            );
             true
         } else {
             false
