@@ -91,6 +91,6 @@ impl<T> RcBox<T> {
 
     /// Return a pointer to the payload field.
     pub fn payload_ptr(&mut self) -> *mut T {
-        &mut self.payload as *mut T
+        &raw mut self.payload
     }
 }

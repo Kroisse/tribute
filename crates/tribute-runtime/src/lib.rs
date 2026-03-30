@@ -307,7 +307,7 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     rc_box.payload.ptr = buf;
     rc_box.payload.len = total_len;
 
-    &mut rc_box.payload as *mut TributeBytes
+    &raw mut rc_box.payload
 }
 
 /// Slice a Bytes value, returning a new RC-managed Bytes pointing into the
@@ -362,7 +362,7 @@ pub unsafe extern "C" fn __tribute_bytes_slice_or_panic(
     rc_box.payload.ptr = new_ptr;
     rc_box.payload.len = new_len;
 
-    &mut rc_box.payload as *mut TributeBytes
+    &raw mut rc_box.payload
 }
 
 fn bounds_check_abort() -> ! {
