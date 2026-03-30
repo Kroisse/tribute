@@ -903,3 +903,47 @@ fn main() {
     // abort() calls the parameter (returns 77), not the ability op (would return 0)
     assert_native_output("effect_directed_shadow.trb", code, "77");
 }
+
+// =============================================================================
+// Use Import Tests (#631)
+// =============================================================================
+
+/// Test `use abilities::Abort` makes Abort usable without qualification.
+#[test]
+fn test_use_import_abort() {
+    let code = r#"use abilities::Abort
+
+fn do_abort() ->{Abort} Nat {
+    abort()
+}
+
+fn main() {
+    let result = handle do_abort() {
+        do result { result }
+        op Abort::abort() { 99 }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("use_import_abort.trb", code, "99");
+}
+
+/// Test `use abilities::Throw` makes Throw(e) usable without qualification.
+#[test]
+fn test_use_import_throw() {
+    let code = r#"use abilities::Throw
+
+fn do_throw() ->{Throw(Nat)} Nat {
+    throw(42)
+}
+
+fn main() {
+    let result = handle do_throw() {
+        do result { result }
+        op Throw::throw(error) { error }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("use_import_throw.trb", code, "42");
+}

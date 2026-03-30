@@ -311,6 +311,12 @@ impl<'db> Resolver<'db> {
         self.effect_ops.clear();
         self.pop_scope();
 
+        // Resolve imported ability names in effect annotations to qualified paths.
+        // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
+        let effects = func
+            .effects
+            .map(|effs| self.resolve_effect_annotations(effs));
+
         FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
@@ -318,7 +324,7 @@ impl<'db> Resolver<'db> {
             type_params: func.type_params,
             params,
             return_ty: func.return_ty,
-            effects: func.effects,
+            effects,
             body,
         }
     }
@@ -393,6 +399,52 @@ impl<'db> Resolver<'db> {
     fn resolve_enum_decl(&self, e: EnumDecl) -> EnumDecl {
         // Enum declarations don't contain expressions to resolve
         e
+    }
+
+    /// Resolve imported ability names in effect annotations to qualified paths.
+    ///
+    /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
+    /// import stores the original module path. This method rewrites unqualified
+    /// ability names in effect annotations to their qualified form so that
+    /// `annotation_to_effect` creates the correct AbilityId.
+    fn resolve_effect_annotations(&self, effects: Vec<TypeAnnotation>) -> Vec<TypeAnnotation> {
+        effects
+            .into_iter()
+            .map(|ann| self.resolve_ability_in_annotation(ann))
+            .collect()
+    }
+
+    /// Resolve a single annotation: if the ability name was imported via `use`,
+    /// rewrite it to the qualified path from the original module.
+    fn resolve_ability_in_annotation(&self, ann: TypeAnnotation) -> TypeAnnotation {
+        match &ann.kind {
+            TypeAnnotationKind::Named(sym)
+                if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
+            {
+                // Check if this name was imported via `use` and refers to a module path
+                // Check if this name was imported via `use` with a qualified path
+                if let Some(path) = self.env.get_use_path(*sym) {
+                    if path.len() >= 2 {
+                        return TypeAnnotation {
+                            id: ann.id,
+                            kind: TypeAnnotationKind::Path(path.clone()),
+                        };
+                    }
+                }
+                ann
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                let resolved_ctor = self.resolve_ability_in_annotation((**ctor).clone());
+                TypeAnnotation {
+                    id: ann.id,
+                    kind: TypeAnnotationKind::App {
+                        ctor: Box::new(resolved_ctor),
+                        args: args.clone(),
+                    },
+                }
+            }
+            _ => ann,
+        }
     }
 
     /// Resolve an ability declaration.

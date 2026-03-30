@@ -73,6 +73,9 @@ pub struct ModuleEnv<'db> {
     imports: HashMap<Symbol, Binding<'db>>,
     /// Qualified paths (namespace → name → binding).
     namespaces: HashMap<Symbol, HashMap<Symbol, Binding<'db>>>,
+    /// Original paths for resolved `use` imports (import name → original path).
+    /// Used to rewrite effect annotations from imported names to qualified paths.
+    use_paths: HashMap<Symbol, Vec<Symbol>>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -171,9 +174,33 @@ impl<'db> ModuleEnv<'db> {
             .flat_map(|bindings| bindings.iter().map(|(k, v)| (*k, v)))
     }
 
+    /// Collect all bindings in a namespace (owned, avoids borrow issues).
+    pub fn collect_namespace(&self, namespace: Symbol) -> Vec<(Symbol, Binding<'db>)> {
+        self.namespaces
+            .get(&namespace)
+            .map(|bindings| bindings.iter().map(|(k, v)| (*k, v.clone())).collect())
+            .unwrap_or_default()
+    }
+
     /// Check whether a namespace exists.
     pub fn has_namespace(&self, namespace: Symbol) -> bool {
         self.namespaces.contains_key(&namespace)
+    }
+
+    /// Iterate over all imports.
+    pub fn iter_imports(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
+        self.imports.iter().map(|(k, v)| (*k, v))
+    }
+
+    /// Replace an import binding, recording the original path.
+    pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
+        self.use_paths.insert(name, path);
+        self.imports.insert(name, binding);
+    }
+
+    /// Get the original `use` path for an import name.
+    pub fn get_use_path(&self, name: Symbol) -> Option<&Vec<Symbol>> {
+        self.use_paths.get(&name)
     }
 
     /// Iterate over all definitions in this environment.

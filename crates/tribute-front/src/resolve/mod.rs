@@ -58,6 +58,58 @@ pub fn resolve_with_env<'db>(
     resolver.resolve_module(module)
 }
 
+/// Resolve `use` imports that reference module-qualified paths.
+///
+/// During `build_env`, `use` declarations are stored as `Binding::Module` placeholders
+/// because the referenced modules (e.g., prelude) may not yet be merged. This function
+/// re-resolves those imports against the full environment after prelude merge.
+///
+/// For example, `use abilities::Abort` upgrades from a `Module` binding to the actual
+/// `Ability` binding, and registers the ability's operations under the imported name's
+/// namespace (so `Abort::abort` works).
+pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
+    // Collect Module bindings that need resolution
+    let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
+        .iter_imports()
+        .filter_map(|(name, binding)| match binding {
+            Binding::Module { path } if path.len() >= 2 => Some((name, path.clone())),
+            _ => None,
+        })
+        .collect();
+
+    for (import_name, path) in module_imports {
+        let target_name = *path.last().unwrap();
+        let ns = Symbol::from_dynamic(
+            &path[..path.len() - 1]
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::"),
+        );
+
+        // Look up the actual binding in the namespace
+        let Some(binding) = env.lookup_qualified(ns, target_name).cloned() else {
+            continue;
+        };
+
+        // Transfer the imported name's sub-namespace entries.
+        // e.g., `use abilities::Abort` makes `Abort::abort` available.
+        let qualified_ns = Symbol::from_dynamic(
+            &path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+                .join("::"),
+        );
+        for (op_name, op_binding) in env.collect_namespace(qualified_ns) {
+            env.add_to_namespace_if_absent(import_name, op_name, op_binding);
+        }
+
+        // Replace the Module placeholder with the actual binding
+        env.replace_import(import_name, binding, path);
+    }
+}
+
 /// Build a module environment from AST declarations.
 pub fn build_env<'db>(
     db: &'db dyn salsa::Database,
@@ -171,10 +223,10 @@ fn collect_definition<'db>(
         Decl::Use(u) => {
             // Import the last segment of the path
             if let Some(&name) = u.path.last() {
+                let import_name = u.alias.unwrap_or(name);
                 let binding = Binding::Module {
                     path: u.path.clone(),
                 };
-                let import_name = u.alias.unwrap_or(name);
                 env.add_import(import_name, binding);
             }
         }
