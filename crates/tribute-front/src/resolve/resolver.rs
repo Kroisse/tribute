@@ -421,15 +421,14 @@ impl<'db> Resolver<'db> {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
             {
-                // Check if this name was imported via `use` and refers to a module path
                 // Check if this name was imported via `use` with a qualified path
-                if let Some(path) = self.env.get_use_path(*sym) {
-                    if path.len() >= 2 {
-                        return TypeAnnotation {
-                            id: ann.id,
-                            kind: TypeAnnotationKind::Path(path.clone()),
-                        };
-                    }
+                if let Some(path) = self.env.get_use_path(*sym)
+                    && path.len() >= 2
+                {
+                    return TypeAnnotation {
+                        id: ann.id,
+                        kind: TypeAnnotationKind::Path(path.clone()),
+                    };
                 }
                 ann
             }
