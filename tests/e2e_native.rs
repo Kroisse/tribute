@@ -774,6 +774,121 @@ fn main() {
 }
 
 // =========================================================================
+// Bytes operations tests
+// =========================================================================
+
+#[test]
+fn test_native_bytes_get_or_panic() {
+    assert_native_output(
+        "bytes_get_or_panic.trb",
+        r#"
+fn main() {
+    let bs = b"abc"
+    __tribute_print_nat(bs.get_or_panic(0))
+    __tribute_print_nat(bs.get_or_panic(1))
+    __tribute_print_nat(bs.get_or_panic(2))
+}
+"#,
+        "97\n98\n99",
+    );
+}
+
+#[test]
+#[ignore = "segfaults — likely related to #617 (operator TDNR in case arms)"]
+fn test_native_bytes_get_safe() {
+    let output = compile_and_run_native(
+        "bytes_get_safe.trb",
+        r#"
+fn main() {
+    let bs = b"hi"
+    let a = bs.get(0)
+    let b = bs.get(2)
+    case a {
+        Some(v) -> __tribute_print_nat(v)
+        None -> print("none")
+    }
+    case b {
+        Some(v) -> __tribute_print_nat(v)
+        None -> print("none")
+    }
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stdout='{}', stderr='{}'",
+        output.status,
+        stdout,
+        stderr,
+    );
+}
+
+#[test]
+fn test_native_bytes_slice_or_panic() {
+    assert_native_output(
+        "bytes_slice_or_panic.trb",
+        r#"
+fn main() {
+    let bs = b"hello world"
+    let sl = bs.slice_or_panic(0, 5)
+    print(String::from_bytes(sl))
+}
+"#,
+        "hello",
+    );
+}
+
+#[test]
+fn test_native_bytes_slice_safe() {
+    assert_native_output(
+        "bytes_slice_safe.trb",
+        r#"
+fn main() {
+    let bs = b"hello world"
+    let sl = bs.slice(6, 11)
+    print(String::from_bytes(sl))
+}
+"#,
+        "world",
+    );
+}
+
+#[test]
+fn test_native_bytes_slice_clamping() {
+    assert_native_output(
+        "bytes_slice_clamp.trb",
+        r#"
+fn main() {
+    let bs = b"hello"
+    let sl = bs.slice(3, 100)
+    __tribute_print_nat(sl.len())
+}
+"#,
+        "2",
+    );
+}
+
+#[test]
+fn test_native_bytes_as_function_arg() {
+    assert_native_output(
+        "bytes_fn_arg.trb",
+        r#"
+fn print_bytes_len(bs: Bytes) -> Nil {
+    __tribute_print_nat(bs.len())
+}
+
+fn main() {
+    let bs = b"test"
+    print_bytes_len(bs)
+}
+"#,
+        "4",
+    );
+}
+
+// =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================
 

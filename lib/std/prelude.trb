@@ -205,13 +205,12 @@ pub mod String {
 }
 
 // =============================================================================
-// Intrinsic declarations (WASM backend)
+// Intrinsic declarations
 // =============================================================================
-// These functions are implemented by the WASM backend.
+// These functions are lowered to inline IR by compiler passes.
 // The `__` prefix marks them as internal/reserved.
 
 extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat
-extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 
 // =============================================================================
 // Native extern "C" declarations
@@ -220,6 +219,7 @@ extern "intrinsic" fn __bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat)
 
 extern "C" fn __tribute_bytes_len(bytes: Bytes) -> Nat
 extern "C" fn __tribute_bytes_concat(left: Bytes, right: Bytes) -> Bytes
+extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
 extern "C" fn __tribute_bytes_print(bytes: Bytes) -> Nil
 extern "C" fn __tribute_print_newline() -> Nil
 
@@ -246,7 +246,7 @@ pub mod Bytes {
     /// Create a slice of the byte sequence.
     /// Panics if start or end is out of bounds.
     pub fn slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes {
-        __bytes_slice_or_panic(bytes, start, end)
+        __tribute_bytes_slice_or_panic(bytes, start, end)
     }
 
     /// Concatenate two byte sequences.

@@ -17,7 +17,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::Attribute;
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
@@ -224,6 +224,28 @@ impl RewritePattern for ArithBinOpPattern {
     }
 }
 
+/// Emit the comparison result, extending from i8 to the expected width if needed.
+///
+/// Cranelift's `icmp`/`fcmp` always return i8. If the converted result type
+/// is wider (e.g. i32), insert a `clif.uextend` after the comparison.
+fn finalize_cmp(
+    ctx: &mut IrContext,
+    loc: trunk_ir::types::Location,
+    rewriter: &mut trunk_ir::rewrite::PatternRewriter<'_>,
+    cmp_op: OpRef,
+    cmp_result: trunk_ir::refs::ValueRef,
+    result_ty: TypeRef,
+    i8_ty: TypeRef,
+) {
+    if result_ty == i8_ty {
+        rewriter.replace_op(cmp_op);
+    } else {
+        rewriter.insert_op(cmp_op);
+        let ext_op = arena_clif::uextend(ctx, loc, cmp_result, result_ty).op_ref();
+        rewriter.replace_op(ext_op);
+    }
+}
+
 struct ArithCmpPattern;
 
 impl RewritePattern for ArithCmpPattern {
@@ -237,13 +259,27 @@ impl RewritePattern for ArithCmpPattern {
             return false;
         };
         let loc = ctx.op(op).location;
+        // Cranelift's icmp/fcmp always return i8, so emit the comparison with
+        // core.i8 result, then uextend to the converted result type (core.i32)
+        // so downstream consumers get the expected width.
+        let i8_ty = ctx
+            .types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i8")).build());
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
             let cond = cmpi.predicate(ctx);
-            let new_op = arena_clif::icmp(ctx, loc, lhs, rhs, result_ty, cond).op_ref();
-            rewriter.replace_op(new_op);
+            let cmp_op = arena_clif::icmp(ctx, loc, lhs, rhs, i8_ty, cond);
+            finalize_cmp(
+                ctx,
+                loc,
+                rewriter,
+                cmp_op.op_ref(),
+                cmp_op.result(ctx),
+                result_ty,
+                i8_ty,
+            );
             true
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
@@ -260,8 +296,16 @@ impl RewritePattern for ArithCmpPattern {
                 "oge" => Symbol::new("ge"),
                 _ => predicate,
             };
-            let new_op = arena_clif::fcmp(ctx, loc, lhs, rhs, result_ty, cond).op_ref();
-            rewriter.replace_op(new_op);
+            let cmp_op = arena_clif::fcmp(ctx, loc, lhs, rhs, i8_ty, cond);
+            finalize_cmp(
+                ctx,
+                loc,
+                rewriter,
+                cmp_op.op_ref(),
+                cmp_op.result(ctx),
+                result_ty,
+                i8_ty,
+            );
             true
         } else {
             false
