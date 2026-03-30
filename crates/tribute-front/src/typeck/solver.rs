@@ -694,6 +694,9 @@ impl<'db> TypeSolver<'db> {
             // Error types unify with anything
             (&TypeKind::Error, _) | (_, &TypeKind::Error) => Ok(()),
 
+            // Never (bottom type) unifies with anything
+            (&TypeKind::Never, _) | (_, &TypeKind::Never) => Ok(()),
+
             // Structural unification for compound types
             (
                 &TypeKind::Named {
@@ -1768,6 +1771,22 @@ mod tests {
         // Error should unify with any type
         assert!(solver.unify_types(error_ty, int_ty).is_ok());
         assert!(solver.unify_types(bool_ty, error_ty).is_ok());
+    }
+
+    #[test]
+    fn test_never_type_unifies_with_anything() {
+        let db = test_db();
+        let mut solver = TypeSolver::new(&db);
+
+        let never_ty = Type::new(&db, TypeKind::Never);
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let nat_ty = Type::new(&db, TypeKind::Nat);
+
+        // Never (bottom type) should unify with any type
+        assert!(solver.unify_types(never_ty, int_ty).is_ok());
+        assert!(solver.unify_types(bool_ty, never_ty).is_ok());
+        assert!(solver.unify_types(never_ty, nat_ty).is_ok());
     }
 
     #[test]

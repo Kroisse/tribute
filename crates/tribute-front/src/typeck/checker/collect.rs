@@ -536,6 +536,8 @@ impl<'db> TypeChecker<'db> {
             self.env.rune_type()
         } else if name == "Nil" {
             self.env.nil_type()
+        } else if name == "Never" {
+            self.env.never_type()
         } else {
             self.env.named_type(name, vec![])
         }

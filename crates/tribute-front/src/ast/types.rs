@@ -77,6 +77,8 @@ pub enum TypeKind<'db> {
     Rune,
     /// Unit type (empty tuple)
     Nil,
+    /// Bottom type (no values, indicates divergence)
+    Never,
 
     // === Type variables ===
     /// Bound type variable (De Bruijn index within a TypeScheme).
@@ -147,6 +149,7 @@ impl TypeKind<'_> {
             Self::Bytes => Some("Bytes"),
             Self::Rune => Some("Rune"),
             Self::Nil => Some("Nil"),
+            Self::Never => Some("Never"),
             _ => None,
         }
     }
@@ -170,6 +173,7 @@ impl TypeKind<'_> {
             "Bytes" => Some(Self::Bytes),
             "Rune" => Some(Self::Rune),
             "Nil" => Some(Self::Nil),
+            "Never" => Some(Self::Never),
             _ => None,
         }
     }
@@ -192,6 +196,7 @@ impl fmt::Display for TypeKind<'_> {
             Self::Bytes => f.write_str("Bytes"),
             Self::Rune => f.write_str("Rune"),
             Self::Nil => f.write_str("Nil"),
+            Self::Never => f.write_str("Never"),
             Self::Named { name, args } => {
                 name.with_str(|s| f.write_str(s))?;
                 if !args.is_empty() {

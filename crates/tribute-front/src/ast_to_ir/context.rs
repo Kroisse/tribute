@@ -328,6 +328,11 @@ impl<'db> IrLoweringCtx<'db> {
             TypeKind::Bool => self.bool_type(ir),
             TypeKind::Bytes => self.bytes_type(ir),
             TypeKind::Nil | TypeKind::Error => self.nil_type(ir),
+            TypeKind::Never => {
+                // Never values are never produced; use anyref for compatibility
+                // with existing type erasure (previously Named("Never") → anyref)
+                self.anyref_type(ir)
+            }
             TypeKind::BoundVar { .. } => {
                 // Quantified type variable in TypeScheme body → type-erased any
                 self.anyref_type(ir)
