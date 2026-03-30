@@ -276,7 +276,9 @@ pub unsafe extern "C" fn __tribute_bytes_concat(
     let a_ref = unsafe { &*a };
     let b_ref = unsafe { &*b };
 
-    let total_len = a_ref.len + b_ref.len;
+    let Some(total_len) = a_ref.len.checked_add(b_ref.len) else {
+        oom_abort();
+    };
 
     // Allocate buffer for concatenated bytes
     let buf = if total_len > 0 {
