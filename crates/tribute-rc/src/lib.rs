@@ -78,8 +78,8 @@ impl<T> RcBox<T> {
     pub unsafe fn init(raw: *mut u8, rtti_idx: u32) -> *mut RcBox<T> {
         let rc_box = raw as *mut RcBox<T>;
         unsafe {
-            ptr::write(ptr::addr_of_mut!((*rc_box).refcount), AtomicU32::new(1));
-            ptr::write(ptr::addr_of_mut!((*rc_box).rtti_idx), rtti_idx);
+            ptr::write(&raw mut (*rc_box).refcount, AtomicU32::new(1));
+            ptr::write(&raw mut (*rc_box).rtti_idx, rtti_idx);
         }
         rc_box
     }
