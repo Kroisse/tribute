@@ -837,7 +837,10 @@ fn lower_block_cps<'db>(
             return lower_cps_ability_op(builder, stmt, remaining, value).map(|r| (r, true));
         }
 
-        if is_effectful_call_stmt(builder.db(), stmt) {
+        // Only CPS-transform effectful calls when done_k is set (inside an
+        // effectful function or handle body). In pure functions, effectful calls
+        // go through lower_expr which passes identity done_k inline.
+        if builder.ctx.done_k.is_some() && is_effectful_call_stmt(builder.db(), stmt) {
             let stmt = stmts_iter.next().unwrap();
             let remaining: Vec<_> = stmts_iter.collect();
             return lower_cps_effectful_call(builder, stmt, remaining, value).map(|r| (r, true));
@@ -849,6 +852,33 @@ fn lower_block_cps<'db>(
 
     // Check if the value expression is a direct ability op call
     if let Some(result) = try_lower_value_ability_op(builder, &value) {
+        return Some((result, true));
+    }
+
+    // Check if the value expression is an effectful named function call with done_k.
+    // If so, treat it as a CPS call: done_k is passed to the callee, which will
+    // call it internally. The caller must NOT call done_k again (is_cps = true).
+    if builder.ctx.done_k.is_some()
+        && let ExprKind::Call { callee: c, .. } = &*value.kind
+        && let ExprKind::Var(tr) = &*c.kind
+        && matches!(&tr.resolved, ResolvedRef::Function { .. })
+        && let TypeKind::Func { effect, .. } = tr.ty.kind(builder.db())
+        && !effect.is_pure(builder.db())
+        && let Some(result) = try_lower_value_effectful_call(builder, value.clone())
+    {
+        return Some((result, true));
+    }
+    // Same for effectful local closure calls
+    if builder.ctx.done_k.is_some()
+        && let ExprKind::Call { callee: c, .. } = &*value.kind
+        && let ExprKind::Var(tr) = &*c.kind
+        && matches!(&tr.resolved, ResolvedRef::Local { .. })
+        && let TypeKind::Func { effect, .. } = tr.ty.kind(builder.db())
+        && !effect.is_pure(builder.db())
+    {
+        // lower_expr will handle this via the Local branch and pass done_k,
+        // but we need to signal is_cps=true so the caller doesn't add done_k again.
+        let result = lower_expr(builder, value)?;
         return Some((result, true));
     }
 
@@ -999,9 +1029,7 @@ fn try_lower_value_effectful_call<'db>(
     builder.ir.push_op(builder.block, call_op.op_ref());
     let call_result = call_op.result(builder.ir);
 
-    // The effectful function calls done_k(result) and returns done_k's result.
-    // We need func.return to terminate this block, since no downstream pass adds it
-    // (unlike ability.perform which is handled by lower_ability_perform).
+    // Add func.return to terminate this block.
     let ret = func::r#return(builder.ir, location, [call_result]);
     builder.ir.push_op(builder.block, ret.op_ref());
 
@@ -1341,9 +1369,8 @@ fn lower_cps_effectful_call<'db>(
     builder.ir.push_op(builder.block, call_op.op_ref());
     let call_result = call_op.result(builder.ir);
 
-    // The effectful function calls continuation(result) and returns its result.
-    // We need func.return to terminate this block, since no downstream pass adds it
-    // (unlike ability.perform which is handled by lower_ability_perform).
+    // Add func.return to terminate this block. The effectful function calls
+    // continuation(result) internally and returns the continuation's result.
     let ret = func::r#return(builder.ir, location, [call_result]);
     builder.ir.push_op(builder.block, ret.op_ref());
 

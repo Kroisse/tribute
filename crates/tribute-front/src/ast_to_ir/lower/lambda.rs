@@ -266,9 +266,15 @@ pub(super) fn lower_lambda<'db>(
 
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
             match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
-                Some((_result, true)) => {
-                    // CPS result: func.return already added by lower_cps_effectful_call
-                    // or lower_ability_perform will add it
+                Some((result, true)) => {
+                    // CPS result: effectful call happened; add func.return with the result.
+                    // The callee already handled done_k via its continuation chain.
+                    let anyref_ty = inner_builder.ctx.anyref_type(inner_builder.ir);
+                    let result = inner_builder.cast_if_needed(location, result, anyref_ty);
+                    let ret_op = func::r#return(inner_builder.ir, location, [result]);
+                    inner_builder
+                        .ir
+                        .push_op(inner_builder.block, ret_op.op_ref());
                 }
                 Some((result, false)) => {
                     // Pure result in an effectful lambda: call done_k(result)

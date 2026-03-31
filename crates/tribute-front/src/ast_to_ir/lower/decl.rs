@@ -267,14 +267,19 @@ fn lower_function<'db>(
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
             let result = expr::lower_block_cps_for_body(&mut builder, func_decl.body);
 
-            if let Some((body_result, is_cps)) = result
-                && !is_cps
-            {
-                // Pure result: call done_k(result) instead of func.return
+            if let Some((body_result, is_cps)) = result {
                 let result_anyref = builder.cast_if_needed(location, body_result, anyref_ty);
-                super::emit_done_k_call(&mut builder, location, done_k_val, result_anyref);
+                if is_cps {
+                    // CPS: effectful call returned; emit func.return with the result.
+                    // The callee already called done_k internally via continuation chain.
+                    let ret = func::r#return(builder.ir, location, [result_anyref]);
+                    builder.ir.push_op(builder.block, ret.op_ref());
+                } else {
+                    // Pure result: call done_k(result) instead of func.return
+                    super::emit_done_k_call(&mut builder, location, done_k_val, result_anyref);
+                }
             }
-            // If is_cps: ability.perform or effectful call already handles tail-call
+            // ability.perform → lower_ability_perform will add func.return
 
             scope.done_k = prev_done_k;
         } else {
