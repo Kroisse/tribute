@@ -37,6 +37,26 @@ fn parse_int_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::IntCC> {
     })
 }
 
+/// Parse a symbol into a Cranelift atomic RMW operation.
+fn parse_atomic_rmw_op(sym: Symbol) -> CompilationResult<cl_ir::AtomicRmwOp> {
+    sym.with_str(|s| match s {
+        "add" => Ok(cl_ir::AtomicRmwOp::Add),
+        "sub" => Ok(cl_ir::AtomicRmwOp::Sub),
+        "and" => Ok(cl_ir::AtomicRmwOp::And),
+        "or" => Ok(cl_ir::AtomicRmwOp::Or),
+        "xor" => Ok(cl_ir::AtomicRmwOp::Xor),
+        "nand" => Ok(cl_ir::AtomicRmwOp::Nand),
+        "xchg" => Ok(cl_ir::AtomicRmwOp::Xchg),
+        "umin" => Ok(cl_ir::AtomicRmwOp::Umin),
+        "umax" => Ok(cl_ir::AtomicRmwOp::Umax),
+        "smin" => Ok(cl_ir::AtomicRmwOp::Smin),
+        "smax" => Ok(cl_ir::AtomicRmwOp::Smax),
+        other => Err(CompilationError::codegen(format!(
+            "unknown atomic RMW operation: {other}"
+        ))),
+    })
+}
+
 /// Parse a condition symbol into a Cranelift float condition code.
 fn parse_float_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::FloatCC> {
     use cl_ir::condcodes::FloatCC;
@@ -419,6 +439,26 @@ impl<'a> FunctionTranslator<'a> {
             self.builder
                 .ins()
                 .store(cl_ir::MemFlags::new(), value, addr, store.offset(ctx));
+            return Ok(());
+        }
+
+        if let Ok(armw) = arena_clif::AtomicRmw::from_op(ctx, op) {
+            let result_ty = ctx.op_result_types(op)[0];
+            let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
+            let operands = ctx.op_operands(op);
+            let mut addr = self.lookup(operands[0])?;
+            let value = self.lookup(operands[1])?;
+            let offset = armw.offset(ctx);
+            if offset != 0 {
+                addr = self.builder.ins().iadd_imm(addr, i64::from(offset));
+            }
+            let rmw_op = parse_atomic_rmw_op(armw.op(ctx))?;
+            let val =
+                self.builder
+                    .ins()
+                    .atomic_rmw(ty, cl_ir::MemFlags::new(), rmw_op, addr, value);
+            let result = ctx.op_result(op, 0);
+            self.values.insert(result, val);
             return Ok(());
         }
 

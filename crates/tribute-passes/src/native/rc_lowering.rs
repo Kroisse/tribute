@@ -17,10 +17,8 @@
 //! ^do_retain_block:
 //!   %hdr_sz  = clif.iconst(8) : core.i64
 //!   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
-//!   %rc      = clif.load(%rc_addr, offset=0) : core.i32
 //!   %one     = clif.iconst(1) : core.i32
-//!   %new_rc  = clif.iadd(%rc, %one) : core.i32
-//!   clif.store(%new_rc, %rc_addr, offset=0)
+//!   %old_rc  = clif.atomic_rmw(%rc_addr, %one, op=@add, offset=0) : core.i32
 //!   clif.jump(^skip_block)
 //!
 //! ^skip_block:
@@ -36,15 +34,12 @@
 //! clif.brif(%is_null, ^skip_block, ^do_release_block)
 //!
 //! ^do_release_block:
-//!   %hdr_sz  = clif.iconst(8) : core.i64
-//!   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
-//!   %rc      = clif.load(%rc_addr, offset=0) : core.i32
-//!   %one     = clif.iconst(1) : core.i32
-//!   %new_rc  = clif.isub(%rc, %one) : core.i32
-//!   clif.store(%new_rc, %rc_addr, offset=0)
-//!   %zero    = clif.iconst(0) : core.i32
-//!   %is_zero = clif.icmp(%new_rc, %zero, eq) : core.i8
-//!   clif.brif(%is_zero, ^free_block, ^skip_block)
+//!   %hdr_sz     = clif.iconst(8) : core.i64
+//!   %rc_addr    = clif.isub(ptr, %hdr_sz) : core.ptr
+//!   %one        = clif.iconst(1) : core.i32
+//!   %old_rc     = clif.atomic_rmw(%rc_addr, %one, op=@sub, offset=0) : core.i32
+//!   %is_last    = clif.icmp(%old_rc, %one, eq) : core.i8
+//!   clif.brif(%is_last, ^free_block, ^skip_block)
 //!
 //! ^free_block:
 //!   clif.call @__tribute_deep_release(ptr, size)
@@ -276,7 +271,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             ctx.push_op(current_block, brif_op.op_ref());
 
             // Generate release decrement ops in do_release_block
-            let is_zero_val = gen_release_decrement(
+            let is_last_val = gen_release_decrement(
                 ctx,
                 loc,
                 do_release_block,
@@ -287,9 +282,9 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 i8_ty,
             );
 
-            // brif: if zero → free, else → skip
-            let zero_brif = clif::brif(ctx, loc, is_zero_val, free_block, skip_block);
-            ctx.push_op(do_release_block, zero_brif.op_ref());
+            // brif: if last ref → free, else → skip
+            let last_brif = clif::brif(ctx, loc, is_last_val, free_block, skip_block);
+            ctx.push_op(do_release_block, last_brif.op_ref());
 
             // Generate free block ops
             gen_deep_release_call(
@@ -334,7 +329,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
         .intern(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
 }
 
-/// Generate retain RC ops (load, increment, store) in a block.
+/// Generate retain RC ops (atomic increment) in a block.
 fn gen_retain_rc_ops(
     ctx: &mut IrContext,
     loc: trunk_ir::Location,
@@ -350,23 +345,23 @@ fn gen_retain_rc_ops(
     let rc_addr = clif::isub(ctx, loc, ptr, hdr_sz.result(ctx), ptr_ty);
     ctx.push_op(block, rc_addr.op_ref());
 
-    // rc = load(rc_addr, offset=0)
-    let rc = clif::load(ctx, loc, rc_addr.result(ctx), i32_ty, 0);
-    ctx.push_op(block, rc.op_ref());
-
-    // new_rc = rc + 1
+    // atomic_rmw add: atomically increment RC
     let one = clif::iconst(ctx, loc, i32_ty, 1);
     ctx.push_op(block, one.op_ref());
-    let new_rc = clif::iadd(ctx, loc, rc.result(ctx), one.result(ctx), i32_ty);
-    ctx.push_op(block, new_rc.op_ref());
-
-    // store(new_rc, rc_addr, offset=0)
-    let store = clif::store(ctx, loc, new_rc.result(ctx), rc_addr.result(ctx), 0);
-    ctx.push_op(block, store.op_ref());
+    let _old_rc = clif::atomic_rmw(
+        ctx,
+        loc,
+        rc_addr.result(ctx),
+        one.result(ctx),
+        i32_ty,
+        Symbol::new("add"),
+        0,
+    );
+    ctx.push_op(block, _old_rc.op_ref());
 }
 
 /// Generate release decrement ops in a block.
-/// Returns the `is_zero` value.
+/// Returns a flag indicating the old refcount was 1 (i.e., now zero after atomic decrement).
 #[allow(clippy::too_many_arguments)]
 fn gen_release_decrement(
     ctx: &mut IrContext,
@@ -384,34 +379,32 @@ fn gen_release_decrement(
     let rc_addr = clif::isub(ctx, loc, ptr, hdr_sz.result(ctx), ptr_ty);
     ctx.push_op(block, rc_addr.op_ref());
 
-    // rc = load(rc_addr, offset=0)
-    let rc = clif::load(ctx, loc, rc_addr.result(ctx), i32_ty, 0);
-    ctx.push_op(block, rc.op_ref());
-
-    // new_rc = rc - 1
+    // atomic_rmw sub: atomically decrement RC, returns old value
     let one = clif::iconst(ctx, loc, i32_ty, 1);
     ctx.push_op(block, one.op_ref());
-    let new_rc = clif::isub(ctx, loc, rc.result(ctx), one.result(ctx), i32_ty);
-    ctx.push_op(block, new_rc.op_ref());
-
-    // store(new_rc, rc_addr, offset=0)
-    let store = clif::store(ctx, loc, new_rc.result(ctx), rc_addr.result(ctx), 0);
-    ctx.push_op(block, store.op_ref());
-
-    // is_zero = icmp(new_rc, 0, eq)
-    let zero = clif::iconst(ctx, loc, i32_ty, 0);
-    ctx.push_op(block, zero.op_ref());
-    let is_zero = clif::icmp(
+    let old_rc = clif::atomic_rmw(
         ctx,
         loc,
-        new_rc.result(ctx),
-        zero.result(ctx),
+        rc_addr.result(ctx),
+        one.result(ctx),
+        i32_ty,
+        Symbol::new("sub"),
+        0,
+    );
+    ctx.push_op(block, old_rc.op_ref());
+
+    // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
+    let is_last = clif::icmp(
+        ctx,
+        loc,
+        old_rc.result(ctx),
+        one.result(ctx),
         i8_ty,
         Symbol::new("eq"),
     );
-    ctx.push_op(block, is_zero.op_ref());
+    ctx.push_op(block, is_last.op_ref());
 
-    is_zero.result(ctx)
+    is_last.result(ctx)
 }
 
 /// Generate deep release call + jump in the free block.
@@ -517,9 +510,12 @@ mod tests {
             !output.contains("tribute_rt."),
             "no tribute_rt ops should remain after lowering"
         );
-        // Each retain produces one iadd (rc + 1) in its do_retain block
-        let iadd_count = output.matches("clif.iadd").count();
-        assert_eq!(iadd_count, 2, "expected 2 RC increments, got {iadd_count}");
+        // Each retain produces one atomic_rmw in its do_retain block
+        let atomic_count = output.matches("clif.atomic_rmw").count();
+        assert_eq!(
+            atomic_count, 2,
+            "expected 2 atomic RC increments, got {atomic_count}"
+        );
     }
 
     #[test]
@@ -608,8 +604,8 @@ mod tests {
             "conditional branch should be present"
         );
         assert!(
-            output.contains("clif.iadd"),
-            "RC increment should be present"
+            output.contains("clif.atomic_rmw"),
+            "atomic RC increment should be present"
         );
     }
 }
