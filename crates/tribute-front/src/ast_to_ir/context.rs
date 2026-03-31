@@ -68,6 +68,11 @@ pub struct IrLoweringCtx<'db> {
     /// When true, continuation calls in handler arms use `func.call_indirect`
     /// instead of `ability.resume` (CPS effect handling mode).
     pub(crate) cps_handler_mode: bool,
+
+    /// Done continuation for effectful functions in CPS mode.
+    /// When set, pure results at the end of continuation chains should call
+    /// this closure instead of `func.return`.
+    pub(crate) done_k: Option<ValueRef>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -97,6 +102,7 @@ impl<'db> IrLoweringCtx<'db> {
 
             node_types,
             cps_handler_mode: false,
+            done_k: None,
         }
     }
 

@@ -274,22 +274,45 @@ fn build_cps_body<'db>(
         }
     }
 
-    // Build body closure: no params, returns anyref
+    // Check if the body contains effectful function calls that need CPS.
+    let body_needs_done_k = super::expr::body_contains_effectful_call(builder.db(), body);
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+    // Build body closure entry block.
+    // If body needs done_k: fn(done_k: anyref) -> anyref
+    // Otherwise: fn() -> anyref
+    let entry_block_args = if body_needs_done_k {
+        vec![BlockArgData {
+            ty: anyref_ty,
+            attrs: Default::default(),
+        }]
+    } else {
+        vec![]
+    };
+
     let entry_block = builder.ir.create_block(BlockData {
         location,
-        args: vec![],
+        args: entry_block_args,
         ops: Default::default(),
         parent_region: None,
     });
 
     {
         let mut scope = builder.ctx.scope();
+
+        let prev_done_k = scope.done_k;
+        if body_needs_done_k {
+            let done_k_val = builder.ir.block_arg(entry_block, 0);
+            scope.done_k = Some(done_k_val);
+        }
+
         let result = {
             let mut body_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
             super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
         };
         let Some((body_result, is_cps)) = result else {
-            return None; // scope drops automatically
+            scope.done_k = prev_done_k;
+            return None;
         };
 
         // In the tail-call CPS design:
@@ -308,6 +331,8 @@ fn build_cps_body<'db>(
             let ret = func::r#return(builder.ir, location, [result]);
             builder.ir.push_op(entry_block, ret.op_ref());
         }
+
+        scope.done_k = prev_done_k;
     }
 
     let body_region = builder.ir.create_region(RegionData {
@@ -316,10 +341,16 @@ fn build_cps_body<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn() ->{effect} anyref
-    let closure_func_ty = builder
-        .ctx
-        .func_type_with_effect(builder.ir, &[], result_ty, effect);
+    // Closure type depends on whether body needs done_k
+    let body_params: Vec<TypeRef> = if body_needs_done_k {
+        vec![anyref_ty]
+    } else {
+        vec![]
+    };
+    let closure_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &body_params, result_ty, effect);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -333,11 +364,27 @@ fn build_cps_body<'db>(
     builder.ir.push_op(builder.block, lambda_op.op_ref());
     let body_closure = lambda_op.result(builder.ir);
 
-    // Call the body closure → anyref result
-    let call_op = func::call_indirect(builder.ir, location, body_closure, vec![], result_ty);
-    builder.ir.push_op(builder.block, call_op.op_ref());
+    // Call the body closure
+    if body_needs_done_k {
+        // Build an identity done_k: fn(result) { return result }
+        // Created at the handle expression level (sibling to body_closure,
+        // not nested inside it), so lower_closure_lambda lifts both correctly.
+        let done_k_val = super::create_identity_done_k(builder, location);
 
-    Some(call_op.result(builder.ir))
+        let call_op = func::call_indirect(
+            builder.ir,
+            location,
+            body_closure,
+            vec![done_k_val],
+            result_ty,
+        );
+        builder.ir.push_op(builder.block, call_op.op_ref());
+        Some(call_op.result(builder.ir))
+    } else {
+        let call_op = func::call_indirect(builder.ir, location, body_closure, vec![], result_ty);
+        builder.ir.push_op(builder.block, call_op.op_ref());
+        Some(call_op.result(builder.ir))
+    }
 }
 
 /// Build the handler dispatch body region with done and suspend ops (CPS version).
@@ -579,12 +626,24 @@ fn build_cps_suspend_handler_region<'db>(
             }
         }
 
+        // Create identity done_k for the handler arm body.
+        // Handler arms may call effectful functions (e.g., run_state) that
+        // expect done_k. Since the handler arm's result flows to scf.yield,
+        // the identity done_k just returns the result through the call chain.
+        let prev_done_k = scope.done_k;
+        {
+            let mut dk_builder = IrBuilder::new(&mut scope, ir, block);
+            let identity_dk = super::create_identity_done_k(&mut dk_builder, location);
+            scope.done_k = Some(identity_dk);
+        }
+
         // Evaluate the handler body
         let body_result = {
             let mut builder = IrBuilder::new(&mut scope, ir, block);
             super::expr::lower_expr(&mut builder, handler.body.clone())
         };
 
+        scope.done_k = prev_done_k;
         scope.cps_handler_mode = prev_cps_mode;
         body_result
     };
@@ -1205,12 +1264,21 @@ fn build_handler_arm_for_dispatch<'db>(
             }
         }
 
+        // Create identity done_k for effectful calls in handler arm body.
+        let prev_done_k = scope.done_k;
+        {
+            let mut dk_builder = super::IrBuilder::new(&mut scope, ir, block);
+            let identity_dk = super::create_identity_done_k(&mut dk_builder, location);
+            scope.done_k = Some(identity_dk);
+        }
+
         // Evaluate the handler body
         let body_result = {
-            let mut inner_builder = IrBuilder::new(&mut scope, ir, block);
+            let mut inner_builder = super::IrBuilder::new(&mut scope, ir, block);
             super::expr::lower_expr(&mut inner_builder, handler.body.clone())
         };
 
+        scope.done_k = prev_done_k;
         scope.cps_handler_mode = prev_cps_mode;
         body_result
     };

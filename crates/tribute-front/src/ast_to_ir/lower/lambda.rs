@@ -214,6 +214,21 @@ pub(super) fn lower_lambda<'db>(
         block_args.push(arg);
     }
 
+    // For effectful lambdas, add done_k as last block arg (before evidence/env
+    // which are added by lower_closure_lambda).
+    let is_effectful = effect.is_some();
+    if is_effectful {
+        let mut done_k_arg = BlockArgData {
+            ty: any_ty,
+            attrs: Default::default(),
+        };
+        done_k_arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__done_k")),
+        );
+        block_args.push(done_k_arg);
+    }
+
     let entry_block = builder.ir.create_block(BlockData {
         location,
         args: block_args,
@@ -240,29 +255,33 @@ pub(super) fn lower_lambda<'db>(
         // Lower the lambda body.
         // For effectful lambdas, use CPS so that ability ops produce
         // ability.perform, consistent with CPS handle dispatch.
-        if effect.is_some() {
+        if is_effectful {
+            // Set done_k for the lambda body scope.
+            // Save and restore the parent's done_k since ScopeGuard's DerefMut
+            // gives us direct access to IrLoweringCtx fields (not scoped).
+            let prev_done_k = scope.done_k;
+            let done_k_idx = params.len() as u32;
+            let done_k_val = builder.ir.block_arg(entry_block, done_k_idx);
+            scope.done_k = Some(done_k_val);
+
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
             match super::expr::lower_block_cps_for_expr(&mut inner_builder, body.clone()) {
                 Some((_result, true)) => {
-                    // CPS result: lower_ability_perform will add func.return
+                    // CPS result: func.return already added by lower_cps_effectful_call
+                    // or lower_ability_perform will add it
                 }
                 Some((result, false)) => {
-                    // Pure result in an effectful lambda: just return it.
-                    // The lowering pipeline will handle return wrapping if needed.
-                    let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
-                    let ret_op = func::r#return(inner_builder.ir, location, [result]);
-                    inner_builder
-                        .ir
-                        .push_op(inner_builder.block, ret_op.op_ref());
+                    // Pure result in an effectful lambda: call done_k(result)
+                    let anyref_ty = inner_builder.ctx.anyref_type(inner_builder.ir);
+                    let result = inner_builder.cast_if_needed(location, result, anyref_ty);
+                    super::emit_done_k_call(&mut inner_builder, location, done_k_val, result);
                 }
                 None => {
                     let nil = inner_builder.emit_nil(location);
-                    let ret_op = func::r#return(inner_builder.ir, location, [nil]);
-                    inner_builder
-                        .ir
-                        .push_op(inner_builder.block, ret_op.op_ref());
+                    super::emit_done_k_call(&mut inner_builder, location, done_k_val, nil);
                 }
             }
+            scope.done_k = prev_done_k;
         } else {
             // Pure lambda: standard lowering
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
@@ -290,10 +309,21 @@ pub(super) fn lower_lambda<'db>(
 
     // Step 3: Emit closure.lambda
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
+
+    // For effectful lambdas, the function type includes done_k as last param
+    // and returns anyref (CPS functions deliver results via done_k).
+    let (func_param_types, func_result_ty) = if is_effectful {
+        let anyref_ty = builder.ctx.anyref_type(builder.ir);
+        let mut pts: Vec<TypeRef> = param_ir_types.to_vec();
+        pts.push(anyref_ty); // done_k
+        (pts, anyref_ty)
+    } else {
+        (param_ir_types.to_vec(), result_ir_ty)
+    };
     let closure_func_ty =
         builder
             .ctx
-            .func_type_with_effect(builder.ir, param_ir_types, result_ir_ty, effect);
+            .func_type_with_effect(builder.ir, &func_param_types, func_result_ty, effect);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let lambda_op = closure::lambda(

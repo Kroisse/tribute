@@ -237,6 +237,32 @@ pub(super) fn lower_expr<'db>(
                             }
                         }
 
+                        // If callee is effectful and we have done_k, pass it as last arg.
+                        // This enables the CPS chain: the callee calls done_k(result)
+                        // instead of returning directly.
+                        let callee_is_effectful = matches!(
+                            typed_ref.ty.kind(builder.db()),
+                            TypeKind::Func { effect, .. } if !effect.is_pure(builder.db())
+                        );
+                        // If callee is effectful, pass done_k as last arg.
+                        // Use existing done_k if available, otherwise create identity.
+                        if callee_is_effectful {
+                            let done_k = builder.ctx.done_k.unwrap_or_else(|| {
+                                super::create_identity_done_k(builder, location)
+                            });
+                            arg_values.push(done_k);
+                            let anyref_ty = builder.ctx.anyref_type(builder.ir);
+                            let op = func::call(
+                                builder.ir,
+                                location,
+                                arg_values,
+                                anyref_ty,
+                                callee_name,
+                            );
+                            builder.ir.push_op(builder.block, op.op_ref());
+                            return Some(op.result(builder.ir));
+                        }
+
                         let result_ty = builder.call_result_type(&typed_ref.ty);
                         let op =
                             func::call(builder.ir, location, arg_values, result_ty, callee_name);
@@ -315,6 +341,25 @@ pub(super) fn lower_expr<'db>(
                                         );
                                     }
                                 }
+                            }
+
+                            // If callee is effectful closure and we have done_k, pass it
+                            let callee_is_effectful = matches!(
+                                typed_ref.ty.kind(builder.db()),
+                                TypeKind::Func { effect, .. } if !effect.is_pure(builder.db())
+                            );
+                            // If callee is effectful closure, pass done_k.
+                            if callee_is_effectful {
+                                let done_k = builder.ctx.done_k.unwrap_or_else(|| {
+                                    super::create_identity_done_k(builder, location)
+                                });
+                                arg_values.push(done_k);
+                                let anyref_ty = builder.ctx.anyref_type(builder.ir);
+                                let op = func::call_indirect(
+                                    builder.ir, location, callee_val, arg_values, anyref_ty,
+                                );
+                                builder.ir.push_op(builder.block, op.op_ref());
+                                return Some(op.result(builder.ir));
                             }
 
                             let result_ty = builder.call_result_type(&typed_ref.ty);
@@ -673,6 +718,45 @@ pub(super) fn lower_expr<'db>(
 ///
 /// Like `lower_block_cps` but works on a single expression, wrapping it in
 /// a trivial block if needed.
+/// Check if an expression (or its sub-block) contains effectful function calls
+/// that would need CPS transformation with done_k.
+pub(super) fn body_contains_effectful_call<'db>(
+    db: &'db dyn salsa::Database,
+    expr: &Expr<TypedRef<'db>>,
+) -> bool {
+    match &*expr.kind {
+        ExprKind::Block { stmts, value } => {
+            stmts.iter().any(|s| is_effectful_call_stmt(db, s))
+                || body_contains_effectful_call(db, value)
+        }
+        ExprKind::Call { callee, .. } => {
+            if let ExprKind::Var(tr) = &*callee.kind {
+                if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. }) {
+                    return false; // Handled by existing CPS
+                }
+                if let TypeKind::Func { effect, .. } = tr.ty.kind(db) {
+                    return !effect.is_pure(db);
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Lower a function body expression with CPS transformation for effectful functions.
+///
+/// Like `lower_block_cps_for_expr`, but also handles top-level effectful function calls
+/// (not just ability ops) as CPS points.
+pub(super) fn lower_block_cps_for_body<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<(ValueRef, bool)> {
+    // Delegate to lower_block_cps_for_expr — effectful call detection
+    // is already integrated into lower_block_cps via is_effectful_call_stmt.
+    lower_block_cps_for_expr(builder, expr)
+}
+
 pub(super) fn lower_block_cps_for_expr<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     expr: Expr<TypedRef<'db>>,
@@ -682,6 +766,17 @@ pub(super) fn lower_block_cps_for_expr<'db>(
         _ => {
             // Non-block expression: check if it's a direct ability op call
             if let Some(result) = super::expr::try_lower_value_ability_op(builder, &expr) {
+                return Some((result, true));
+            }
+            // Check if it's an effectful named function call (needs CPS with done_k)
+            if builder.ctx.done_k.is_some()
+                && let ExprKind::Call { callee: c, .. } = &*expr.kind
+                && let ExprKind::Var(tr) = &*c.kind
+                && matches!(&tr.resolved, ResolvedRef::Function { .. })
+                && let TypeKind::Func { effect, .. } = tr.ty.kind(builder.db())
+                && !effect.is_pure(builder.db())
+                && let Some(result) = try_lower_value_effectful_call(builder, expr.clone())
+            {
                 return Some((result, true));
             }
             // Reject nested ability-op subexpressions that would bypass CPS.
@@ -742,6 +837,12 @@ fn lower_block_cps<'db>(
             return lower_cps_ability_op(builder, stmt, remaining, value).map(|r| (r, true));
         }
 
+        if is_effectful_call_stmt(builder.db(), stmt) {
+            let stmt = stmts_iter.next().unwrap();
+            let remaining: Vec<_> = stmts_iter.collect();
+            return lower_cps_effectful_call(builder, stmt, remaining, value).map(|r| (r, true));
+        }
+
         let stmt = stmts_iter.next().unwrap();
         lower_single_stmt(builder, stmt);
     }
@@ -791,44 +892,49 @@ fn try_lower_value_ability_op<'db>(
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    // Build trivial identity continuation: fn(result) { result }
-    let entry_block = builder.ir.create_block(trunk_ir::context::BlockData {
-        location,
-        args: vec![trunk_ir::context::BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        }],
-        ops: Default::default(),
-        parent_region: None,
-    });
+    // Build continuation for the value expression.
+    // If done_k is set (inside an effectful function), use done_k directly
+    // since there's nothing after this ability op call.
+    // Otherwise, build a trivial identity continuation: fn(result) { return result }
+    let continuation = if let Some(done_k) = builder.ctx.done_k {
+        done_k
+    } else {
+        let entry_block = builder.ir.create_block(trunk_ir::context::BlockData {
+            location,
+            args: vec![trunk_ir::context::BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            }],
+            ops: Default::default(),
+            parent_region: None,
+        });
 
-    let param_val = builder.ir.block_arg(entry_block, 0);
-    let ret = func::r#return(builder.ir, location, [param_val]);
-    builder.ir.push_op(entry_block, ret.op_ref());
+        let param_val = builder.ir.block_arg(entry_block, 0);
+        let ret = func::r#return(builder.ir, location, [param_val]);
+        builder.ir.push_op(entry_block, ret.op_ref());
 
-    let body_region = builder.ir.create_region(trunk_ir::context::RegionData {
-        location,
-        blocks: trunk_ir::smallvec::smallvec![entry_block],
-        parent_op: None,
-    });
+        let body_region = builder.ir.create_region(trunk_ir::context::RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![entry_block],
+            parent_op: None,
+        });
 
-    // Closure type: fn(anyref) -> anyref
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
-    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+        let closure_func_ty =
+            builder
+                .ctx
+                .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+        let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
-    // No captures needed for identity continuation
-    let lambda_op = closure::lambda(
-        builder.ir,
-        location,
-        Vec::<ValueRef>::new(),
-        closure_ty,
-        body_region,
-    );
-    builder.ir.push_op(builder.block, lambda_op.op_ref());
-    let continuation = lambda_op.result(builder.ir);
+        let lambda_op = closure::lambda(
+            builder.ir,
+            location,
+            Vec::<ValueRef>::new(),
+            closure_ty,
+            body_region,
+        );
+        builder.ir.push_op(builder.block, lambda_op.op_ref());
+        lambda_op.result(builder.ir)
+    };
 
     // Emit ability.perform
     let ability_name = ability.qualified(builder.db());
@@ -846,6 +952,60 @@ fn try_lower_value_ability_op<'db>(
     builder.ir.push_op(builder.block, perform_op.op_ref());
 
     Some(perform_op.result(builder.ir))
+}
+
+/// Try to lower a value expression that is an effectful function call.
+///
+/// When done_k is set (inside an effectful function), the effectful call receives
+/// done_k as its last argument, making it a CPS tail call.
+fn try_lower_value_effectful_call<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    expr: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    let ExprKind::Call { callee, args } = *expr.kind else {
+        return None;
+    };
+    let ExprKind::Var(typed_ref) = *callee.kind else {
+        return None;
+    };
+    let callee_name = match &typed_ref.resolved {
+        ResolvedRef::Function { id } => id.qualified(builder.db()),
+        _ => return None,
+    };
+
+    let location = builder.location(expr.id);
+    let mut arg_values = builder.collect_args(args)?;
+
+    // Insert casts for arguments using type scheme information
+    if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
+        let body = scheme.body(builder.db());
+        if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
+            for (i, param_ty) in params.iter().enumerate() {
+                if i < arg_values.len() {
+                    let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
+                    arg_values[i] = builder.cast_if_needed(location, arg_values[i], target_ty);
+                }
+            }
+        }
+    }
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+    // Get done_k — the caller's continuation
+    let done_k = builder.ctx.done_k?;
+    arg_values.push(done_k);
+
+    let call_op = func::call(builder.ir, location, arg_values, anyref_ty, callee_name);
+    builder.ir.push_op(builder.block, call_op.op_ref());
+    let call_result = call_op.result(builder.ir);
+
+    // The effectful function calls done_k(result) and returns done_k's result.
+    // We need func.return to terminate this block, since no downstream pass adds it
+    // (unlike ability.perform which is handled by lower_ability_perform).
+    let ret = func::r#return(builder.ir, location, [call_result]);
+    builder.ir.push_op(builder.block, ret.op_ref());
+
+    Some(call_result)
 }
 
 /// Check if an expression contains a nested CPS ability op call (not at the top level).
@@ -944,6 +1104,32 @@ fn is_direct_ability_op_stmt<'db>(stmt: &Stmt<TypedRef<'db>>) -> bool {
             ..
         }
     )
+}
+
+/// Check if a statement contains a call to an effectful function (non-pure).
+///
+/// This excludes direct ability op calls (handled by `is_direct_ability_op_stmt`)
+/// and targets regular function calls whose type has non-empty effects.
+fn is_effectful_call_stmt<'db>(db: &'db dyn salsa::Database, stmt: &Stmt<TypedRef<'db>>) -> bool {
+    let call_expr = match stmt {
+        Stmt::Let { value, .. } => value,
+        Stmt::Expr { expr, .. } => expr,
+    };
+    let ExprKind::Call { callee, .. } = &*call_expr.kind else {
+        return false;
+    };
+    let ExprKind::Var(tr) = &*callee.kind else {
+        return false;
+    };
+    // Skip ability ops — they are handled by is_direct_ability_op_stmt
+    if matches!(&tr.resolved, ResolvedRef::AbilityOp { .. }) {
+        return false;
+    }
+    // Check if the callee's type is a function with non-pure effects
+    match tr.ty.kind(db) {
+        TypeKind::Func { effect, .. } => !effect.is_pure(db),
+        _ => false,
+    }
 }
 
 /// Lower a single non-CPS statement (let binding or expression statement).
@@ -1080,6 +1266,90 @@ fn lower_cps_ability_op<'db>(
     Some(perform_op.result(builder.ir))
 }
 
+/// CPS-transform a statement containing an effectful function call.
+///
+/// Similar to `lower_cps_ability_op`, but for regular function calls to effectful
+/// functions. Builds a continuation for the remaining computation and passes it
+/// as the last argument to the effectful function.
+fn lower_cps_effectful_call<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    stmt: Stmt<TypedRef<'db>>,
+    remaining_stmts: Vec<Stmt<TypedRef<'db>>>,
+    value: Expr<TypedRef<'db>>,
+) -> Option<ValueRef> {
+    // Decompose statement into pattern + call expression
+    let (pattern, call_expr) = match stmt {
+        Stmt::Let { pattern, value, .. } => (Some(pattern), value),
+        Stmt::Expr { expr, .. } => (None, expr),
+    };
+
+    let call_expr_id = call_expr.id;
+    let location = builder.location(call_expr_id);
+
+    let ExprKind::Call { callee, args } = *call_expr.kind else {
+        unreachable!("ICE: lower_cps_effectful_call called with non-call expression");
+    };
+    let ExprKind::Var(typed_ref) = *callee.kind else {
+        unreachable!("ICE: lower_cps_effectful_call called with non-var callee");
+    };
+
+    // Lower arguments
+    let mut arg_values = builder.collect_args(args)?;
+
+    // Insert casts for arguments using type scheme information
+    let callee_name = match &typed_ref.resolved {
+        ResolvedRef::Function { id } => id.qualified(builder.db()),
+        _ => unreachable!("ICE: lower_cps_effectful_call with non-function callee"),
+    };
+
+    if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
+        let body = scheme.body(builder.db());
+        if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
+            for (i, param_ty) in params.iter().enumerate() {
+                if i < arg_values.len() {
+                    let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
+                    arg_values[i] = builder.cast_if_needed(location, arg_values[i], target_ty);
+                }
+            }
+        }
+    }
+
+    // Determine the logical result type of the function call
+    let logical_result_ty = builder
+        .ctx
+        .get_node_type(call_expr_id)
+        .map(|t| builder.ctx.convert_type(builder.ir, *t))
+        .unwrap_or_else(|| builder.call_result_type(&typed_ref.ty));
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+    // Build continuation closure for remaining computation
+    let continuation = build_cps_continuation(
+        builder,
+        location,
+        pattern.as_ref(),
+        anyref_ty,
+        logical_result_ty,
+        remaining_stmts,
+        value,
+    )?;
+
+    // Call the effectful function with continuation as the last argument
+    arg_values.push(continuation);
+
+    let call_op = func::call(builder.ir, location, arg_values, anyref_ty, callee_name);
+    builder.ir.push_op(builder.block, call_op.op_ref());
+    let call_result = call_op.result(builder.ir);
+
+    // The effectful function calls continuation(result) and returns its result.
+    // We need func.return to terminate this block, since no downstream pass adds it
+    // (unlike ability.perform which is handled by lower_ability_perform).
+    let ret = func::r#return(builder.ir, location, [call_result]);
+    builder.ir.push_op(builder.block, ret.op_ref());
+
+    Some(call_result)
+}
+
 /// Build a CPS continuation closure for the remaining computation after an
 /// ability op call.
 ///
@@ -1101,13 +1371,28 @@ fn build_cps_continuation<'db>(
 
     // Analyze captures: variables from current scope used in remaining computation
     let excluded_ids = HashSet::new();
-    let captures = super::lambda::analyze_continuation_captures(
+    let mut captures = super::lambda::analyze_continuation_captures(
         builder.ctx,
         builder.ir,
         &remaining_stmts,
         &value,
         &excluded_ids,
     );
+
+    // If we're inside an effectful function (done_k is set), capture done_k
+    // so it's available at the end of the continuation chain.
+    if let Some(done_k_val) = builder.ctx.done_k {
+        // Add done_k to captures if not already present
+        let already_captured = captures.iter().any(|c| c.value == done_k_val);
+        if !already_captured {
+            captures.push(super::super::context::CaptureInfo {
+                name: Symbol::new("__done_k"),
+                local_id: crate::ast::LocalId::UNRESOLVED,
+                ty: builder.ir.value_ty(done_k_val),
+                value: done_k_val,
+            });
+        }
+    }
 
     // Build body region with one parameter: the ability op result (anyref)
     let entry_block = builder.ir.create_block(trunk_ir::context::BlockData {
@@ -1150,14 +1435,19 @@ fn build_cps_continuation<'db>(
         // Emit return: pass through result directly (no YieldResult wrapping)
         let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
         if !is_cps {
-            // Pure result → return as anyref
             let result_anyref = inner_builder.cast_if_needed(location, body_result, anyref_ty);
-            let ret = func::r#return(inner_builder.ir, location, [result_anyref]);
-            inner_builder.ir.push_op(inner_builder.block, ret.op_ref());
+            if let Some(done_k_val) = inner_builder.ctx.done_k {
+                // Inside an effectful function: call done_k(result) instead of func.return
+                super::emit_done_k_call(&mut inner_builder, location, done_k_val, result_anyref);
+            } else {
+                // Pure function: return as anyref
+                let ret = func::r#return(inner_builder.ir, location, [result_anyref]);
+                inner_builder.ir.push_op(inner_builder.block, ret.op_ref());
+            }
         } else {
-            // CPS result (from nested ability.perform) → no explicit return.
-            // lower_ability_perform will add tail_call when lowering the
-            // ability.perform op.
+            // CPS result (from nested ability.perform or effectful call) → no explicit return.
+            // lower_ability_perform will add tail_call when lowering the ability.perform op,
+            // or the effectful call already includes the continuation parameter.
         }
     }
 
