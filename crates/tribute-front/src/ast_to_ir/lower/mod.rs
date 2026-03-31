@@ -303,3 +303,123 @@ pub(super) fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> 
         PatternKind::Wildcard | PatternKind::Bind { .. }
     )
 }
+
+/// Create an identity `done_k` closure: `fn(result: anyref) -> anyref { return result }`.
+///
+/// Built as a direct `func.func` + `closure.new` (NOT `closure.lambda`), so it
+/// bypasses `lower_closure_lambda` and has a fixed, known signature:
+/// `(evidence, env, result) -> anyref`.
+///
+/// This is an internal mechanism closure, not a user lambda.
+pub(super) fn create_identity_done_k(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+) -> ValueRef {
+    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::dialect::{adt, func};
+
+    use tribute_ir::dialect::{ability, closure};
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
+
+    let dk_name = builder.ctx.gen_lambda_name();
+
+    // func.func @identity_dk(%evidence, %env, %result) -> anyref { return %result }
+    let dk_block = builder.ir.create_block(BlockData {
+        location,
+        args: vec![
+            BlockArgData {
+                ty: evidence_ty,
+                attrs: Default::default(),
+            },
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            },
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            },
+        ],
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let result_param = builder.ir.block_arg(dk_block, 2); // result is 3rd arg
+    let ret = func::r#return(builder.ir, location, [result_param]);
+    builder.ir.push_op(dk_block, ret.op_ref());
+
+    let dk_region = builder.ir.create_region(RegionData {
+        location,
+        blocks: trunk_ir::smallvec::smallvec![dk_block],
+        parent_op: None,
+    });
+
+    let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
+    let dk_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &all_param_types, anyref_ty, None);
+    let dk_func_op = func::func(builder.ir, location, dk_name, dk_func_ty, dk_region);
+
+    // Push to module block
+    let module_block = builder
+        .ctx
+        .module_block()
+        .expect("module block should be set");
+    builder.ir.push_op(module_block, dk_func_op.op_ref());
+
+    // closure.new @identity_dk, null_env
+    let null_op = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);
+    builder.ir.push_op(builder.block, null_op.op_ref());
+    let null_env = null_op.result(builder.ir);
+
+    let closure_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+    let closure_op = closure::new(builder.ir, location, null_env, closure_ty, dk_name);
+    builder.ir.push_op(builder.block, closure_op.op_ref());
+    closure_op.result(builder.ir)
+}
+
+/// Emit a call to the `done_k` continuation closure with a result value,
+/// followed by `func.return` with the call's result.
+///
+/// Used by effectful functions in CPS mode: instead of `func.return result`,
+/// they call `done_k(result)` and return the call's result.
+///
+/// Done_k closures use their own calling convention: `fn(result) -> anyref`.
+/// They are internal mechanism closures, not user-visible lambdas.
+pub(super) fn emit_done_k_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    done_k: ValueRef,
+    result: ValueRef,
+) {
+    use trunk_ir::dialect::func;
+
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+    // Cast done_k to closure type so closure_lower can decompose the call.
+    let closure_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+    let done_k_closure = builder.cast_if_needed(location, done_k, closure_ty);
+    let result_anyref = builder.cast_if_needed(location, result, anyref_ty);
+
+    let call = func::call_indirect(
+        builder.ir,
+        location,
+        done_k_closure,
+        vec![result_anyref],
+        anyref_ty,
+    );
+    builder.ir.push_op(builder.block, call.op_ref());
+
+    let ret = func::r#return(builder.ir, location, [call.result(builder.ir)]);
+    builder.ir.push_op(builder.block, ret.op_ref());
+}

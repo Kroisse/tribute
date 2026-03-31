@@ -3,13 +3,16 @@ source: crates/tribute-front/tests/cps_lowering.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @set_and_get() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %0 = arith.const {value = 42} : core.i32
-      %1 = ability.call %0 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
-      %2 = core.unrealized_conversion_cast %1 : core.nil
-      %3 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      %4 = core.unrealized_conversion_cast %3 : core.i32
-      func.return %4
+  func.func @set_and_get(%0: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %1 = arith.const {value = 42} : core.i32
+      %2 = ability.call %1 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+      %3 = core.unrealized_conversion_cast %2 : core.nil
+      %4 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %5 = core.unrealized_conversion_cast %4 : core.i32
+      %6 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
+      %7 = core.unrealized_conversion_cast %0 : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+      %8 = func.call_indirect %7, %6 : tribute_rt.anyref
+      func.return %8
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

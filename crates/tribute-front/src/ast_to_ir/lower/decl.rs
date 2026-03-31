@@ -206,8 +206,11 @@ fn lower_function<'db>(
             (p, r, None)
         };
 
+    let is_effectful = effect_ir.is_some();
+    let anyref_ty = ctx.anyref_type(ir);
+
     // Create entry block with parameter args
-    let block_args: Vec<BlockArgData> = param_ir_types
+    let mut block_args: Vec<BlockArgData> = param_ir_types
         .iter()
         .zip(func_decl.params.iter())
         .map(|(&ty, p)| {
@@ -221,6 +224,24 @@ fn lower_function<'db>(
         })
         .collect();
 
+    // Effectful functions receive a done_k (continuation closure) as the first parameter.
+    // The function calls done_k(result) instead of func.return on normal completion.
+    let block_args = if is_effectful {
+        let mut done_k_arg = BlockArgData {
+            ty: anyref_ty,
+            attrs: Default::default(),
+        };
+        done_k_arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__done_k")),
+        );
+        let mut args = vec![done_k_arg];
+        args.append(&mut block_args);
+        args
+    } else {
+        block_args
+    };
+
     let entry_block = ir.create_block(BlockData {
         location,
         args: block_args,
@@ -231,28 +252,66 @@ fn lower_function<'db>(
     // Bind parameters to their block argument values
     {
         let mut scope = ctx.scope();
+        // When effectful, done_k is at index 0, params start at 1
+        let param_offset: u32 = if is_effectful { 1 } else { 0 };
         for (i, param) in func_decl.params.iter().enumerate() {
             if let Some(local_id) = param.local_id {
-                let arg_val = ir.block_arg(entry_block, i as u32);
+                let arg_val = ir.block_arg(entry_block, i as u32 + param_offset);
                 scope.bind(local_id, param.name, arg_val);
             }
         }
 
-        // Lower function body
-        let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
-        if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
-            let result = builder.cast_if_needed(location, result, return_ty);
-            let ret_op = func::r#return(builder.ir, location, [result]);
-            builder.ir.push_op(builder.block, ret_op.op_ref());
+        // For effectful functions: set done_k and use CPS body lowering.
+        // The done_k continuation is called at the end of the continuation chain
+        // instead of func.return, handled by build_cps_continuation.
+        if is_effectful {
+            let prev_done_k = scope.done_k;
+            let done_k_val = ir.block_arg(entry_block, 0);
+            scope.done_k = Some(done_k_val);
+
+            let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
+            let result = expr::lower_block_cps_for_body(&mut builder, func_decl.body);
+
+            if let Some((body_result, is_cps)) = result {
+                let result_anyref = builder.cast_if_needed(location, body_result, anyref_ty);
+                if is_cps {
+                    // CPS: effectful call returned; emit func.return with the result.
+                    // The callee already called done_k internally via continuation chain.
+                    let ret = func::r#return(builder.ir, location, [result_anyref]);
+                    builder.ir.push_op(builder.block, ret.op_ref());
+                } else {
+                    // Pure result: call done_k(result) instead of func.return
+                    super::emit_done_k_call(&mut builder, location, done_k_val, result_anyref);
+                }
+            }
+            // ability.perform → lower_ability_perform will add func.return
+
+            scope.done_k = prev_done_k;
         } else {
-            let nil = builder.emit_nil(location);
-            let ret_op = func::r#return(builder.ir, location, [nil]);
-            builder.ir.push_op(builder.block, ret_op.op_ref());
+            // Pure function: lower body normally
+            let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
+            if let Some(result) = expr::lower_expr(&mut builder, func_decl.body) {
+                let result = builder.cast_if_needed(location, result, return_ty);
+                let ret_op = func::r#return(builder.ir, location, [result]);
+                builder.ir.push_op(builder.block, ret_op.op_ref());
+            } else {
+                let nil = builder.emit_nil(location);
+                let ret_op = func::r#return(builder.ir, location, [nil]);
+                builder.ir.push_op(builder.block, ret_op.op_ref());
+            }
         }
     }
 
     // Build function type
-    let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, effect_ir);
+    // Effectful functions: done_k is the first param, return type is anyref
+    let (final_param_types, final_return_ty) = if is_effectful {
+        let mut params = vec![anyref_ty]; // done_k first
+        params.extend_from_slice(&param_ir_types);
+        (params, anyref_ty)
+    } else {
+        (param_ir_types.clone(), return_ty)
+    };
+    let func_type = ctx.func_type_with_effect(ir, &final_param_types, final_return_ty, effect_ir);
 
     // Create body region and func op
     let body_region = ir.create_region(RegionData {
