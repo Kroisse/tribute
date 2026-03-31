@@ -306,51 +306,82 @@ pub(super) fn is_irrefutable_pattern<R: salsa::Update>(pattern: &Pattern<R>) -> 
 
 /// Create an identity `done_k` closure: `fn(result: anyref) -> anyref { return result }`.
 ///
-/// Used at handle expression boundaries and handler arm bodies where there is
-/// no remaining computation after an effectful call — the result just flows through.
+/// Built as a direct `func.func` + `closure.new` (NOT `closure.lambda`), so it
+/// bypasses `lower_closure_lambda` and has a fixed, known signature:
+/// `(evidence, env, result) -> anyref`.
+///
+/// This is an internal mechanism closure, not a user lambda.
 pub(super) fn create_identity_done_k(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
 ) -> ValueRef {
-    use tribute_ir::dialect::closure;
-    use trunk_ir::context::BlockData;
-    use trunk_ir::dialect::func;
+    use trunk_ir::context::{BlockArgData, BlockData, RegionData};
+    use trunk_ir::dialect::{adt, func};
+
+    use tribute_ir::dialect::{ability, closure};
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
 
+    let dk_name = builder.ctx.gen_lambda_name();
+
+    // func.func @identity_dk(%evidence, %env, %result) -> anyref { return %result }
     let dk_block = builder.ir.create_block(BlockData {
         location,
-        args: vec![trunk_ir::context::BlockArgData {
-            ty: anyref_ty,
-            attrs: Default::default(),
-        }],
+        args: vec![
+            BlockArgData {
+                ty: evidence_ty,
+                attrs: Default::default(),
+            },
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            },
+            BlockArgData {
+                ty: anyref_ty,
+                attrs: Default::default(),
+            },
+        ],
         ops: Default::default(),
         parent_region: None,
     });
-    let dk_param = builder.ir.block_arg(dk_block, 0);
-    let ret = func::r#return(builder.ir, location, [dk_param]);
+    let result_param = builder.ir.block_arg(dk_block, 2); // result is 3rd arg
+    let ret = func::r#return(builder.ir, location, [result_param]);
     builder.ir.push_op(dk_block, ret.op_ref());
 
-    let dk_region = builder.ir.create_region(trunk_ir::context::RegionData {
+    let dk_region = builder.ir.create_region(RegionData {
         location,
         blocks: trunk_ir::smallvec::smallvec![dk_block],
         parent_op: None,
     });
 
-    let dk_func_ty = builder
-        .ctx
-        .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
-    let dk_closure_ty = builder.ctx.closure_type(builder.ir, dk_func_ty);
+    let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
+    let dk_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &all_param_types, anyref_ty, None);
+    let dk_func_op = func::func(builder.ir, location, dk_name, dk_func_ty, dk_region);
 
-    let dk_lambda = closure::lambda(
-        builder.ir,
-        location,
-        Vec::<trunk_ir::refs::ValueRef>::new(),
-        dk_closure_ty,
-        dk_region,
-    );
-    builder.ir.push_op(builder.block, dk_lambda.op_ref());
-    dk_lambda.result(builder.ir)
+    // Push to module block
+    let module_block = builder
+        .ctx
+        .module_block()
+        .expect("module block should be set");
+    builder.ir.push_op(module_block, dk_func_op.op_ref());
+
+    // closure.new @identity_dk, null_env
+    let null_op = adt::ref_null(builder.ir, location, anyref_ty, anyref_ty);
+    builder.ir.push_op(builder.block, null_op.op_ref());
+    let null_env = null_op.result(builder.ir);
+
+    let closure_func_ty =
+        builder
+            .ctx
+            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+    let closure_op = closure::new(builder.ir, location, null_env, closure_ty, dk_name);
+    builder.ir.push_op(builder.block, closure_op.op_ref());
+    closure_op.result(builder.ir)
 }
 
 /// Emit a call to the `done_k` continuation closure with a result value,
@@ -358,6 +389,9 @@ pub(super) fn create_identity_done_k(
 ///
 /// Used by effectful functions in CPS mode: instead of `func.return result`,
 /// they call `done_k(result)` and return the call's result.
+///
+/// Done_k closures use their own calling convention: `fn(result) -> anyref`.
+/// They are internal mechanism closures, not user-visible lambdas.
 pub(super) fn emit_done_k_call(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
@@ -369,8 +403,6 @@ pub(super) fn emit_done_k_call(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Cast done_k to closure type so closure_lower can decompose the call.
-    // done_k is typically anyref (from block arg), but func.call_indirect
-    // needs a closure-typed callee for the closure_lower pass to recognize it.
     let closure_func_ty =
         builder
             .ctx

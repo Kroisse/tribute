@@ -3,10 +3,13 @@ source: crates/tribute-front/tests/cps_lowering.rs
 expression: ir_text
 ---
 core.module @test {
-  func.func @get_state() -> core.i32 effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %0 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      %1 = core.unrealized_conversion_cast %0 : core.i32
-      func.return %1
+  func.func @get_state(%0: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %2 = core.unrealized_conversion_cast %1 : core.i32
+      %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
+      %4 = core.unrealized_conversion_cast %0 : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+      %5 = func.call_indirect %4, %3 : tribute_rt.anyref
+      func.return %5
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

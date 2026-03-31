@@ -193,7 +193,7 @@ pub(super) fn lower_lambda<'db>(
     body: &Expr<TypedRef<'db>>,
     effect: Option<TypeRef>,
     param_ir_types: &[TypeRef],
-    result_ir_ty: TypeRef,
+    _result_ir_ty: TypeRef,
 ) -> Option<ValueRef> {
     // Step 1: Analyze captures
     let captures = analyze_captures(builder.ctx, builder.ir, params, body);
@@ -214,10 +214,10 @@ pub(super) fn lower_lambda<'db>(
         block_args.push(arg);
     }
 
-    // For effectful lambdas, add done_k as last block arg (before evidence/env
-    // which are added by lower_closure_lambda).
-    let is_effectful = effect.is_some();
-    if is_effectful {
+    // All closures have CPS calling convention: done_k is always the first
+    // block arg (before user params). Evidence/env are added later by
+    // lower_closure_lambda.
+    let block_args = {
         let mut done_k_arg = BlockArgData {
             ty: any_ty,
             attrs: Default::default(),
@@ -226,8 +226,10 @@ pub(super) fn lower_lambda<'db>(
             Symbol::new("bind_name"),
             Attribute::Symbol(Symbol::new("__done_k")),
         );
-        block_args.push(done_k_arg);
-    }
+        let mut args = vec![done_k_arg];
+        args.append(&mut block_args);
+        args
+    };
 
     let entry_block = builder.ir.create_block(BlockData {
         location,
@@ -240,10 +242,10 @@ pub(super) fn lower_lambda<'db>(
     {
         let mut scope = builder.ctx.scope();
 
-        // Bind lambda parameters
+        // Bind lambda parameters (done_k is at index 0, params start at 1)
         for (i, param) in params.iter().enumerate() {
             if let Some(local_id) = param.local_id {
-                let arg_val = builder.ir.block_arg(entry_block, i as u32);
+                let arg_val = builder.ir.block_arg(entry_block, (i + 1) as u32);
                 scope.bind(local_id, param.name, arg_val);
             }
         }
@@ -252,16 +254,12 @@ pub(super) fn lower_lambda<'db>(
         // The closure.lambda body is NOT isolated from above, so parent-scope
         // ValueRefs are valid inside the body region.
 
-        // Lower the lambda body.
-        // For effectful lambdas, use CPS so that ability ops produce
-        // ability.perform, consistent with CPS handle dispatch.
-        if is_effectful {
-            // Set done_k for the lambda body scope.
-            // Save and restore the parent's done_k since ScopeGuard's DerefMut
-            // gives us direct access to IrLoweringCtx fields (not scoped).
+        // All closures use CPS body lowering (done_k is always at index 0).
+        // Save and restore the parent's done_k since ScopeGuard's DerefMut
+        // gives us direct access to IrLoweringCtx fields (not scoped).
+        {
             let prev_done_k = scope.done_k;
-            let done_k_idx = params.len() as u32;
-            let done_k_val = builder.ir.block_arg(entry_block, done_k_idx);
+            let done_k_val = builder.ir.block_arg(entry_block, 0);
             scope.done_k = Some(done_k_val);
 
             let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
@@ -277,7 +275,7 @@ pub(super) fn lower_lambda<'db>(
                         .push_op(inner_builder.block, ret_op.op_ref());
                 }
                 Some((result, false)) => {
-                    // Pure result in an effectful lambda: call done_k(result)
+                    // Pure result: call done_k(result)
                     let anyref_ty = inner_builder.ctx.anyref_type(inner_builder.ir);
                     let result = inner_builder.cast_if_needed(location, result, anyref_ty);
                     super::emit_done_k_call(&mut inner_builder, location, done_k_val, result);
@@ -288,22 +286,6 @@ pub(super) fn lower_lambda<'db>(
                 }
             }
             scope.done_k = prev_done_k;
-        } else {
-            // Pure lambda: standard lowering
-            let mut inner_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
-            if let Some(result) = super::expr::lower_expr(&mut inner_builder, body.clone()) {
-                let result = inner_builder.cast_if_needed(location, result, result_ir_ty);
-                let ret_op = func::r#return(inner_builder.ir, location, [result]);
-                inner_builder
-                    .ir
-                    .push_op(inner_builder.block, ret_op.op_ref());
-            } else {
-                let nil = inner_builder.emit_nil(location);
-                let ret_op = func::r#return(inner_builder.ir, location, [nil]);
-                inner_builder
-                    .ir
-                    .push_op(inner_builder.block, ret_op.op_ref());
-            }
         }
     }
 
@@ -316,16 +298,15 @@ pub(super) fn lower_lambda<'db>(
     // Step 3: Emit closure.lambda
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
 
-    // For effectful lambdas, the function type includes done_k as last param
-    // and returns anyref (CPS functions deliver results via done_k).
-    let (func_param_types, func_result_ty) = if is_effectful {
-        let anyref_ty = builder.ctx.anyref_type(builder.ir);
-        let mut pts: Vec<TypeRef> = param_ir_types.to_vec();
-        pts.push(anyref_ty); // done_k
-        (pts, anyref_ty)
-    } else {
-        (param_ir_types.to_vec(), result_ir_ty)
+    // All closures use CPS calling convention: done_k is the first param,
+    // return type is always anyref (results delivered via done_k).
+    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+    let func_param_types = {
+        let mut pts = vec![anyref_ty]; // done_k first
+        pts.extend_from_slice(param_ir_types);
+        pts
     };
+    let func_result_ty = anyref_ty;
     let closure_func_ty =
         builder
             .ctx
@@ -343,11 +324,12 @@ pub(super) fn lower_lambda<'db>(
     Some(lambda_op.result(builder.ir))
 }
 
-/// Wrap a named function reference as a closure value.
+/// Wrap a named function reference as a CPS closure value.
 ///
-/// Generates a thin wrapper function with `(evidence, env, params...) -> result`
-/// signature that forwards the call to the original function (ignoring env),
-/// then emits `closure.new @wrapper, nil`.
+/// Generates a thin wrapper function with `(evidence, env, done_k, params...) -> anyref`
+/// signature. For pure originals: calls the function, then calls done_k(result).
+/// For effectful originals: forwards done_k to the function.
+/// Then emits `closure.new @wrapper, nil`.
 pub(super) fn wrap_func_as_closure(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
@@ -358,10 +340,20 @@ pub(super) fn wrap_func_as_closure(
     let any_ty = builder.ctx.anyref_type(builder.ir);
     let evidence_ty = ability::evidence_adt_type_ref(builder.ir);
 
+    // Check if the original function is effectful (has done_k parameter)
+    let callee_is_effectful = builder
+        .ctx
+        .lookup_function_type(func_name)
+        .map(|scheme| {
+            let body = scheme.body(builder.ctx.db);
+            matches!(body.kind(builder.ctx.db), TypeKind::Func { effect, .. } if !effect.is_pure(builder.ctx.db))
+        })
+        .unwrap_or(false);
+
     // Generate unique wrapper name
     let wrapper_name = builder.ctx.gen_lambda_name();
 
-    // Block args: [evidence, env, param1, param2, ...]
+    // Block args: [evidence, env, done_k, param1, param2, ...]
     let mut block_args = Vec::new();
     {
         let mut arg = BlockArgData {
@@ -382,6 +374,17 @@ pub(super) fn wrap_func_as_closure(
         arg.attrs.insert(
             Symbol::new("bind_name"),
             Attribute::Symbol(Symbol::new("__env")),
+        );
+        block_args.push(arg);
+    }
+    {
+        let mut arg = BlockArgData {
+            ty: any_ty,
+            attrs: Default::default(),
+        };
+        arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__done_k")),
         );
         block_args.push(arg);
     }
@@ -409,10 +412,12 @@ pub(super) fn wrap_func_as_closure(
         .map(|i| builder.ir.block_arg(entry_block, i as u32))
         .collect();
 
-    // Forward call: func.call @func_name(params...) — skip evidence and env
-    // Coerce arguments to match callee's declared parameter types (handles
-    // polymorphic callees where wrapper params are concrete but callee expects `any`).
-    let mut call_args: Vec<ValueRef> = arg_values[2..].to_vec();
+    // arg_values layout: [evidence, env, done_k, param1, param2, ...]
+    let done_k_val = arg_values[2];
+    let user_params = &arg_values[3..];
+
+    // Coerce arguments to match callee's declared parameter types
+    let mut call_args: Vec<ValueRef> = user_params.to_vec();
     if let Some(scheme) = builder.ctx.lookup_function_type(func_name) {
         let body = scheme.body(builder.ctx.db);
         if let TypeKind::Func { params, .. } = body.kind(builder.ctx.db) {
@@ -434,12 +439,50 @@ pub(super) fn wrap_func_as_closure(
             }
         }
     }
-    let call_op = func::call(builder.ir, location, call_args, result_ir_ty, func_name);
-    builder.ir.push_op(entry_block, call_op.op_ref());
-    let call_result = call_op.result(builder.ir);
 
-    let ret_op = func::r#return(builder.ir, location, [call_result]);
-    builder.ir.push_op(entry_block, ret_op.op_ref());
+    if callee_is_effectful {
+        // Effectful original: forward done_k as first arg
+        let mut cps_args = vec![done_k_val];
+        cps_args.append(&mut call_args);
+        let call_op = func::call(builder.ir, location, cps_args, any_ty, func_name);
+        builder.ir.push_op(entry_block, call_op.op_ref());
+        let call_result = call_op.result(builder.ir);
+        let ret_op = func::r#return(builder.ir, location, [call_result]);
+        builder.ir.push_op(entry_block, ret_op.op_ref());
+    } else {
+        // Pure original: call and return result via done_k.
+        let call_op = func::call(builder.ir, location, call_args, result_ir_ty, func_name);
+        builder.ir.push_op(entry_block, call_op.op_ref());
+        let call_result = call_op.result(builder.ir);
+        // Cast result to anyref, then call done_k(result)
+        let call_anyref = {
+            let cast = core::unrealized_conversion_cast(builder.ir, location, call_result, any_ty);
+            builder.ir.push_op(entry_block, cast.op_ref());
+            cast.result(builder.ir)
+        };
+        let closure_func_ty =
+            builder
+                .ctx
+                .func_type_with_effect(builder.ir, &[any_ty], any_ty, None);
+        let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
+        let done_k_closure = {
+            let cast =
+                core::unrealized_conversion_cast(builder.ir, location, done_k_val, closure_ty);
+            builder.ir.push_op(entry_block, cast.op_ref());
+            cast.result(builder.ir)
+        };
+        let dk_call = func::call_indirect(
+            builder.ir,
+            location,
+            done_k_closure,
+            vec![call_anyref],
+            any_ty,
+        );
+        builder.ir.push_op(entry_block, dk_call.op_ref());
+        let dk_result = dk_call.result(builder.ir);
+        let ret_op = func::r#return(builder.ir, location, [dk_result]);
+        builder.ir.push_op(entry_block, ret_op.op_ref());
+    }
 
     // Create region and wrapper func op
     let body_region = builder.ir.create_region(RegionData {
@@ -448,12 +491,13 @@ pub(super) fn wrap_func_as_closure(
         parent_op: None,
     });
 
-    let mut all_param_types = vec![evidence_ty, any_ty];
+    // Wrapper func type: (evidence, env, done_k, params...) -> anyref
+    let mut all_param_types = vec![evidence_ty, any_ty, any_ty]; // ev, env, done_k
     all_param_types.extend_from_slice(param_ir_types);
     let wrapper_func_ty =
         builder
             .ctx
-            .func_type_with_effect(builder.ir, &all_param_types, result_ir_ty, None);
+            .func_type_with_effect(builder.ir, &all_param_types, any_ty, None);
 
     let func_op = func::func(
         builder.ir,
@@ -470,13 +514,15 @@ pub(super) fn wrap_func_as_closure(
     builder.ir.push_op(module_block, func_op.op_ref());
 
     // Emit closure.new @wrapper, null_env at the call site
-    let any_ty = builder.ctx.anyref_type(builder.ir);
+    // The closure type uses CPS calling convention: (done_k, params...) -> anyref
     let null_op = adt::ref_null(builder.ir, location, any_ty, any_ty);
     builder.ir.push_op(builder.block, null_op.op_ref());
     let null_env = null_op.result(builder.ir);
+    let mut closure_param_types = vec![any_ty]; // done_k first
+    closure_param_types.extend_from_slice(param_ir_types);
     let closure_func_ty = builder
         .ctx
-        .func_type(builder.ir, param_ir_types, result_ir_ty);
+        .func_type(builder.ir, &closure_param_types, any_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let closure_op = closure::new(builder.ir, location, null_env, closure_ty, wrapper_name);
     builder.ir.push_op(builder.block, closure_op.op_ref());

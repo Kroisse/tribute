@@ -107,6 +107,7 @@ pub(super) fn lower_ability_op_call<'db>(
     };
 
     // Build identity continuation: fn(result) { result }
+    // Continuation closures are internal mechanism, not user lambdas.
     let entry_block = builder.ir.create_block(trunk_ir::context::BlockData {
         location,
         args: vec![trunk_ir::context::BlockArgData {
@@ -275,7 +276,7 @@ fn build_cps_body<'db>(
     }
 
     // Check if the body contains effectful function calls that need CPS.
-    let body_needs_done_k = super::expr::body_contains_effectful_call(builder.db(), body);
+    let body_needs_done_k = super::expr::body_contains_cps_call(builder.ctx, body);
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Build body closure entry block.
@@ -310,16 +311,14 @@ fn build_cps_body<'db>(
             let mut body_builder = IrBuilder::new(&mut scope, builder.ir, entry_block);
             super::expr::lower_block_cps_for_expr(&mut body_builder, body.clone())
         };
-        let Some((body_result, is_cps)) = result else {
+        let Some((body_result, _is_cps)) = result else {
             scope.done_k = prev_done_k;
             return None;
         };
 
-        // In the tail-call CPS design:
-        // - CPS path (is_cps=true): ability.perform will be lowered to tail_call
-        //   handler_dispatch. The body function never returns normally on this path.
-        // - Pure path (is_cps=false): body returns the result directly.
-        if !is_cps {
+        // Always add func.return to terminate the block.
+        // For ability.perform: lower_ability_perform removes dead code after it.
+        {
             let result = if builder.ir.value_ty(body_result) != result_ty {
                 let cast =
                     core::unrealized_conversion_cast(builder.ir, location, body_result, result_ty);
@@ -718,7 +717,8 @@ fn build_handler_dispatch_closure<'db>(
         }
     }
 
-    // Build closure body: ^bb0(%k: anyref, %op_idx: i32, %value: anyref)
+    // Build closure body: ^bb0(%cps_dk: anyref, %k: anyref, %op_idx: i32, %value: anyref)
+    // CPS convention: done_k is first param (unused in dispatch closure)
     let entry_block = builder.ir.create_block(BlockData {
         location,
         args: vec![
@@ -839,8 +839,8 @@ fn build_tr_dispatch_closure<'db>(
         }
     }
 
-    // Build closure body: ^bb0(%op_idx: i32, %value: anyref)
-    // No k parameter — fn operations don't capture continuations
+    // Build closure body: ^bb0(%cps_dk: anyref, %op_idx: i32, %value: anyref)
+    // CPS convention: done_k first (unused), then real params
     let entry_block = builder.ir.create_block(BlockData {
         location,
         args: vec![

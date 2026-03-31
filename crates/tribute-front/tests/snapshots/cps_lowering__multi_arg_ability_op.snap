@@ -5,13 +5,16 @@ expression: ir_text
 core.module @test {
   !__ability_args_tuple = adt.struct() {fields = [[@_0, tribute_rt.anyref], [@_1, tribute_rt.anyref]], name = @__ability_args_tuple}
 
-  func.func @store() -> core.nil effects core.effect_row(core.ability_ref(core.i32, core.i32) {name = @KV}) {tail_var_id = 0} {
-      %0 = arith.const {value = 1} : core.i32
-      %1 = arith.const {value = 2} : core.i32
-      %2 = adt.struct_new %0, %1 {type = !__ability_args_tuple} : tribute_rt.anyref
-      %3 = ability.call %2 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref
-      %4 = core.unrealized_conversion_cast %3 : core.nil
-      func.return %4
+  func.func @store(%0: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32, core.i32) {name = @KV}) {tail_var_id = 0} {
+      %1 = arith.const {value = 1} : core.i32
+      %2 = arith.const {value = 2} : core.i32
+      %3 = adt.struct_new %1, %2 {type = !__ability_args_tuple} : tribute_rt.anyref
+      %4 = ability.call %3 {ability_ref = core.ability_ref() {name = @KV}, op_name = @put} : tribute_rt.anyref
+      %5 = core.unrealized_conversion_cast %4 : core.nil
+      %6 = core.unrealized_conversion_cast %5 : tribute_rt.anyref
+      %7 = core.unrealized_conversion_cast %0 : closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
+      %8 = func.call_indirect %7, %6 : tribute_rt.anyref
+      func.return %8
   }
   func.func @main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil

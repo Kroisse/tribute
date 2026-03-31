@@ -224,9 +224,9 @@ fn lower_function<'db>(
         })
         .collect();
 
-    // Effectful functions receive a done_k (continuation closure) as the last parameter.
+    // Effectful functions receive a done_k (continuation closure) as the first parameter.
     // The function calls done_k(result) instead of func.return on normal completion.
-    if is_effectful {
+    let block_args = if is_effectful {
         let mut done_k_arg = BlockArgData {
             ty: anyref_ty,
             attrs: Default::default(),
@@ -235,8 +235,12 @@ fn lower_function<'db>(
             Symbol::new("bind_name"),
             Attribute::Symbol(Symbol::new("__done_k")),
         );
-        block_args.push(done_k_arg);
-    }
+        let mut args = vec![done_k_arg];
+        args.append(&mut block_args);
+        args
+    } else {
+        block_args
+    };
 
     let entry_block = ir.create_block(BlockData {
         location,
@@ -248,9 +252,11 @@ fn lower_function<'db>(
     // Bind parameters to their block argument values
     {
         let mut scope = ctx.scope();
+        // When effectful, done_k is at index 0, params start at 1
+        let param_offset: u32 = if is_effectful { 1 } else { 0 };
         for (i, param) in func_decl.params.iter().enumerate() {
             if let Some(local_id) = param.local_id {
-                let arg_val = ir.block_arg(entry_block, i as u32);
+                let arg_val = ir.block_arg(entry_block, i as u32 + param_offset);
                 scope.bind(local_id, param.name, arg_val);
             }
         }
@@ -260,8 +266,7 @@ fn lower_function<'db>(
         // instead of func.return, handled by build_cps_continuation.
         if is_effectful {
             let prev_done_k = scope.done_k;
-            let done_k_idx = func_decl.params.len() as u32;
-            let done_k_val = ir.block_arg(entry_block, done_k_idx);
+            let done_k_val = ir.block_arg(entry_block, 0);
             scope.done_k = Some(done_k_val);
 
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
@@ -298,10 +303,10 @@ fn lower_function<'db>(
     }
 
     // Build function type
-    // Effectful functions: add done_k param and return anyref
+    // Effectful functions: done_k is the first param, return type is anyref
     let (final_param_types, final_return_ty) = if is_effectful {
-        let mut params = param_ir_types.clone();
-        params.push(anyref_ty);
+        let mut params = vec![anyref_ty]; // done_k first
+        params.extend_from_slice(&param_ir_types);
         (params, anyref_ty)
     } else {
         (param_ir_types.clone(), return_ty)
