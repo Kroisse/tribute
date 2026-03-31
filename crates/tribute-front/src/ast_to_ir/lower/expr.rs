@@ -416,17 +416,40 @@ pub(super) fn lower_expr<'db>(
                 },
                 _ => {
                     // General expression callee -> indirect call
+                    // All closures use CPS calling convention: pass done_k as first arg.
                     let callee_val = lower_expr(builder, callee)?;
-                    let result_ty = builder
+                    let done_k = builder
+                        .ctx
+                        .done_k
+                        .unwrap_or_else(|| super::create_identity_done_k(builder, location));
+                    let anyref_ty = builder.ctx.anyref_type(builder.ir);
+
+                    // Cast callee to CPS closure type
+                    let mut cps_param_types = vec![anyref_ty]; // done_k
+                    cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
+                    let cps_func_ty = builder.ctx.func_type_with_effect(
+                        builder.ir,
+                        &cps_param_types,
+                        anyref_ty,
+                        None,
+                    );
+                    let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
+                    let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
+
+                    let mut cps_args = vec![done_k];
+                    cps_args.append(&mut arg_values);
+                    let op =
+                        func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
+                    builder.ir.push_op(builder.block, op.op_ref());
+                    let result = op.result(builder.ir);
+
+                    // Cast anyref result back to expected type
+                    let expected_ty = builder
                         .ctx
                         .get_node_type(expr_node_id)
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
-                        .unwrap_or_else(|| builder.ctx.anyref_type(builder.ir));
-                    let op = func::call_indirect(
-                        builder.ir, location, callee_val, arg_values, result_ty,
-                    );
-                    builder.ir.push_op(builder.block, op.op_ref());
-                    let result = op.result(builder.ir);
+                        .unwrap_or_else(|| anyref_ty);
+                    let result = builder.cast_if_needed(location, result, expected_ty);
 
                     Some(result)
                 }
@@ -1387,12 +1410,23 @@ fn lower_cps_call<'db>(
                 }
             }
 
+            // Cast callee to CPS closure type so closure_lower extracts
+            // the correct return type (anyref, not the source-level type).
+            let mut cps_param_types = vec![anyref_ty]; // done_k
+            cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
+            let cps_func_ty =
+                builder
+                    .ctx
+                    .func_type_with_effect(builder.ir, &cps_param_types, anyref_ty, None);
+            let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
+            let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
+
             // Call closure with continuation as first arg (done_k)
             let mut cps_args = vec![continuation];
             cps_args.append(&mut arg_values);
 
             let call_op =
-                func::call_indirect(builder.ir, location, callee_val, cps_args, anyref_ty);
+                func::call_indirect(builder.ir, location, callee_cps, cps_args, anyref_ty);
             builder.ir.push_op(builder.block, call_op.op_ref());
             Some(call_op.result(builder.ir))
         }

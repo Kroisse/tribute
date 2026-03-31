@@ -176,3 +176,24 @@ fn main() {
     // call 2: ask() with Reader(value=20) → 20
     assert_native_output("effect_row_poly_unification.trb", code, "10\n20");
 }
+
+/// Test closure returned from a function and called via local variable.
+///
+/// `identity` returns the closure as-is. The returned closure is bound to
+/// a local variable and called, exercising the Local closure CPS call path
+/// with a closure obtained from a function return value.
+#[test]
+fn test_returned_closure_call() {
+    let code = r#"fn identity(f: fn(Nat) -> Nat) -> fn(Nat) -> Nat {
+    f
+}
+
+fn main() {
+    let f = identity(fn(x: Nat) { x + 10 })
+    let result = f(5)
+    __tribute_print_nat(result)
+}
+"#;
+    // identity returns the lambda, f(5) = 5 + 10 = 15
+    assert_native_output("returned_closure_call.trb", code, "15");
+}
