@@ -14,13 +14,12 @@ core.module @test {
       %4 = clif.isub %0, %3 : core.ptr
       %5 = clif.iconst {value = 1} : core.i32
       %6 = clif.atomic_rmw %4, %5 {offset = 0, op = @sub} : core.i32
-      %7 = clif.iconst {value = 1} : core.i32
-      %8 = clif.icmp %6, %7 {cond = @eq} : core.i8
-      clif.brif %8 [^bb2, ^bb3]
+      %7 = clif.icmp %6, %5 {cond = @eq} : core.i8
+      clif.brif %7 [^bb2, ^bb3]
 
     ^bb2:
-      %9 = clif.iconst {value = 12} : core.i64
-      %10 = clif.call %0, %9 {callee = @__tribute_deep_release} : core.nil
+      %8 = clif.iconst {value = 12} : core.i64
+      %9 = clif.call %0, %8 {callee = @__tribute_deep_release} : core.nil
       clif.jump [^bb3]
 
     ^bb3:

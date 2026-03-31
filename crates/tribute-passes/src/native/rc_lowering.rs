@@ -38,8 +38,7 @@
 //!   %rc_addr    = clif.isub(ptr, %hdr_sz) : core.ptr
 //!   %one        = clif.iconst(1) : core.i32
 //!   %old_rc     = clif.atomic_rmw(%rc_addr, %one, op=@sub, offset=0) : core.i32
-//!   %one2       = clif.iconst(1) : core.i32
-//!   %is_last    = clif.icmp(%old_rc, %one2, eq) : core.i8
+//!   %is_last    = clif.icmp(%old_rc, %one, eq) : core.i8
 //!   clif.brif(%is_last, ^free_block, ^skip_block)
 //!
 //! ^free_block:
@@ -395,13 +394,11 @@ fn gen_release_decrement(
     ctx.push_op(block, old_rc.op_ref());
 
     // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
-    let one_cmp = clif::iconst(ctx, loc, i32_ty, 1);
-    ctx.push_op(block, one_cmp.op_ref());
     let is_last = clif::icmp(
         ctx,
         loc,
         old_rc.result(ctx),
-        one_cmp.result(ctx),
+        one.result(ctx),
         i8_ty,
         Symbol::new("eq"),
     );
