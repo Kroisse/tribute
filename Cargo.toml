@@ -12,7 +12,7 @@ ariadne = "0.6"
 clap = { version = "4.6.0", features = ["derive"] }
 cranelift-codegen = "0.128.3"
 cranelift-entity = "0.128.3"
-cranelift-frontend = "0.128.3"
+cranelift-frontend = "0.130.0"
 cranelift-module = "0.128.3"
 cranelift-object = "0.128.3"
 dashmap = "6.1"
