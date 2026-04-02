@@ -265,7 +265,7 @@ version = "0.128.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "618e4da87d9179a70b3c2f664451ca8898987aa6eb9f487d16988588b5d8cc40"
 dependencies = [
- "cranelift-entity",
+ "cranelift-entity 0.128.3",
 ]
 
 [[package]]
@@ -273,6 +273,15 @@ name = "cranelift-bitset"
 version = "0.128.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db53764b5dad233b37b8f5dc54d3caa9900c54579195e00f17ea21f03f71aaa7"
+
+[[package]]
+name = "cranelift-bitset"
+version = "0.130.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81fb5b134a12b559ff0c0f5af0fcd755ad380723b5016c4e0d36f74d39485340"
+dependencies = [
+ "wasmtime-internal-core",
+]
 
 [[package]]
 name = "cranelift-codegen"
@@ -283,11 +292,11 @@ dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
  "cranelift-bforest",
- "cranelift-bitset",
+ "cranelift-bitset 0.128.3",
  "cranelift-codegen-meta",
  "cranelift-codegen-shared",
  "cranelift-control",
- "cranelift-entity",
+ "cranelift-entity 0.128.3",
  "cranelift-isle",
  "gimli",
  "hashbrown 0.15.5",
@@ -333,7 +342,17 @@ version = "0.128.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0d96496910065d3165f84ff8e1e393916f4c086f88ac8e1b407678bc78735aa"
 dependencies = [
- "cranelift-bitset",
+ "cranelift-bitset 0.128.3",
+]
+
+[[package]]
+name = "cranelift-entity"
+version = "0.130.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "463feed5d46cf8763f3ba3045284cf706dd161496e20ec9c14afbb4ba09b9e66"
+dependencies = [
+ "cranelift-bitset 0.130.0",
+ "wasmtime-internal-core",
 ]
 
 [[package]]
@@ -543,6 +562,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
 name = "getrandom"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -583,7 +608,7 @@ checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
  "allocator-api2",
  "equivalent",
- "foldhash",
+ "foldhash 0.1.5",
 ]
 
 [[package]]
@@ -591,6 +616,9 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash 0.2.0",
+]
 
 [[package]]
 name = "hashlink"
@@ -1541,7 +1569,7 @@ dependencies = [
 name = "trunk-ir"
 version = "0.1.0"
 dependencies = [
- "cranelift-entity",
+ "cranelift-entity 0.130.0",
  "insta",
  "inventory",
  "lasso",
@@ -1696,6 +1724,16 @@ dependencies = [
  "bitflags 2.10.0",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "wasmtime-internal-core"
+version = "43.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e671917bb6856ae360cb59d7aaf26f1cfd042c7b924319dd06fd380739fc0b2e"
+dependencies = [
+ "hashbrown 0.16.1",
+ "libm",
 ]
 
 [[package]]
