@@ -154,7 +154,7 @@ fn test_boolean_operators(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 fn logic(a: Bool, b: Bool) -> Bool {
-    a && b || False
+    a || b && False
 }
 "#,
     );

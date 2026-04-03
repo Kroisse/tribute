@@ -5,9 +5,9 @@ expression: ir_text
 ---
 core.module @test {
   func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 {
-      %2 = arith.and %0, %1 : core.i1
-      %3 = arith.const {value = false} : core.i1
-      %4 = arith.or %2, %3 : core.i1
+      %2 = arith.const {value = false} : core.i1
+      %3 = arith.and %1, %2 : core.i1
+      %4 = arith.or %0, %3 : core.i1
       func.return %4
   }
 }
