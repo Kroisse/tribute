@@ -137,8 +137,8 @@ fn test_tuple_construction(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn pair() -> (Nat, Bool) {
-    (42, True)
+fn pair() -> #(Nat, Bool) {
+    #(42, True)
 }
 "#,
     );
