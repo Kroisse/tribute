@@ -1,4 +1,5 @@
 //\! Shared test helpers for tribute-front integration tests.
+#![allow(dead_code)]
 
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
