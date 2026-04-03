@@ -1,0 +1,11 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 63
+expression: ir_text
+---
+core.module @test {
+  func.func @pi() -> core.f64 {
+      %0 = arith.const {value = 3.14} : core.f64
+      func.return %0
+  }
+}

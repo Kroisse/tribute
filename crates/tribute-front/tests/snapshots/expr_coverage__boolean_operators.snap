@@ -1,0 +1,13 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 163
+expression: ir_text
+---
+core.module @test {
+  func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 {
+      %2 = arith.and %0, %1 : core.i1
+      %3 = arith.const {value = false} : core.i1
+      %4 = arith.or %2, %3 : core.i1
+      func.return %4
+  }
+}

@@ -1,0 +1,11 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 31
+expression: ir_text
+---
+core.module @test {
+  func.func @greeting() -> tribute_rt.anyref {
+      %0 = adt.string_const {value = "hello"} : tribute_rt.anyref
+      func.return %0
+  }
+}
