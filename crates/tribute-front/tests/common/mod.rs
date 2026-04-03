@@ -1,5 +1,6 @@
 //\! Shared test helpers for tribute-front integration tests.
 
+use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use trunk_ir::context::IrContext;
 use trunk_ir::printer::print_module;
@@ -57,10 +58,12 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     })
 }
 
-/// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)
-/// with the prelude loaded, and return the IR text.
+/// Inner tracked function that runs the full pipeline.
+///
+/// Diagnostics emitted during the pipeline are accumulated as Salsa
+/// accumulators and can be collected by the caller.
 #[salsa::tracked]
-pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
@@ -106,8 +109,49 @@ pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> 
     print_module(&ir, module.op())
 }
 
+/// Run the full AST pipeline (parse -> resolve -> typecheck -> TDNR -> IR)
+/// with the prelude loaded, and return the IR text.
+///
+/// Panics if any parse error diagnostics were emitted for the test source.
+///
+/// Uses `parsed_ast` to check only the test source for parse errors,
+/// avoiding false positives from prelude diagnostics.
+pub fn run_ast_pipeline_with_ir(db: &dyn salsa::Database, source: SourceCst) -> String {
+    // Check for parse errors in the test source (not prelude)
+    let parse_diagnostics = tribute_front::query::parsed_ast::accumulated::<Diagnostic>(db, source);
+    let parse_errors: Vec<_> = parse_diagnostics
+        .iter()
+        .filter(|d| {
+            d.inner.severity == tribute_core::diagnostic::DiagnosticSeverity::Error
+                && matches!(
+                    d.phase,
+                    tribute_core::diagnostic::CompilationPhase::Parsing
+                        | tribute_core::diagnostic::CompilationPhase::AstGeneration
+                )
+        })
+        .collect();
+    assert!(
+        parse_errors.is_empty(),
+        "Expected no parse errors, but found {}:\n{}",
+        parse_errors.len(),
+        parse_errors
+            .iter()
+            .map(|d| {
+                format!(
+                    "  - [{}] {} (span: {}..{})",
+                    d.phase, d.inner.message, d.inner.span.start, d.inner.span.end
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+
+    run_ast_pipeline_inner(db, source)
+}
+
 /// Run the full AST pipeline without returning IR text.
-#[salsa::tracked]
+///
+/// Panics if any error diagnostics were emitted during the pipeline.
 pub fn run_ast_pipeline(db: &dyn salsa::Database, source: SourceCst) {
     let _ = run_ast_pipeline_with_ir(db, source);
 }

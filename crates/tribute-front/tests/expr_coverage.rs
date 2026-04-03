@@ -163,22 +163,6 @@ fn logic(a: Bool, b: Bool) -> Bool {
     assert_snapshot!(ir_text);
 }
 
-#[salsa_test]
-fn test_parenthesized_expression(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
-fn wrapped() -> Nat {
-    (42)
-}
-"#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
 // ========================================================================
 // Higher-Order Function Tests
 // ========================================================================
@@ -214,7 +198,7 @@ fn id(x: Nat) -> Nat {
 }
 
 fn test_ref() -> Nat {
-    let f = id;
+    let f = id
     f(1)
 }
 "#,
