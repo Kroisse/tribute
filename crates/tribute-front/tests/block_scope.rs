@@ -23,7 +23,7 @@ fn test_block_let_binding_accessible_inside(db: &salsa::DatabaseImpl) {
         r#"
 fn example() -> Nat {
     {
-        let x = 42;
+        let x = 42
         x
     }
 }
@@ -42,9 +42,9 @@ fn test_nested_blocks_separate_scopes(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 fn example() -> Nat {
-    let outer = 1;
+    let outer = 1
     {
-        let inner = 2;
+        let inner = 2
         inner
     }
 }
@@ -63,9 +63,9 @@ fn test_outer_scope_accessible_in_inner_block(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 fn example() -> Nat {
-    let outer = 10;
+    let outer = 10
     {
-        let inner = outer;
+        let inner = outer
         inner
     }
 }
@@ -85,13 +85,13 @@ fn test_sequential_blocks_independent_scopes(db: &salsa::DatabaseImpl) {
         r#"
 fn example() -> Nat {
     let a = {
-        let x = 1;
+        let x = 1
         x
-    };
+    }
     let b = {
-        let x = 2;
+        let x = 2
         x
-    };
+    }
     a
 }
 "#,

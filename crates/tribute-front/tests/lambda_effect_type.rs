@@ -46,7 +46,7 @@ fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
 fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
 
 fn main() -> Int {
-    let offset = 10;
+    let offset = 10
     apply(fn(n) { n + offset }, 32)
 }
 "#,
@@ -77,9 +77,9 @@ ability State(s) {
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
-        { result } -> result
-        { State::get() -> k } -> k(42)
-        { State::set(v) -> k } -> k(Nil)
+        do result { result }
+        op State::get() { resume 42 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -116,9 +116,9 @@ fn counter() ->{State(Int)} Int {
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
-        { result } -> result
-        { State::get() -> k } -> k(0)
-        { State::set(v) -> k } -> k(Nil)
+        do result { result }
+        op State::get() { resume 0 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -146,9 +146,9 @@ ability State(s) {
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
-        { result } -> result
-        { State::get() -> k } -> k(0)
-        { State::set(v) -> k } -> k(Nil)
+        do result { result }
+        op State::get() { resume 0 }
+        op State::set(v) { resume Nil }
     }
 }
 
@@ -173,9 +173,9 @@ fn main() -> Int {
 /// Test handler arm lambdas that call continuations.
 ///
 /// This is the core pattern from ability_core.trb:
-/// `{ State::get() -> k } -> run_state(fn() { k(init) }, init)`
+/// `op State::get() { run_state(fn() { resume init }, init) }`
 ///
-/// The lambda `fn() { k(init) }` should preserve the effect row variable `e`
+/// The lambda `fn() { resume init }` should preserve the effect row variable `e`
 /// from the outer handler context.
 #[salsa_test]
 fn test_handler_arm_continuation_lambda(db: &salsa::DatabaseImpl) {
@@ -190,9 +190,9 @@ ability State(s) {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() { k(init) }, init)
-        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -224,9 +224,9 @@ fn counter() ->{State(Int)} Int {
 
 fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle comp() {
-        { result } -> result
-        { State::get() -> k } -> run_state(fn() { k(init) }, init)
-        { State::set(v) -> k } -> run_state(fn() { k(Nil) }, v)
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
     }
 }
 
@@ -261,8 +261,8 @@ ability State(s) {
 
 fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     handle f() {
-        { result } -> result
-        { State::get() -> k } -> k(99)
+        do result { result }
+        op State::get() { resume 99 }
     }
 }
 
@@ -301,9 +301,9 @@ ability State(s) {
 
 fn with_state(f: fn() ->{e, State(s)} a, init: s) ->{e} a {
     handle f() {
-        { result } -> result
-        { State::get() -> k } -> with_state(fn() { k(init) }, init)
-        { State::set(v) -> k } -> with_state(fn() { k(Nil) }, v)
+        do result { result }
+        op State::get() { with_state(fn() { resume init }, init) }
+        op State::set(v) { with_state(fn() { resume Nil }, v) }
     }
 }
 

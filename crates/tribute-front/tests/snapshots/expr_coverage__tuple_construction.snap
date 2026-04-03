@@ -1,0 +1,16 @@
+---
+source: crates/tribute-front/tests/expr_coverage.rs
+assertion_line: 147
+expression: ir_text
+---
+core.module @test {
+  !__tuple_i32_i1 = adt.struct() {fields = [[@0, core.i32], [@1, core.i1]], name = @__tuple_i32_i1}
+
+  func.func @pair() -> tribute_rt.anyref {
+      %0 = arith.const {value = 42} : core.i32
+      %1 = arith.const {value = true} : core.i1
+      %2 = adt.struct_new %0, %1 {type = !__tuple_i32_i1} : adt.typeref() {name = @__tuple_i32_i1}
+      %3 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
+      func.return %3
+  }
+}

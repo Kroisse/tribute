@@ -112,7 +112,7 @@ fn test_record_field_type_inference(db: &salsa::DatabaseImpl) {
 struct Point { x: Int, y: Int }
 
 fn test() -> Int {
-    let p = Point { x: 1, y: 2 };
+    let p = Point { x: 1, y: 2 }
     p.x
 }
 "#,

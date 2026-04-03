@@ -161,7 +161,7 @@ pub fn lower_source_to_ast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{Decl, ExprKind, PatternKind, Stmt, TypeAnnotationKind};
+    use crate::ast::{Decl, ExprKind, HandlerKind, PatternKind, Stmt, TypeAnnotationKind};
     use tree_sitter::Parser;
 
     fn parse_and_lower(source: &str) -> Module<UnresolvedName> {
@@ -2282,5 +2282,201 @@ mod tests {
         assert_eq!(module.decls.len(), 2);
         assert!(matches!(&module.decls[0], Decl::ExternFunction(_)));
         assert!(matches!(&module.decls[1], Decl::Function(_)));
+    }
+
+    #[test]
+    fn test_handle_expression() {
+        let source = r#"
+            ability Ask {
+                fn ask() -> Nat
+            }
+
+            fn main() {
+                handle {
+                    Ask::ask()
+                } {
+                    do x { x }
+                    fn Ask::ask() { 42 }
+                }
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        // Find the main function
+        let Decl::Function(func) = &module.decls[1] else {
+            panic!("Expected function declaration");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Handle { body, handlers } = value.kind.as_ref() else {
+            panic!("Expected handle expression, got {:?}", value.kind);
+        };
+
+        // Should have body and handlers
+        assert!(!handlers.is_empty(), "Expected at least one handler arm");
+
+        // Check we have a Do handler
+        assert!(
+            handlers
+                .iter()
+                .any(|h| matches!(&h.kind, HandlerKind::Do { .. })),
+            "Expected a Do handler arm"
+        );
+        // Check we have a Fn handler
+        assert!(
+            handlers
+                .iter()
+                .any(|h| matches!(&h.kind, HandlerKind::Fn { .. })),
+            "Expected a Fn handler arm"
+        );
+        // The body should not be empty
+        let ExprKind::Block { .. } = body.kind.as_ref() else {
+            panic!("Expected block body in handle");
+        };
+    }
+
+    #[test]
+    fn test_handle_with_op_handler() {
+        let source = r#"
+            ability Ask {
+                fn ask() -> Nat
+            }
+
+            fn main() {
+                handle {
+                    Ask::ask()
+                } {
+                    do x { x }
+                    op Ask::ask() { resume 42 }
+                }
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[1] else {
+            panic!("Expected function declaration");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Handle { handlers, .. } = value.kind.as_ref() else {
+            panic!("Expected handle expression");
+        };
+
+        // Check we have an Op handler
+        assert!(
+            handlers
+                .iter()
+                .any(|h| matches!(&h.kind, HandlerKind::Op { .. })),
+            "Expected an Op handler arm"
+        );
+    }
+
+    #[test]
+    fn test_resume_expression() {
+        let source = r#"
+            ability Ask {
+                fn ask() -> Nat
+            }
+
+            fn main() {
+                handle {
+                    Ask::ask()
+                } {
+                    do x { x }
+                    op Ask::ask() { resume 99 }
+                }
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[1] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Handle { handlers, .. } = value.kind.as_ref() else {
+            panic!("Expected handle");
+        };
+
+        // Find the op handler and check its body contains resume
+        let op_handler = handlers
+            .iter()
+            .find(|h| matches!(&h.kind, HandlerKind::Op { .. }))
+            .expect("Expected Op handler");
+        let ExprKind::Block { value, .. } = op_handler.body.kind.as_ref() else {
+            panic!("Expected block in op handler body");
+        };
+        let ExprKind::Resume { arg, .. } = value.kind.as_ref() else {
+            panic!("Expected resume expression, got {:?}", value.kind);
+        };
+        assert!(
+            matches!(arg.kind.as_ref(), ExprKind::NatLit(99)),
+            "Expected resume arg to be 99"
+        );
+    }
+
+    #[test]
+    fn test_record_with_spread() {
+        let source = r#"
+            struct Point { x: Nat, y: Nat }
+
+            fn update(p: Point) -> Point {
+                Point { x: 10, ..p }
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[1] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Record { fields, spread, .. } = value.kind.as_ref() else {
+            panic!("Expected record expression, got {:?}", value.kind);
+        };
+        assert_eq!(fields.len(), 1, "Expected 1 explicit field");
+        assert!(spread.is_some(), "Expected spread expression");
+    }
+
+    #[test]
+    fn test_as_pattern() {
+        let source = r#"
+            enum Option(a) {
+                Some(a),
+                None,
+            }
+
+            fn test(opt: Option(Nat)) -> Nat {
+                case opt {
+                    Some(x) as whole -> x
+                    None -> 0
+                }
+            }
+        "#;
+        let module = parse_and_lower(source);
+
+        let Decl::Function(func) = &module.decls[1] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Case { arms, .. } = value.kind.as_ref() else {
+            panic!("Expected case expression");
+        };
+
+        // First arm should have an As pattern
+        let PatternKind::As { pattern, name, .. } = arms[0].pattern.kind.as_ref() else {
+            panic!("Expected as pattern, got {:?}", arms[0].pattern.kind);
+        };
+        assert_eq!(name.to_string(), "whole");
+        assert!(
+            matches!(pattern.kind.as_ref(), PatternKind::Variant { .. }),
+            "Expected variant pattern inside as"
+        );
     }
 }

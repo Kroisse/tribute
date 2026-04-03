@@ -2211,4 +2211,88 @@ fn main() {
             "Variable 'c' computed from other let-bound variables should have type Nat"
         );
     }
+
+    // ========================================================================
+    // Document Symbol Helper Tests
+    // ========================================================================
+
+    #[test]
+    fn test_convert_document_symbol_function() {
+        let rope = Rope::from_str("fn foo() { 1 }");
+        let info = completion_index::DocumentSymbolInfo {
+            name: trunk_ir::Symbol::new("foo"),
+            kind: completion_index::SymbolKind::Function,
+            span: trunk_ir::Span::new(0, 14),
+            children: vec![],
+        };
+        let symbol = convert_document_symbol_info(&info, &rope);
+        assert_eq!(symbol.name, "foo");
+        assert_eq!(symbol.kind, lsp_types::SymbolKind::FUNCTION);
+        assert!(symbol.children.is_none());
+    }
+
+    #[test]
+    fn test_convert_document_symbol_struct_with_children() {
+        let rope = Rope::from_str("struct Point { x: Nat, y: Nat }");
+        let info = completion_index::DocumentSymbolInfo {
+            name: trunk_ir::Symbol::new("Point"),
+            kind: completion_index::SymbolKind::Struct,
+            span: trunk_ir::Span::new(0, 31),
+            children: vec![
+                completion_index::DocumentSymbolInfo {
+                    name: trunk_ir::Symbol::new("x"),
+                    kind: completion_index::SymbolKind::Field,
+                    span: trunk_ir::Span::new(15, 21),
+                    children: vec![],
+                },
+                completion_index::DocumentSymbolInfo {
+                    name: trunk_ir::Symbol::new("y"),
+                    kind: completion_index::SymbolKind::Field,
+                    span: trunk_ir::Span::new(23, 29),
+                    children: vec![],
+                },
+            ],
+        };
+        let symbol = convert_document_symbol_info(&info, &rope);
+        assert_eq!(symbol.name, "Point");
+        assert_eq!(symbol.kind, lsp_types::SymbolKind::STRUCT);
+        let children = symbol.children.expect("Should have children");
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].name, "x");
+        assert_eq!(children[0].kind, lsp_types::SymbolKind::FIELD);
+        assert_eq!(children[1].name, "y");
+    }
+
+    #[test]
+    fn test_convert_document_symbol_enum() {
+        let rope = Rope::from_str("enum Color { Red, Green, Blue }");
+        let info = completion_index::DocumentSymbolInfo {
+            name: trunk_ir::Symbol::new("Color"),
+            kind: completion_index::SymbolKind::Enum,
+            span: trunk_ir::Span::new(0, 31),
+            children: vec![completion_index::DocumentSymbolInfo {
+                name: trunk_ir::Symbol::new("Red"),
+                kind: completion_index::SymbolKind::Variant,
+                span: trunk_ir::Span::new(13, 16),
+                children: vec![],
+            }],
+        };
+        let symbol = convert_document_symbol_info(&info, &rope);
+        assert_eq!(symbol.kind, lsp_types::SymbolKind::ENUM);
+        let children = symbol.children.unwrap();
+        assert_eq!(children[0].kind, lsp_types::SymbolKind::ENUM_MEMBER);
+    }
+
+    #[test]
+    fn test_convert_document_symbol_ability() {
+        let rope = Rope::from_str("ability State { fn get() -> Nat }");
+        let info = completion_index::DocumentSymbolInfo {
+            name: trunk_ir::Symbol::new("State"),
+            kind: completion_index::SymbolKind::Ability,
+            span: trunk_ir::Span::new(0, 33),
+            children: vec![],
+        };
+        let symbol = convert_document_symbol_info(&info, &rope);
+        assert_eq!(symbol.kind, lsp_types::SymbolKind::CLASS);
+    }
 }
