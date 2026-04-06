@@ -676,8 +676,7 @@ impl<'db> TypeChecker<'db> {
                         ability_id: *ability,
                         args: ability_args,
                     };
-                    let row_var = ctx.fresh_row_var();
-                    let effect = EffectRow::new(self.db(), vec![ability_effect], Some(row_var));
+                    let effect = EffectRow::new(self.db(), vec![ability_effect], None);
                     ctx.func_type(param_types, return_type, effect)
                 } else {
                     ctx.error_type()

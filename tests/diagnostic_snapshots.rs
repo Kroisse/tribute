@@ -240,9 +240,7 @@ fn test() ->{Foo} Nat {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    // Baseline: the compiler does not yet detect effect row mismatches
-    // for non-main functions (row polymorphism absorbs extra effects).
-    assert!(result.diagnostics.is_empty());
+    assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 

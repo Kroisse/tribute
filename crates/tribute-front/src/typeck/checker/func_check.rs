@@ -4,7 +4,7 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::fmt::joined;
@@ -58,9 +58,13 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Set effect row from the function's declared type before checking body
-        if let TypeKind::Func { effect, .. } = instantiated_func_ty.kind(self.db()) {
-            ctx.set_current_effect(*effect);
-        }
+        let declared_effect =
+            if let TypeKind::Func { effect, .. } = instantiated_func_ty.kind(self.db()) {
+                ctx.set_current_effect(*effect);
+                Some(*effect)
+            } else {
+                None
+            };
 
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, func.body, Mode::Check(expected_return));
@@ -154,6 +158,41 @@ impl<'db> TypeChecker<'db> {
                     CompilationPhase::TypeChecking,
                 )
                 .accumulate(self.db());
+            }
+        }
+
+        // Validate that functions with explicit closed effect annotations
+        // do not use undeclared effects in their body.
+        if func.effects.is_some()
+            && let Some(declared) = declared_effect
+        {
+            let resolved_declared = row_subst.apply(self.db(), declared);
+            // Only check if the declared row is closed (no rest variable)
+            if resolved_declared.rest(self.db()).is_none() {
+                let resolved_body = row_subst.apply(self.db(), body_effect_row);
+                let declared_ids: HashSet<_> = resolved_declared
+                    .effects(self.db())
+                    .iter()
+                    .map(|e| e.ability_id)
+                    .collect();
+                let body_effects = resolved_body.effects(self.db());
+                let mut undeclared = body_effects
+                    .iter()
+                    .filter(|e| !declared_ids.contains(&e.ability_id))
+                    .peekable();
+                if undeclared.peek().is_some() {
+                    Diagnostic::new(
+                        format!(
+                            "function '{}' uses undeclared effects: {}",
+                            func.name,
+                            joined(", ", undeclared),
+                        ),
+                        self.get_span(func.id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
+                }
             }
         }
 
