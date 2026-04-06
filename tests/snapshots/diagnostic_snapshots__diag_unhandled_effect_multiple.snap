@@ -1,0 +1,16 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "function 'main' must return Nil, but returns `Nat`"
+  span:
+    start: 75
+    end: 123
+  severity: Error
+  phase: TypeChecking
+- message: "function 'main' has unhandled effects: Foo, Bar"
+  span:
+    start: 75
+    end: 123
+  severity: Error
+  phase: TypeChecking

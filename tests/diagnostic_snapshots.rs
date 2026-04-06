@@ -195,6 +195,115 @@ fn test() ->{MyEffec} Int {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+#[salsa_test]
+fn diag_unhandled_effect_multiple(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Foo {
+    op foo() -> Nat
+}
+
+ability Bar {
+    op bar() -> Nat
+}
+
+fn main() -> Nat {
+    Foo::foo() + Bar::bar()
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_effect_row_mismatch(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Foo {
+    op foo() -> Nat
+}
+
+ability Bar {
+    op bar() -> Nat
+}
+
+fn test() ->{Foo} Nat {
+    Bar::bar()
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    // Baseline: the compiler does not yet detect effect row mismatches
+    // for non-main functions (row polymorphism absorbs extra effects).
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_missing_handler_arm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn comp() ->{State(Nat)} Nat {
+    State::set(1)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    // Baseline: the compiler does not yet detect missing handler arms.
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_handler_arm_wrong_signature(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn comp() ->{State(Nat)} Nat {
+    State::set(1)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(a, b) { run_state(fn() { resume Nil }, a) }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    // Baseline: the compiler does not yet validate handler arm parameter
+    // counts against ability operation definitions.
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 /// Panics in func_context.rs debug_assert instead of producing a diagnostic.
 #[ignore = "arity mismatch panics in effect row merging"]
 #[salsa_test]
