@@ -4,7 +4,7 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::fmt::joined;
@@ -170,22 +170,22 @@ impl<'db> TypeChecker<'db> {
             // Only check if the declared row is closed (no rest variable)
             if resolved_declared.rest(self.db()).is_none() {
                 let resolved_body = row_subst.apply(self.db(), body_effect_row);
-                let declared_ids: Vec<_> = resolved_declared
+                let declared_ids: HashSet<_> = resolved_declared
                     .effects(self.db())
                     .iter()
                     .map(|e| e.ability_id)
                     .collect();
-                let undeclared: Vec<_> = resolved_body
-                    .effects(self.db())
+                let body_effects = resolved_body.effects(self.db());
+                let mut undeclared = body_effects
                     .iter()
                     .filter(|e| !declared_ids.contains(&e.ability_id))
-                    .collect();
-                if !undeclared.is_empty() {
+                    .peekable();
+                if undeclared.peek().is_some() {
                     Diagnostic::new(
                         format!(
                             "function '{}' uses undeclared effects: {}",
                             func.name,
-                            joined(", ", undeclared.iter()),
+                            joined(", ", undeclared),
                         ),
                         self.get_span(func.id),
                         DiagnosticSeverity::Error,
