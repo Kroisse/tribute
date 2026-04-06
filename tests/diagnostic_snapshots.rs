@@ -202,15 +202,16 @@ fn diag_unhandled_effect_multiple(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 ability Foo {
-    op foo() -> Nat
+    op foo() -> Nil
 }
 
 ability Bar {
-    op bar() -> Nat
+    op bar() -> Nil
 }
 
-fn main() -> Nat {
-    Foo::foo() + Bar::bar()
+fn main() -> Nil {
+    Foo::foo()
+    Bar::bar()
 }
 "#,
     );
@@ -241,6 +242,7 @@ fn test() ->{Foo} Nat {
     let result = compile_with_diagnostics(db, source);
     // Baseline: the compiler does not yet detect effect row mismatches
     // for non-main functions (row polymorphism absorbs extra effects).
+    assert!(result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
@@ -270,6 +272,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     );
     let result = compile_with_diagnostics(db, source);
     // Baseline: the compiler does not yet detect missing handler arms.
+    assert!(result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
@@ -301,6 +304,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     let result = compile_with_diagnostics(db, source);
     // Baseline: the compiler does not yet validate handler arm parameter
     // counts against ability operation definitions.
+    assert!(result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
