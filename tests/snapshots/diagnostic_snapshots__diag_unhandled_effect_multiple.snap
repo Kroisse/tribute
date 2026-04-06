@@ -1,0 +1,10 @@
+---
+source: tests/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "function 'main' has unhandled effects: Foo, Bar"
+  span:
+    start: 75
+    end: 125
+  severity: Error
+  phase: TypeChecking
