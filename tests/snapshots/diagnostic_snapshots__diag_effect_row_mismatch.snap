@@ -2,4 +2,9 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-[]
+- message: "function 'test' uses undeclared effects: Bar"
+  span:
+    start: 75
+    end: 115
+  severity: Error
+  phase: TypeChecking
