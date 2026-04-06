@@ -163,35 +163,35 @@ impl<'db> TypeChecker<'db> {
 
         // Validate that functions with explicit closed effect annotations
         // do not use undeclared effects in their body.
-        if func.effects.is_some() {
-            if let Some(declared) = declared_effect {
-                let resolved_declared = row_subst.apply(self.db(), declared);
-                // Only check if the declared row is closed (no rest variable)
-                if resolved_declared.rest(self.db()).is_none() {
-                    let resolved_body = row_subst.apply(self.db(), body_effect_row);
-                    let declared_ids: Vec<_> = resolved_declared
-                        .effects(self.db())
-                        .iter()
-                        .map(|e| e.ability_id)
-                        .collect();
-                    let undeclared: Vec<_> = resolved_body
-                        .effects(self.db())
-                        .iter()
-                        .filter(|e| !declared_ids.contains(&e.ability_id))
-                        .collect();
-                    if !undeclared.is_empty() {
-                        Diagnostic::new(
-                            format!(
-                                "function '{}' uses undeclared effects: {}",
-                                func.name,
-                                joined(", ", undeclared.iter()),
-                            ),
-                            self.get_span(func.id),
-                            DiagnosticSeverity::Error,
-                            CompilationPhase::TypeChecking,
-                        )
-                        .accumulate(self.db());
-                    }
+        if func.effects.is_some()
+            && let Some(declared) = declared_effect
+        {
+            let resolved_declared = row_subst.apply(self.db(), declared);
+            // Only check if the declared row is closed (no rest variable)
+            if resolved_declared.rest(self.db()).is_none() {
+                let resolved_body = row_subst.apply(self.db(), body_effect_row);
+                let declared_ids: Vec<_> = resolved_declared
+                    .effects(self.db())
+                    .iter()
+                    .map(|e| e.ability_id)
+                    .collect();
+                let undeclared: Vec<_> = resolved_body
+                    .effects(self.db())
+                    .iter()
+                    .filter(|e| !declared_ids.contains(&e.ability_id))
+                    .collect();
+                if !undeclared.is_empty() {
+                    Diagnostic::new(
+                        format!(
+                            "function '{}' uses undeclared effects: {}",
+                            func.name,
+                            joined(", ", undeclared.iter()),
+                        ),
+                        self.get_span(func.id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
                 }
             }
         }
