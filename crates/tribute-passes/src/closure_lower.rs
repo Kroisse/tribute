@@ -35,8 +35,6 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use crate::evidence::collect_effectful_functions;
-
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
@@ -441,7 +439,6 @@ fn extract_return_type_from_callee(ctx: &IrContext, callee_ty: TypeRef) -> Optio
 fn transform_closure_calls_with_evidence(
     ctx: &mut IrContext,
     module: Module,
-    effectful_fns: &HashSet<Symbol>,
     closure_calls: &HashSet<(usize, usize)>,
 ) {
     if closure_calls.is_empty() {
@@ -454,8 +451,8 @@ fn transform_closure_calls_with_evidence(
             continue;
         };
 
-        let func_name = func_op.sym_name(ctx);
-        let is_effectful = effectful_fns.contains(&func_name);
+        let func_ty = func_op.r#type(ctx);
+        let is_effectful = crate::evidence::has_evidence_first_param(ctx, func_ty);
 
         let body = func_op.body(ctx);
         let blocks: Vec<_> = ctx.region(body).blocks.to_vec();
@@ -619,9 +616,6 @@ fn transform_closure_calls_in_block(
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
 pub fn lower_closures(ctx: &mut IrContext, module: Module) {
-    // Collect effectful functions BEFORE lowering (while closure types are intact)
-    let effectful_fns = collect_effectful_functions(ctx, module);
-
     // Collect ALL closure calls before pattern application
     let all_closure_calls = collect_all_closure_calls(ctx, module);
 
@@ -635,5 +629,5 @@ pub fn lower_closures(ctx: &mut IrContext, module: Module) {
     applicator.apply_partial(ctx, module);
 
     // Phase 2: Evidence passing for closure calls
-    transform_closure_calls_with_evidence(ctx, module, &effectful_fns, &all_closure_calls);
+    transform_closure_calls_with_evidence(ctx, module, &all_closure_calls);
 }
