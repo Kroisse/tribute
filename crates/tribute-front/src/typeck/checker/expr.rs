@@ -1795,9 +1795,10 @@ impl<'db> TypeChecker<'db> {
             })
             .collect();
 
-        // Bind each pattern to the corresponding operation parameter type
+        // Infer, constrain, and bind each pattern to the corresponding op param type
         for (pattern, op_ty) in params.iter().zip(op_param_types.iter()) {
-            ctx.record_node_type(pattern.id, *op_ty);
+            let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+            ctx.constrain_eq(pattern_ty, *op_ty);
             self.bind_pattern_vars_with_ctx(ctx, pattern, *op_ty);
         }
     }
