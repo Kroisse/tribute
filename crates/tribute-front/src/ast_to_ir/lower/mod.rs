@@ -387,6 +387,24 @@ pub(super) fn create_identity_done_k(
 /// Emit a call to the `done_k` continuation closure with a result value,
 /// followed by `func.return` with the call's result.
 ///
+/// Get the evidence value from the current scope, or create an empty evidence
+/// placeholder (`adt.ref_null`) if not in an effectful context.
+///
+/// The placeholder is later resolved by `resolve_evidence` pass into a
+/// `func.call @__tribute_evidence_empty()`.
+pub(super) fn get_or_create_evidence(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+) -> ValueRef {
+    if let Some(ev) = builder.ctx.evidence {
+        return ev;
+    }
+    let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(builder.ir);
+    let null_op = trunk_ir::dialect::adt::ref_null(builder.ir, location, evidence_ty, evidence_ty);
+    builder.ir.push_op(builder.block, null_op.op_ref());
+    null_op.result(builder.ir)
+}
+
 /// Used by effectful functions in CPS mode: instead of `func.return result`,
 /// they call `done_k(result)` and return the call's result.
 ///

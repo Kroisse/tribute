@@ -73,7 +73,6 @@ use std::path::Path;
 use tree_sitter::Parser;
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_passes::evidence;
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
@@ -403,7 +402,7 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
 
 /// Run pipeline through evidence params (for testing).
 ///
-/// Runs frontend + `add_evidence_params` in a single arena session.
+/// Evidence params are now inserted during ast_to_ir lowering.
 pub fn run_through_evidence_params(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -411,13 +410,12 @@ pub fn run_through_evidence_params(
     let (mut ctx, m) = compile_frontend(db, source)?;
     tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
-    evidence::add_evidence_params(&mut ctx, m);
     Some((ctx, m))
 }
 
 /// Run pipeline through closure lower (for testing).
 ///
-/// Runs frontend + `lower_closure_lambda` + `add_evidence_params` + `lower_closures`
+/// Runs frontend + `lower_closure_lambda` + `lower_closures`
 /// in a single arena session.
 pub fn run_through_closure_lower(
     db: &dyn salsa::Database,
@@ -426,7 +424,6 @@ pub fn run_through_closure_lower(
     let (mut ctx, m) = compile_frontend(db, source)?;
     tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
-    evidence::add_evidence_params(&mut ctx, m);
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     Some((ctx, m))
 }
@@ -448,9 +445,8 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
     // Middle-end passes
     tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
     tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
-    evidence::add_evidence_params(&mut ctx, m);
+    // Evidence params are now inserted directly during ast_to_ir lowering.
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
-    evidence::transform_evidence_calls(&mut ctx, m);
     // CPS effect handling: lower_ability_perform produces ability.evidence_lookup ops
     // that resolve_evidence needs to process. lower_handle_dispatch consumes
     // handle_dispatch ops, so it must run AFTER resolve_evidence expands evidence.

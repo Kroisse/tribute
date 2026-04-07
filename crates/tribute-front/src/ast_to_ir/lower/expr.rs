@@ -247,11 +247,12 @@ pub(super) fn lower_expr<'db>(
                         // If callee is effectful, pass done_k as first arg.
                         // Use existing done_k if available, otherwise create identity.
                         if callee_is_effectful {
+                            let evidence = super::get_or_create_evidence(builder, location);
                             let done_k = builder.ctx.done_k.unwrap_or_else(|| {
                                 super::create_identity_done_k(builder, location)
                             });
                             let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                            let mut cps_args = vec![done_k];
+                            let mut cps_args = vec![evidence, done_k];
                             cps_args.append(&mut arg_values);
                             let op =
                                 func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
@@ -1011,9 +1012,10 @@ fn try_lower_value_effectful_call<'db>(
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    // Get done_k — the caller's continuation (first arg)
+    // Get evidence and done_k — the caller's evidence and continuation
+    let evidence = super::get_or_create_evidence(builder, location);
     let done_k = builder.ctx.done_k?;
-    let mut cps_args = vec![done_k];
+    let mut cps_args = vec![evidence, done_k];
     cps_args.append(&mut arg_values);
 
     let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
@@ -1389,8 +1391,9 @@ fn lower_cps_call<'db>(
                 }
             }
 
-            // Call effectful function with continuation as first arg (done_k)
-            let mut cps_args = vec![continuation];
+            // Call effectful function with evidence + continuation as first args
+            let evidence = super::get_or_create_evidence(builder, location);
+            let mut cps_args = vec![evidence, continuation];
             cps_args.append(&mut arg_values);
 
             let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
@@ -1442,6 +1445,26 @@ fn lower_cps_call<'db>(
 /// statements and value expression. Pure results are wrapped in
 /// `YieldResult::Done`; CPS results (from nested ability.perform) are
 /// returned directly.
+/// Add an internal context value (evidence or done_k) to the capture list
+/// if present and not already captured.
+fn capture_ctx_value(
+    captures: &mut Vec<super::super::context::CaptureInfo>,
+    builder: &IrBuilder<'_, '_>,
+    name: Symbol,
+    value: Option<ValueRef>,
+) {
+    if let Some(val) = value
+        && !captures.iter().any(|c| c.value == val)
+    {
+        captures.push(super::super::context::CaptureInfo {
+            name,
+            local_id: crate::ast::LocalId::UNRESOLVED,
+            ty: builder.ir.value_ty(val),
+            value: val,
+        });
+    }
+}
+
 fn build_cps_continuation<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -1463,20 +1486,16 @@ fn build_cps_continuation<'db>(
         &excluded_ids,
     );
 
-    // If we're inside an effectful function (done_k is set), capture done_k
-    // so it's available at the end of the continuation chain.
-    if let Some(done_k_val) = builder.ctx.done_k {
-        // Add done_k to captures if not already present
-        let already_captured = captures.iter().any(|c| c.value == done_k_val);
-        if !already_captured {
-            captures.push(super::super::context::CaptureInfo {
-                name: Symbol::new("__done_k"),
-                local_id: crate::ast::LocalId::UNRESOLVED,
-                ty: builder.ir.value_ty(done_k_val),
-                value: done_k_val,
-            });
-        }
-    }
+    // Inside effectful functions, capture done_k so it's available
+    // at the end of the continuation chain after lambda lifting.
+    // Evidence is NOT captured here — it's provided by the lifted function's
+    // own evidence parameter (added by lower_closure_lambda).
+    capture_ctx_value(
+        &mut captures,
+        builder,
+        Symbol::new("__done_k"),
+        builder.ctx.done_k,
+    );
 
     // Build body region with one parameter: the ability op result (anyref).
     // Continuation closures are internal mechanism closures, not user lambdas,

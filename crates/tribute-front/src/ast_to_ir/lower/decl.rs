@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use tribute_ir::dialect::ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
@@ -224,9 +225,19 @@ fn lower_function<'db>(
         })
         .collect();
 
-    // Effectful functions receive a done_k (continuation closure) as the first parameter.
+    // Effectful functions receive evidence and done_k as the first two parameters.
+    // Evidence is threaded through to effectful callees.
     // The function calls done_k(result) instead of func.return on normal completion.
     let block_args = if is_effectful {
+        let evidence_ty = ability::evidence_adt_type_ref(ir);
+        let mut ev_arg = BlockArgData {
+            ty: evidence_ty,
+            attrs: Default::default(),
+        };
+        ev_arg.attrs.insert(
+            Symbol::new("bind_name"),
+            Attribute::Symbol(Symbol::new("__evidence")),
+        );
         let mut done_k_arg = BlockArgData {
             ty: anyref_ty,
             attrs: Default::default(),
@@ -235,7 +246,7 @@ fn lower_function<'db>(
             Symbol::new("bind_name"),
             Attribute::Symbol(Symbol::new("__done_k")),
         );
-        let mut args = vec![done_k_arg];
+        let mut args = vec![ev_arg, done_k_arg];
         args.append(&mut block_args);
         args
     } else {
@@ -252,8 +263,8 @@ fn lower_function<'db>(
     // Bind parameters to their block argument values
     {
         let mut scope = ctx.scope();
-        // When effectful, done_k is at index 0, params start at 1
-        let param_offset: u32 = if is_effectful { 1 } else { 0 };
+        // When effectful, evidence=0, done_k=1, params start at 2
+        let param_offset: u32 = if is_effectful { 2 } else { 0 };
         for (i, param) in func_decl.params.iter().enumerate() {
             if let Some(local_id) = param.local_id {
                 let arg_val = ir.block_arg(entry_block, i as u32 + param_offset);
@@ -266,7 +277,10 @@ fn lower_function<'db>(
         // instead of func.return, handled by build_cps_continuation.
         if is_effectful {
             let prev_done_k = scope.done_k;
-            let done_k_val = ir.block_arg(entry_block, 0);
+            let prev_evidence = scope.evidence;
+            let evidence_val = ir.block_arg(entry_block, 0);
+            let done_k_val = ir.block_arg(entry_block, 1);
+            scope.evidence = Some(evidence_val);
             scope.done_k = Some(done_k_val);
 
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
@@ -287,6 +301,7 @@ fn lower_function<'db>(
             // ability.perform → lower_ability_perform will add func.return
 
             scope.done_k = prev_done_k;
+            scope.evidence = prev_evidence;
         } else {
             // Pure function: lower body normally
             let mut builder = IrBuilder::new(&mut scope, ir, entry_block);
@@ -303,9 +318,10 @@ fn lower_function<'db>(
     }
 
     // Build function type
-    // Effectful functions: done_k is the first param, return type is anyref
+    // Effectful functions: evidence + done_k are the first two params, return type is anyref
     let (final_param_types, final_return_ty) = if is_effectful {
-        let mut params = vec![anyref_ty]; // done_k first
+        let evidence_ty = ability::evidence_adt_type_ref(ir);
+        let mut params = vec![evidence_ty, anyref_ty]; // evidence, done_k
         params.extend_from_slice(&param_ir_types);
         (params, anyref_ty)
     } else {
