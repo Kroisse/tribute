@@ -1678,14 +1678,17 @@ impl<'db> TypeChecker<'db> {
                 ability,
                 op,
                 params,
-            } => HandlerKind::Fn {
-                ability: self.convert_ref_with_ctx(ctx, ability),
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.convert_pattern_with_ctx(ctx, p))
-                    .collect(),
-            },
+            } => {
+                self.constrain_handler_params(ctx, &ability, op, &params);
+                HandlerKind::Fn {
+                    ability: self.convert_ref_with_ctx(ctx, ability),
+                    op,
+                    params: params
+                        .into_iter()
+                        .map(|p| self.convert_pattern_with_ctx(ctx, p))
+                        .collect(),
+                }
+            }
             HandlerKind::Op {
                 ability,
                 op,
@@ -1725,6 +1728,7 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
 
+                self.constrain_handler_params(ctx, &ability, op, &params);
                 HandlerKind::Op {
                     ability: self.convert_ref_with_ctx(ctx, ability),
                     op,
@@ -1740,6 +1744,62 @@ impl<'db> TypeChecker<'db> {
             id: arm.id,
             kind,
             body: self.check_expr_with_ctx(ctx, arm.body, Mode::Infer),
+        }
+    }
+
+    /// Constrain handler arm parameters to the ability operation's parameter types.
+    ///
+    /// This ensures handler arm pattern bindings (e.g., `x`, `y` in
+    /// `op Multi::combine(x, y)`) are constrained to the operation's declared
+    /// parameter types (e.g., `Nat, Nat`), enabling TDNR to resolve operators
+    /// like `x + y`.
+    fn constrain_handler_params(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        ability: &ResolvedRef<'db>,
+        op: Symbol,
+        params: &[Pattern<ResolvedRef<'db>>],
+    ) {
+        let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
+            return;
+        };
+        let Some(op_info) = self.env.lookup_ability_op(ability_id, op) else {
+            return;
+        };
+
+        // Generate fresh type vars for parameterized abilities
+        let ability_args: Vec<Type<'db>> =
+            if let Some(ability_info) = self.env.lookup_ability(ability_id) {
+                ability_info
+                    .type_params
+                    .iter()
+                    .map(|_| ctx.fresh_type_var())
+                    .collect()
+            } else {
+                vec![]
+            };
+
+        // Substitute ability type params into the operation's parameter types
+        let op_param_types: Vec<Type<'db>> = op_info
+            .param_types
+            .iter()
+            .map(|ty| {
+                subst::substitute_bound_vars(self.db(), *ty, &ability_args).unwrap_or_else(
+                    |index, max| {
+                        panic!(
+                            "handler param BoundVar index out of range: index={}, subst.len()={}",
+                            index, max
+                        )
+                    },
+                )
+            })
+            .collect();
+
+        // Constrain each pattern to the corresponding operation parameter type
+        for (pattern, op_ty) in params.iter().zip(op_param_types.iter()) {
+            let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
+            ctx.constrain_eq(pattern_ty, *op_ty);
+            self.bind_pattern_vars_with_ctx(ctx, pattern, pattern_ty);
         }
     }
 

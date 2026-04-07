@@ -963,7 +963,6 @@ fn main() { }
 
 /// Test that a handler for multi-param ability op compiles successfully.
 #[test]
-#[ignore = "operator TDNR fails in handler arms (#617)"]
 fn test_ability_op_multiple_params_with_handler() {
     let code = r#"ability Multi {
     op combine(x: Nat, y: Nat, z: Nat) -> Nat
