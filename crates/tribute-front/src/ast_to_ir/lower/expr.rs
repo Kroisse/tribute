@@ -1566,15 +1566,20 @@ fn build_cps_continuation<'db>(
 }
 
 /// Pack multiple ability op arguments into a single anyref tuple if needed.
-fn pack_ability_args(
+pub(super) fn pack_ability_args(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
     arg_values: Vec<ValueRef>,
 ) -> Vec<ValueRef> {
     if arg_values.len() > 1 {
         let any_ty = builder.ctx.anyref_type(builder.ir);
-        let tuple_ty = ability_args_tuple_type(builder.ir, arg_values.len());
-        let tuple_op = adt::struct_new(builder.ir, location, arg_values, any_ty, tuple_ty);
+        // Cast each arg to anyref (inserts box_int etc. via unrealized_conversion_cast)
+        let boxed_args: Vec<ValueRef> = arg_values
+            .into_iter()
+            .map(|v| builder.cast_if_needed(location, v, any_ty))
+            .collect();
+        let tuple_ty = ability_args_tuple_type(builder.ir, boxed_args.len());
+        let tuple_op = adt::struct_new(builder.ir, location, boxed_args, any_ty, tuple_ty);
         builder.ir.push_op(builder.block, tuple_op.op_ref());
         vec![tuple_op.result(builder.ir)]
     } else {

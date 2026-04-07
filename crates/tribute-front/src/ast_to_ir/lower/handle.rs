@@ -20,7 +20,7 @@ use trunk_ir::types::{Attribute, Location};
 
 use tribute_ir::dialect::{ability, closure};
 
-use crate::ast::{Expr, HandlerArm, HandlerKind, ResolvedRef, TypedRef};
+use crate::ast::{Expr, HandlerArm, HandlerKind, Pattern, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
 use super::IrBuilder;
@@ -42,15 +42,8 @@ pub(super) fn lower_ability_fn_call<'db>(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability, &[]);
 
-    // Pack multiple arguments into a tuple if needed
-    let packed_args = if args.len() > 1 {
-        let tuple_ty = super::expr::ability_args_tuple_type(builder.ir, args.len());
-        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, tuple_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        vec![tuple_op.result(builder.ir)]
-    } else {
-        args
-    };
+    // Pack multiple arguments into a tuple if needed (with boxing)
+    let packed_args = super::expr::pack_ability_args(builder, location, args);
 
     // Emit ability.call (direct call, no continuation)
     let call_op = ability::call(
@@ -96,15 +89,8 @@ pub(super) fn lower_ability_op_call<'db>(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability, &[]);
 
-    // Pack multiple arguments into a tuple if needed
-    let packed_args = if args.len() > 1 {
-        let tuple_ty = super::expr::ability_args_tuple_type(builder.ir, args.len());
-        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, tuple_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        vec![tuple_op.result(builder.ir)]
-    } else {
-        args
-    };
+    // Pack multiple arguments into a tuple if needed (with boxing)
+    let packed_args = super::expr::pack_ability_args(builder, location, args);
 
     // Build identity continuation: fn(result) { result }
     // Continuation closures are internal mechanism, not user lambdas.
@@ -611,19 +597,7 @@ fn build_cps_suspend_handler_region<'db>(
         }
 
         // Bind params patterns
-        if params.len() == 1 {
-            bind_pattern_fields(&mut scope, ir, block, location, shift_value, &params[0]);
-        } else if params.len() > 1 {
-            // Multiple params - destructure as tuple
-            let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
-            for (i, param) in params.iter().enumerate() {
-                let field_op =
-                    adt::struct_get(ir, location, shift_value, any_ty, tuple_ty, i as u32);
-                ir.push_op(block, field_op.op_ref());
-                let field_val = field_op.result(ir);
-                bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
-            }
-        }
+        bind_handler_params(&mut scope, ir, block, location, shift_value, params, any_ty);
 
         // Create identity done_k for the handler arm body.
         // Handler arms may call effectful functions (e.g., run_state) that
@@ -1044,18 +1018,9 @@ fn build_fn_handler_arm_for_dispatch<'db>(
         // No resume binding for fn handlers
 
         // Bind params patterns
-        if params.len() == 1 {
-            bind_pattern_fields(&mut scope, ir, block, location, value_val, &params[0]);
-        } else if params.len() > 1 {
-            let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
-            for (i, param) in params.iter().enumerate() {
-                let field_op =
-                    adt::struct_get(ir, location, value_val, anyref_ty, tuple_ty, i as u32);
-                ir.push_op(block, field_op.op_ref());
-                let field_val = field_op.result(ir);
-                bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
-            }
-        }
+        bind_handler_params(
+            &mut scope, ir, block, location, value_val, params, anyref_ty,
+        );
 
         // Evaluate the handler body
         {
@@ -1251,18 +1216,9 @@ fn build_handler_arm_for_dispatch<'db>(
         }
 
         // Bind params patterns
-        if params.len() == 1 {
-            bind_pattern_fields(&mut scope, ir, block, location, value_val, &params[0]);
-        } else if params.len() > 1 {
-            let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
-            for (i, param) in params.iter().enumerate() {
-                let field_op =
-                    adt::struct_get(ir, location, value_val, anyref_ty, tuple_ty, i as u32);
-                ir.push_op(block, field_op.op_ref());
-                let field_val = field_op.result(ir);
-                bind_pattern_fields(&mut scope, ir, block, location, field_val, param);
-            }
-        }
+        bind_handler_params(
+            &mut scope, ir, block, location, value_val, params, anyref_ty,
+        );
 
         // Create identity done_k for effectful calls in handler arm body.
         let prev_done_k = scope.done_k;
@@ -1310,4 +1266,44 @@ fn build_handler_arm_for_dispatch<'db>(
         blocks: trunk_ir::smallvec::smallvec![block],
         parent_op: None,
     })
+}
+
+/// Bind handler arm parameters from an ability operation's packed arguments.
+///
+/// Single-param ops pass the value directly; multi-param ops pack arguments
+/// into an `anyref` tuple struct. This function destructures the tuple and
+/// inserts `unrealized_conversion_cast` to convert each `anyref` field to
+/// the pattern's actual IR type (e.g., `core.i32` for `Nat`).
+fn bind_handler_params<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    block: trunk_ir::refs::BlockRef,
+    location: Location,
+    value: ValueRef,
+    params: &[Pattern<TypedRef<'db>>],
+    anyref_ty: TypeRef,
+) {
+    if params.len() == 1 {
+        bind_pattern_fields(ctx, ir, block, location, value, &params[0]);
+    } else if params.len() > 1 {
+        let tuple_ty = super::expr::ability_args_tuple_type(ir, params.len());
+        for (i, param) in params.iter().enumerate() {
+            let field_op = adt::struct_get(ir, location, value, anyref_ty, tuple_ty, i as u32);
+            ir.push_op(block, field_op.op_ref());
+            let mut field_val = field_op.result(ir);
+
+            // Cast anyref → actual param type (inserts unbox via unrealized_conversion_cast)
+            let param_ty = ctx
+                .get_node_type(param.id)
+                .map(|ty| ctx.convert_type(ir, *ty))
+                .unwrap_or(anyref_ty);
+            if param_ty != anyref_ty {
+                let cast_op = core::unrealized_conversion_cast(ir, location, field_val, param_ty);
+                ir.push_op(block, cast_op.op_ref());
+                field_val = cast_op.result(ir);
+            }
+
+            bind_pattern_fields(ctx, ir, block, location, field_val, param);
+        }
+    }
 }

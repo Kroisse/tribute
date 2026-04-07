@@ -2,4 +2,9 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-[]
+- message: "handler arm has 2 parameter(s), but operation 'set' expects 1"
+  span:
+    start: 337
+    end: 338
+  severity: Error
+  phase: TypeChecking

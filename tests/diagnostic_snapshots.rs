@@ -300,9 +300,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    // Baseline: the compiler does not yet validate handler arm parameter
-    // counts against ability operation definitions.
-    assert!(result.diagnostics.is_empty());
+    assert!(!result.diagnostics.is_empty());
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
