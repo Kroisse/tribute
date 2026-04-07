@@ -370,12 +370,12 @@ impl<'db> IrLoweringCtx<'db> {
                 let param_refs: Vec<TypeRef> =
                     params.iter().map(|p| self.convert_type(ir, *p)).collect();
                 let result_ref = self.convert_type(ir, *result);
-                let effect_ref = if effect.is_pure(self.db) {
+                let _effect_ref = if effect.is_pure(self.db) {
                     None
                 } else {
                     Some(self.convert_effect_row(ir, *effect))
                 };
-                self.func_type_with_effect(ir, &param_refs, result_ref, effect_ref)
+                self.func_type(ir, &param_refs, result_ref)
             }
             TypeKind::Tuple(_) => {
                 // Type erasure: tuple → tribute_rt.any
@@ -461,22 +461,6 @@ impl<'db> IrLoweringCtx<'db> {
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied()).as_type_ref()
-    }
-
-    /// Create a `core.func` type with params, result, and effect.
-    ///
-    /// The `effect` parameter is accepted for compatibility but ignored;
-    /// effect information is no longer stored on the `core.func` type.
-    ///
-    /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
-    pub fn func_type_with_effect(
-        &self,
-        ir: &mut IrContext,
-        params: &[TypeRef],
-        result: TypeRef,
-        _effect: Option<TypeRef>,
-    ) -> TypeRef {
         arena_core::func(ir, result, params.iter().copied()).as_type_ref()
     }
 

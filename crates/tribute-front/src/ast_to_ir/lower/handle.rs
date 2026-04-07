@@ -112,10 +112,7 @@ pub(super) fn lower_ability_op_call<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry_block],
         parent_op: None,
     });
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let lambda_op = closure::lambda(
         builder.ir,
@@ -244,7 +241,7 @@ fn build_cps_body<'db>(
     location: Location,
     body: &Expr<TypedRef<'db>>,
     result_ty: TypeRef,
-    effect: Option<TypeRef>,
+    _effect: Option<TypeRef>,
 ) -> Option<ValueRef> {
     // Analyze captures for the body expression
     let mut free_vars = HashSet::new();
@@ -332,10 +329,7 @@ fn build_cps_body<'db>(
     } else {
         vec![]
     };
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &body_params, result_ty, effect);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &body_params, result_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -664,7 +658,7 @@ fn build_handler_dispatch_closure<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     anyref_ty: TypeRef,
     yr_ty: TypeRef,
-    effect_ty: Option<TypeRef>,
+    _effect_ty: Option<TypeRef>,
 ) -> ValueRef {
     let i32_ty = builder.ctx.i32_type(builder.ir);
 
@@ -747,13 +741,10 @@ fn build_handler_dispatch_closure<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn(anyref, i32, anyref) ->{effect} YieldResult
-    let closure_func_ty = builder.ctx.func_type_with_effect(
-        builder.ir,
-        &[anyref_ty, i32_ty, anyref_ty],
-        yr_ty,
-        effect_ty,
-    );
+    // Closure type: fn(anyref, i32, anyref) -> YieldResult
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &[anyref_ty, i32_ty, anyref_ty], yr_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -779,7 +770,7 @@ fn build_tr_dispatch_closure<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     anyref_ty: TypeRef,
     yr_ty: TypeRef,
-    effect_ty: Option<TypeRef>,
+    _effect_ty: Option<TypeRef>,
 ) -> ValueRef {
     let i32_ty = builder.ctx.i32_type(builder.ir);
 
@@ -859,10 +850,9 @@ fn build_tr_dispatch_closure<'db>(
     });
 
     // Closure type: fn(i32, anyref) ->{effect} anyref
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[i32_ty, anyref_ty], yr_ty, effect_ty);
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &[i32_ty, anyref_ty], yr_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();

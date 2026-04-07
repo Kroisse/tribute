@@ -327,7 +327,7 @@ fn lower_function<'db>(
     } else {
         (param_ir_types.clone(), return_ty)
     };
-    let func_type = ctx.func_type_with_effect(ir, &final_param_types, final_return_ty, effect_ir);
+    let func_type = ctx.func_type(ir, &final_param_types, final_return_ty);
 
     // Create body region and func op
     let body_region = ir.create_region(RegionData {
@@ -352,7 +352,7 @@ fn lower_extern_function<'db>(
     let func_name = func_decl.name;
     let qualified_name = ctx.qualify_name(func_name);
 
-    let (param_ir_types, return_ty, effect_ir) = {
+    let (param_ir_types, return_ty, _effect_ir) = {
         let scheme = ctx
             .lookup_function_type(qualified_name)
             .cloned()
@@ -411,7 +411,7 @@ fn lower_extern_function<'db>(
     ir.push_op(entry_block, unreachable_op.op_ref());
 
     // Build function type and create func op
-    let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, effect_ir);
+    let func_type = ctx.func_type(ir, &param_ir_types, return_ty);
 
     let body_region = ir.create_region(RegionData {
         location,
@@ -529,7 +529,7 @@ fn lower_struct_decl<'db>(
             parent_op: None,
         });
 
-        let getter_func_type = ctx.func_type_with_effect(ir, &[struct_ty], *field_type, None);
+        let getter_func_type = ctx.func_type(ir, &[struct_ty], *field_type);
         let getter_op = func::func(ir, location, qualified_name, getter_func_type, getter_body);
         ir.push_op(accessor_block, getter_op.op_ref());
     }

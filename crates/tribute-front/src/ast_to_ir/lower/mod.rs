@@ -356,10 +356,9 @@ pub(super) fn create_identity_done_k(
     });
 
     let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
-    let dk_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &all_param_types, anyref_ty, None);
+    let dk_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &all_param_types, anyref_ty);
     let dk_func_op = func::func(builder.ir, location, dk_name, dk_func_ty, dk_region);
 
     // Push to module block
@@ -374,10 +373,7 @@ pub(super) fn create_identity_done_k(
     builder.ir.push_op(builder.block, null_op.op_ref());
     let null_env = null_op.result(builder.ir);
 
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let closure_op = closure::new(builder.ir, location, null_env, closure_ty, dk_name);
     builder.ir.push_op(builder.block, closure_op.op_ref());
@@ -421,10 +417,7 @@ pub(super) fn emit_done_k_call(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Cast done_k to closure type so closure_lower can decompose the call.
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let done_k_closure = builder.cast_if_needed(location, done_k, closure_ty);
     let result_anyref = builder.cast_if_needed(location, result, anyref_ty);

@@ -287,12 +287,8 @@ pub(super) fn lower_expr<'db>(
                                 // CPS: tail-call continuation closure.
                                 // Continuation closures use internal convention: fn(result) -> anyref
                                 let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                                let closure_func_ty = builder.ctx.func_type_with_effect(
-                                    builder.ir,
-                                    &[anyref_ty],
-                                    anyref_ty,
-                                    None,
-                                );
+                                let closure_func_ty =
+                                    builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
                                 let closure_ty =
                                     builder.ctx.closure_type(builder.ir, closure_func_ty);
                                 let callee_closure =
@@ -350,12 +346,10 @@ pub(super) fn lower_expr<'db>(
                             let mut cps_param_types = vec![anyref_ty]; // done_k
                             cps_param_types
                                 .extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                            let cps_func_ty = builder.ctx.func_type_with_effect(
-                                builder.ir,
-                                &cps_param_types,
-                                anyref_ty,
-                                None,
-                            );
+                            let cps_func_ty =
+                                builder
+                                    .ctx
+                                    .func_type(builder.ir, &cps_param_types, anyref_ty);
                             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
                             let callee_cps =
                                 builder.cast_if_needed(location, callee_val, cps_closure_ty);
@@ -428,12 +422,10 @@ pub(super) fn lower_expr<'db>(
                     // Cast callee to CPS closure type
                     let mut cps_param_types = vec![anyref_ty]; // done_k
                     cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                    let cps_func_ty = builder.ctx.func_type_with_effect(
-                        builder.ir,
-                        &cps_param_types,
-                        anyref_ty,
-                        None,
-                    );
+                    let cps_func_ty =
+                        builder
+                            .ctx
+                            .func_type(builder.ir, &cps_param_types, anyref_ty);
                     let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
                     let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
@@ -713,10 +705,7 @@ pub(super) fn lower_expr<'db>(
 
             // Cast k_val from anyref to closure type so closure_lower can
             // properly decompose it (extract fn_ptr + env and add evidence).
-            let closure_func_ty =
-                builder
-                    .ctx
-                    .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+            let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
             let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
             let k_cast = core::unrealized_conversion_cast(builder.ir, location, k_val, closure_ty);
             builder.ir.push_op(builder.block, k_cast.op_ref());
@@ -1417,10 +1406,9 @@ fn lower_cps_call<'db>(
             // the correct return type (anyref, not the source-level type).
             let mut cps_param_types = vec![anyref_ty]; // done_k
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-            let cps_func_ty =
-                builder
-                    .ctx
-                    .func_type_with_effect(builder.ir, &cps_param_types, anyref_ty, None);
+            let cps_func_ty = builder
+                .ctx
+                .func_type(builder.ir, &cps_param_types, anyref_ty);
             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
             let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
@@ -1565,10 +1553,7 @@ fn build_cps_continuation<'db>(
     });
 
     // Closure type: fn(param_type) -> anyref
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[param_type], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[param_type], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     // Emit closure.lambda
