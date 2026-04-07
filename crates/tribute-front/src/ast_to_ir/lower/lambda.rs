@@ -441,7 +441,9 @@ pub(super) fn wrap_func_as_closure(
     }
 
     if callee_is_effectful {
-        // Effectful original: forward done_k as first arg
+        // Effectful original: forward done_k as first arg.
+        // Evidence is handled by closure_lower which extracts it from
+        // the wrapper's own evidence parameter.
         let mut cps_args = vec![done_k_val];
         cps_args.append(&mut call_args);
         let call_op = func::call(builder.ir, location, cps_args, any_ty, func_name);

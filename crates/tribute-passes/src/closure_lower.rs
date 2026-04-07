@@ -555,6 +555,19 @@ fn transform_closure_calls_in_block(
             continue;
         }
 
+        // Skip if evidence is already present as the first non-table-idx argument
+        {
+            let operands = ctx.op_operands(op);
+            if operands.len() > 1
+                && tribute_ir::dialect::ability::is_evidence_type_ref(
+                    ctx,
+                    ctx.value_ty(operands[1]),
+                )
+            {
+                continue;
+            }
+        }
+
         let evidence = if let Some(ev) = evidence_from_param {
             ev
         } else {
