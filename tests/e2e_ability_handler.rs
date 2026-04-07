@@ -719,7 +719,6 @@ fn main() {
 /// Currently segfaults at runtime: handler unpack produces anyref values that
 /// are used directly in arith.add without unbox_int, causing type mismatch.
 #[test]
-#[ignore = "multi-param handler unpack missing unbox for struct_get results"]
 fn test_handler_multi_param_op() {
     let code = r#"ability Multi {
     op combine(x: Nat, y: Nat, z: Nat) -> Nat
