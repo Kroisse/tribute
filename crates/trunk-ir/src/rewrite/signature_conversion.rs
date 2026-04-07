@@ -18,14 +18,12 @@ use crate::rewrite::type_converter::TypeConverter;
 struct ConvertedSignature {
     new_params: Vec<TypeRef>,
     new_result: TypeRef,
-    effect: Option<TypeRef>,
     params_changed: bool,
 }
 
 /// Analyze a `core.func` TypeRef and convert params/result via the type converter.
 ///
-/// `core.func` type layout: `params[0]` = return type, `params[1..]` = param types,
-/// `attrs["effect"]` = optional effect type.
+/// `core.func` type layout: `params[0]` = return type, `params[1..]` = param types.
 ///
 /// Returns `None` if no types changed.
 fn convert_func_signature(
@@ -59,25 +57,16 @@ fn convert_func_signature(
         return None;
     }
 
-    let effect = func.effect(ctx);
-
     Some(ConvertedSignature {
         new_params,
         new_result,
-        effect,
         params_changed,
     })
 }
 
-/// Build a new `core.func` TypeRef from converted params/result/effect.
+/// Build a new `core.func` TypeRef from converted params/result.
 fn rebuild_func_type(ctx: &mut IrContext, sig: &ConvertedSignature) -> TypeRef {
-    crate::dialect::core::func(
-        ctx,
-        sig.new_result,
-        sig.new_params.iter().copied(),
-        sig.effect,
-    )
-    .as_type_ref()
+    crate::dialect::core::func(ctx, sig.new_result, sig.new_params.iter().copied()).as_type_ref()
 }
 
 /// Update entry block argument types in-place to match converted params.
@@ -239,16 +228,7 @@ mod tests {
     }
 
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
-    }
-
-    fn make_func_type_with_effect(
-        ctx: &mut IrContext,
-        params: &[TypeRef],
-        ret: TypeRef,
-        effect: TypeRef,
-    ) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied(), Some(effect)).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
     }
 
     fn make_module(ctx: &mut IrContext, loc: crate::types::Location, ops: Vec<OpRef>) -> Module {
@@ -442,36 +422,6 @@ mod tests {
         assert_eq!(ctx.block(entry).args.len(), 2);
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 0)), i64_ty);
         assert_eq!(ctx.value_ty(ctx.block_arg(entry, 1)), i64_ty);
-    }
-
-    #[test]
-    fn effect_attribute_preserved() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let i64_ty = i64_type(&mut ctx);
-
-        let effect_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
-        let func_ty = make_func_type_with_effect(&mut ctx, &[i32_ty], i32_ty, effect_ty);
-        let func_op = make_func_op(&mut ctx, loc, "effectful", func_ty, &[i32_ty]);
-        let module = make_module(&mut ctx, loc, vec![func_op]);
-
-        let tc = i32_to_i64_converter(i32_ty, i64_ty);
-        let applicator = PatternApplicator::new(tc).add_pattern(FuncSignatureConversionPattern);
-        let target = ConversionTarget::new();
-
-        let result = applicator.apply(&mut ctx, module, &target).unwrap();
-        // 1 block arg converted + 1 pattern match
-        assert!(result.total_changes >= 1);
-
-        // Verify effect is preserved in the new type
-        let ops = module.ops(&ctx);
-        let new_func = func::Func::from_op(&ctx, ops[0]).unwrap();
-        let new_type = new_func.r#type(&ctx);
-        let td = ctx.types.get(new_type);
-        let effect_attr = td.attrs.get(&Symbol::new("effect"));
-        assert_eq!(effect_attr, Some(&Attribute::Type(effect_ty)));
     }
 
     #[test]

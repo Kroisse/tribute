@@ -376,8 +376,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // Handle func-style signature → core.func type
-        let has_func_signature =
-            raw.return_type.is_some() || !raw.func_params.is_empty() || raw.effect_type.is_some();
+        let has_func_signature = raw.return_type.is_some() || !raw.func_params.is_empty();
         if has_func_signature {
             let return_ty = match raw.return_type.as_ref() {
                 Some(t) => self.build_type(t)?,
@@ -389,14 +388,9 @@ impl<'a> ArenaIrBuilder<'a> {
                 .iter()
                 .map(|(_, raw_ty)| self.build_type(raw_ty))
                 .collect::<Result<_, _>>()?;
-            let effect_ty = raw
-                .effect_type
-                .as_ref()
-                .map(|effect_raw| self.build_type(effect_raw))
-                .transpose()?;
 
-            let func_ty = crate::dialect::core::func(self.ctx, return_ty, param_types, effect_ty)
-                .as_type_ref();
+            let func_ty =
+                crate::dialect::core::func(self.ctx, return_ty, param_types).as_type_ref();
             attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
         }
 
@@ -573,21 +567,8 @@ mod tests {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
     }
 
-    fn make_nil_type(ctx: &mut IrContext) -> TypeRef {
-        core::nil(ctx).as_type_ref()
-    }
-
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
-    }
-
-    fn make_func_type_with_effect(
-        ctx: &mut IrContext,
-        params: &[TypeRef],
-        ret: TypeRef,
-        effect: TypeRef,
-    ) -> TypeRef {
-        core::func(ctx, ret, params.iter().copied(), Some(effect)).as_type_ref()
+        core::func(ctx, ret, params.iter().copied()).as_type_ref()
     }
 
     fn wrap_in_module(ctx: &mut IrContext, loc: Location, func_ops: Vec<OpRef>) -> OpRef {
@@ -780,8 +761,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
-        let nil_ty = make_nil_type(&mut ctx);
-        let func_ty = make_func_type_with_effect(&mut ctx, &[], i32_ty, nil_ty);
+        let func_ty = make_func_type(&mut ctx, &[], i32_ty);
 
         let entry = ctx.create_block(BlockData {
             location: loc,
@@ -1197,9 +1177,9 @@ mod tests {
     fn test_nested_type_alias() {
         let input = r#"core.module @test {
   !inner = core.tuple(core.i32, core.i32)
-  !outer = core.func(!inner) {effect = core.nil}
+  !outer = core.func(!inner)
 
-  func.func @foo(%0: !inner) -> !inner effects core.nil {
+  func.func @foo(%0: !inner) -> !inner {
     func.return %0
   }
 }"#;

@@ -159,12 +159,10 @@ fn lower_single_lambda(
         },
     );
 
-    // Function type: (evidence, env, params...) -> result, preserving effect row.
-    let effect = extract_effect_from_closure(ctx, result_ty);
+    // Function type: (evidence, env, params...) -> result.
     let mut all_param_tys = vec![evidence_ty, anyref_ty];
     all_param_tys.extend_from_slice(&orig_param_types);
-    let func_ty =
-        core::func(ctx, func_result_ty, all_param_tys.iter().copied(), effect).as_type_ref();
+    let func_ty = core::func(ctx, func_result_ty, all_param_tys.iter().copied()).as_type_ref();
 
     let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
     ctx.push_op(module_block, func_op.op_ref());
@@ -188,13 +186,8 @@ fn lower_single_lambda(
     };
 
     // Create closure.new replacing the lambda.
-    let closure_func_ty = core::func(
-        ctx,
-        func_result_ty,
-        orig_param_types.iter().copied(),
-        effect,
-    )
-    .as_type_ref();
+    let closure_func_ty =
+        core::func(ctx, func_result_ty, orig_param_types.iter().copied()).as_type_ref();
     let closure_ty = arena_closure::closure(ctx, closure_func_ty).as_type_ref();
     let closure_new_op = arena_closure::new(ctx, location, closure_env, closure_ty, lifted_name);
     ctx.insert_op_before(parent_block, lambda_ref, closure_new_op.op_ref());
@@ -387,16 +380,6 @@ fn extract_return_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Opt
     func_data.params.first().copied()
 }
 
-/// Extract effect attribute from the func type inside a closure type.
-fn extract_effect_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
-    let func_ty = extract_func_type_from_closure(ctx, closure_ty)?;
-    let func_data = ctx.types.get(func_ty);
-    match func_data.attrs.get(&Symbol::new("effect")) {
-        Some(Attribute::Type(ty)) => Some(*ty),
-        _ => None,
-    }
-}
-
 /// Extract the `core.func` TypeRef from a `closure.closure<core.func<...>>`.
 fn extract_func_type_from_closure(ctx: &IrContext, closure_ty: TypeRef) -> Option<TypeRef> {
     let data = ctx.types.get(closure_ty);
@@ -525,7 +508,7 @@ mod tests {
         });
 
         // closure type: closure.closure<core.func<i32, i32>>
-        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty], None).as_type_ref();
+        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
         let closure_ty = arena_closure::closure(&mut ctx, func_ty).as_type_ref();
 
         // closure.lambda [] { ... } -> closure_ty
@@ -552,8 +535,7 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty =
-            arena_core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>(), None)
-                .as_type_ref();
+            arena_core::func(&mut ctx, anyref_ty, std::iter::empty::<TypeRef>()).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,
@@ -651,7 +633,7 @@ mod tests {
             parent_op: None,
         });
 
-        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty], None).as_type_ref();
+        let func_ty = arena_core::func(&mut ctx, i32_ty, [i32_ty]).as_type_ref();
         let closure_ty = arena_closure::closure(&mut ctx, func_ty).as_type_ref();
 
         // closure.lambda [%a] { ... }
@@ -664,7 +646,7 @@ mod tests {
             blocks: trunk_ir::smallvec::smallvec![outer_entry],
             parent_op: None,
         });
-        let outer_func_ty = arena_core::func(&mut ctx, anyref_ty, [i32_ty], None).as_type_ref();
+        let outer_func_ty = arena_core::func(&mut ctx, anyref_ty, [i32_ty]).as_type_ref();
         let outer_func = func::func(
             &mut ctx,
             loc,

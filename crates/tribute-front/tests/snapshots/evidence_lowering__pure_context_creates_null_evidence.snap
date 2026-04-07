@@ -6,7 +6,7 @@ core.module @test {
   !t0 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
   !t1 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
 
-  func.func @use_ask(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @Ask}) {tail_var_id = 0} {
+  func.func @use_ask(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Ask}, op_name = @ask} : tribute_rt.anyref
       func.return %2
   }
@@ -20,7 +20,7 @@ core.module @test {
       func.return %2
   }
   func.func @main() -> core.nil {
-      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @Ask}) {tail_var_id = 0} {
+      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
           %2 = adt.ref_null {type = !t0} : !t0
           %3 = func.call %2, %1 {callee = @use_ask} : tribute_rt.anyref
           func.return %3
@@ -28,7 +28,7 @@ core.module @test {
       %4 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %5 = closure.new %4 {func_ref = @"test::__lambda_0"} : !t1
       %6 = func.call_indirect %0, %5 : tribute_rt.anyref
-      %7 = closure.lambda(%8: tribute_rt.anyref, %9: core.i32, %10: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @Ask}) {tail_var_id = 0} {
+      %7 = closure.lambda(%8: tribute_rt.anyref, %9: core.i32, %10: tribute_rt.anyref) -> tribute_rt.anyref {
           %11 = arith.const {value = 1} : core.i1
           %12 = scf.if %11 : tribute_rt.anyref {
               %13 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref

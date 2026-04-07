@@ -42,8 +42,6 @@ pub struct RawOperation<'a> {
     pub func_params: Vec<(&'a str, RawType<'a>)>,
     /// Optional return type from `-> type`.
     pub return_type: Option<RawType<'a>>,
-    /// Optional effect type from `effects type`.
-    pub effect_type: Option<RawType<'a>>,
     pub operands: Vec<&'a str>,
     pub attributes: Vec<(&'a str, RawAttribute<'a>)>,
     pub result_types: Vec<RawType<'a>>,
@@ -527,9 +525,6 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     // Optional return type: -> type
     let return_ty = opt(return_type).parse_next(input)?;
 
-    // Optional effect type: effects type
-    let effect_ty = opt(preceded((ws, "effects", ws), raw_type)).parse_next(input)?;
-
     // Attributes (optional)
     let attributes = opt(preceded(ws, raw_attr_dict))
         .parse_next(input)?
@@ -557,7 +552,6 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         sym_name,
         func_params: func_params_parsed,
         return_type: return_ty,
-        effect_type: effect_ty,
         operands,
         attributes,
         result_types,

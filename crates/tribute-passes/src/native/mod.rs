@@ -43,7 +43,7 @@ pub(crate) fn build_extern_func(
     params: &[TypeRef],
     result: TypeRef,
 ) -> OpRef {
-    let func_ty = arena_core::func(ctx, result, params.iter().copied(), None).as_type_ref();
+    let func_ty = arena_core::func(ctx, result, params.iter().copied()).as_type_ref();
 
     let args: Vec<BlockArgData> = params
         .iter()

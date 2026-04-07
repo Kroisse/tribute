@@ -560,7 +560,7 @@ mod tests {
         params: &[super::super::refs::TypeRef],
         ret: super::super::refs::TypeRef,
     ) -> super::super::refs::TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
     }
 
     /// Build a valid module: fn add() { 40 + 2 }

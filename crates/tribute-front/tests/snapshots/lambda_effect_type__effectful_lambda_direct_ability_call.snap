@@ -1,6 +1,5 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 93
 expression: ir_text
 ---
 core.module @test {
@@ -22,8 +21,8 @@ core.module @test {
   func.func @"test::__lambda_4"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
   }
-  func.func @run_with_state(%0: core.func(core.i32) {effect = core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0}}) -> core.i32 {
-      %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0} [%0] {
+  func.func @run_with_state(%0: core.func(core.i32)) -> core.i32 {
+      %1 = closure.lambda(%2: tribute_rt.anyref) -> tribute_rt.anyref [%0] {
           %3 = core.unrealized_conversion_cast %0 : !t0
           %4 = func.call_indirect %3, %2 : tribute_rt.anyref
           %5 = core.unrealized_conversion_cast %4 : core.i32
@@ -33,7 +32,7 @@ core.module @test {
       %7 = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
       %8 = closure.new %7 {func_ref = @"test::__lambda_0"} : !t0
       %9 = func.call_indirect %1, %8 : tribute_rt.anyref
-      %10 = closure.lambda(%11: tribute_rt.anyref, %12: core.i32, %13: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @State}, core.ability_ref() {name = @State}) {tail_var_id = 0} {
+      %10 = closure.lambda(%11: tribute_rt.anyref, %12: core.i32, %13: tribute_rt.anyref) -> tribute_rt.anyref {
           %14 = arith.const {value = 1972422014} : core.i32
           %15 = arith.cmpi %12, %14 {predicate = @eq} : core.i1
           %16 = scf.if %15 : tribute_rt.anyref {
@@ -93,7 +92,7 @@ core.module @test {
       func.return %51
   }
   func.func @main() -> core.i32 {
-      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref {
           %2 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
           %3 = core.unrealized_conversion_cast %1 : !t0
           %4 = func.call_indirect %3, %2 : tribute_rt.anyref

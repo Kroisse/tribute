@@ -461,10 +461,13 @@ impl<'db> IrLoweringCtx<'db> {
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied(), None).as_type_ref()
+        arena_core::func(ir, result, params.iter().copied()).as_type_ref()
     }
 
     /// Create a `core.func` type with params, result, and effect.
+    ///
+    /// The `effect` parameter is accepted for compatibility but ignored;
+    /// effect information is no longer stored on the `core.func` type.
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type_with_effect(
@@ -472,9 +475,9 @@ impl<'db> IrLoweringCtx<'db> {
         ir: &mut IrContext,
         params: &[TypeRef],
         result: TypeRef,
-        effect: Option<TypeRef>,
+        _effect: Option<TypeRef>,
     ) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied(), effect).as_type_ref()
+        arena_core::func(ir, result, params.iter().copied()).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.

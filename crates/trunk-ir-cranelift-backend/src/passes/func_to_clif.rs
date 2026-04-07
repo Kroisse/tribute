@@ -156,7 +156,7 @@ impl RewritePattern for FuncFuncPattern {
                 // Build new func type in Layout A: params[0] = return type
                 let ret_ty = new_ret.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
                 let new_func_ty =
-                    arena_core::func(ctx, ret_ty, new_params.iter().copied(), None).as_type_ref();
+                    arena_core::func(ctx, ret_ty, new_params.iter().copied()).as_type_ref();
                 new_attrs.insert(Symbol::new("type"), Attribute::Type(new_func_ty));
             }
         }
@@ -233,7 +233,7 @@ impl RewritePattern for FuncCallIndirectPattern {
         // Build sig type matching translate_signature layout:
         // params[0] = return type, params[1..] = parameter types
         let ret_ty = result_ty.unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
-        let sig_ty = arena_core::func(ctx, ret_ty, param_types.iter().copied(), None).as_type_ref();
+        let sig_ty = arena_core::func(ctx, ret_ty, param_types.iter().copied()).as_type_ref();
 
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,

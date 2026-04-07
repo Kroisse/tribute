@@ -35,7 +35,7 @@ inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "lambd
 // === Custom assembly format for closure.lambda ===
 
 /// Print closure.lambda with decomposed signature:
-/// `%r = closure.lambda(%param: type, ...) -> ret effects eff [%cap0, %cap1] { body }`
+/// `%r = closure.lambda(%param: type, ...) -> ret [%cap0, %cap1] { body }`
 fn print_closure_lambda(
     h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>,
     op: trunk_ir::OpRef,
@@ -74,35 +74,23 @@ fn print_closure_lambda(
     }
     write!(h, ")")?;
 
-    // "-> return_type" and "effects effect_type"
-    // Decompose: result type = closure.closure<core.func<ret, params...> {effect = eff}>
-    let type_info = {
+    // "-> return_type"
+    // Decompose: result type = closure.closure<core.func<ret, params...>>
+    let return_ty = {
         let result_ty = h.ctx().op_result_types(op)[0];
         let closure_ty_data = h.ctx().types.get(result_ty);
         if !closure_ty_data.params.is_empty() {
             let func_ty = closure_ty_data.params[0];
             let func_ty_data = h.ctx().types.get(func_ty);
-            let return_ty = func_ty_data.params.first().copied();
-            let effect_ty = func_ty_data
-                .attrs
-                .get(&trunk_ir::Symbol::new("effect"))
-                .and_then(|a| match a {
-                    trunk_ir::Attribute::Type(t) => Some(*t),
-                    _ => None,
-                });
-            (return_ty, effect_ty)
+            func_ty_data.params.first().copied()
         } else {
-            (None, None)
+            None
         }
     };
 
-    if let Some(return_ty) = type_info.0 {
+    if let Some(return_ty) = return_ty {
         write!(h, " -> ")?;
         h.write_type(return_ty)?;
-    }
-    if let Some(eff_ty) = type_info.1 {
-        write!(h, " effects ")?;
-        h.write_type(eff_ty)?;
     }
 
     // " {key = val, ...}" — attributes (if any)
@@ -173,7 +161,7 @@ fn parse_closure_lambda<'a>(
     sym_name: Option<String>,
 ) -> winnow::ModalResult<trunk_ir::parser::raw::RawOperation<'a>> {
     use trunk_ir::parser::raw::*;
-    use winnow::combinator::{delimited, opt, preceded, separated};
+    use winnow::combinator::{delimited, opt, separated};
     use winnow::prelude::*;
 
     // "(%param: type, ...)" (optional, may be just "()")
@@ -186,9 +174,6 @@ fn parse_closure_lambda<'a>(
 
     // "-> return_type" (optional)
     let ret_ty = opt(return_type).parse_next(input)?;
-
-    // "effects effect_type" (optional)
-    let eff_ty = opt(preceded((ws, "effects", ws), raw_type)).parse_next(input)?;
 
     // " {key = val, ...}" (optional attributes — distinguished from body by lookahead)
     ws.parse_next(input)?;
@@ -237,18 +222,14 @@ fn parse_closure_lambda<'a>(
 
     let param_raw_types: Vec<RawType<'a>> = params.iter().map(|(_, ty)| ty.clone()).collect();
 
-    // core.func<return_ty, param_types...> (+ optional effect attr)
+    // core.func<return_ty, param_types...>
     let mut func_params_list = vec![return_raw];
     func_params_list.extend(param_raw_types);
-    let mut func_attrs = vec![];
-    if let Some(eff) = eff_ty {
-        func_attrs.push(("effect", RawAttribute::Type(eff)));
-    }
     let func_raw_ty = RawType::Concrete {
         dialect: "core",
         name: "func",
         params: func_params_list,
-        attrs: func_attrs,
+        attrs: vec![],
     };
 
     // closure.closure<core.func<...>>
@@ -266,7 +247,6 @@ fn parse_closure_lambda<'a>(
         sym_name,
         func_params: vec![],
         return_type: None,
-        effect_type: None,
         operands: captures,
         attributes,
         result_types: vec![closure_raw_ty],
@@ -535,7 +515,7 @@ mod tests {
             r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 10} : core.i32
-    %1 = closure.lambda(%2: core.i32) -> core.i32 effects core.effect_row() {tail_var_id = 42} [%0] {
+    %1 = closure.lambda(%2: core.i32) -> core.i32 [%0] {
         %3 = arith.addi %2, %0 : core.i32
         func.return %3
     }

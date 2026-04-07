@@ -986,7 +986,7 @@ mod tests {
     /// Create a `core.func` type. Parameters are laid out as `[ret, ...params]`
     /// in `TypeData.params`, matching the convention used by `core::Func`.
     fn make_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-        crate::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+        crate::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
     }
 
     #[test]

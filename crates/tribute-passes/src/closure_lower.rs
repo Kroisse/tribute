@@ -171,7 +171,6 @@ impl RewritePattern for UpdateFuncSignatureArena {
 
         // Clone data we need before mutating ctx.types
         let params: Vec<TypeRef> = func_data.params.to_vec();
-        let effect_attr = func_data.attrs.get(&Symbol::new("effect")).cloned();
 
         let mut needs_update = false;
         let mut new_params = Vec::with_capacity(params.len());
@@ -192,18 +191,10 @@ impl RewritePattern for UpdateFuncSignatureArena {
             return false;
         }
 
-        // Build new func type preserving effect attribute
+        // Build new func type
         let return_ty = new_params[0];
-        let effect = match effect_attr {
-            Some(Attribute::Type(t)) => Some(t),
-            None => None,
-            Some(other) => panic!(
-                "UpdateFuncSignatureArena: expected Attribute::Type for effect, got {:?}",
-                other,
-            ),
-        };
         let new_func_ty =
-            arena_core::func(ctx, return_ty, new_params[1..].iter().copied(), effect).as_type_ref();
+            arena_core::func(ctx, return_ty, new_params[1..].iter().copied()).as_type_ref();
 
         // Rebuild the function with new type
         let func_name = func_op.sym_name(ctx);

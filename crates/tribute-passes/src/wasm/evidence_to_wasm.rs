@@ -903,7 +903,7 @@ fn intern_i32(ctx: &mut IrContext) -> TypeRef {
 
 /// Intern a `core.func` type with the given parameter and return types.
 fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> TypeRef {
-    trunk_ir::dialect::core::func(ctx, ret, params.iter().copied(), None).as_type_ref()
+    trunk_ir::dialect::core::func(ctx, ret, params.iter().copied()).as_type_ref()
 }
 
 /// Compute a stable ability ID hash from an ability type reference.

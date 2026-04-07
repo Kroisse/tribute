@@ -363,8 +363,7 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
 
         // Build function type: (field_types...) -> ptr
-        let func_ty =
-            arena_core::func(ctx, ptr_ty, field_types.iter().copied(), None).as_type_ref();
+        let func_ty = arena_core::func(ctx, ptr_ty, field_types.iter().copied()).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types

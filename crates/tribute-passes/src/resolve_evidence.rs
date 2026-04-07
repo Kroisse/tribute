@@ -74,7 +74,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty], None).as_type_ref();
+        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty]).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
@@ -118,8 +118,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty =
-            arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty], None).as_type_ref();
+        let func_ty = arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -163,7 +162,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let i32_ty = i32_type_ref(ctx);
 
         // fn __tribute_next_tag() -> i32
-        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty(), None).as_type_ref();
+        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty()).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
