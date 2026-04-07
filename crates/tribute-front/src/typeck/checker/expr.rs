@@ -1795,6 +1795,25 @@ impl<'db> TypeChecker<'db> {
             })
             .collect();
 
+        // Check arity before constraining
+        if params.len() != op_param_types.len() {
+            if let Some(first) = params.first() {
+                Diagnostic::new(
+                    format!(
+                        "handler arm has {} parameter(s), but operation '{}' expects {}",
+                        params.len(),
+                        op,
+                        op_param_types.len()
+                    ),
+                    self.get_span(first.id),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+            return;
+        }
+
         // Infer, constrain, and bind each pattern to the corresponding op param type
         for (pattern, op_ty) in params.iter().zip(op_param_types.iter()) {
             let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
