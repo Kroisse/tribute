@@ -1679,7 +1679,7 @@ impl<'db> TypeChecker<'db> {
                 op,
                 params,
             } => {
-                self.constrain_handler_params(ctx, &ability, op, &params);
+                self.constrain_handler_params(ctx, &ability, op, &params, arm.id);
                 HandlerKind::Fn {
                     ability: self.convert_ref_with_ctx(ctx, ability),
                     op,
@@ -1728,7 +1728,7 @@ impl<'db> TypeChecker<'db> {
                     }
                 }
 
-                self.constrain_handler_params(ctx, &ability, op, &params);
+                self.constrain_handler_params(ctx, &ability, op, &params, arm.id);
                 HandlerKind::Op {
                     ability: self.convert_ref_with_ctx(ctx, ability),
                     op,
@@ -1759,6 +1759,7 @@ impl<'db> TypeChecker<'db> {
         ability: &ResolvedRef<'db>,
         op: Symbol,
         params: &[Pattern<ResolvedRef<'db>>],
+        arm_id: crate::ast::NodeId,
     ) {
         let Some(ability_id) = self.extract_ability_id_from_ref(ability) else {
             return;
@@ -1797,20 +1798,22 @@ impl<'db> TypeChecker<'db> {
 
         // Check arity before constraining
         if params.len() != op_param_types.len() {
-            if let Some(first) = params.first() {
-                Diagnostic::new(
-                    format!(
-                        "handler arm has {} parameter(s), but operation '{}' expects {}",
-                        params.len(),
-                        op,
-                        op_param_types.len()
-                    ),
-                    self.get_span(first.id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
-            }
+            let span = params
+                .first()
+                .map(|p| self.get_span(p.id))
+                .unwrap_or_else(|| self.get_span(arm_id));
+            Diagnostic::new(
+                format!(
+                    "handler arm has {} parameter(s), but operation '{}' expects {}",
+                    params.len(),
+                    op,
+                    op_param_types.len()
+                ),
+                span,
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
             return;
         }
 
