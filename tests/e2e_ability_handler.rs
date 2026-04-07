@@ -739,6 +739,96 @@ fn main() {
     assert_native_output("handler_multi_param_op.trb", code, "60");
 }
 
+/// Test two-parameter ability op handler (simplest multi-param case).
+#[test]
+fn test_handler_two_param_op() {
+    let code = r#"ability Pair {
+    op make(a: Nat, b: Nat) -> Nat
+}
+
+fn use_pair() ->{Pair} Nat {
+    Pair::make(3, 7)
+}
+
+fn main() {
+    let result = handle use_pair() {
+        do result { result }
+        op Pair::make(a, b) { resume a + b }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_two_param_op.trb", code, "10");
+}
+
+/// Test multi-param op where handler only uses one parameter.
+#[test]
+fn test_handler_multi_param_partial_use() {
+    let code = r#"ability Pick {
+    op choose(a: Nat, b: Nat, c: Nat) -> Nat
+}
+
+fn use_pick() ->{Pick} Nat {
+    Pick::choose(100, 200, 300)
+}
+
+fn main() {
+    let result = handle use_pick() {
+        do result { result }
+        op Pick::choose(a, _, c) { resume a + c }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_multi_param_partial.trb", code, "400");
+}
+
+/// Test multi-param ability op with `fn` (tail-resumptive) handler.
+#[test]
+fn test_handler_multi_param_fn_arm() {
+    let code = r#"ability Arith {
+    fn add(a: Nat, b: Nat) -> Nat
+}
+
+fn use_arith() ->{Arith} Nat {
+    Arith::add(15, 27)
+}
+
+fn main() {
+    let result = handle use_arith() {
+        do result { result }
+        fn Arith::add(a, b) { a + b }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_multi_param_fn.trb", code, "42");
+}
+
+/// Test multi-param op called multiple times within a handler.
+#[test]
+fn test_handler_multi_param_repeated_calls() {
+    let code = r#"ability Math {
+    op mul(a: Nat, b: Nat) -> Nat
+}
+
+fn computation() ->{Math} Nat {
+    let x = Math::mul(3, 4)
+    let y = Math::mul(x, 5)
+    y
+}
+
+fn main() {
+    let result = handle computation() {
+        do result { result }
+        op Math::mul(a, b) { resume a * b }
+    }
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("handler_multi_param_repeated.trb", code, "60");
+}
+
 // =============================================================================
 // Throw(e) Ability Tests (#193)
 //

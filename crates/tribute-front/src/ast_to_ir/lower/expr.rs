@@ -1566,7 +1566,7 @@ fn build_cps_continuation<'db>(
 }
 
 /// Pack multiple ability op arguments into a single anyref tuple if needed.
-fn pack_ability_args(
+pub(super) fn pack_ability_args(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
     arg_values: Vec<ValueRef>,

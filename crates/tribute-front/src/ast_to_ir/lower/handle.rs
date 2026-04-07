@@ -42,15 +42,8 @@ pub(super) fn lower_ability_fn_call<'db>(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability, &[]);
 
-    // Pack multiple arguments into a tuple if needed
-    let packed_args = if args.len() > 1 {
-        let tuple_ty = super::expr::ability_args_tuple_type(builder.ir, args.len());
-        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, tuple_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        vec![tuple_op.result(builder.ir)]
-    } else {
-        args
-    };
+    // Pack multiple arguments into a tuple if needed (with boxing)
+    let packed_args = super::expr::pack_ability_args(builder, location, args);
 
     // Emit ability.call (direct call, no continuation)
     let call_op = ability::call(
@@ -96,15 +89,8 @@ pub(super) fn lower_ability_op_call<'db>(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
     let ability_ref = builder.ctx.ability_ref_type(builder.ir, ability, &[]);
 
-    // Pack multiple arguments into a tuple if needed
-    let packed_args = if args.len() > 1 {
-        let tuple_ty = super::expr::ability_args_tuple_type(builder.ir, args.len());
-        let tuple_op = adt::struct_new(builder.ir, location, args, anyref_ty, tuple_ty);
-        builder.ir.push_op(builder.block, tuple_op.op_ref());
-        vec![tuple_op.result(builder.ir)]
-    } else {
-        args
-    };
+    // Pack multiple arguments into a tuple if needed (with boxing)
+    let packed_args = super::expr::pack_ability_args(builder, location, args);
 
     // Build identity continuation: fn(result) { result }
     // Continuation closures are internal mechanism, not user lambdas.
