@@ -1,23 +1,22 @@
 ---
 source: crates/tribute-front/tests/lambda_effect_type.rs
-assertion_line: 132
 expression: ir_text
 ---
 core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
   !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
 
-  func.func @counter(%0: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-      %1 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
-      %2 = core.unrealized_conversion_cast %1 : core.i32
-      %3 = arith.const {value = 1} : core.i32
-      %4 = func.call %2, %3 {callee = @"Int::+"} : core.i32
-      %5 = ability.call %4 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
-      %6 = core.unrealized_conversion_cast %5 : core.nil
-      %7 = core.unrealized_conversion_cast %2 : tribute_rt.anyref
-      %8 = core.unrealized_conversion_cast %0 : !t0
-      %9 = func.call_indirect %8, %7 : tribute_rt.anyref
-      func.return %9
+  func.func @counter(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
+      %2 = ability.call {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+      %3 = core.unrealized_conversion_cast %2 : core.i32
+      %4 = arith.const {value = 1} : core.i32
+      %5 = func.call %3, %4 {callee = @"Int::+"} : core.i32
+      %6 = ability.call %5 {ability_ref = core.ability_ref() {name = @State}, op_name = @set} : tribute_rt.anyref
+      %7 = core.unrealized_conversion_cast %6 : core.nil
+      %8 = core.unrealized_conversion_cast %3 : tribute_rt.anyref
+      %9 = core.unrealized_conversion_cast %1 : !t0
+      %10 = func.call_indirect %9, %8 : tribute_rt.anyref
+      func.return %10
   }
   func.func @"test::__lambda_0"(%0: !t1, %1: tribute_rt.anyref, %2: tribute_rt.anyref) -> tribute_rt.anyref {
       func.return %2
@@ -106,10 +105,11 @@ core.module @test {
   }
   func.func @main() -> core.i32 {
       %0 = closure.lambda(%1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32) {name = @State}) {tail_var_id = 0} {
-          %2 = func.call %1 {callee = @counter} : tribute_rt.anyref
-          func.return %2
+          %2 = adt.ref_null {type = !t1} : !t1
+          %3 = func.call %2, %1 {callee = @counter} : tribute_rt.anyref
+          func.return %3
       }
-      %3 = func.call %0 {callee = @run_with_state} : core.i32
-      func.return %3
+      %4 = func.call %0 {callee = @run_with_state} : core.i32
+      func.return %4
   }
 }

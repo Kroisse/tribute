@@ -73,6 +73,11 @@ pub struct IrLoweringCtx<'db> {
     /// When set, pure results at the end of continuation chains should call
     /// this closure instead of `func.return`.
     pub(crate) done_k: Option<ValueRef>,
+
+    /// Evidence value for the enclosing effectful function.
+    /// Passed as the first parameter to effectful functions and threaded
+    /// through to effectful callees.
+    pub(crate) evidence: Option<ValueRef>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -103,6 +108,7 @@ impl<'db> IrLoweringCtx<'db> {
             node_types,
             cps_handler_mode: false,
             done_k: None,
+            evidence: None,
         }
     }
 

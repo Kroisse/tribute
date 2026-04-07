@@ -247,11 +247,12 @@ pub(super) fn lower_expr<'db>(
                         // If callee is effectful, pass done_k as first arg.
                         // Use existing done_k if available, otherwise create identity.
                         if callee_is_effectful {
+                            let evidence = super::get_or_create_evidence(builder, location);
                             let done_k = builder.ctx.done_k.unwrap_or_else(|| {
                                 super::create_identity_done_k(builder, location)
                             });
                             let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                            let mut cps_args = vec![done_k];
+                            let mut cps_args = vec![evidence, done_k];
                             cps_args.append(&mut arg_values);
                             let op =
                                 func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
@@ -1011,9 +1012,10 @@ fn try_lower_value_effectful_call<'db>(
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
-    // Get done_k — the caller's continuation (first arg)
+    // Get evidence and done_k — the caller's evidence and continuation
+    let evidence = super::get_or_create_evidence(builder, location);
     let done_k = builder.ctx.done_k?;
-    let mut cps_args = vec![done_k];
+    let mut cps_args = vec![evidence, done_k];
     cps_args.append(&mut arg_values);
 
     let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);
@@ -1389,8 +1391,9 @@ fn lower_cps_call<'db>(
                 }
             }
 
-            // Call effectful function with continuation as first arg (done_k)
-            let mut cps_args = vec![continuation];
+            // Call effectful function with evidence + continuation as first args
+            let evidence = super::get_or_create_evidence(builder, location);
+            let mut cps_args = vec![evidence, continuation];
             cps_args.append(&mut arg_values);
 
             let call_op = func::call(builder.ir, location, cps_args, anyref_ty, callee_name);

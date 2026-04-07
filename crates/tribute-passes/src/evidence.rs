@@ -286,9 +286,12 @@ impl RewritePattern for TransformEvidenceCallPattern {
             return false;
         };
 
-        // Check if evidence is already the first argument
+        // Check if evidence is already the first argument (by value or by type)
         let operands = ctx.op_operands(op);
-        if !operands.is_empty() && operands[0] == ev_value {
+        if !operands.is_empty()
+            && (operands[0] == ev_value
+                || arena_ability::is_evidence_type_ref(ctx, ctx.value_ty(operands[0])))
+        {
             return false;
         }
 
