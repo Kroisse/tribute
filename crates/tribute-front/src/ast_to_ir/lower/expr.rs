@@ -217,25 +217,8 @@ pub(super) fn lower_expr<'db>(
                     ResolvedRef::Function { id } => {
                         let callee_name = id.qualified(builder.db());
 
-                        let func_scheme = builder.ctx.lookup_function_type(callee_name);
-
                         // Insert casts for arguments if we have type scheme information
-                        if let Some(scheme) = func_scheme {
-                            let body = scheme.body(builder.db());
-                            if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-                                for (i, param_ty) in params.iter().enumerate() {
-                                    if i < arg_values.len() {
-                                        let target_ty =
-                                            builder.ctx.convert_type(builder.ir, *param_ty);
-                                        arg_values[i] = builder.cast_if_needed(
-                                            location,
-                                            arg_values[i],
-                                            target_ty,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
                         // If callee is effectful and we have done_k, pass it as last arg.
                         // This enables the CPS chain: the callee calls done_k(result)
@@ -287,12 +270,8 @@ pub(super) fn lower_expr<'db>(
                                 // CPS: tail-call continuation closure.
                                 // Continuation closures use internal convention: fn(result) -> anyref
                                 let anyref_ty = builder.ctx.anyref_type(builder.ir);
-                                let closure_func_ty = builder.ctx.func_type_with_effect(
-                                    builder.ir,
-                                    &[anyref_ty],
-                                    anyref_ty,
-                                    None,
-                                );
+                                let closure_func_ty =
+                                    builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
                                 let closure_ty =
                                     builder.ctx.closure_type(builder.ir, closure_func_ty);
                                 let callee_closure =
@@ -350,12 +329,10 @@ pub(super) fn lower_expr<'db>(
                             let mut cps_param_types = vec![anyref_ty]; // done_k
                             cps_param_types
                                 .extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                            let cps_func_ty = builder.ctx.func_type_with_effect(
-                                builder.ir,
-                                &cps_param_types,
-                                anyref_ty,
-                                None,
-                            );
+                            let cps_func_ty =
+                                builder
+                                    .ctx
+                                    .func_type(builder.ir, &cps_param_types, anyref_ty);
                             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
                             let callee_cps =
                                 builder.cast_if_needed(location, callee_val, cps_closure_ty);
@@ -428,12 +405,10 @@ pub(super) fn lower_expr<'db>(
                     // Cast callee to CPS closure type
                     let mut cps_param_types = vec![anyref_ty]; // done_k
                     cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-                    let cps_func_ty = builder.ctx.func_type_with_effect(
-                        builder.ir,
-                        &cps_param_types,
-                        anyref_ty,
-                        None,
-                    );
+                    let cps_func_ty =
+                        builder
+                            .ctx
+                            .func_type(builder.ir, &cps_param_types, anyref_ty);
                     let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
                     let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
@@ -624,8 +599,7 @@ pub(super) fn lower_expr<'db>(
                 node_ty.is_some(),
                 "lambda node type should be populated by typeck"
             );
-            let (effect_row, param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db)))
-            {
+            let (param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db))) {
                 Some((
                     _,
                     TypeKind::Func {
@@ -638,11 +612,6 @@ pub(super) fn lower_expr<'db>(
                         .iter()
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
                         .collect();
-                    let eff = if effect.is_pure(db) {
-                        None
-                    } else {
-                        Some(*effect)
-                    };
                     // Effectful lambdas with concrete abilities use anyref as
                     // their return type. This ensures the CPS handler chain
                     // (which passes boxed values) has consistent types.
@@ -654,20 +623,18 @@ pub(super) fn lower_expr<'db>(
                     } else {
                         builder.ctx.convert_type(builder.ir, *result)
                     };
-                    (eff, pir, rir)
+                    (pir, rir)
                 }
                 _ => {
                     let any = builder.ctx.anyref_type(builder.ir);
-                    (None, vec![any; params.len()], any)
+                    (vec![any; params.len()], any)
                 }
             };
-            let effect_ty = effect_row.map(|row| builder.ctx.convert_effect_row(builder.ir, row));
             super::lambda::lower_lambda(
                 builder,
                 location,
                 &params,
                 &body,
-                effect_ty,
                 &param_ir_types,
                 result_ir_ty,
             )
@@ -713,10 +680,7 @@ pub(super) fn lower_expr<'db>(
 
             // Cast k_val from anyref to closure type so closure_lower can
             // properly decompose it (extract fn_ptr + env and add evidence).
-            let closure_func_ty =
-                builder
-                    .ctx
-                    .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+            let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
             let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
             let k_cast = core::unrealized_conversion_cast(builder.ir, location, k_val, closure_ty);
             builder.ir.push_op(builder.block, k_cast.op_ref());
@@ -998,17 +962,7 @@ fn try_lower_value_effectful_call<'db>(
     let mut arg_values = builder.collect_args(args)?;
 
     // Insert casts for arguments using type scheme information
-    if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
-        let body = scheme.body(builder.db());
-        if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-            for (i, param_ty) in params.iter().enumerate() {
-                if i < arg_values.len() {
-                    let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
-                    arg_values[i] = builder.cast_if_needed(location, arg_values[i], target_ty);
-                }
-            }
-        }
-    }
+    cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
@@ -1378,18 +1332,7 @@ fn lower_cps_call<'db>(
             let callee_name = id.qualified(builder.db());
 
             // Insert casts for arguments using type scheme information
-            if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
-                let body = scheme.body(builder.db());
-                if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-                    for (i, param_ty) in params.iter().enumerate() {
-                        if i < arg_values.len() {
-                            let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
-                            arg_values[i] =
-                                builder.cast_if_needed(location, arg_values[i], target_ty);
-                        }
-                    }
-                }
-            }
+            cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
             // Call effectful function with evidence + continuation as first args
             let evidence = super::get_or_create_evidence(builder, location);
@@ -1417,10 +1360,9 @@ fn lower_cps_call<'db>(
             // the correct return type (anyref, not the source-level type).
             let mut cps_param_types = vec![anyref_ty]; // done_k
             cps_param_types.extend(arg_values.iter().map(|v| builder.ir.value_ty(*v)));
-            let cps_func_ty =
-                builder
-                    .ctx
-                    .func_type_with_effect(builder.ir, &cps_param_types, anyref_ty, None);
+            let cps_func_ty = builder
+                .ctx
+                .func_type(builder.ir, &cps_param_types, anyref_ty);
             let cps_closure_ty = builder.ctx.closure_type(builder.ir, cps_func_ty);
             let callee_cps = builder.cast_if_needed(location, callee_val, cps_closure_ty);
 
@@ -1447,6 +1389,25 @@ fn lower_cps_call<'db>(
 /// returned directly.
 /// Add an internal context value (evidence or done_k) to the capture list
 /// if present and not already captured.
+/// Cast call arguments to match the callee's declared parameter types.
+///
+/// Looks up the callee's TypeScheme and inserts `unrealized_conversion_cast`
+/// for any argument whose IR type doesn't match the declared parameter type.
+fn cast_args_from_signature(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    callee_name: Symbol,
+    arg_values: &mut [ValueRef],
+) {
+    if let Some(sig) = super::FuncSignature::lookup(builder.ctx, builder.ir, callee_name) {
+        for (i, target_ty) in sig.param_types.iter().enumerate() {
+            if i < arg_values.len() {
+                arg_values[i] = builder.cast_if_needed(location, arg_values[i], *target_ty);
+            }
+        }
+    }
+}
+
 fn capture_ctx_value(
     captures: &mut Vec<super::super::context::CaptureInfo>,
     builder: &IrBuilder<'_, '_>,
@@ -1565,10 +1526,7 @@ fn build_cps_continuation<'db>(
     });
 
     // Closure type: fn(param_type) -> anyref
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[param_type], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[param_type], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     // Emit closure.lambda

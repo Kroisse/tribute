@@ -218,7 +218,7 @@ fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -
 }
 
 fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    arena_core::func(ctx, result, params, None).as_type_ref()
+    arena_core::func(ctx, result, params).as_type_ref()
 }
 
 fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &'static str, name: &'static str) -> bool {

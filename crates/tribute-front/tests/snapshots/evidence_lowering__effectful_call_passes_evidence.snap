@@ -6,11 +6,11 @@ core.module @test {
   !t0 = closure.closure(core.func(tribute_rt.anyref, tribute_rt.anyref))
   !t1 = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
 
-  func.func @get_count(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @Counter}) {tail_var_id = 0} {
+  func.func @get_count(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
       %2 = ability.perform %1 {ability_ref = core.ability_ref() {name = @Counter}, op_name = @inc} : tribute_rt.anyref
       func.return %2
   }
-  func.func @use_counter(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref() {name = @Counter}) {tail_var_id = 0} {
+  func.func @use_counter(%0: !t1, %1: tribute_rt.anyref) -> tribute_rt.anyref {
       %2 = closure.lambda(%3: tribute_rt.anyref) -> tribute_rt.anyref [%1] {
           %4 = core.unrealized_conversion_cast %3 : core.i32
           %5 = closure.lambda(%6: tribute_rt.anyref) -> tribute_rt.anyref [%4, %1] {

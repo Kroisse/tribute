@@ -191,7 +191,6 @@ pub(super) fn lower_lambda<'db>(
     location: Location,
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
-    effect: Option<TypeRef>,
     param_ir_types: &[TypeRef],
     _result_ir_ty: TypeRef,
 ) -> Option<ValueRef> {
@@ -307,10 +306,9 @@ pub(super) fn lower_lambda<'db>(
         pts
     };
     let func_result_ty = anyref_ty;
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &func_param_types, func_result_ty, effect);
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &func_param_types, func_result_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let lambda_op = closure::lambda(
@@ -462,10 +460,7 @@ pub(super) fn wrap_func_as_closure(
             builder.ir.push_op(entry_block, cast.op_ref());
             cast.result(builder.ir)
         };
-        let closure_func_ty =
-            builder
-                .ctx
-                .func_type_with_effect(builder.ir, &[any_ty], any_ty, None);
+        let closure_func_ty = builder.ctx.func_type(builder.ir, &[any_ty], any_ty);
         let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
         let done_k_closure = {
             let cast =
@@ -496,10 +491,7 @@ pub(super) fn wrap_func_as_closure(
     // Wrapper func type: (evidence, env, done_k, params...) -> anyref
     let mut all_param_types = vec![evidence_ty, any_ty, any_ty]; // ev, env, done_k
     all_param_types.extend_from_slice(param_ir_types);
-    let wrapper_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &all_param_types, any_ty, None);
+    let wrapper_func_ty = builder.ctx.func_type(builder.ir, &all_param_types, any_ty);
 
     let func_op = func::func(
         builder.ir,

@@ -112,10 +112,7 @@ pub(super) fn lower_ability_op_call<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry_block],
         parent_op: None,
     });
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let lambda_op = closure::lambda(
         builder.ir,
@@ -156,38 +153,16 @@ pub(super) fn lower_handle<'db>(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Generate a fresh prompt tag and build body inside the prompt scope.
-    let (tag, body_yr, effect_ty) = {
+    let (tag, body_yr) = {
         let mut prompt_scope = builder.ctx.prompt_tag_scope();
         let tag = prompt_scope.tag();
-
-        // Collect handled abilities for the body closure's effect annotation.
-        // This ensures the body function is detected as effectful by evidence passes.
-        let handled_ability_refs: Vec<_> = handlers
-            .iter()
-            .filter_map(|h| match &h.kind {
-                HandlerKind::Fn { ability, .. } | HandlerKind::Op { ability, .. } => {
-                    let name = match &ability.resolved {
-                        ResolvedRef::Ability { id } => id.qualified(prompt_scope.db),
-                        ResolvedRef::TypeDef { id } => id.qualified(prompt_scope.db),
-                        _ => return None,
-                    };
-                    Some(prompt_scope.ability_ref_type(builder.ir, name, &[]))
-                }
-                _ => None,
-            })
-            .collect();
-        let effect_ty = if !handled_ability_refs.is_empty() {
-            Some(prompt_scope.effect_row_type(builder.ir, &handled_ability_refs, 0))
-        } else {
-            None
-        };
 
         // 1. Build body as a CPS closure that returns anyref
         //    (tail calls handle effects; the final return goes to the handle frame)
         let builder = &mut IrBuilder::new(&mut prompt_scope, builder.ir, builder.block);
-        let body_yr = build_cps_body(builder, location, body, anyref_ty, effect_ty)?;
+        let body_yr = build_cps_body(builder, location, body, anyref_ty)?;
 
-        (tag, body_yr, effect_ty)
+        (tag, body_yr)
     };
     // Prompt tag popped — handlers are lowered with the outer prompt active.
 
@@ -209,14 +184,13 @@ pub(super) fn lower_handle<'db>(
     );
 
     // 3. Build handler_dispatch closure: (k, op_idx, value) -> anyref
-    let handler_fn_val = build_handler_dispatch_closure(
-        builder, location, handlers, anyref_ty, anyref_ty, effect_ty,
-    );
+    let handler_fn_val =
+        build_handler_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
 
     // 3b. Build tr_dispatch_fn closure: (op_idx, value) -> anyref
     //     Only includes fn handlers. If no fn handlers exist, use null.
     let tr_dispatch_fn_val =
-        build_tr_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty, effect_ty);
+        build_tr_dispatch_closure(builder, location, handlers, anyref_ty, anyref_ty);
 
     // 4. Emit ability.handle_dispatch
     let dispatch_op = ability::handle_dispatch(
@@ -244,7 +218,6 @@ fn build_cps_body<'db>(
     location: Location,
     body: &Expr<TypedRef<'db>>,
     result_ty: TypeRef,
-    effect: Option<TypeRef>,
 ) -> Option<ValueRef> {
     // Analyze captures for the body expression
     let mut free_vars = HashSet::new();
@@ -332,10 +305,7 @@ fn build_cps_body<'db>(
     } else {
         vec![]
     };
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &body_params, result_ty, effect);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &body_params, result_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -664,7 +634,6 @@ fn build_handler_dispatch_closure<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     anyref_ty: TypeRef,
     yr_ty: TypeRef,
-    effect_ty: Option<TypeRef>,
 ) -> ValueRef {
     let i32_ty = builder.ctx.i32_type(builder.ir);
 
@@ -747,13 +716,10 @@ fn build_handler_dispatch_closure<'db>(
         parent_op: None,
     });
 
-    // Closure type: fn(anyref, i32, anyref) ->{effect} YieldResult
-    let closure_func_ty = builder.ctx.func_type_with_effect(
-        builder.ir,
-        &[anyref_ty, i32_ty, anyref_ty],
-        yr_ty,
-        effect_ty,
-    );
+    // Closure type: fn(anyref, i32, anyref) -> YieldResult
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &[anyref_ty, i32_ty, anyref_ty], yr_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();
@@ -779,7 +745,6 @@ fn build_tr_dispatch_closure<'db>(
     handlers: &[HandlerArm<TypedRef<'db>>],
     anyref_ty: TypeRef,
     yr_ty: TypeRef,
-    effect_ty: Option<TypeRef>,
 ) -> ValueRef {
     let i32_ty = builder.ctx.i32_type(builder.ir);
 
@@ -859,10 +824,9 @@ fn build_tr_dispatch_closure<'db>(
     });
 
     // Closure type: fn(i32, anyref) ->{effect} anyref
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[i32_ty, anyref_ty], yr_ty, effect_ty);
+    let closure_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &[i32_ty, anyref_ty], yr_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
 
     let capture_values: Vec<ValueRef> = captures.iter().map(|c| c.value).collect();

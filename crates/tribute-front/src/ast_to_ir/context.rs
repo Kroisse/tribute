@@ -362,20 +362,11 @@ impl<'db> IrLoweringCtx<'db> {
                 // Type erasure: struct/enum → tribute_rt.any
                 self.anyref_type(ir)
             }
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
+            TypeKind::Func { params, result, .. } => {
                 let param_refs: Vec<TypeRef> =
                     params.iter().map(|p| self.convert_type(ir, *p)).collect();
                 let result_ref = self.convert_type(ir, *result);
-                let effect_ref = if effect.is_pure(self.db) {
-                    None
-                } else {
-                    Some(self.convert_effect_row(ir, *effect))
-                };
-                self.func_type_with_effect(ir, &param_refs, result_ref, effect_ref)
+                self.func_type(ir, &param_refs, result_ref)
             }
             TypeKind::Tuple(_) => {
                 // Type erasure: tuple → tribute_rt.any
@@ -461,20 +452,7 @@ impl<'db> IrLoweringCtx<'db> {
     ///
     /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
     pub fn func_type(&self, ir: &mut IrContext, params: &[TypeRef], result: TypeRef) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied(), None).as_type_ref()
-    }
-
-    /// Create a `core.func` type with params, result, and effect.
-    ///
-    /// Layout follows Salsa `core::Func`: `params[0] = result, params[1..] = param_types`.
-    pub fn func_type_with_effect(
-        &self,
-        ir: &mut IrContext,
-        params: &[TypeRef],
-        result: TypeRef,
-        effect: Option<TypeRef>,
-    ) -> TypeRef {
-        arena_core::func(ir, result, params.iter().copied(), effect).as_type_ref()
+        arena_core::func(ir, result, params.iter().copied()).as_type_ref()
     }
 
     /// Create a `core.ability_ref` type.

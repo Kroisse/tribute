@@ -5,7 +5,7 @@ expression: ir_text
 core.module @test {
   !__ability_args_tuple = adt.struct() {fields = [[@_0, tribute_rt.anyref], [@_1, tribute_rt.anyref]], name = @__ability_args_tuple}
 
-  func.func @store(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref effects core.effect_row(core.ability_ref(core.i32, core.i32) {name = @KV}) {tail_var_id = 0} {
+  func.func @store(%0: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}), %1: tribute_rt.anyref) -> tribute_rt.anyref {
       %2 = arith.const {value = 1} : core.i32
       %3 = arith.const {value = 2} : core.i32
       %4 = core.unrealized_conversion_cast %2 : tribute_rt.anyref

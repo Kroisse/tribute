@@ -212,7 +212,7 @@ fn generate_release_function_for_struct(
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
 
     // Function type: (core.ptr) -> core.nil
-    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty], None).as_type_ref();
+    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
 
     // Collect pointer field offsets (skip func_ptr fields)
     let func_ptr_sym = Symbol::new("func_ptr");
@@ -425,7 +425,7 @@ fn generate_release_function_for_enum(
     let i8_ty = tys.i8;
 
     let func_name = format!("{}{}", RELEASE_FN_PREFIX, rtti_idx);
-    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty], None).as_type_ref();
+    let func_ty = arena_core::func(ctx, nil_ty, [ptr_ty]).as_type_ref();
 
     let entry_block = ctx.create_block(BlockData {
         location: loc,
@@ -696,8 +696,7 @@ mod tests {
         field_types: &[TypeRef],
     ) -> Module {
         // Build function type: (field_types...) -> struct_ty
-        let func_ty =
-            arena_core::func(ctx, struct_ty, field_types.iter().copied(), None).as_type_ref();
+        let func_ty = arena_core::func(ctx, struct_ty, field_types.iter().copied()).as_type_ref();
 
         // Create entry block with field arguments
         let args: Vec<BlockArgData> = field_types
@@ -840,8 +839,7 @@ mod tests {
         let node_ty = make_struct_type(&mut ctx, &[("value", i32_ty), ("next", ptr_ty)]);
 
         // Build module with two struct_new ops
-        let func_ty =
-            arena_core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty], None).as_type_ref();
+        let func_ty = arena_core::func(&mut ctx, ptr_ty, [i32_ty, i32_ty, ptr_ty]).as_type_ref();
 
         let entry = ctx.create_block(BlockData {
             location: loc,

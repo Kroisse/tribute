@@ -23,6 +23,35 @@ use crate::ast::{
     TypeKind, TypedRef,
 };
 
+/// IR-level function signature extracted from a TypeScheme.
+pub(super) struct FuncSignature {
+    pub param_types: Vec<TypeRef>,
+    pub return_type: TypeRef,
+    pub is_effectful: bool,
+}
+
+impl FuncSignature {
+    /// Look up a function's TypeScheme by name and extract its IR-level signature.
+    ///
+    /// Returns `None` if the function has no TypeScheme or non-Func body type.
+    pub fn lookup<'db>(ctx: &IrLoweringCtx<'db>, ir: &mut IrContext, name: Symbol) -> Option<Self> {
+        let scheme = *ctx.lookup_function_type(name)?;
+        let body = scheme.body(ctx.db);
+        match body.kind(ctx.db) {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => Some(Self {
+                param_types: params.iter().map(|t| ctx.convert_type(ir, *t)).collect(),
+                return_type: ctx.convert_type(ir, *result),
+                is_effectful: !effect.is_pure(ctx.db),
+            }),
+            _ => None,
+        }
+    }
+}
+
 // Re-export lower_module as the public entry point
 pub use self::decl::lower_module;
 
@@ -356,10 +385,9 @@ pub(super) fn create_identity_done_k(
     });
 
     let all_param_types = vec![evidence_ty, anyref_ty, anyref_ty];
-    let dk_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &all_param_types, anyref_ty, None);
+    let dk_func_ty = builder
+        .ctx
+        .func_type(builder.ir, &all_param_types, anyref_ty);
     let dk_func_op = func::func(builder.ir, location, dk_name, dk_func_ty, dk_region);
 
     // Push to module block
@@ -374,10 +402,7 @@ pub(super) fn create_identity_done_k(
     builder.ir.push_op(builder.block, null_op.op_ref());
     let null_env = null_op.result(builder.ir);
 
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let closure_op = closure::new(builder.ir, location, null_env, closure_ty, dk_name);
     builder.ir.push_op(builder.block, closure_op.op_ref());
@@ -421,10 +446,7 @@ pub(super) fn emit_done_k_call(
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
     // Cast done_k to closure type so closure_lower can decompose the call.
-    let closure_func_ty =
-        builder
-            .ctx
-            .func_type_with_effect(builder.ir, &[anyref_ty], anyref_ty, None);
+    let closure_func_ty = builder.ctx.func_type(builder.ir, &[anyref_ty], anyref_ty);
     let closure_ty = builder.ctx.closure_type(builder.ir, closure_func_ty);
     let done_k_closure = builder.cast_if_needed(location, done_k, closure_ty);
     let result_anyref = builder.cast_if_needed(location, result, anyref_ty);

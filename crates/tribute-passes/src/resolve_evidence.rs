@@ -6,8 +6,8 @@
 //! It extends evidence at handler boundaries and updates function call sites
 //! to propagate evidence correctly through the call graph.
 //!
-//! This pass must run AFTER `add_evidence_params` so that effectful functions
-//! have evidence as their first parameter.
+//! This pass expects effectful functions to already have evidence as their
+//! first parameter.
 
 use std::collections::{HashMap, HashSet};
 
@@ -74,7 +74,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty], None).as_type_ref();
+        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty]).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
@@ -118,8 +118,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty =
-            arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty], None).as_type_ref();
+        let func_ty = arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -163,7 +162,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let i32_ty = i32_type_ref(ctx);
 
         // fn __tribute_next_tag() -> i32
-        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty(), None).as_type_ref();
+        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty()).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -381,44 +380,15 @@ fn transform_handler_roots(
         }
 
         let func_ty = func_op.r#type(ctx);
-        if !crate::evidence::has_tail_effect_variable(ctx, func_ty) {
+
+        // Only process handler roots that already have evidence (effectful functions).
+        // Pure handler roots (like main) don't need evidence — their handlers
+        // create evidence internally via adt.ref_null.
+        if !crate::evidence::has_evidence_first_param(ctx, func_ty) {
             continue;
         }
 
         polymorphic_roots.insert(func_name);
-
-        // Skip if evidence param was already added by add_evidence_params.
-        if crate::evidence::has_evidence_first_param(ctx, func_ty) {
-            fns_with_evidence.insert(func_name);
-            continue;
-        }
-
-        // Add evidence param to function signature
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let new_func_ty = crate::evidence::build_func_type_with_evidence(ctx, func_ty, evidence_ty);
-
-        let body = func_op.body(ctx);
-        let blocks = &ctx.region(body).blocks;
-        if blocks.is_empty() {
-            continue;
-        }
-        let entry_block = blocks[0];
-        let loc = ctx.op(func_op_ref).location;
-
-        ctx.prepend_block_arg(
-            entry_block,
-            trunk_ir::context::BlockArgData {
-                ty: evidence_ty,
-                attrs: Default::default(),
-            },
-        );
-        ctx.detach_region(body);
-        let new_op = arena_func::func(ctx, loc, func_name, new_func_ty, body).op_ref();
-        // Replace old func op in module block
-        let module_block = ctx.region(ctx.op(module.op()).regions[0]).blocks[0];
-        ctx.insert_op_before(module_block, func_op_ref, new_op);
-        ctx.remove_op_from_block(module_block, func_op_ref);
-
         fns_with_evidence.insert(func_name);
     }
 
@@ -1061,6 +1031,5 @@ mod tests {
 
     // Note: CPS-specific evidence resolution (ability.evidence_lookup,
     // ability.handle_dispatch evidence extension) requires full pipeline
-    // context (add_evidence_params must run first). These paths are covered
-    // by e2e_ability_core integration tests.
+    // context. These paths are covered by e2e_ability_core integration tests.
 }

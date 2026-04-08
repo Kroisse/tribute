@@ -201,7 +201,7 @@ mod tests {
 
         // Outer func op containing inner region
         let nil_ty = crate::dialect::core::nil(&mut ctx).as_type_ref();
-        let func_ty = crate::dialect::core::func(&mut ctx, nil_ty, [], None).as_type_ref();
+        let func_ty = crate::dialect::core::func(&mut ctx, nil_ty, []).as_type_ref();
         let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .result(func_ty)
             .region(inner_region)

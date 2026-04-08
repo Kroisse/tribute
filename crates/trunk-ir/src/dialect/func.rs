@@ -84,7 +84,7 @@ fn print_func(
         data.regions.first().copied()
     };
 
-    // Extract type decomposition: return type + effect from core.func type attribute
+    // Extract type decomposition: return type from core.func type attribute
     let type_info = {
         let data = h.ctx().op(op);
         if let Some(crate::Attribute::Type(func_ty)) =
@@ -96,14 +96,7 @@ fn print_func(
             if is_core_func && !ty_data.params.is_empty() {
                 let result_ty = ty_data.params[0];
                 let param_tys: Vec<crate::TypeRef> = ty_data.params[1..].to_vec();
-                let effect_ty = ty_data
-                    .attrs
-                    .get(&crate::Symbol::new("effect"))
-                    .and_then(|a| match a {
-                        crate::Attribute::Type(t) => Some(*t),
-                        _ => None,
-                    });
-                Some((result_ty, param_tys, effect_ty))
+                Some((result_ty, param_tys))
             } else {
                 // Non-standard or empty core.func type — skip signature
                 None
@@ -134,7 +127,7 @@ fn print_func(
             h.write_type(ty)?;
         }
         write!(h, ")")?;
-    } else if let Some((_, ref param_tys, _)) = type_info {
+    } else if let Some((_, ref param_tys)) = type_info {
         // Body-less declaration: synthesize params from type
         write!(h, "(")?;
         for (i, &ty) in param_tys.iter().enumerate() {
@@ -149,13 +142,9 @@ fn print_func(
         write!(h, "()")?;
     }
 
-    if let Some((result_ty, _, effect_ty)) = type_info {
+    if let Some((result_ty, _)) = type_info {
         write!(h, " -> ")?;
         h.write_type(result_ty)?;
-        if let Some(eff) = effect_ty {
-            write!(h, " effects ")?;
-            h.write_type(eff)?;
-        }
     }
 
     if let Some(region) = region {
@@ -191,10 +180,6 @@ fn parse_func<'a>(
     // "-> return_type" (optional)
     let ret_ty = opt(return_type).parse_next(input)?;
 
-    // "effects type" (optional)
-    let eff_ty =
-        opt(winnow::combinator::preceded((ws, "effects", ws), raw_type)).parse_next(input)?;
-
     // "{ body }"
     ws.parse_next(input)?;
     let mut regions = Vec::new();
@@ -210,7 +195,6 @@ fn parse_func<'a>(
         sym_name,
         func_params: params,
         return_type: ret_ty,
-        effect_type: eff_ty,
         operands: vec![],
         attributes: vec![],
         result_types: vec![],

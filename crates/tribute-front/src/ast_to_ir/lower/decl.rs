@@ -11,11 +11,11 @@ use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
 
 use crate::ast::{
-    CtorId, Decl, ExternFuncDecl, FuncDecl, Module, NodeId, SpanMap, TypeKind, TypeScheme, TypedRef,
+    CtorId, Decl, ExternFuncDecl, FuncDecl, Module, NodeId, SpanMap, TypeScheme, TypedRef,
 };
 
 use super::super::context::IrLoweringCtx;
-use super::{IrBuilder, convert_annotation_to_ir_type, expr, qualified_type_name};
+use super::{FuncSignature, IrBuilder, convert_annotation_to_ir_type, expr, qualified_type_name};
 
 /// Pre-scan declarations to register struct field orders.
 fn prescan_struct_fields<'db>(
@@ -179,35 +179,13 @@ fn lower_function<'db>(
     let func_name = func_decl.name;
 
     // Use TypeScheme from type checking if available, otherwise fall back to annotations
-    let (param_ir_types, return_ty, effect_ir) =
-        if let Some(scheme) = ctx.lookup_function_type(func_name).cloned() {
-            let body = scheme.body(ctx.db);
-            match body.kind(ctx.db) {
-                TypeKind::Func {
-                    params,
-                    result,
-                    effect,
-                } => {
-                    let p: Vec<TypeRef> = params.iter().map(|t| ctx.convert_type(ir, *t)).collect();
-                    let r = ctx.convert_type(ir, *result);
-                    let e = if effect.is_pure(ctx.db) {
-                        None
-                    } else {
-                        Some(ctx.convert_effect_row(ir, *effect))
-                    };
-                    (p, r, e)
-                }
-                _ => {
-                    let (p, r) = fallback_from_annotations(ctx, ir, &func_decl);
-                    (p, r, None)
-                }
-            }
-        } else {
-            let (p, r) = fallback_from_annotations(ctx, ir, &func_decl);
-            (p, r, None)
-        };
-
-    let is_effectful = effect_ir.is_some();
+    let sig = FuncSignature::lookup(ctx, ir, func_name)
+        .unwrap_or_else(|| fallback_from_annotations(ctx, ir, &func_decl));
+    let FuncSignature {
+        param_types: param_ir_types,
+        return_type: return_ty,
+        is_effectful,
+    } = sig;
     let anyref_ty = ctx.anyref_type(ir);
 
     // Create entry block with parameter args
@@ -327,7 +305,7 @@ fn lower_function<'db>(
     } else {
         (param_ir_types.clone(), return_ty)
     };
-    let func_type = ctx.func_type_with_effect(ir, &final_param_types, final_return_ty, effect_ir);
+    let func_type = ctx.func_type(ir, &final_param_types, final_return_ty);
 
     // Create body region and func op
     let body_region = ir.create_region(RegionData {
@@ -352,37 +330,16 @@ fn lower_extern_function<'db>(
     let func_name = func_decl.name;
     let qualified_name = ctx.qualify_name(func_name);
 
-    let (param_ir_types, return_ty, effect_ir) = {
-        let scheme = ctx
-            .lookup_function_type(qualified_name)
-            .cloned()
-            .unwrap_or_else(|| {
-                panic!(
-                    "extern function '{}' should have TypeScheme from type checking",
-                    qualified_name
-                )
-            });
-        let body = scheme.body(ctx.db);
-        match body.kind(ctx.db) {
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
-                let p: Vec<TypeRef> = params.iter().map(|t| ctx.convert_type(ir, *t)).collect();
-                let r = ctx.convert_type(ir, *result);
-                let e = if effect.is_pure(ctx.db) {
-                    None
-                } else {
-                    Some(ctx.convert_effect_row(ir, *effect))
-                };
-                (p, r, e)
-            }
-            other => {
-                unreachable!("extern function `{func_name}` has non-function TypeScheme: {other:?}")
-            }
-        }
-    };
+    let FuncSignature {
+        param_types: param_ir_types,
+        return_type: return_ty,
+        ..
+    } = FuncSignature::lookup(ctx, ir, qualified_name).unwrap_or_else(|| {
+        panic!(
+            "extern function '{}' should have TypeScheme from type checking",
+            qualified_name
+        )
+    });
 
     // Create entry block with parameter args
     let block_args: Vec<BlockArgData> = param_ir_types
@@ -411,7 +368,7 @@ fn lower_extern_function<'db>(
     ir.push_op(entry_block, unreachable_op.op_ref());
 
     // Build function type and create func op
-    let func_type = ctx.func_type_with_effect(ir, &param_ir_types, return_ty, effect_ir);
+    let func_type = ctx.func_type(ir, &param_ir_types, return_ty);
 
     let body_region = ir.create_region(RegionData {
         location,
@@ -529,7 +486,7 @@ fn lower_struct_decl<'db>(
             parent_op: None,
         });
 
-        let getter_func_type = ctx.func_type_with_effect(ir, &[struct_ty], *field_type, None);
+        let getter_func_type = ctx.func_type(ir, &[struct_ty], *field_type);
         let getter_op = func::func(ir, location, qualified_name, getter_func_type, getter_body);
         ir.push_op(accessor_block, getter_op.op_ref());
     }
@@ -549,16 +506,20 @@ fn fallback_from_annotations<'db>(
     ctx: &IrLoweringCtx<'db>,
     ir: &mut IrContext,
     func: &FuncDecl<TypedRef<'db>>,
-) -> (Vec<TypeRef>, TypeRef) {
-    let params = func
+) -> FuncSignature {
+    let param_types = func
         .params
         .iter()
         .map(|p| convert_annotation_to_ir_type(ctx, ir, p.ty.as_ref()))
         .collect();
-    let ret = func
+    let return_type = func
         .return_ty
         .as_ref()
         .map(|ann| convert_annotation_to_ir_type(ctx, ir, Some(ann)))
         .unwrap_or_else(|| ctx.nil_type(ir));
-    (params, ret)
+    FuncSignature {
+        param_types,
+        return_type,
+        is_effectful: false,
+    }
 }

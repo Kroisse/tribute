@@ -21,6 +21,5 @@ mod core {
     #[attr(nullable: bool)]
     struct Ref<Pointee>;
     struct Tuple<#[rest] Elements>;
-    #[attr(effect?: Type)]
     struct Func<Return, #[rest] Params>;
 }

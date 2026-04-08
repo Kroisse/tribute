@@ -33,7 +33,7 @@ mod tests {
 
     fn make_func_type(ctx: &mut IrContext) -> crate::TypeRef {
         let nil_ty = super::core::nil(ctx).as_type_ref();
-        super::core::func(ctx, nil_ty, [], None).as_type_ref()
+        super::core::func(ctx, nil_ty, []).as_type_ref()
     }
 
     // ================================================================
@@ -512,27 +512,22 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx.types);
 
         // func(i32, i32) -> i32  (no effect)
-        let f = super::core::func(&mut ctx, i32_ty, [i32_ty, i32_ty], None);
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty, i32_ty]);
 
         assert!(super::core::Func::matches(&ctx, f.as_type_ref()));
         assert_eq!(f.r#return(&ctx), i32_ty);
         assert_eq!(f.params(&ctx), &[i32_ty, i32_ty]);
-        assert_eq!(f.effect(&ctx), None);
     }
 
     #[test]
-    fn test_func_type_with_effect() {
+    fn test_func_type_single_param() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx.types);
-        let effect_ty = ctx
-            .types
-            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("effect_row")).build());
 
-        let f = super::core::func(&mut ctx, i32_ty, [i32_ty], Some(effect_ty));
+        let f = super::core::func(&mut ctx, i32_ty, [i32_ty]);
 
         assert_eq!(f.r#return(&ctx), i32_ty);
         assert_eq!(f.params(&ctx), &[i32_ty]);
-        assert_eq!(f.effect(&ctx), Some(effect_ty));
     }
 
     #[test]
@@ -540,7 +535,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let nil_ty = super::core::nil(&mut ctx);
 
-        let f = super::core::func(&mut ctx, nil_ty.as_type_ref(), [], None);
+        let f = super::core::func(&mut ctx, nil_ty.as_type_ref(), []);
 
         assert_eq!(f.r#return(&ctx), nil_ty.as_type_ref());
         assert!(f.params(&ctx).is_empty());

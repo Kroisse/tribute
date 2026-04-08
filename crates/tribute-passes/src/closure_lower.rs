@@ -35,8 +35,6 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
-use crate::evidence::collect_effectful_functions;
-
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx
@@ -171,7 +169,6 @@ impl RewritePattern for UpdateFuncSignatureArena {
 
         // Clone data we need before mutating ctx.types
         let params: Vec<TypeRef> = func_data.params.to_vec();
-        let effect_attr = func_data.attrs.get(&Symbol::new("effect")).cloned();
 
         let mut needs_update = false;
         let mut new_params = Vec::with_capacity(params.len());
@@ -192,18 +189,10 @@ impl RewritePattern for UpdateFuncSignatureArena {
             return false;
         }
 
-        // Build new func type preserving effect attribute
+        // Build new func type
         let return_ty = new_params[0];
-        let effect = match effect_attr {
-            Some(Attribute::Type(t)) => Some(t),
-            None => None,
-            Some(other) => panic!(
-                "UpdateFuncSignatureArena: expected Attribute::Type for effect, got {:?}",
-                other,
-            ),
-        };
         let new_func_ty =
-            arena_core::func(ctx, return_ty, new_params[1..].iter().copied(), effect).as_type_ref();
+            arena_core::func(ctx, return_ty, new_params[1..].iter().copied()).as_type_ref();
 
         // Rebuild the function with new type
         let func_name = func_op.sym_name(ctx);
@@ -450,7 +439,6 @@ fn extract_return_type_from_callee(ctx: &IrContext, callee_ty: TypeRef) -> Optio
 fn transform_closure_calls_with_evidence(
     ctx: &mut IrContext,
     module: Module,
-    effectful_fns: &HashSet<Symbol>,
     closure_calls: &HashSet<(usize, usize)>,
 ) {
     if closure_calls.is_empty() {
@@ -463,8 +451,8 @@ fn transform_closure_calls_with_evidence(
             continue;
         };
 
-        let func_name = func_op.sym_name(ctx);
-        let is_effectful = effectful_fns.contains(&func_name);
+        let func_ty = func_op.r#type(ctx);
+        let is_effectful = crate::evidence::has_evidence_first_param(ctx, func_ty);
 
         let body = func_op.body(ctx);
         let blocks: Vec<_> = ctx.region(body).blocks.to_vec();
@@ -628,9 +616,6 @@ fn transform_closure_calls_in_block(
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
 pub fn lower_closures(ctx: &mut IrContext, module: Module) {
-    // Collect effectful functions BEFORE lowering (while closure types are intact)
-    let effectful_fns = collect_effectful_functions(ctx, module);
-
     // Collect ALL closure calls before pattern application
     let all_closure_calls = collect_all_closure_calls(ctx, module);
 
@@ -644,5 +629,5 @@ pub fn lower_closures(ctx: &mut IrContext, module: Module) {
     applicator.apply_partial(ctx, module);
 
     // Phase 2: Evidence passing for closure calls
-    transform_closure_calls_with_evidence(ctx, module, &effectful_fns, &all_closure_calls);
+    transform_closure_calls_with_evidence(ctx, module, &all_closure_calls);
 }
