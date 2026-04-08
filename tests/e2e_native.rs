@@ -261,6 +261,97 @@ fn main() {
     );
 }
 
+/// Test short-circuit evaluation for &&.
+#[test]
+fn test_native_short_circuit_and() {
+    assert_native_output(
+        "short_circuit_and.trb",
+        r#"
+fn bool_to_nat(b: Bool) -> Nat {
+    case b {
+        True -> 1
+        False -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(bool_to_nat(False && True))
+    __tribute_print_nat(bool_to_nat(True && True))
+    __tribute_print_nat(bool_to_nat(True && False))
+}
+"#,
+        "0\n1\n0",
+    );
+}
+
+/// Test short-circuit evaluation for ||.
+#[test]
+fn test_native_short_circuit_or() {
+    assert_native_output(
+        "short_circuit_or.trb",
+        r#"
+fn bool_to_nat(b: Bool) -> Nat {
+    case b {
+        True -> 1
+        False -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(bool_to_nat(True || False))
+    __tribute_print_nat(bool_to_nat(False || True))
+    __tribute_print_nat(bool_to_nat(False || False))
+}
+"#,
+        "1\n1\n0",
+    );
+}
+
+/// Test that short-circuit && does not evaluate rhs when lhs is false.
+/// If rhs were evaluated, the side effect would appear in the output.
+#[test]
+fn test_native_short_circuit_and_skips_rhs() {
+    assert_native_output(
+        "short_circuit_and_side_effect.trb",
+        r#"
+fn side_effect() -> Bool {
+    __tribute_print_nat(99)
+    True
+}
+
+fn main() {
+    case False && side_effect() {
+        True -> __tribute_print_nat(1)
+        False -> __tribute_print_nat(0)
+    }
+}
+"#,
+        "0",
+    );
+}
+
+/// Test that short-circuit || does not evaluate rhs when lhs is true.
+#[test]
+fn test_native_short_circuit_or_skips_rhs() {
+    assert_native_output(
+        "short_circuit_or_side_effect.trb",
+        r#"
+fn side_effect() -> Bool {
+    __tribute_print_nat(99)
+    False
+}
+
+fn main() {
+    case True || side_effect() {
+        True -> __tribute_print_nat(1)
+        False -> __tribute_print_nat(0)
+    }
+}
+"#,
+        "1",
+    );
+}
+
 /// Test enum destructuring with mixed-type fields.
 /// Regression test: each pattern binding must get a fresh type variable.
 #[test]
