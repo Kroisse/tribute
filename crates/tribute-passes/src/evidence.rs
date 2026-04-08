@@ -29,6 +29,12 @@ pub fn build_func_type_with_evidence(
     ev_ty: TypeRef,
 ) -> TypeRef {
     let data = ctx.types.get(old_func_ty);
+    debug_assert!(
+        data.dialect == Symbol::new("core") && data.name == Symbol::new("func"),
+        "build_func_type_with_evidence: expected core.func type, got {}.{} (ty={old_func_ty:?})",
+        data.dialect,
+        data.name,
+    );
     // params[0] = return, params[1..] = param types
     let result_ty = data.params[0];
     let old_params = &data.params[1..];
