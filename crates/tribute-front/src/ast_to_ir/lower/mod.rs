@@ -23,6 +23,35 @@ use crate::ast::{
     TypeKind, TypedRef,
 };
 
+/// IR-level function signature extracted from a TypeScheme.
+pub(super) struct FuncSignature {
+    pub param_types: Vec<TypeRef>,
+    pub return_type: TypeRef,
+    pub is_effectful: bool,
+}
+
+impl FuncSignature {
+    /// Look up a function's TypeScheme by name and extract its IR-level signature.
+    ///
+    /// Returns `None` if the function has no TypeScheme or non-Func body type.
+    pub fn lookup<'db>(ctx: &IrLoweringCtx<'db>, ir: &mut IrContext, name: Symbol) -> Option<Self> {
+        let scheme = *ctx.lookup_function_type(name)?;
+        let body = scheme.body(ctx.db);
+        match body.kind(ctx.db) {
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+            } => Some(Self {
+                param_types: params.iter().map(|t| ctx.convert_type(ir, *t)).collect(),
+                return_type: ctx.convert_type(ir, *result),
+                is_effectful: !effect.is_pure(ctx.db),
+            }),
+            _ => None,
+        }
+    }
+}
+
 // Re-export lower_module as the public entry point
 pub use self::decl::lower_module;
 

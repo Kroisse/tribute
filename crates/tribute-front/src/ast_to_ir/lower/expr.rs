@@ -217,25 +217,8 @@ pub(super) fn lower_expr<'db>(
                     ResolvedRef::Function { id } => {
                         let callee_name = id.qualified(builder.db());
 
-                        let func_scheme = builder.ctx.lookup_function_type(callee_name);
-
                         // Insert casts for arguments if we have type scheme information
-                        if let Some(scheme) = func_scheme {
-                            let body = scheme.body(builder.db());
-                            if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-                                for (i, param_ty) in params.iter().enumerate() {
-                                    if i < arg_values.len() {
-                                        let target_ty =
-                                            builder.ctx.convert_type(builder.ir, *param_ty);
-                                        arg_values[i] = builder.cast_if_needed(
-                                            location,
-                                            arg_values[i],
-                                            target_ty,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
                         // If callee is effectful and we have done_k, pass it as last arg.
                         // This enables the CPS chain: the callee calls done_k(result)
@@ -979,17 +962,7 @@ fn try_lower_value_effectful_call<'db>(
     let mut arg_values = builder.collect_args(args)?;
 
     // Insert casts for arguments using type scheme information
-    if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
-        let body = scheme.body(builder.db());
-        if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-            for (i, param_ty) in params.iter().enumerate() {
-                if i < arg_values.len() {
-                    let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
-                    arg_values[i] = builder.cast_if_needed(location, arg_values[i], target_ty);
-                }
-            }
-        }
-    }
+    cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
     let anyref_ty = builder.ctx.anyref_type(builder.ir);
 
@@ -1359,18 +1332,7 @@ fn lower_cps_call<'db>(
             let callee_name = id.qualified(builder.db());
 
             // Insert casts for arguments using type scheme information
-            if let Some(scheme) = builder.ctx.lookup_function_type(callee_name).cloned() {
-                let body = scheme.body(builder.db());
-                if let TypeKind::Func { params, .. } = body.kind(builder.db()) {
-                    for (i, param_ty) in params.iter().enumerate() {
-                        if i < arg_values.len() {
-                            let target_ty = builder.ctx.convert_type(builder.ir, *param_ty);
-                            arg_values[i] =
-                                builder.cast_if_needed(location, arg_values[i], target_ty);
-                        }
-                    }
-                }
-            }
+            cast_args_from_signature(builder, location, callee_name, &mut arg_values);
 
             // Call effectful function with evidence + continuation as first args
             let evidence = super::get_or_create_evidence(builder, location);
@@ -1427,6 +1389,25 @@ fn lower_cps_call<'db>(
 /// returned directly.
 /// Add an internal context value (evidence or done_k) to the capture list
 /// if present and not already captured.
+/// Cast call arguments to match the callee's declared parameter types.
+///
+/// Looks up the callee's TypeScheme and inserts `unrealized_conversion_cast`
+/// for any argument whose IR type doesn't match the declared parameter type.
+fn cast_args_from_signature(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    callee_name: Symbol,
+    arg_values: &mut [ValueRef],
+) {
+    if let Some(sig) = super::FuncSignature::lookup(builder.ctx, builder.ir, callee_name) {
+        for (i, target_ty) in sig.param_types.iter().enumerate() {
+            if i < arg_values.len() {
+                arg_values[i] = builder.cast_if_needed(location, arg_values[i], *target_ty);
+            }
+        }
+    }
+}
+
 fn capture_ctx_value(
     captures: &mut Vec<super::super::context::CaptureInfo>,
     builder: &IrBuilder<'_, '_>,
