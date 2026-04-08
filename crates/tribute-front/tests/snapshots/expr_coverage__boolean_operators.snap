@@ -5,9 +5,19 @@ expression: ir_text
 ---
 core.module @test {
   func.func @logic(%0: core.i1, %1: core.i1) -> core.i1 {
-      %2 = arith.const {value = false} : core.i1
-      %3 = arith.and %1, %2 : core.i1
-      %4 = arith.or %0, %3 : core.i1
-      func.return %4
+      %2 = scf.if %0 : core.i1 {
+          %3 = arith.const {value = true} : core.i1
+          scf.yield %3
+      } {
+          %4 = scf.if %1 : core.i1 {
+              %5 = arith.const {value = false} : core.i1
+              scf.yield %5
+          } {
+              %6 = arith.const {value = false} : core.i1
+              scf.yield %6
+          }
+          scf.yield %4
+      }
+      func.return %2
   }
 }

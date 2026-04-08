@@ -38,8 +38,8 @@ struct Flags { read: Bool, write: Bool, execute: Bool }
 ```rust
 // 단순 enum
 enum Bool {
-    True
     False
+    True
 }
 
 // 제네릭 enum - positional fields
