@@ -179,7 +179,7 @@ fn lower_function<'db>(
     let func_name = func_decl.name;
 
     // Use TypeScheme from type checking if available, otherwise fall back to annotations
-    let (param_ir_types, return_ty, effect_ir) =
+    let (param_ir_types, return_ty, is_effectful) =
         if let Some(scheme) = ctx.lookup_function_type(func_name).cloned() {
             let body = scheme.body(ctx.db);
             match body.kind(ctx.db) {
@@ -190,24 +190,18 @@ fn lower_function<'db>(
                 } => {
                     let p: Vec<TypeRef> = params.iter().map(|t| ctx.convert_type(ir, *t)).collect();
                     let r = ctx.convert_type(ir, *result);
-                    let e = if effect.is_pure(ctx.db) {
-                        None
-                    } else {
-                        Some(ctx.convert_effect_row(ir, *effect))
-                    };
-                    (p, r, e)
+                    let effectful = !effect.is_pure(ctx.db);
+                    (p, r, effectful)
                 }
                 _ => {
                     let (p, r) = fallback_from_annotations(ctx, ir, &func_decl);
-                    (p, r, None)
+                    (p, r, false)
                 }
             }
         } else {
             let (p, r) = fallback_from_annotations(ctx, ir, &func_decl);
-            (p, r, None)
+            (p, r, false)
         };
-
-    let is_effectful = effect_ir.is_some();
     let anyref_ty = ctx.anyref_type(ir);
 
     // Create entry block with parameter args
