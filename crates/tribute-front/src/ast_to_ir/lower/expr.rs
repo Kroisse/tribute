@@ -616,8 +616,7 @@ pub(super) fn lower_expr<'db>(
                 node_ty.is_some(),
                 "lambda node type should be populated by typeck"
             );
-            let (effect_row, param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db)))
-            {
+            let (param_ir_types, result_ir_ty) = match node_ty.map(|t| (t, t.kind(db))) {
                 Some((
                     _,
                     TypeKind::Func {
@@ -630,11 +629,6 @@ pub(super) fn lower_expr<'db>(
                         .iter()
                         .map(|t| builder.ctx.convert_type(builder.ir, *t))
                         .collect();
-                    let eff = if effect.is_pure(db) {
-                        None
-                    } else {
-                        Some(*effect)
-                    };
                     // Effectful lambdas with concrete abilities use anyref as
                     // their return type. This ensures the CPS handler chain
                     // (which passes boxed values) has consistent types.
@@ -646,20 +640,18 @@ pub(super) fn lower_expr<'db>(
                     } else {
                         builder.ctx.convert_type(builder.ir, *result)
                     };
-                    (eff, pir, rir)
+                    (pir, rir)
                 }
                 _ => {
                     let any = builder.ctx.anyref_type(builder.ir);
-                    (None, vec![any; params.len()], any)
+                    (vec![any; params.len()], any)
                 }
             };
-            let effect_ty = effect_row.map(|row| builder.ctx.convert_effect_row(builder.ir, row));
             super::lambda::lower_lambda(
                 builder,
                 location,
                 &params,
                 &body,
-                effect_ty,
                 &param_ir_types,
                 result_ir_ty,
             )

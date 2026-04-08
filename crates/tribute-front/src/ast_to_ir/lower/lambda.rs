@@ -191,7 +191,6 @@ pub(super) fn lower_lambda<'db>(
     location: Location,
     params: &[Param],
     body: &Expr<TypedRef<'db>>,
-    _effect: Option<TypeRef>,
     param_ir_types: &[TypeRef],
     _result_ir_ty: TypeRef,
 ) -> Option<ValueRef> {

@@ -352,7 +352,7 @@ fn lower_extern_function<'db>(
     let func_name = func_decl.name;
     let qualified_name = ctx.qualify_name(func_name);
 
-    let (param_ir_types, return_ty, _effect_ir) = {
+    let (param_ir_types, return_ty) = {
         let scheme = ctx
             .lookup_function_type(qualified_name)
             .cloned()
@@ -364,19 +364,10 @@ fn lower_extern_function<'db>(
             });
         let body = scheme.body(ctx.db);
         match body.kind(ctx.db) {
-            TypeKind::Func {
-                params,
-                result,
-                effect,
-            } => {
+            TypeKind::Func { params, result, .. } => {
                 let p: Vec<TypeRef> = params.iter().map(|t| ctx.convert_type(ir, *t)).collect();
                 let r = ctx.convert_type(ir, *result);
-                let e = if effect.is_pure(ctx.db) {
-                    None
-                } else {
-                    Some(ctx.convert_effect_row(ir, *effect))
-                };
-                (p, r, e)
+                (p, r)
             }
             other => {
                 unreachable!("extern function `{func_name}` has non-function TypeScheme: {other:?}")
