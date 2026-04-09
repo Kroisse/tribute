@@ -2,13 +2,13 @@
 source: tests/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "syntax error: unexpected token"
+- message: "syntax error: unexpected `fn main( { }`; expected a declaration (fn, struct, enum, ability, mod, or use)"
   span:
     start: 0
     end: 12
   severity: Error
   phase: Parsing
-- message: "syntax error: unexpected token"
+- message: "syntax error: unexpected `fn main( { }`; expected a declaration (fn, struct, enum, ability, mod, or use)"
   span:
     start: 0
     end: 12

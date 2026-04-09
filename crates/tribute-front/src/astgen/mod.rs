@@ -16,6 +16,8 @@ mod expressions;
 mod helpers;
 mod patterns;
 
+use std::borrow::Cow;
+
 use crate::ast::{Module, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
@@ -49,11 +51,26 @@ fn lower_cst_to_ast_internal(
     lower_module(ctx, root, module_name)
 }
 
-/// Recursively collect ERROR nodes from the CST and emit parse error diagnostics.
+/// Recursively collect ERROR and MISSING nodes from the CST and emit parse error diagnostics.
 fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
+    if node.is_missing() {
+        let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
+        ctx.parse_error(span, format!("syntax error: expected '{}'", node.kind()));
+        return;
+    }
+
     if node.kind() == "ERROR" {
         let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
-        ctx.parse_error(span, "syntax error: unexpected token");
+        let text = ctx.node_text(&node);
+        let token_preview = truncate_token_preview(&text);
+        let parent_ctx = node
+            .parent()
+            .map(|p| describe_parent_context(p.kind()))
+            .unwrap_or_default();
+        ctx.parse_error(
+            span,
+            format!("syntax error: unexpected `{token_preview}`{parent_ctx}"),
+        );
         return; // Don't recurse into ERROR nodes
     }
 
@@ -63,6 +80,35 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
         for child in node.children(&mut cursor) {
             collect_error_nodes(ctx, child);
         }
+    }
+}
+
+/// Truncate token text for display in error messages.
+pub(super) fn truncate_token_preview<'a>(text: &'a str) -> Cow<'a, str> {
+    let trimmed = text.trim();
+    let first_line = trimmed.lines().next().unwrap_or(trimmed);
+    if first_line.len() > 20 {
+        Cow::Owned(format!("{}...", &first_line[..20]))
+    } else {
+        Cow::Borrowed(first_line)
+    }
+}
+
+/// Describe the parent context for error messages.
+fn describe_parent_context(parent_kind: &str) -> &'static str {
+    match parent_kind {
+        "source_file" => "; expected a declaration (fn, struct, enum, ability, mod, or use)",
+        "block" => "; expected a statement or expression",
+        "function_definition" => " in function definition",
+        "struct_declaration" => " in struct declaration",
+        "enum_declaration" => " in enum declaration",
+        "ability_declaration" => " in ability declaration",
+        "parameters" | "param_list" => " in parameter list",
+        "arguments" | "arg_list" => " in argument list",
+        "type_annotation" => " in type annotation",
+        "case_expression" => " in case expression",
+        "handle_expression" => " in handle expression",
+        _ => "",
     }
 }
 
