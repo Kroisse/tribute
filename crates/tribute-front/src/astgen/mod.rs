@@ -163,8 +163,8 @@ fn detect_unmatched_delimiter(text: &str) -> Option<String> {
         }
     }
 
-    // Report the first unclosed opener
-    if let Some(&open) = stack.first() {
+    // Report the innermost (most recent) unclosed opener
+    if let Some(&open) = stack.last() {
         let close = match open {
             '(' => ')',
             '[' => ']',
