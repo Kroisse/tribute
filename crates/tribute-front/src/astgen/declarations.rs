@@ -32,17 +32,8 @@ pub fn lower_module(
             continue;
         }
 
-        // Emit parse error diagnostic for ERROR nodes
+        // Skip ERROR nodes — diagnostics are emitted by collect_error_nodes
         if child.kind() == "ERROR" {
-            let span = trunk_ir::Span::new(child.start_byte(), child.end_byte());
-            let text = ctx.node_text(&child);
-            let token_preview = super::truncate_token_preview(&text);
-            ctx.parse_error(
-                span,
-                format!(
-                    "syntax error: unexpected `{token_preview}`; expected a declaration (fn, struct, enum, ability, mod, or use)"
-                ),
-            );
             continue;
         }
 

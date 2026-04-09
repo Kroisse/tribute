@@ -62,15 +62,21 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
     if node.kind() == "ERROR" {
         let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
         let text = ctx.node_text(&node);
-        let token_preview = truncate_token_preview(&text);
-        let parent_ctx = node
-            .parent()
-            .map(|p| describe_parent_context(p.kind()))
-            .unwrap_or_default();
-        ctx.parse_error(
-            span,
-            format!("syntax error: unexpected `{token_preview}`{parent_ctx}"),
-        );
+
+        // Check for unmatched delimiters first
+        if let Some(msg) = detect_unmatched_delimiter(&text) {
+            ctx.parse_error(span, msg);
+        } else {
+            let token_preview = truncate_token_preview(&text);
+            let parent_ctx = node
+                .parent()
+                .map(|p| describe_parent_context(p.kind()))
+                .unwrap_or_default();
+            ctx.parse_error(
+                span,
+                format!("syntax error: unexpected `{token_preview}`{parent_ctx}"),
+            );
+        }
         return; // Don't recurse into ERROR nodes
     }
 
@@ -110,6 +116,57 @@ fn describe_parent_context(parent_kind: &str) -> &'static str {
         "handle_expression" => " in handle expression",
         _ => "",
     }
+}
+
+/// Detect unmatched delimiters in ERROR node text.
+///
+/// Scans for `(`, `)`, `[`, `]`, `{`, `}` and reports the first
+/// delimiter whose matching pair is missing.
+fn detect_unmatched_delimiter(text: &str) -> Option<String> {
+    let mut stack: Vec<char> = Vec::new();
+
+    for ch in text.chars() {
+        match ch {
+            '(' | '[' | '{' => stack.push(ch),
+            ')' => {
+                if stack.last() == Some(&'(') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `)`".to_string());
+                }
+            }
+            ']' => {
+                if stack.last() == Some(&'[') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `]`".to_string());
+                }
+            }
+            '}' => {
+                if stack.last() == Some(&'{') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `}`".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Report the first unclosed opener
+    if let Some(&open) = stack.first() {
+        let close = match open {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            _ => unreachable!(),
+        };
+        return Some(format!(
+            "syntax error: unmatched `{open}`, expected `{close}`"
+        ));
+    }
+
+    None
 }
 
 /// Lower a parsed CST to an AST Module.

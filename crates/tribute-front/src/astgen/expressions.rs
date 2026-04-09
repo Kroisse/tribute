@@ -378,15 +378,7 @@ fn lower_block(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedN
         .named_children(&mut cursor)
         .filter(|c| {
             if c.kind() == "ERROR" {
-                let span = trunk_ir::Span::new(c.start_byte(), c.end_byte());
-                let text = ctx.node_text(c);
-                let token_preview = super::truncate_token_preview(&text);
-                ctx.parse_error(
-                    span,
-                    format!(
-                        "syntax error: unexpected `{token_preview}`; expected a statement or expression"
-                    ),
-                );
+                // Skip — diagnostics are emitted by collect_error_nodes
                 false
             } else {
                 !is_comment(c.kind())
