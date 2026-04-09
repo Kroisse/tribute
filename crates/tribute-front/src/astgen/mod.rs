@@ -49,11 +49,32 @@ fn lower_cst_to_ast_internal(
     lower_module(ctx, root, module_name)
 }
 
-/// Recursively collect ERROR nodes from the CST and emit parse error diagnostics.
+/// Recursively collect ERROR and MISSING nodes from the CST and emit parse error diagnostics.
 fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
+    if node.is_missing() {
+        let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
+        ctx.parse_error(span, format!("syntax error: expected '{}'", node.kind()));
+        return;
+    }
+
     if node.kind() == "ERROR" {
         let span = trunk_ir::Span::new(node.start_byte(), node.end_byte());
-        ctx.parse_error(span, "syntax error: unexpected token");
+        let text = ctx.node_text(&node);
+
+        // Check for unmatched delimiters first
+        if let Some(msg) = detect_unmatched_delimiter(&text) {
+            ctx.parse_error(span, msg);
+        } else {
+            let parent_ctx = node
+                .parent()
+                .map(|p| describe_parent_context(p.kind()))
+                .unwrap_or_default();
+            let msg = format!(
+                "syntax error: unexpected `{}`{parent_ctx}",
+                truncate_token_preview(&text)
+            );
+            ctx.parse_error(span, msg);
+        }
         return; // Don't recurse into ERROR nodes
     }
 
@@ -64,6 +85,117 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
             collect_error_nodes(ctx, child);
         }
     }
+}
+
+/// Truncate token text for display in error messages.
+///
+/// Returns a `Display` wrapper that lazily truncates to the first line,
+/// at most 20 characters, with `...` appended if truncated.
+/// No intermediate allocation — writes directly into the formatter.
+pub(super) fn truncate_token_preview(text: &str) -> impl std::fmt::Display + '_ {
+    struct TruncatedToken<'a>(&'a str);
+
+    impl std::fmt::Display for TruncatedToken<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if let Some((byte_idx, _)) = self.0.char_indices().nth(20) {
+                write!(f, "{}...", &self.0[..byte_idx])
+            } else {
+                f.write_str(self.0)
+            }
+        }
+    }
+
+    let trimmed = text.trim();
+    let first_line = trimmed.lines().next().unwrap_or(trimmed);
+    TruncatedToken(first_line)
+}
+
+/// Describe the parent context for error messages.
+fn describe_parent_context(parent_kind: &str) -> &'static str {
+    match parent_kind {
+        "source_file" => "; expected a declaration (fn, struct, enum, ability, mod, or use)",
+        "block" => "; expected a statement or expression",
+        "function_definition" => " in function definition",
+        "struct_declaration" => " in struct declaration",
+        "enum_declaration" => " in enum declaration",
+        "ability_declaration" => " in ability declaration",
+        "parameters" | "param_list" => " in parameter list",
+        "arguments" | "arg_list" => " in argument list",
+        "type_annotation" => " in type annotation",
+        "case_expression" => " in case expression",
+        "handle_expression" => " in handle expression",
+        _ => "",
+    }
+}
+
+/// Detect unmatched delimiters in ERROR node text.
+///
+/// Scans for `(`, `)`, `[`, `]`, `{`, `}` and reports the first
+/// delimiter whose matching pair is missing.
+fn detect_unmatched_delimiter(text: &str) -> Option<String> {
+    let mut stack: Vec<char> = Vec::new();
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            // Skip string literals
+            '"' => {
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        chars.next(); // skip escaped char
+                    } else if c == '"' {
+                        break;
+                    }
+                }
+            }
+            // Skip line comments
+            '/' if chars.peek() == Some(&'/') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
+            '(' | '[' | '{' => stack.push(ch),
+            ')' => {
+                if stack.last() == Some(&'(') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `)`".to_string());
+                }
+            }
+            ']' => {
+                if stack.last() == Some(&'[') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `]`".to_string());
+                }
+            }
+            '}' => {
+                if stack.last() == Some(&'{') {
+                    stack.pop();
+                } else {
+                    return Some("syntax error: unmatched `}`".to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Report the innermost (most recent) unclosed opener
+    if let Some(&open) = stack.last() {
+        let close = match open {
+            '(' => ')',
+            '[' => ']',
+            '{' => '}',
+            _ => unreachable!(),
+        };
+        return Some(format!(
+            "syntax error: unmatched `{open}`, expected `{close}`"
+        ));
+    }
+
+    None
 }
 
 /// Lower a parsed CST to an AST Module.
@@ -2478,5 +2610,52 @@ mod tests {
             matches!(pattern.kind.as_ref(), PatternKind::Variant { .. }),
             "Expected variant pattern inside as"
         );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_short() {
+        assert_eq!(truncate_token_preview("hello").to_string(), "hello");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_exact_20() {
+        let s = "12345678901234567890"; // exactly 20 chars
+        assert_eq!(truncate_token_preview(s).to_string(), s);
+    }
+
+    #[test]
+    fn test_truncate_token_preview_over_20() {
+        let s = "123456789012345678901"; // 21 chars
+        assert_eq!(
+            truncate_token_preview(s).to_string(),
+            "12345678901234567890..."
+        );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_multiline() {
+        assert_eq!(
+            truncate_token_preview("first line\nsecond line").to_string(),
+            "first line"
+        );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_trims_whitespace() {
+        assert_eq!(truncate_token_preview("  hello  ").to_string(), "hello");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_multibyte_chars() {
+        // 21 Korean characters — must not panic on multibyte boundary
+        let s = "가나다라마바사아자차카타파하거너더러머버서";
+        let result = truncate_token_preview(s).to_string();
+        assert!(result.ends_with("..."));
+        assert_eq!(result, "가나다라마바사아자차카타파하거너더러머버...");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_empty() {
+        assert_eq!(truncate_token_preview("").to_string(), "");
     }
 }
