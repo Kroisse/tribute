@@ -19,7 +19,7 @@ dashmap = "6.1"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
 fluent-uri = "0.1.4"
 im = "15"
-insta = { version = "1.46.3", features = ["yaml"] }
+insta = { version = "1.47.2", features = ["yaml"] }
 itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
