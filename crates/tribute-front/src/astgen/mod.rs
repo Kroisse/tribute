@@ -16,8 +16,6 @@ mod expressions;
 mod helpers;
 mod patterns;
 
-use std::borrow::Cow;
-
 use crate::ast::{Module, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;
 use crate::source_file::SourceCst;
@@ -67,15 +65,15 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
         if let Some(msg) = detect_unmatched_delimiter(&text) {
             ctx.parse_error(span, msg);
         } else {
-            let token_preview = truncate_token_preview(&text);
             let parent_ctx = node
                 .parent()
                 .map(|p| describe_parent_context(p.kind()))
                 .unwrap_or_default();
-            ctx.parse_error(
-                span,
-                format!("syntax error: unexpected `{token_preview}`{parent_ctx}"),
+            let msg = format!(
+                "syntax error: unexpected `{}`{parent_ctx}",
+                truncate_token_preview(&text)
             );
+            ctx.parse_error(span, msg);
         }
         return; // Don't recurse into ERROR nodes
     }
@@ -90,14 +88,26 @@ fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitter::Node) {
 }
 
 /// Truncate token text for display in error messages.
-pub(super) fn truncate_token_preview<'a>(text: &'a str) -> Cow<'a, str> {
+///
+/// Returns a `Display` wrapper that lazily truncates to the first line,
+/// at most 20 characters, with `...` appended if truncated.
+/// No intermediate allocation — writes directly into the formatter.
+pub(super) fn truncate_token_preview(text: &str) -> impl std::fmt::Display + '_ {
+    struct TruncatedToken<'a>(&'a str);
+
+    impl std::fmt::Display for TruncatedToken<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            if let Some((byte_idx, _)) = self.0.char_indices().nth(20) {
+                write!(f, "{}...", &self.0[..byte_idx])
+            } else {
+                f.write_str(self.0)
+            }
+        }
+    }
+
     let trimmed = text.trim();
     let first_line = trimmed.lines().next().unwrap_or(trimmed);
-    if first_line.len() > 20 {
-        Cow::Owned(format!("{}...", &first_line[..20]))
-    } else {
-        Cow::Borrowed(first_line)
-    }
+    TruncatedToken(first_line)
 }
 
 /// Describe the parent context for error messages.
@@ -2581,5 +2591,52 @@ mod tests {
             matches!(pattern.kind.as_ref(), PatternKind::Variant { .. }),
             "Expected variant pattern inside as"
         );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_short() {
+        assert_eq!(truncate_token_preview("hello").to_string(), "hello");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_exact_20() {
+        let s = "12345678901234567890"; // exactly 20 chars
+        assert_eq!(truncate_token_preview(s).to_string(), s);
+    }
+
+    #[test]
+    fn test_truncate_token_preview_over_20() {
+        let s = "123456789012345678901"; // 21 chars
+        assert_eq!(
+            truncate_token_preview(s).to_string(),
+            "12345678901234567890..."
+        );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_multiline() {
+        assert_eq!(
+            truncate_token_preview("first line\nsecond line").to_string(),
+            "first line"
+        );
+    }
+
+    #[test]
+    fn test_truncate_token_preview_trims_whitespace() {
+        assert_eq!(truncate_token_preview("  hello  ").to_string(), "hello");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_multibyte_chars() {
+        // 21 Korean characters — must not panic on multibyte boundary
+        let s = "가나다라마바사아자차카타파하거너더러머버서";
+        let result = truncate_token_preview(s).to_string();
+        assert!(result.ends_with("..."));
+        assert_eq!(result, "가나다라마바사아자차카타파하거너더러머버...");
+    }
+
+    #[test]
+    fn test_truncate_token_preview_empty() {
+        assert_eq!(truncate_token_preview("").to_string(), "");
     }
 }
