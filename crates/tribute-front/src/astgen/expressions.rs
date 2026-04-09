@@ -379,7 +379,7 @@ fn lower_block(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedN
         .filter(|c| {
             if c.kind() == "ERROR" {
                 let span = trunk_ir::Span::new(c.start_byte(), c.end_byte());
-                let text = ctx.node_text(&c);
+                let text = ctx.node_text(c);
                 let token_preview = super::truncate_token_preview(&text);
                 ctx.parse_error(
                     span,
