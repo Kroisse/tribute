@@ -134,9 +134,28 @@ fn describe_parent_context(parent_kind: &str) -> &'static str {
 /// delimiter whose matching pair is missing.
 fn detect_unmatched_delimiter(text: &str) -> Option<String> {
     let mut stack: Vec<char> = Vec::new();
+    let mut chars = text.chars().peekable();
 
-    for ch in text.chars() {
+    while let Some(ch) = chars.next() {
         match ch {
+            // Skip string literals
+            '"' => {
+                while let Some(c) = chars.next() {
+                    if c == '\\' {
+                        chars.next(); // skip escaped char
+                    } else if c == '"' {
+                        break;
+                    }
+                }
+            }
+            // Skip line comments
+            '/' if chars.peek() == Some(&'/') => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+            }
             '(' | '[' | '{' => stack.push(ch),
             ')' => {
                 if stack.last() == Some(&'(') {
