@@ -249,41 +249,134 @@ any (anyref) ← 다형적 값의 공통 타입
 
 ## Implementation
 
-### 주요 파일
+Monomorphization은 AST 레벨에서 동작하며, `tribute-front` 크레이트 안에서 처리한다.
+제네릭 함수를 먼저 구현하고, 제네릭 타입(struct/enum)은 후속 작업으로 분리한다.
 
-- `src/pipeline.rs` - 새 단계 추가
-- `crates/tribute-passes/src/monomorphize/` - 새 모듈
-  - `mod.rs` - 모듈 정의
-  - `collect.rs` - 인스턴스화 수집
-  - `types.rs` - InstantiationKey, MonomorphizationPlan
-  - `transform.rs` - 변환 로직
-- `crates/tribute-passes/src/typeck/solver.rs` - TypeSubst 재사용
+### 구현 순서
+
+1. **Phase A: 제네릭 함수** — 함수 특수화 + call site 재작성
+2. **Phase B: 제네릭 타입** — struct/enum 특수화 + 생성자 재작성
+
+### 파이프라인 삽입 위치
+
+TDNR 이후, ast_to_ir 이전에 삽입한다. TDNR까지 마치면 모든 타입이 구체적으로
+확정되어 있으므로, `node_types`에서 call site의 concrete type을 추출할 수 있다.
+
+```text
+TDNR (Module<TypedRef>)
+    ↓
+★ monomorphize — AST 레벨, tribute-front 크레이트
+    ↓
+ast_to_ir (IR lowering)
+```
+
+수정 대상: `src/pipeline.rs`의 `parse_and_lower_ast()` 함수.
+
+### 기존 인프라 재사용
+
+| 용도 | 기존 코드 | 위치 |
+| ---- | --------- | ---- |
+| BoundVar 치환 | `substitute_bound_vars()` | `typeck/subst.rs` |
+| 함수 시그니처 조회 | `function_types: HashMap<Symbol, TypeScheme>` | `TypeCheckOutput` |
+| 표현식 concrete type | `node_types: HashMap<NodeId, Type>` | `TypeCheckOutput` |
+| 제네릭 여부 판별 | `TypeScheme.type_params` 비어있지 않으면 제네릭 | `ast/types.rs` |
+
+### 모듈 구조
+
+```text
+crates/tribute-front/src/monomorphize/
+├── mod.rs        — 공개 API
+├── collect.rs    — 인스턴스화 수집
+├── mangle.rs     — 이름 맹글링
+└── specialize.rs — 특수화된 정의 생성 + call site 재작성
+```
+
+### Phase A: 제네릭 함수 Monomorphization
+
+#### Step 1: 이름 맹글링 (`mangle.rs`)
+
+Type → mangled name 변환. 규칙:
+
+```text
+identity + [Int]           → identity$Int
+first + [Int, Text]        → first$Int$Text
+map + [Int, Option(Int)]   → map$Int$Option_Int_
+```
+
+중첩 타입은 `_`로 감싼다: `Option(Int)` → `Option_Int_`.
+
+#### Step 2: 인스턴스화 수집 (`collect.rs`)
+
+`Module<TypedRef>` 전체를 순회하며 제네릭 함수 호출을 찾는다.
+
+**Type arg 추론 방법:**
+
+TypeScheme의 param types와 call site의 concrete argument types를 매칭하여
+BoundVar → concrete type 매핑을 역추론한다.
+
+```text
+TypeScheme: fn identity(a)(x: a) -> a
+  body = Func { params: [BoundVar(0)], result: BoundVar(0) }
+
+Call site: identity(42)
+  arg types = [Int]  (node_types에서 조회)
+
+매칭: BoundVar(0) = Int
+  → type_args = [Int]
+```
+
+여러 파라미터가 같은 BoundVar를 참조하면 일관성 검증한다.
+수집 결과는 `HashMap<Symbol, HashSet<Vec<Type>>>` (함수명 → type arg 조합 집합).
+
+#### Step 3: 특수화된 함수 생성 (`specialize.rs`)
+
+각 (function_name, type_args)에 대해:
+
+1. 원본 `FuncDecl<TypedRef>` 복제
+2. `type_params` 비움
+3. `substitute_bound_vars()`로 body의 모든 `TypedRef.ty`에서 BoundVar 치환
+4. mangled name 적용
+5. `function_types`에 specialized TypeScheme 등록
+
+#### Step 4: Call site 재작성
+
+Module 순회하며 제네릭 함수 호출의 `ResolvedRef::Function { id }` →
+specialized function의 id로 교체. 원본 제네릭 선언은 유지한다
+(향후 DCE에서 제거 가능).
+
+#### Step 5: Pipeline 통합
+
+`parse_and_lower_ast()`에서 TDNR 후 monomorphize 호출.
+`TypeCheckOutput`의 `function_types`, `node_types`를 monomorphize에 전달하고,
+결과로 updated module + function_types를 받아 ast_to_ir에 넘긴다.
+
+### Phase B: 제네릭 타입 (후속 작업)
+
+Phase A 완료 후 별도 이슈로 추적:
+
+- `StructDecl`, `EnumDecl`의 타입 파라미터 특수화
+- 생성자 호출(`Variant`, `StructNew`) 재작성
+- IR lowering에서 specialized struct/enum 타입 생성
 
 ### 데이터 구조
 
 ```rust
-/// 인스턴스화 키
+/// 인스턴스화 키 — 함수/타입 이름 + concrete type args
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct InstantiationKey<'db> {
-    /// 원본 제네릭 정의 이름
-    pub name: Symbol,
-    /// 구체적 타입 인자
-    pub type_args: IdVec<Type<'db>>,
-}
-
-/// Monomorphization 계획
-#[salsa::tracked]
-pub struct MonomorphizationPlan<'db> {
-    /// 타입 인스턴스화: 제네릭 타입 → 인스턴스화 키 목록
-    type_instantiations: HashMap<Symbol, Vec<InstantiationKey<'db>>>,
-    /// 함수 인스턴스화: 제네릭 함수 → 인스턴스화 키 목록
-    func_instantiations: HashMap<Symbol, Vec<InstantiationKey<'db>>>,
-    /// 인스턴스화 키 → 맹글된 이름
-    instantiation_names: HashMap<InstantiationKey<'db>, Symbol>,
-    /// 다형적 재귀 함수 집합
-    polymorphic_recursive: HashSet<Symbol>,
+struct InstantiationKey<'db> {
+    name: Symbol,
+    type_args: Vec<Type<'db>>,
 }
 ```
+
+### 리스크와 대응
+
+| 리스크 | 대응 |
+| ------ | ---- |
+| Polymorphic recursion → 무한 인스턴스화 | depth limit으로 방어, #54에서 본격 처리 |
+| Higher-order functions의 type arg 추적 | closure 타입에서도 BoundVar 매칭 |
+| Effect-only polymorphism | skip — evidence passing이 이미 처리 |
+| 미해결 타입 변수 (BoundVar 잔존) | anyref 폴백 유지 (기존 uniform rep) |
 
 ---
 
