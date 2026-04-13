@@ -70,7 +70,7 @@ fn write_type_mangled(db: &dyn salsa::Database, ty: Type<'_>, buf: &mut String) 
             let _ = write!(buf, "T{index}");
         }
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
-            buf.push_str("unknown");
+            panic!("mangle_name requires fully-resolved concrete types");
         }
         TypeKind::Error => buf.push_str("error"),
     }
@@ -226,5 +226,24 @@ mod tests {
         let bv = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let result = mangle_name(&db, base, &[bv]);
         assert_eq!(result.to_string(), "f$T0");
+    }
+
+    #[test]
+    fn test_error_type() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let err_ty = Type::new(&db, TypeKind::Error);
+        let result = mangle_name(&db, base, &[err_ty]);
+        assert_eq!(result.to_string(), "f$error");
+    }
+
+    #[test]
+    #[should_panic(expected = "mangle_name requires fully-resolved concrete types")]
+    fn test_univar_panics() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let univar_id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
+        let ty = Type::new(&db, TypeKind::UniVar { id: univar_id });
+        mangle_name(&db, base, &[ty]);
     }
 }
