@@ -147,6 +147,31 @@ fn print_func(
         h.write_type(result_ty)?;
     }
 
+    // Extra attributes (everything except sym_name and type, which are
+    // already encoded in the signature).  Clone to avoid borrow conflicts
+    // with the mutable write helpers.
+    let extra_attrs: Vec<_> = {
+        let data = h.ctx().op(op);
+        data.attributes
+            .iter()
+            .filter(|(k, _)| {
+                **k != crate::Symbol::new("sym_name") && **k != crate::Symbol::new("type")
+            })
+            .map(|(k, v)| (*k, v.clone()))
+            .collect()
+    };
+    if !extra_attrs.is_empty() {
+        write!(h, " attributes {{")?;
+        for (i, (key, val)) in extra_attrs.iter().enumerate() {
+            if i > 0 {
+                write!(h, ", ")?;
+            }
+            write!(h, "{key} = ")?;
+            h.write_attribute(val)?;
+        }
+        write!(h, "}}")?;
+    }
+
     if let Some(region) = region {
         // Body
         writeln!(h, " {{")?;
@@ -180,6 +205,16 @@ fn parse_func<'a>(
     // "-> return_type" (optional)
     let ret_ty = opt(return_type).parse_next(input)?;
 
+    // "attributes { key = value, ... }" (optional extra attributes)
+    ws.parse_next(input)?;
+    let attributes = if input.starts_with("attributes") {
+        *input = &input["attributes".len()..];
+        ws.parse_next(input)?;
+        raw_attr_dict.parse_next(input)?
+    } else {
+        vec![]
+    };
+
     // "{ body }"
     ws.parse_next(input)?;
     let mut regions = Vec::new();
@@ -196,7 +231,7 @@ fn parse_func<'a>(
         func_params: params,
         return_type: ret_ty,
         operands: vec![],
-        attributes: vec![],
+        attributes,
         result_types: vec![],
         regions,
         successors: vec![],
