@@ -206,14 +206,10 @@ fn parse_func<'a>(
     let ret_ty = opt(return_type).parse_next(input)?;
 
     // "attributes { key = value, ... }" (optional extra attributes)
-    ws.parse_next(input)?;
-    let attributes = if input.starts_with("attributes") {
-        *input = &input["attributes".len()..];
-        ws.parse_next(input)?;
-        raw_attr_dict.parse_next(input)?
-    } else {
-        vec![]
-    };
+    let attributes = opt((ws, "attributes", ws, raw_attr_dict))
+        .parse_next(input)?
+        .map(|(_, _, _, attrs)| attrs)
+        .unwrap_or_default();
 
     // "{ body }"
     ws.parse_next(input)?;
