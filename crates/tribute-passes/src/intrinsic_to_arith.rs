@@ -236,7 +236,8 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         let loc = ctx.op(op).location;
         let func_ty = func_op.r#type(ctx);
 
-        // Extract param types from core.func<return_ty, param_ty...>
+        // All mapped intrinsics are binary (lhs, rhs) -> result.
+        // This will panic if a non-binary intrinsic is ever added to the map.
         let func_data = ctx.types.get(func_ty);
         let return_ty = func_data.params[0];
         let param_tys: Vec<TypeRef> = func_data.params[1..].to_vec();
@@ -329,10 +330,10 @@ mod tests {
             !output.contains("func.unreachable"),
             "func.unreachable should be gone:\n{output}"
         );
-        // The intrinsic abi should be removed
+        // The intrinsic abi attribute should be removed
         assert!(
-            !output.contains("intrinsic"),
-            "intrinsic abi should be removed:\n{output}"
+            !output.contains(r#"abi = "intrinsic""#),
+            "intrinsic abi attribute should be removed:\n{output}"
         );
     }
 
