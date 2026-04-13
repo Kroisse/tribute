@@ -6,10 +6,8 @@
 
 use std::collections::HashMap;
 
-use std::collections::HashSet;
-
 use trunk_ir::Symbol;
-use trunk_ir::context::IrContext;
+use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::DialectOp;
@@ -21,20 +19,23 @@ use trunk_ir::types::{Attribute, Location};
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
-/// Also removes `func.func` declarations for intrinsic operators, since they
-/// have no real body and would cause undefined symbol errors at link time.
+/// Direct calls are rewritten inline (e.g. `func.call @"Int::+"(a,b)` →
+/// `arith.addi`). Intrinsic `func.func` declarations — which originally
+/// contain only `func.unreachable` — are given a real body so they remain
+/// valid when used as first-class values (closures, `func.constant`, etc.).
 pub fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
-    let intrinsic_names: HashSet<Symbol> = pattern.map.keys().copied().collect();
+    let intrinsic_map: HashMap<Symbol, ArithMapping> = pattern.map.clone();
 
     let mut applicator = PatternApplicator::new(TypeConverter::new());
     applicator = applicator
         .add_pattern(pattern)
-        .add_pattern(ArithIntrinsicFuncDeclPattern { intrinsic_names });
+        .add_pattern(ArithIntrinsicFuncDeclPattern { intrinsic_map });
     applicator.apply_partial(ctx, module);
 }
 
 /// What kind of arith operation to emit.
+#[derive(Clone)]
 enum ArithMapping {
     /// Binary arithmetic: addi, addf, subi, etc.
     BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef, TypeRef) -> OpRef),
@@ -195,12 +196,14 @@ impl RewritePattern for ArithIntrinsicPattern {
     }
 }
 
-/// Pattern that removes `func.func` declarations for intrinsic operators.
+/// Pattern that replaces `func.unreachable` bodies in intrinsic operator
+/// declarations with real arith-dialect implementations.
 ///
-/// These declarations have `abi = "intrinsic"` and `func.unreachable` body,
-/// so they must not reach the backend or linker.
+/// This allows intrinsic operators to work as first-class values (closures,
+/// `func.constant` references) while also removing the `abi = "intrinsic"`
+/// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern {
-    intrinsic_names: HashSet<Symbol>,
+    intrinsic_map: HashMap<Symbol, ArithMapping>,
 }
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern {
@@ -226,12 +229,176 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = func_op.sym_name(ctx);
-        if !self.intrinsic_names.contains(&sym_name) {
+        let Some(mapping) = self.intrinsic_map.get(&sym_name) else {
             return false;
-        }
+        };
 
-        // Erase the function declaration (no results to map)
-        rewriter.erase_op(vec![]);
+        let loc = ctx.op(op).location;
+        let func_ty = func_op.r#type(ctx);
+
+        // All mapped intrinsics are binary (lhs, rhs) -> result.
+        // This will panic if a non-binary intrinsic is ever added to the map.
+        let func_data = ctx.types.get(func_ty);
+        let return_ty = func_data.params[0];
+        let param_tys: Vec<TypeRef> = func_data.params[1..].to_vec();
+
+        // Build a new body: entry block with params → arith op → func.return
+        let block_args: Vec<BlockArgData> = param_tys
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: Default::default(),
+            })
+            .collect();
+        let body_block = ctx.create_block(BlockData {
+            location: loc,
+            args: block_args,
+            ops: Default::default(),
+            parent_region: None,
+        });
+        let lhs = ctx.block_args(body_block)[0];
+        let rhs = ctx.block_args(body_block)[1];
+
+        let result_op = match mapping {
+            ArithMapping::BinaryOp(op_fn) => op_fn(ctx, loc, lhs, rhs, return_ty),
+            ArithMapping::CmpI(predicate) => {
+                arith::cmpi(ctx, loc, lhs, rhs, return_ty, Symbol::new(predicate)).op_ref()
+            }
+            ArithMapping::CmpF(predicate) => {
+                arith::cmpf(ctx, loc, lhs, rhs, return_ty, Symbol::new(predicate)).op_ref()
+            }
+        };
+        ctx.push_op(body_block, result_op);
+
+        let result_val = ctx.op_results(result_op)[0];
+        let ret_op = arena_func::r#return(ctx, loc, [result_val]);
+        ctx.push_op(body_block, ret_op.op_ref());
+
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: trunk_ir::smallvec::smallvec![body_block],
+            parent_op: None,
+        });
+
+        // Detach old body region before replacing
+        let old_body = func_op.body(ctx);
+        ctx.detach_region(old_body);
+
+        let new_func = arena_func::func(ctx, loc, sym_name, func_ty, body).op_ref();
+        // Do NOT copy the "intrinsic" abi — this is now a real function
+        rewriter.replace_op(new_func);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    #[test]
+    fn intrinsic_decl_gets_real_body() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic"} {
+                ^bb0:
+                    func.unreachable
+                }
+            }
+        "#,
+        );
+
+        lower_intrinsic_to_arith(&mut ctx, module);
+
+        let output = print_module(&ctx, module.op());
+        // The declaration should still exist with a real body (not erased)
+        assert!(
+            output.contains(r#"@"Nat::+""#),
+            "func decl should not be erased:\n{output}"
+        );
+        // Body should contain arith.addi, not func.unreachable
+        assert!(
+            output.contains("arith.addi"),
+            "body should have arith.addi:\n{output}"
+        );
+        assert!(
+            !output.contains("func.unreachable"),
+            "func.unreachable should be gone:\n{output}"
+        );
+        // The intrinsic abi attribute should be removed
+        assert!(
+            !output.contains(r#"abi = "intrinsic""#),
+            "intrinsic abi attribute should be removed:\n{output}"
+        );
+    }
+
+    #[test]
+    fn intrinsic_cmpi_gets_real_body() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Int::=="(%0: core.i32, %1: core.i32) -> core.i1
+                    attributes {abi = "intrinsic"} {
+                ^bb0:
+                    func.unreachable
+                }
+            }
+        "#,
+        );
+
+        lower_intrinsic_to_arith(&mut ctx, module);
+
+        let output = print_module(&ctx, module.op());
+        assert!(
+            output.contains("arith.cmpi"),
+            "body should have arith.cmpi:\n{output}"
+        );
+        assert!(
+            !output.contains("func.unreachable"),
+            "func.unreachable should be gone:\n{output}"
+        );
+    }
+
+    #[test]
+    fn direct_calls_still_rewritten() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic"} {
+                ^bb0:
+                    func.unreachable
+                }
+                func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
+                ^bb0:
+                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    func.return %2
+                }
+            }
+        "#,
+        );
+
+        lower_intrinsic_to_arith(&mut ctx, module);
+
+        let output = print_module(&ctx, module.op());
+        // Direct call should be replaced by arith.addi in @caller
+        assert!(
+            output.contains("arith.addi"),
+            "direct call should be rewritten to arith.addi:\n{output}"
+        );
+        // The intrinsic decl should still exist (for first-class usage)
+        assert!(
+            output.contains(r#"@"Nat::+""#),
+            "intrinsic decl should still exist:\n{output}"
+        );
     }
 }
