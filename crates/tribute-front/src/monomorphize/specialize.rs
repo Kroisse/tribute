@@ -23,8 +23,7 @@ pub fn generate_specializations<'db>(
     let func_decls = collect_func_decls(module);
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
-    let mut new_decls = Vec::new();
-    let mut new_function_types = Vec::new();
+    let mut entries: Vec<(Symbol, FuncDecl<TypedRef<'db>>, TypeScheme<'db>)> = Vec::new();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
@@ -38,15 +37,23 @@ pub fn generate_specializations<'db>(
         for type_args in type_arg_sets {
             let mangled = mangle_name(db, qualified, type_args);
             let specialized = specialize_func_decl(db, func, type_args, mangled);
-
             let specialized_scheme = TypeScheme::new(
                 db,
                 vec![],
                 substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or(scheme.body(db)),
             );
-            new_decls.push(specialized);
-            new_function_types.push((mangled, specialized_scheme));
+            entries.push((mangled, specialized, specialized_scheme));
         }
+    }
+
+    // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut new_decls = Vec::with_capacity(entries.len());
+    let mut new_function_types = Vec::with_capacity(entries.len());
+    for (name, decl, scheme) in entries {
+        new_decls.push(decl);
+        new_function_types.push((name, scheme));
     }
 
     (new_decls, new_function_types)
@@ -539,5 +546,13 @@ mod tests {
         let names: HashSet<String> = new_decls.iter().map(|d| d.name.to_string()).collect();
         assert!(names.contains("identity$Int"));
         assert!(names.contains("identity$Float"));
+
+        // All specialized TypeSchemes must be monomorphic
+        for (_, scheme) in &new_fn_types {
+            assert!(
+                scheme.is_mono(&db),
+                "specialized scheme should have no type params"
+            );
+        }
     }
 }
