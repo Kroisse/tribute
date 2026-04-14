@@ -1,5 +1,6 @@
-use std::fmt::Write;
+use std::fmt;
 
+use tribute_core::fmt::joined_by;
 use trunk_ir::Symbol;
 
 use crate::ast::{Type, TypeKind};
@@ -16,63 +17,57 @@ pub fn mangle_name(db: &dyn salsa::Database, base: Symbol, type_args: &[Type<'_>
     base.with_str(|s| buf.push_str(s));
     for ty in type_args {
         buf.push('$');
-        write_type_mangled(db, *ty, &mut buf);
+        write_type_mangled(db, *ty, &mut buf).unwrap();
     }
     Symbol::from_dynamic(&buf)
 }
 
-fn write_type_mangled(db: &dyn salsa::Database, ty: Type<'_>, buf: &mut String) {
+fn write_type_mangled(
+    db: &dyn salsa::Database,
+    ty: Type<'_>,
+    f: &mut impl fmt::Write,
+) -> fmt::Result {
     match ty.kind(db) {
-        TypeKind::Int => buf.push_str("Int"),
-        TypeKind::Nat => buf.push_str("Nat"),
-        TypeKind::Float => buf.push_str("Float"),
-        TypeKind::Bool => buf.push_str("Bool"),
-        TypeKind::Bytes => buf.push_str("Bytes"),
-        TypeKind::Rune => buf.push_str("Rune"),
-        TypeKind::Nil => buf.push_str("Nil"),
-        TypeKind::Never => buf.push_str("Never"),
+        TypeKind::Int => f.write_str("Int"),
+        TypeKind::Nat => f.write_str("Nat"),
+        TypeKind::Float => f.write_str("Float"),
+        TypeKind::Bool => f.write_str("Bool"),
+        TypeKind::Bytes => f.write_str("Bytes"),
+        TypeKind::Rune => f.write_str("Rune"),
+        TypeKind::Nil => f.write_str("Nil"),
+        TypeKind::Never => f.write_str("Never"),
         TypeKind::Named { name, args } => {
-            name.with_str(|s| buf.push_str(s));
+            name.with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
-                buf.push('_');
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        buf.push('_');
-                    }
-                    write_type_mangled(db, *arg, buf);
-                }
-                buf.push('_');
+                write!(
+                    f,
+                    "_{}_",
+                    joined_by("_", args, |arg, f| write_type_mangled(db, *arg, f))
+                )?;
             }
+            Ok(())
         }
         TypeKind::Func { params, result, .. } => {
-            buf.push_str("Fn_");
-            for (i, p) in params.iter().enumerate() {
-                if i > 0 {
-                    buf.push('_');
-                }
-                write_type_mangled(db, *p, buf);
-            }
-            buf.push_str("__");
-            write_type_mangled(db, *result, buf);
-            buf.push('_');
+            write!(
+                f,
+                "Fn_{}__",
+                joined_by("_", params, |p, f| write_type_mangled(db, *p, f))
+            )?;
+            write_type_mangled(db, *result, f)?;
+            f.write_str("_")
         }
         TypeKind::Tuple(elems) => {
-            buf.push_str("Tup_");
-            for (i, e) in elems.iter().enumerate() {
-                if i > 0 {
-                    buf.push('_');
-                }
-                write_type_mangled(db, *e, buf);
-            }
-            buf.push('_');
+            write!(
+                f,
+                "Tup_{}_",
+                joined_by("_", elems, |e, f| write_type_mangled(db, *e, f))
+            )
         }
-        TypeKind::BoundVar { index } => {
-            let _ = write!(buf, "T{index}");
-        }
+        TypeKind::BoundVar { index } => write!(f, "T{index}"),
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }
-        TypeKind::Error => buf.push_str("error"),
+        TypeKind::Error => f.write_str("error"),
     }
 }
 
