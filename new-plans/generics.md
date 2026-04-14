@@ -115,12 +115,16 @@ Stage 7: Codegen (Wasm/Cranelift)
 
 ### 이름 맹글링
 
+`$`만 구조적 문자로 사용한다. `$0`/`$1`은 중첩 타입 인자의 시작/끝을 나타내며,
+Tribute 식별자는 숫자로 시작할 수 없으므로 타입 이름과 충돌하지 않는다.
+
 ```text
-Box(Int)           → Box$Int
-List(Option(Int))  → List$Option_Int_
-Pair(Int, Text)    → Pair$Int$Text
-identity<Int>      → identity$Int
-map<Int, Text>     → map$Int$Text
+identity + [Int]              → identity$Int
+first + [Int, Text]           → first$Int$Text
+map + [Int, Option(Int)]      → map$Int$Option$0$Int$1
+f + [List(Option(Int))]       → f$List$0$Option$0$Int$1$1
+apply + [fn(Int) -> Bool]     → apply$Fn$0$Int$1$Bool
+swap + [(Int, Bool)]          → swap$Tup$0$Int$Bool$1
 ```
 
 ### 알고리즘
@@ -295,15 +299,13 @@ crates/tribute-front/src/monomorphize/
 
 #### Step 1: 이름 맹글링 (`mangle.rs`)
 
-Type → mangled name 변환. 규칙:
+Type → mangled name 변환. `$0`/`$1`로 중첩 타입 인자를 감싼다:
 
 ```text
 identity + [Int]           → identity$Int
 first + [Int, Text]        → first$Int$Text
-map + [Int, Option(Int)]   → map$Int$Option_Int_
+map + [Int, Option(Int)]   → map$Int$Option$0$Int$1
 ```
-
-중첩 타입은 `_`로 감싼다: `Option(Int)` → `Option_Int_`.
 
 #### Step 2: 인스턴스화 수집 (`collect.rs`)
 
