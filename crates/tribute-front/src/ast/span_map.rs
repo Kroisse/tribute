@@ -86,13 +86,22 @@ impl SpanMap {
     }
 
     /// Look up a span by NodeId.
+    ///
+    /// For specialized (monomorphized) nodes, falls back to the origin NodeId
+    /// so that spans are inherited from the original generic function.
     pub fn get(&self, id: NodeId) -> Option<Span> {
-        self.0.get(&id).copied()
+        self.0.get(&id).copied().or_else(|| {
+            if id.variant().is_some() {
+                self.0.get(&id.origin()).copied()
+            } else {
+                None
+            }
+        })
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
     pub fn get_or_default(&self, id: NodeId) -> Span {
-        self.0.get(&id).copied().unwrap_or(Span::new(0, 0))
+        self.get(id).unwrap_or(Span::new(0, 0))
     }
 
     /// Check if this NodeId has a recorded span.

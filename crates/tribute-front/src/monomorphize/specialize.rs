@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::num::NonZero;
 
 use trunk_ir::Symbol;
 
@@ -86,21 +88,34 @@ fn collect_func_decls_inner<'a, 'db>(
     }
 }
 
+/// Compute a NonZero<u64> variant hash from concrete type arguments.
+///
+/// This is used to give specialized AST nodes unique NodeIds that
+/// don't collide with the original or other specializations.
+fn type_args_variant(type_args: &[Type<'_>]) -> NonZero<u64> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    type_args.hash(&mut hasher);
+    let hash = hasher.finish();
+    // Ensure non-zero: if hash happens to be 0, use 1
+    NonZero::new(hash).unwrap_or(NonZero::new(1).unwrap())
+}
+
 fn specialize_func_decl<'db>(
     db: &'db dyn salsa::Database,
     func: &FuncDecl<TypedRef<'db>>,
     type_args: &[Type<'db>],
     mangled_name: Symbol,
 ) -> FuncDecl<TypedRef<'db>> {
+    let variant = type_args_variant(type_args);
     FuncDecl {
-        id: func.id,
+        id: func.id.with_variant(variant),
         is_pub: false,
         name: mangled_name,
         type_params: vec![],
         params: func.params.clone(),
         return_ty: func.return_ty.clone(),
         effects: func.effects.clone(),
-        body: substitute_expr(db, func.body.clone(), type_args),
+        body: substitute_expr(db, func.body.clone(), type_args, variant),
     }
 }
 
@@ -131,50 +146,51 @@ fn substitute_expr<'db>(
     db: &'db dyn salsa::Database,
     expr: Expr<TypedRef<'db>>,
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> Expr<TypedRef<'db>> {
     let kind = match *expr.kind {
         ExprKind::Var(tr) => ExprKind::Var(subst_typed_ref(db, tr, type_args)),
         ExprKind::Call { callee, args } => ExprKind::Call {
-            callee: substitute_expr(db, callee, type_args),
+            callee: substitute_expr(db, callee, type_args, variant),
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args))
+                .map(|a| substitute_expr(db, a, type_args, variant))
                 .collect(),
         },
         ExprKind::Block { stmts, value } => ExprKind::Block {
             stmts: stmts
                 .into_iter()
-                .map(|s| substitute_stmt(db, s, type_args))
+                .map(|s| substitute_stmt(db, s, type_args, variant))
                 .collect(),
-            value: substitute_expr(db, value, type_args),
+            value: substitute_expr(db, value, type_args, variant),
         },
         ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-            scrutinee: substitute_expr(db, scrutinee, type_args),
+            scrutinee: substitute_expr(db, scrutinee, type_args, variant),
             arms: arms
                 .into_iter()
-                .map(|a| substitute_arm(db, a, type_args))
+                .map(|a| substitute_arm(db, a, type_args, variant))
                 .collect(),
         },
         ExprKind::Lambda { params, body } => ExprKind::Lambda {
             params,
-            body: substitute_expr(db, body, type_args),
+            body: substitute_expr(db, body, type_args, variant),
         },
         ExprKind::Handle { body, handlers } => ExprKind::Handle {
-            body: substitute_expr(db, body, type_args),
+            body: substitute_expr(db, body, type_args, variant),
             handlers: handlers
                 .into_iter()
-                .map(|h| substitute_handler_arm(db, h, type_args))
+                .map(|h| substitute_handler_arm(db, h, type_args, variant))
                 .collect(),
         },
         ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-            arg: substitute_expr(db, arg, type_args),
+            arg: substitute_expr(db, arg, type_args, variant),
             local_id,
         },
         ExprKind::Cons { ctor, args } => ExprKind::Cons {
             ctor: subst_typed_ref(db, ctor, type_args),
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args))
+                .map(|a| substitute_expr(db, a, type_args, variant))
                 .collect(),
         },
         ExprKind::Record {
@@ -185,35 +201,35 @@ fn substitute_expr<'db>(
             type_name: subst_typed_ref(db, type_name, type_args),
             fields: fields
                 .into_iter()
-                .map(|(name, e)| (name, substitute_expr(db, e, type_args)))
+                .map(|(name, e)| (name, substitute_expr(db, e, type_args, variant)))
                 .collect(),
-            spread: spread.map(|s| substitute_expr(db, s, type_args)),
+            spread: spread.map(|s| substitute_expr(db, s, type_args, variant)),
         },
         ExprKind::MethodCall {
             receiver,
             method,
             args,
         } => ExprKind::MethodCall {
-            receiver: substitute_expr(db, receiver, type_args),
+            receiver: substitute_expr(db, receiver, type_args, variant),
             method,
             args: args
                 .into_iter()
-                .map(|a| substitute_expr(db, a, type_args))
+                .map(|a| substitute_expr(db, a, type_args, variant))
                 .collect(),
         },
         ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
             op,
-            lhs: substitute_expr(db, lhs, type_args),
-            rhs: substitute_expr(db, rhs, type_args),
+            lhs: substitute_expr(db, lhs, type_args, variant),
+            rhs: substitute_expr(db, rhs, type_args, variant),
         },
         ExprKind::Tuple(es) => ExprKind::Tuple(
             es.into_iter()
-                .map(|e| substitute_expr(db, e, type_args))
+                .map(|e| substitute_expr(db, e, type_args, variant))
                 .collect(),
         ),
         ExprKind::List(es) => ExprKind::List(
             es.into_iter()
-                .map(|e| substitute_expr(db, e, type_args))
+                .map(|e| substitute_expr(db, e, type_args, variant))
                 .collect(),
         ),
         // Leaf nodes — no types to substitute
@@ -227,13 +243,14 @@ fn substitute_expr<'db>(
         ExprKind::Nil => ExprKind::Nil,
         ExprKind::Error => ExprKind::Error,
     };
-    Expr::new(expr.id, kind)
+    Expr::new(expr.id.with_variant(variant), kind)
 }
 
 fn substitute_stmt<'db>(
     db: &'db dyn salsa::Database,
     stmt: Stmt<TypedRef<'db>>,
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> Stmt<TypedRef<'db>> {
     match stmt {
         Stmt::Let {
@@ -242,14 +259,14 @@ fn substitute_stmt<'db>(
             ty,
             value,
         } => Stmt::Let {
-            id,
-            pattern: substitute_pattern(db, pattern, type_args),
+            id: id.with_variant(variant),
+            pattern: substitute_pattern(db, pattern, type_args, variant),
             ty,
-            value: substitute_expr(db, value, type_args),
+            value: substitute_expr(db, value, type_args, variant),
         },
         Stmt::Expr { id, expr } => Stmt::Expr {
-            id,
-            expr: substitute_expr(db, expr, type_args),
+            id: id.with_variant(variant),
+            expr: substitute_expr(db, expr, type_args, variant),
         },
     }
 }
@@ -258,12 +275,15 @@ fn substitute_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: Arm<TypedRef<'db>>,
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> Arm<TypedRef<'db>> {
     Arm {
-        id: arm.id,
-        pattern: substitute_pattern(db, arm.pattern, type_args),
-        guard: arm.guard.map(|g| substitute_expr(db, g, type_args)),
-        body: substitute_expr(db, arm.body, type_args),
+        id: arm.id.with_variant(variant),
+        pattern: substitute_pattern(db, arm.pattern, type_args, variant),
+        guard: arm
+            .guard
+            .map(|g| substitute_expr(db, g, type_args, variant)),
+        body: substitute_expr(db, arm.body, type_args, variant),
     }
 }
 
@@ -271,10 +291,11 @@ fn substitute_handler_arm<'db>(
     db: &'db dyn salsa::Database,
     arm: HandlerArm<TypedRef<'db>>,
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> HandlerArm<TypedRef<'db>> {
     let kind = match arm.kind {
         HandlerKind::Do { binding } => HandlerKind::Do {
-            binding: substitute_pattern(db, binding, type_args),
+            binding: substitute_pattern(db, binding, type_args, variant),
         },
         HandlerKind::Fn {
             ability,
@@ -285,7 +306,7 @@ fn substitute_handler_arm<'db>(
             op,
             params: params
                 .into_iter()
-                .map(|p| substitute_pattern(db, p, type_args))
+                .map(|p| substitute_pattern(db, p, type_args, variant))
                 .collect(),
         },
         HandlerKind::Op {
@@ -298,15 +319,15 @@ fn substitute_handler_arm<'db>(
             op,
             params: params
                 .into_iter()
-                .map(|p| substitute_pattern(db, p, type_args))
+                .map(|p| substitute_pattern(db, p, type_args, variant))
                 .collect(),
             resume_local_id,
         },
     };
     HandlerArm {
-        id: arm.id,
+        id: arm.id.with_variant(variant),
         kind,
-        body: substitute_expr(db, arm.body, type_args),
+        body: substitute_expr(db, arm.body, type_args, variant),
     }
 }
 
@@ -314,13 +335,14 @@ fn substitute_pattern<'db>(
     db: &'db dyn salsa::Database,
     pattern: Pattern<TypedRef<'db>>,
     type_args: &[Type<'db>],
+    variant: NonZero<u64>,
 ) -> Pattern<TypedRef<'db>> {
     let kind = match *pattern.kind {
         PatternKind::Variant { ctor, fields } => PatternKind::Variant {
             ctor: subst_typed_ref(db, ctor, type_args),
             fields: fields
                 .into_iter()
-                .map(|f| substitute_pattern(db, f, type_args))
+                .map(|f| substitute_pattern(db, f, type_args, variant))
                 .collect(),
         },
         PatternKind::Record {
@@ -332,21 +354,23 @@ fn substitute_pattern<'db>(
             fields: fields
                 .into_iter()
                 .map(|f| FieldPattern {
-                    id: f.id,
+                    id: f.id.with_variant(variant),
                     name: f.name,
-                    pattern: f.pattern.map(|p| substitute_pattern(db, p, type_args)),
+                    pattern: f
+                        .pattern
+                        .map(|p| substitute_pattern(db, p, type_args, variant)),
                 })
                 .collect(),
             rest,
         },
         PatternKind::Tuple(ps) => PatternKind::Tuple(
             ps.into_iter()
-                .map(|p| substitute_pattern(db, p, type_args))
+                .map(|p| substitute_pattern(db, p, type_args, variant))
                 .collect(),
         ),
         PatternKind::List(ps) => PatternKind::List(
             ps.into_iter()
-                .map(|p| substitute_pattern(db, p, type_args))
+                .map(|p| substitute_pattern(db, p, type_args, variant))
                 .collect(),
         ),
         PatternKind::ListRest {
@@ -356,7 +380,7 @@ fn substitute_pattern<'db>(
         } => PatternKind::ListRest {
             head: head
                 .into_iter()
-                .map(|p| substitute_pattern(db, p, type_args))
+                .map(|p| substitute_pattern(db, p, type_args, variant))
                 .collect(),
             rest,
             rest_local_id,
@@ -366,7 +390,7 @@ fn substitute_pattern<'db>(
             name,
             local_id,
         } => PatternKind::As {
-            pattern: substitute_pattern(db, inner, type_args),
+            pattern: substitute_pattern(db, inner, type_args, variant),
             name,
             local_id,
         },
@@ -376,7 +400,7 @@ fn substitute_pattern<'db>(
         PatternKind::Literal(lit) => PatternKind::Literal(lit),
         PatternKind::Error => PatternKind::Error,
     };
-    Pattern::new(pattern.id, kind)
+    Pattern::new(pattern.id.with_variant(variant), kind)
 }
 
 #[cfg(test)]
@@ -430,7 +454,12 @@ mod tests {
             bv0,
         );
         let expr = Expr::new(node_id(1), ExprKind::Var(tr));
-        let result = substitute_expr(&db, expr, &[int]);
+        let variant = type_args_variant(&[int]);
+        let result = substitute_expr(&db, expr, &[int], variant);
+
+        // NodeId should have the variant applied
+        assert!(result.id.variant().is_some());
+        assert_eq!(result.id.origin(), node_id(1));
 
         match result.kind.as_ref() {
             ExprKind::Var(tr) => assert_eq!(tr.ty, int),

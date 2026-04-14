@@ -5,6 +5,7 @@
 //! This follows the rust-analyzer pattern of separating structure from metadata.
 
 use std::hash::{Hash, Hasher};
+use std::num::NonZero;
 
 use tree_sitter::Node;
 
@@ -16,12 +17,19 @@ use tree_sitter::Node;
 /// tag assignment. This prevents key-space collisions when merging SpanMaps or
 /// node_types HashMaps.
 ///
+/// For monomorphized copies of generic functions, the `variant` field
+/// distinguishes nodes from different specializations. Original AST nodes
+/// have `variant: None`, while specialized copies carry a hash of the
+/// concrete type arguments. Use [`origin()`](NodeId::origin) to recover
+/// the original NodeId for SpanMap lookups.
+///
 /// NodeIds are local to a compilation unit and should not be used
 /// for cross-module references.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, salsa::Update)]
 pub struct NodeId {
     source: u64,
     raw: usize,
+    variant: Option<NonZero<u64>>,
 }
 
 impl NodeId {
@@ -34,6 +42,33 @@ impl NodeId {
         Self {
             source,
             raw: node.id(),
+            variant: None,
+        }
+    }
+
+    /// Create a specialized copy of this NodeId for monomorphization.
+    ///
+    /// The `variant` hash distinguishes different specializations of the
+    /// same generic function (e.g., `identity$Int` vs `identity$Float`).
+    #[inline]
+    pub const fn with_variant(self, variant: NonZero<u64>) -> Self {
+        Self {
+            source: self.source,
+            raw: self.raw,
+            variant: Some(variant),
+        }
+    }
+
+    /// Get the original NodeId, stripping any specialization variant.
+    ///
+    /// Use this to look up spans in SpanMap, which only contains entries
+    /// for original (non-specialized) nodes.
+    #[inline]
+    pub const fn origin(self) -> Self {
+        Self {
+            source: self.source,
+            raw: self.raw,
+            variant: None,
         }
     }
 
@@ -47,6 +82,12 @@ impl NodeId {
     #[inline]
     pub const fn source(self) -> u64 {
         self.source
+    }
+
+    /// Get the specialization variant, if any.
+    #[inline]
+    pub const fn variant(self) -> Option<NonZero<u64>> {
+        self.variant
     }
 }
 
@@ -75,7 +116,11 @@ impl NodeId {
     /// Create a NodeId from a raw value (for testing only).
     /// Uses source hash 0 by default.
     pub const fn from_raw(id: usize) -> Self {
-        Self { source: 0, raw: id }
+        Self {
+            source: 0,
+            raw: id,
+            variant: None,
+        }
     }
 }
 
@@ -105,10 +150,12 @@ mod tests {
         let id1 = NodeId {
             source: source_hash("file:///a.trb"),
             raw: 42,
+            variant: None,
         };
         let id2 = NodeId {
             source: source_hash("prelude:///std/prelude"),
             raw: 42,
+            variant: None,
         };
         assert_ne!(id1, id2);
     }
@@ -124,6 +171,7 @@ mod tests {
         let id = NodeId {
             source: 0xff,
             raw: 123,
+            variant: None,
         };
         assert_eq!(format!("{}", id), "#ff:123");
     }
