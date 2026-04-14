@@ -232,8 +232,16 @@ impl<'db> InstantiationCollector<'db> {
                     self.visit_expr(a);
                 }
             }
-            // Literals, Nil, Error, etc. — no sub-expressions
-            _ => {}
+            // Leaf nodes — no sub-expressions to traverse
+            ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::RuneLit(_)
+            | ExprKind::Nil
+            | ExprKind::Error => {}
         }
     }
 
