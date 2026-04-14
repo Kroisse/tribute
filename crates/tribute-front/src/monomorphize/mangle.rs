@@ -7,11 +7,16 @@ use crate::ast::{Type, TypeKind};
 
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
-/// Mangling rules:
-/// - `identity + [Int]` → `identity$Int`
-/// - `first + [Int, Text]` → `first$Int$Text`
-/// - `map + [Int, Option(Int)]` → `map$Int$Option_Int_`
-/// - Nested type args are wrapped with `_`: `Option(Int)` → `Option_Int_`
+/// Mangling rules use `$` as the only structural character, with `$0`/`$1`
+/// as open/close markers for nested type arguments (unambiguous because
+/// Tribute identifiers cannot start with a digit):
+///
+/// - `identity + [Int]`              → `identity$Int`
+/// - `first + [Int, Text]`           → `first$Int$Text`
+/// - `map + [Int, Option(Int)]`      → `map$Int$Option$0$Int$1`
+/// - `f + [List(Option(Int))]`       → `f$List$0$Option$0$Int$1$1`
+/// - `apply + [fn(Int) -> Bool]`     → `apply$Fn$0$Int$1$Bool`
+/// - `swap + [(Int, Bool)]`          → `swap$Tup$0$Int$Bool$1`
 pub fn mangle_name(db: &dyn salsa::Database, base: Symbol, type_args: &[Type<'_>]) -> Symbol {
     let mut buf = String::new();
     base.with_str(|s| buf.push_str(s));
@@ -41,8 +46,8 @@ fn write_type_mangled(
             if !args.is_empty() {
                 write!(
                     f,
-                    "_{}_",
-                    joined_by("_", args, |arg, f| write_type_mangled(db, *arg, f))
+                    "$0${}$1",
+                    joined_by("$", args, |arg, f| write_type_mangled(db, *arg, f))
                 )?;
             }
             Ok(())
@@ -50,17 +55,16 @@ fn write_type_mangled(
         TypeKind::Func { params, result, .. } => {
             write!(
                 f,
-                "Fn_{}__",
-                joined_by("_", params, |p, f| write_type_mangled(db, *p, f))
+                "Fn$0${}$1$",
+                joined_by("$", params, |p, f| write_type_mangled(db, *p, f))
             )?;
-            write_type_mangled(db, *result, f)?;
-            f.write_str("_")
+            write_type_mangled(db, *result, f)
         }
         TypeKind::Tuple(elems) => {
             write!(
                 f,
-                "Tup_{}_",
-                joined_by("_", elems, |e, f| write_type_mangled(db, *e, f))
+                "Tup$0${}$1",
+                joined_by("$", elems, |e, f| write_type_mangled(db, *e, f))
             )
         }
         TypeKind::BoundVar { index } => write!(f, "T{index}"),
@@ -131,7 +135,7 @@ mod tests {
             },
         );
         let result = mangle_name(&db, base, &[int_ty, option_int]);
-        assert_eq!(result.to_string(), "map$Int$Option_Int_");
+        assert_eq!(result.to_string(), "map$Int$Option$0$Int$1");
     }
 
     #[test]
@@ -154,7 +158,30 @@ mod tests {
             },
         );
         let result = mangle_name(&db, base, &[list_option_int]);
-        assert_eq!(result.to_string(), "f$List_Option_Int__");
+        assert_eq!(result.to_string(), "f$List$0$Option$0$Int$1$1");
+    }
+
+    #[test]
+    fn test_named_type_multiple_args() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let text_ty = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Text"),
+                args: vec![],
+            },
+        );
+        let pair = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Pair"),
+                args: vec![int_ty, text_ty],
+            },
+        );
+        let result = mangle_name(&db, base, &[pair]);
+        assert_eq!(result.to_string(), "f$Pair$0$Int$Text$1");
     }
 
     #[test]
@@ -172,7 +199,7 @@ mod tests {
             },
         );
         let result = mangle_name(&db, base, &[func_ty]);
-        assert_eq!(result.to_string(), "apply$Fn_Int__Bool_");
+        assert_eq!(result.to_string(), "apply$Fn$0$Int$1$Bool");
     }
 
     #[test]
@@ -183,7 +210,7 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let tup_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
         let result = mangle_name(&db, base, &[tup_ty]);
-        assert_eq!(result.to_string(), "swap$Tup_Int_Bool_");
+        assert_eq!(result.to_string(), "swap$Tup$0$Int$Bool$1");
     }
 
     #[test]
