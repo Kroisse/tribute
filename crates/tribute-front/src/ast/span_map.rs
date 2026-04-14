@@ -180,4 +180,22 @@ mod tests {
         assert!(span_map.contains(id));
         assert!(!span_map.contains(NodeId::from_raw(999)));
     }
+
+    #[test]
+    fn test_span_map_variant_fallback() {
+        let mut builder = SpanMapBuilder::new();
+        let origin = NodeId::from_raw(42);
+        let span = Span::new(10, 20);
+        builder.insert(origin, span);
+
+        let span_map = builder.finish();
+
+        // Specialized NodeId should fall back to origin's span
+        let variant = std::num::NonZero::new(12345u64).unwrap();
+        let specialized = origin.with_variant(variant);
+
+        assert_ne!(origin, specialized);
+        assert_eq!(span_map.get(specialized), Some(span));
+        assert_eq!(span_map.get_or_default(specialized), span);
+    }
 }

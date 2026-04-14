@@ -42,7 +42,14 @@ pub fn generate_specializations<'db>(
             let specialized_scheme = TypeScheme::new(
                 db,
                 vec![],
-                substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or(scheme.body(db)),
+                substitute_bound_vars(db, scheme.body(db), type_args).unwrap_or_else(
+                    |index, max| {
+                        panic!(
+                            "BoundVar index out of range in specialization of {}: index={}, subst.len()={}",
+                            qualified, index, max
+                        )
+                    },
+                ),
             );
             entries.push((mangled, specialized, specialized_scheme));
         }
@@ -128,7 +135,11 @@ fn subst_type<'db>(
     ty: Type<'db>,
     type_args: &[Type<'db>],
 ) -> Type<'db> {
-    substitute_bound_vars(db, ty, type_args).unwrap_or(ty)
+    substitute_bound_vars(db, ty, type_args).unwrap_or_else(|index, max| {
+        panic!(
+            "BoundVar index out of range during monomorphization: index={index}, subst.len()={max}"
+        )
+    })
 }
 
 fn subst_typed_ref<'db>(
