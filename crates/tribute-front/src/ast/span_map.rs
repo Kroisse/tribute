@@ -86,13 +86,22 @@ impl SpanMap {
     }
 
     /// Look up a span by NodeId.
+    ///
+    /// For specialized (monomorphized) nodes, falls back to the origin NodeId
+    /// so that spans are inherited from the original generic function.
     pub fn get(&self, id: NodeId) -> Option<Span> {
-        self.0.get(&id).copied()
+        self.0.get(&id).copied().or_else(|| {
+            if id.variant().is_some() {
+                self.0.get(&id.origin()).copied()
+            } else {
+                None
+            }
+        })
     }
 
     /// Look up a span by NodeId, returning a default span if not found.
     pub fn get_or_default(&self, id: NodeId) -> Span {
-        self.0.get(&id).copied().unwrap_or(Span::new(0, 0))
+        self.get(id).unwrap_or(Span::new(0, 0))
     }
 
     /// Check if this NodeId has a recorded span.
@@ -170,5 +179,23 @@ mod tests {
 
         assert!(span_map.contains(id));
         assert!(!span_map.contains(NodeId::from_raw(999)));
+    }
+
+    #[test]
+    fn test_span_map_variant_fallback() {
+        let mut builder = SpanMapBuilder::new();
+        let origin = NodeId::from_raw(42);
+        let span = Span::new(10, 20);
+        builder.insert(origin, span);
+
+        let span_map = builder.finish();
+
+        // Specialized NodeId should fall back to origin's span
+        let variant = std::num::NonZero::new(12345u64).unwrap();
+        let specialized = origin.with_variant(variant);
+
+        assert_ne!(origin, specialized);
+        assert_eq!(span_map.get(specialized), Some(span));
+        assert_eq!(span_map.get_or_default(specialized), span);
     }
 }
