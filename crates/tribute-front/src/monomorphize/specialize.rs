@@ -72,22 +72,27 @@ fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
     let mut map = HashMap::new();
-    collect_func_decls_inner(&module.decls, &mut map);
+    let mut prefix = String::new();
+    collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
     map
 }
 
 fn collect_func_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
+    prefix: &mut String,
     map: &mut HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>>,
 ) {
     for decl in decls {
         match decl {
             Decl::Function(func) => {
-                map.insert(func.name, func);
+                let qualified = crate::qualified_symbol(prefix, func.name);
+                map.insert(qualified, func);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    collect_func_decls_inner(body, map);
+                    let len = crate::push_prefix(prefix, m.name);
+                    collect_func_decls_inner(body, prefix, map);
+                    prefix.truncate(len);
                 }
             }
             _ => {}
