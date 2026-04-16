@@ -696,3 +696,136 @@ fn rewrite_types_in_pattern<'db>(
     };
     Pattern::new(pattern.id, kind)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::EffectRow;
+
+    #[salsa::db]
+    #[derive(Default)]
+    struct TestDb {
+        storage: salsa::Storage<Self>,
+    }
+
+    #[salsa::db]
+    impl salsa::Database for TestDb {}
+
+    fn pure_effect(db: &dyn salsa::Database) -> EffectRow<'_> {
+        EffectRow::new(db, vec![], None)
+    }
+
+    fn make_type_rewrite_map<'db>(
+        _db: &'db dyn salsa::Database,
+        entries: Vec<(Symbol, Vec<Type<'db>>, Symbol)>,
+    ) -> TypeRewriteMap<'db> {
+        let mut map = TypeRewriteMap::new();
+        for (name, args, mangled) in entries {
+            map.entry(name).or_default().push((args, mangled));
+        }
+        map
+    }
+
+    #[test]
+    fn test_rewrite_type_named_with_args() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let map = make_type_rewrite_map(
+            &db,
+            vec![(Symbol::new("Option"), vec![int], Symbol::new("Option$Int"))],
+        );
+
+        let result = rewrite_type(&db, option_int, &map);
+        match result.kind(&db) {
+            TypeKind::Named { name, args } => {
+                assert_eq!(name.to_string(), "Option$Int");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected Named, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rewrite_type_leaves_primitives() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let map = TypeRewriteMap::new();
+        assert_eq!(rewrite_type(&db, int, &map), int);
+    }
+
+    #[test]
+    fn test_rewrite_type_named_no_args_unchanged() {
+        let db = TestDb::default();
+        let text = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Text"),
+                args: vec![],
+            },
+        );
+        let map = TypeRewriteMap::new();
+        assert_eq!(rewrite_type(&db, text, &map), text);
+    }
+
+    #[test]
+    fn test_rewrite_type_nested_in_func() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![option_int],
+                result: int,
+                effect: pure_effect(&db),
+            },
+        );
+        let map = make_type_rewrite_map(
+            &db,
+            vec![(Symbol::new("Option"), vec![int], Symbol::new("Option$Int"))],
+        );
+
+        let result = rewrite_type(&db, func_ty, &map);
+        match result.kind(&db) {
+            TypeKind::Func { params, .. } => match params[0].kind(&db) {
+                TypeKind::Named { name, args } => {
+                    assert_eq!(name.to_string(), "Option$Int");
+                    assert!(args.is_empty());
+                }
+                other => panic!("expected Named, got {:?}", other),
+            },
+            other => panic!("expected Func, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_rewrite_type_not_in_map_preserves_args() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let unknown = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Unknown"),
+                args: vec![int],
+            },
+        );
+        let map = TypeRewriteMap::new(); // empty
+
+        let result = rewrite_type(&db, unknown, &map);
+        // Should be unchanged
+        assert_eq!(result, unknown);
+    }
+}

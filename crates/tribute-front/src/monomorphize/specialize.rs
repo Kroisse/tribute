@@ -871,4 +871,231 @@ mod tests {
             );
         }
     }
+
+    // ========================================================================
+    // type_to_annotation tests
+    // ========================================================================
+
+    #[test]
+    fn test_type_to_annotation_primitives() {
+        let db = TestDb::default();
+        let id = node_id(1);
+        let cases = [
+            (TypeKind::Int, "Int"),
+            (TypeKind::Nat, "Nat"),
+            (TypeKind::Float, "Float"),
+            (TypeKind::Bool, "Bool"),
+            (TypeKind::Nil, "Nil"),
+        ];
+        for (kind, expected_name) in cases {
+            let ty = Type::new(&db, kind);
+            let ann = type_to_annotation(&db, ty, id);
+            match &ann.kind {
+                TypeAnnotationKind::Named(name) => {
+                    assert_eq!(name.to_string(), expected_name);
+                }
+                _ => panic!("expected Named annotation for {:?}", expected_name),
+            }
+        }
+    }
+
+    #[test]
+    fn test_type_to_annotation_named_no_args() {
+        let db = TestDb::default();
+        let ty = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Text"),
+                args: vec![],
+            },
+        );
+        let ann = type_to_annotation(&db, ty, node_id(1));
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Text"),
+            _ => panic!("expected Named"),
+        }
+    }
+
+    #[test]
+    fn test_type_to_annotation_named_with_args_uses_mangled() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let ty = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let ann = type_to_annotation(&db, ty, node_id(1));
+        match &ann.kind {
+            TypeAnnotationKind::Named(name) => {
+                assert_eq!(name.to_string(), "Option$Int");
+            }
+            _ => panic!("expected Named with mangled name"),
+        }
+    }
+
+    // ========================================================================
+    // specialize_struct_decl tests
+    // ========================================================================
+
+    #[test]
+    fn test_specialize_struct_decl_basic() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+
+        // struct Pair(a, b) { first: a, second: b }
+        let decl = StructDecl {
+            id: node_id(1),
+            is_pub: true,
+            name: Symbol::new("Pair"),
+            type_params: vec![
+                crate::ast::TypeParamDecl {
+                    id: node_id(2),
+                    name: Symbol::new("a"),
+                    bounds: vec![],
+                },
+                crate::ast::TypeParamDecl {
+                    id: node_id(3),
+                    name: Symbol::new("b"),
+                    bounds: vec![],
+                },
+            ],
+            fields: vec![
+                FieldDecl {
+                    id: node_id(4),
+                    is_pub: false,
+                    name: Some(Symbol::new("first")),
+                    ty: TypeAnnotation {
+                        id: node_id(5),
+                        kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                    },
+                },
+                FieldDecl {
+                    id: node_id(6),
+                    is_pub: false,
+                    name: Some(Symbol::new("second")),
+                    ty: TypeAnnotation {
+                        id: node_id(7),
+                        kind: TypeAnnotationKind::Named(Symbol::new("b")),
+                    },
+                },
+            ],
+        };
+
+        let mangled = mangle_name(&db, Symbol::new("Pair"), &[int, bool_ty]);
+        let specialized = specialize_struct_decl(&db, &decl, &[int, bool_ty], mangled);
+
+        assert_eq!(specialized.name.to_string(), "Pair$Int$Bool");
+        assert!(specialized.type_params.is_empty());
+        assert_eq!(specialized.fields.len(), 2);
+
+        // first field should be Int
+        match &specialized.fields[0].ty.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Int"),
+            other => panic!("expected Named(Int), got {:?}", other),
+        }
+        // second field should be Bool
+        match &specialized.fields[1].ty.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Bool"),
+            other => panic!("expected Named(Bool), got {:?}", other),
+        }
+    }
+
+    // ========================================================================
+    // specialize_enum_decl tests
+    // ========================================================================
+
+    #[test]
+    fn test_specialize_enum_decl_basic() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+
+        // enum Option(a) { Some(a), None }
+        let decl = EnumDecl {
+            id: node_id(1),
+            is_pub: true,
+            name: Symbol::new("Option"),
+            type_params: vec![crate::ast::TypeParamDecl {
+                id: node_id(2),
+                name: Symbol::new("a"),
+                bounds: vec![],
+            }],
+            variants: vec![
+                VariantDecl {
+                    id: node_id(3),
+                    name: Symbol::new("Some"),
+                    fields: vec![FieldDecl {
+                        id: node_id(4),
+                        is_pub: false,
+                        name: None,
+                        ty: TypeAnnotation {
+                            id: node_id(5),
+                            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+                        },
+                    }],
+                },
+                VariantDecl {
+                    id: node_id(6),
+                    name: Symbol::new("None"),
+                    fields: vec![],
+                },
+            ],
+        };
+
+        let mangled = mangle_name(&db, Symbol::new("Option"), &[int]);
+        let specialized = specialize_enum_decl(&db, &decl, &[int], mangled);
+
+        assert_eq!(specialized.name.to_string(), "Option$Int");
+        assert!(specialized.type_params.is_empty());
+        assert_eq!(specialized.variants.len(), 2);
+
+        // Some variant should have Int field
+        assert_eq!(specialized.variants[0].name.to_string(), "Some");
+        assert_eq!(specialized.variants[0].fields.len(), 1);
+        match &specialized.variants[0].fields[0].ty.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Int"),
+            other => panic!("expected Named(Int), got {:?}", other),
+        }
+
+        // None variant should have no fields
+        assert_eq!(specialized.variants[1].name.to_string(), "None");
+        assert!(specialized.variants[1].fields.is_empty());
+    }
+
+    // ========================================================================
+    // substitute_annotation tests
+    // ========================================================================
+
+    #[test]
+    fn test_substitute_annotation_replaces_param() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let ann = TypeAnnotation {
+            id: node_id(1),
+            kind: TypeAnnotationKind::Named(Symbol::new("a")),
+        };
+        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
+        match &result.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Int"),
+            other => panic!("expected Named(Int), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_substitute_annotation_leaves_non_param() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let ann = TypeAnnotation {
+            id: node_id(1),
+            kind: TypeAnnotationKind::Named(Symbol::new("Text")),
+        };
+        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
+        match &result.kind {
+            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Text"),
+            other => panic!("expected Named(Text), got {:?}", other),
+        }
+    }
 }
