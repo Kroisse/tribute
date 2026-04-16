@@ -24,18 +24,40 @@ pub fn rewrite_module<'db>(
     function_types: &[(Symbol, TypeScheme<'db>)],
     rewrite_map: &RewriteMap<'db>,
 ) -> Module<TypedRef<'db>> {
-    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
-    let mut rewriter = CallSiteRewriter {
-        db,
-        scheme_map,
-        rewrite_map,
-    };
+    let mut rewriter = make_rewriter(db, function_types, rewrite_map);
     let decls = module
         .decls
         .into_iter()
         .map(|d| rewriter.rewrite_decl(d))
         .collect();
     Module::new(module.id, module.name, decls)
+}
+
+/// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
+pub fn rewrite_decls<'db>(
+    db: &'db dyn salsa::Database,
+    decls: Vec<Decl<TypedRef<'db>>>,
+    function_types: &[(Symbol, TypeScheme<'db>)],
+    rewrite_map: &RewriteMap<'db>,
+) -> Vec<Decl<TypedRef<'db>>> {
+    let mut rewriter = make_rewriter(db, function_types, rewrite_map);
+    decls
+        .into_iter()
+        .map(|d| rewriter.rewrite_decl(d))
+        .collect()
+}
+
+fn make_rewriter<'a, 'db>(
+    db: &'db dyn salsa::Database,
+    function_types: &[(Symbol, TypeScheme<'db>)],
+    rewrite_map: &'a RewriteMap<'db>,
+) -> CallSiteRewriter<'a, 'db> {
+    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
+    CallSiteRewriter {
+        db,
+        scheme_map,
+        rewrite_map,
+    }
 }
 
 struct CallSiteRewriter<'a, 'db> {

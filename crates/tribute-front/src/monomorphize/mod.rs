@@ -50,9 +50,16 @@ pub fn monomorphize_functions<'db>(
     // Step 3: Rewrite call sites in the module
     let rewritten_module = rewrite::rewrite_module(db, module, &fn_types_vec, &rewrite_map);
 
-    // Step 4: Append specialized functions to module
+    // Step 4: Rewrite call sites inside specialized function bodies
+    // (e.g., a specialized function calling another generic function)
+    let specialized_decls: Vec<Decl<TypedRef<'db>>> =
+        specialized_decls.into_iter().map(Decl::Function).collect();
+    let rewritten_specialized =
+        rewrite::rewrite_decls(db, specialized_decls, &fn_types_vec, &rewrite_map);
+
+    // Step 5: Append specialized functions to module
     let mut decls = rewritten_module.decls;
-    decls.extend(specialized_decls.into_iter().map(Decl::Function));
+    decls.extend(rewritten_specialized);
 
     let final_module = Module::new(rewritten_module.id, rewritten_module.name, decls);
 
