@@ -287,22 +287,52 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 
 fn collect_struct_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a StructDecl> {
     let mut map = HashMap::new();
-    for decl in &module.decls {
-        if let Decl::Struct(s) = decl {
-            map.insert(s.name, s);
+    collect_struct_decls_inner(&module.decls, &mut map);
+    map
+}
+
+fn collect_struct_decls_inner<'a>(
+    decls: &'a [Decl<TypedRef<'_>>],
+    map: &mut HashMap<Symbol, &'a StructDecl>,
+) {
+    for decl in decls {
+        match decl {
+            Decl::Struct(s) => {
+                map.insert(s.name, s);
+            }
+            Decl::Module(m) => {
+                if let Some(body) = &m.body {
+                    collect_struct_decls_inner(body, map);
+                }
+            }
+            _ => {}
         }
     }
-    map
 }
 
 fn collect_enum_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a EnumDecl> {
     let mut map = HashMap::new();
-    for decl in &module.decls {
-        if let Decl::Enum(e) = decl {
-            map.insert(e.name, e);
+    collect_enum_decls_inner(&module.decls, &mut map);
+    map
+}
+
+fn collect_enum_decls_inner<'a>(
+    decls: &'a [Decl<TypedRef<'_>>],
+    map: &mut HashMap<Symbol, &'a EnumDecl>,
+) {
+    for decl in decls {
+        match decl {
+            Decl::Enum(e) => {
+                map.insert(e.name, e);
+            }
+            Decl::Module(m) => {
+                if let Some(body) = &m.body {
+                    collect_enum_decls_inner(body, map);
+                }
+            }
+            _ => {}
         }
     }
-    map
 }
 
 // ============================================================================

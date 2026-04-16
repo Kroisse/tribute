@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, CtorId, Decl, Expr, ExprKind, FuncDefId, HandlerArm, Module, ModuleDecl, ResolvedRef,
-    Stmt, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+    Arm, CtorId, Decl, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, Module, ModuleDecl,
+    Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
 
 use super::collect::extract_type_args;
@@ -366,6 +366,39 @@ pub fn rewrite_type<'db>(
             }
             Type::new(db, TypeKind::Tuple(new_elems))
         }
+        TypeKind::App { ctor, args } => {
+            let new_ctor = rewrite_type(db, *ctor, map);
+            let new_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
+            if new_ctor == *ctor && new_args == *args {
+                return ty;
+            }
+            Type::new(
+                db,
+                TypeKind::App {
+                    ctor: new_ctor,
+                    args: new_args,
+                },
+            )
+        }
+        TypeKind::Continuation {
+            arg,
+            result,
+            effect,
+        } => {
+            let new_arg = rewrite_type(db, *arg, map);
+            let new_result = rewrite_type(db, *result, map);
+            if new_arg == *arg && new_result == *result {
+                return ty;
+            }
+            Type::new(
+                db,
+                TypeKind::Continuation {
+                    arg: new_arg,
+                    result: new_result,
+                    effect: *effect,
+                },
+            )
+        }
         TypeKind::Named { .. }
         | TypeKind::Int
         | TypeKind::Nat
@@ -377,8 +410,6 @@ pub fn rewrite_type<'db>(
         | TypeKind::Never
         | TypeKind::BoundVar { .. }
         | TypeKind::UniVar { .. }
-        | TypeKind::App { .. }
-        | TypeKind::Continuation { .. }
         | TypeKind::Error => ty,
     }
 }
@@ -574,7 +605,7 @@ fn rewrite_types_in_stmt<'db>(
             value,
         } => Stmt::Let {
             id,
-            pattern,
+            pattern: rewrite_types_in_pattern(db, pattern, map),
             ty,
             value: rewrite_types_in_expr(db, value, map),
         },
@@ -592,8 +623,76 @@ fn rewrite_types_in_arm<'db>(
 ) -> Arm<TypedRef<'db>> {
     Arm {
         id: arm.id,
-        pattern: arm.pattern,
+        pattern: rewrite_types_in_pattern(db, arm.pattern, map),
         guard: arm.guard.map(|g| rewrite_types_in_expr(db, g, map)),
         body: rewrite_types_in_expr(db, arm.body, map),
     }
+}
+
+fn rewrite_types_in_pattern<'db>(
+    db: &'db dyn salsa::Database,
+    pattern: Pattern<TypedRef<'db>>,
+    map: &TypeRewriteMap<'db>,
+) -> Pattern<TypedRef<'db>> {
+    let kind = match *pattern.kind {
+        PatternKind::Variant { ctor, fields } => PatternKind::Variant {
+            ctor: rewrite_typed_ref_type(db, ctor, map),
+            fields: fields
+                .into_iter()
+                .map(|f| rewrite_types_in_pattern(db, f, map))
+                .collect(),
+        },
+        PatternKind::Record {
+            type_name,
+            fields,
+            rest,
+        } => PatternKind::Record {
+            type_name: type_name.map(|tn| rewrite_typed_ref_type(db, tn, map)),
+            fields: fields
+                .into_iter()
+                .map(|f| FieldPattern {
+                    id: f.id,
+                    name: f.name,
+                    pattern: f.pattern.map(|p| rewrite_types_in_pattern(db, p, map)),
+                })
+                .collect(),
+            rest,
+        },
+        PatternKind::Tuple(ps) => PatternKind::Tuple(
+            ps.into_iter()
+                .map(|p| rewrite_types_in_pattern(db, p, map))
+                .collect(),
+        ),
+        PatternKind::List(ps) => PatternKind::List(
+            ps.into_iter()
+                .map(|p| rewrite_types_in_pattern(db, p, map))
+                .collect(),
+        ),
+        PatternKind::ListRest {
+            head,
+            rest,
+            rest_local_id,
+        } => PatternKind::ListRest {
+            head: head
+                .into_iter()
+                .map(|p| rewrite_types_in_pattern(db, p, map))
+                .collect(),
+            rest,
+            rest_local_id,
+        },
+        PatternKind::As {
+            pattern: inner,
+            name,
+            local_id,
+        } => PatternKind::As {
+            pattern: rewrite_types_in_pattern(db, inner, map),
+            name,
+            local_id,
+        },
+        PatternKind::Wildcard => PatternKind::Wildcard,
+        PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
+        PatternKind::Literal(lit) => PatternKind::Literal(lit),
+        PatternKind::Error => PatternKind::Error,
+    };
+    Pattern::new(pattern.id, kind)
 }
