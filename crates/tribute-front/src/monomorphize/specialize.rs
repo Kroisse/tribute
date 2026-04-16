@@ -287,22 +287,27 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 
 fn collect_struct_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a StructDecl> {
     let mut map = HashMap::new();
-    collect_struct_decls_inner(&module.decls, &mut map);
+    let mut prefix = String::new();
+    collect_struct_decls_inner(&module.decls, &mut prefix, &mut map);
     map
 }
 
 fn collect_struct_decls_inner<'a>(
     decls: &'a [Decl<TypedRef<'_>>],
+    prefix: &mut String,
     map: &mut HashMap<Symbol, &'a StructDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Struct(s) => {
-                map.insert(s.name, s);
+                let qualified = crate::qualified_symbol(prefix, s.name);
+                map.insert(qualified, s);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    collect_struct_decls_inner(body, map);
+                    let len = crate::push_prefix(prefix, m.name);
+                    collect_struct_decls_inner(body, prefix, map);
+                    prefix.truncate(len);
                 }
             }
             _ => {}
@@ -312,22 +317,27 @@ fn collect_struct_decls_inner<'a>(
 
 fn collect_enum_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a EnumDecl> {
     let mut map = HashMap::new();
-    collect_enum_decls_inner(&module.decls, &mut map);
+    let mut prefix = String::new();
+    collect_enum_decls_inner(&module.decls, &mut prefix, &mut map);
     map
 }
 
 fn collect_enum_decls_inner<'a>(
     decls: &'a [Decl<TypedRef<'_>>],
+    prefix: &mut String,
     map: &mut HashMap<Symbol, &'a EnumDecl>,
 ) {
     for decl in decls {
         match decl {
             Decl::Enum(e) => {
-                map.insert(e.name, e);
+                let qualified = crate::qualified_symbol(prefix, e.name);
+                map.insert(qualified, e);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    collect_enum_decls_inner(body, map);
+                    let len = crate::push_prefix(prefix, m.name);
+                    collect_enum_decls_inner(body, prefix, map);
+                    prefix.truncate(len);
                 }
             }
             _ => {}

@@ -9,8 +9,9 @@ use std::collections::{HashMap, HashSet};
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, CtorId, Decl, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, Module, ModuleDecl,
-    Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
+    Arm, CtorId, Decl, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, HandlerKind, Module,
+    ModuleDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId, TypeKind, TypeScheme,
+    TypedRef,
 };
 
 use super::collect::extract_type_args;
@@ -522,10 +523,43 @@ fn rewrite_types_in_expr<'db>(
             body: rewrite_types_in_expr(db, body, map),
             handlers: handlers
                 .into_iter()
-                .map(|h| HandlerArm {
-                    id: h.id,
-                    kind: h.kind,
-                    body: rewrite_types_in_expr(db, h.body, map),
+                .map(|h| {
+                    let kind = match h.kind {
+                        HandlerKind::Do { binding } => HandlerKind::Do {
+                            binding: rewrite_types_in_pattern(db, binding, map),
+                        },
+                        HandlerKind::Fn {
+                            ability,
+                            op,
+                            params,
+                        } => HandlerKind::Fn {
+                            ability: rewrite_typed_ref_type(db, ability, map),
+                            op,
+                            params: params
+                                .into_iter()
+                                .map(|p| rewrite_types_in_pattern(db, p, map))
+                                .collect(),
+                        },
+                        HandlerKind::Op {
+                            ability,
+                            op,
+                            params,
+                            resume_local_id,
+                        } => HandlerKind::Op {
+                            ability: rewrite_typed_ref_type(db, ability, map),
+                            op,
+                            params: params
+                                .into_iter()
+                                .map(|p| rewrite_types_in_pattern(db, p, map))
+                                .collect(),
+                            resume_local_id,
+                        },
+                    };
+                    HandlerArm {
+                        id: h.id,
+                        kind,
+                        body: rewrite_types_in_expr(db, h.body, map),
+                    }
                 })
                 .collect(),
         },
