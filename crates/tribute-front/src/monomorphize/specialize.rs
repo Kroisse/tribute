@@ -5,8 +5,9 @@ use std::num::NonZero;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FieldPattern, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module,
-    Pattern, PatternKind, Stmt, Type, TypeScheme, TypedRef,
+    Arm, Decl, EnumDecl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, FuncDefId, HandlerArm,
+    HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl, Type, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypeScheme, TypedRef, VariantDecl,
 };
 use crate::typeck::subst::substitute_bound_vars;
 
@@ -67,6 +68,246 @@ pub fn generate_specializations<'db>(
 
     (new_decls, new_function_types)
 }
+
+// ============================================================================
+// Generic struct/enum specialization
+// ============================================================================
+
+/// Generate specialized struct declarations for each type instantiation.
+pub fn generate_struct_specializations<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    instantiations: &HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+) -> Vec<StructDecl> {
+    let struct_decls = collect_struct_decls(module);
+    let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
+
+    for (name, type_arg_sets) in instantiations {
+        let Some(decl) = struct_decls.get(name) else {
+            continue;
+        };
+        if decl.type_params.is_empty() {
+            continue;
+        }
+
+        for type_args in type_arg_sets {
+            let mangled = mangle_name(db, *name, type_args);
+            let specialized = specialize_struct_decl(db, decl, type_args, mangled);
+            entries.push((mangled, specialized));
+        }
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.into_iter().map(|(_, decl)| decl).collect()
+}
+
+/// Generate specialized enum declarations for each type instantiation.
+pub fn generate_enum_specializations<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+    instantiations: &HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+) -> Vec<EnumDecl> {
+    let enum_decls = collect_enum_decls(module);
+    let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
+
+    for (name, type_arg_sets) in instantiations {
+        let Some(decl) = enum_decls.get(name) else {
+            continue;
+        };
+        if decl.type_params.is_empty() {
+            continue;
+        }
+
+        for type_args in type_arg_sets {
+            let mangled = mangle_name(db, *name, type_args);
+            let specialized = specialize_enum_decl(db, decl, type_args, mangled);
+            entries.push((mangled, specialized));
+        }
+    }
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.into_iter().map(|(_, decl)| decl).collect()
+}
+
+fn specialize_struct_decl<'db>(
+    db: &'db dyn salsa::Database,
+    decl: &StructDecl,
+    type_args: &[Type<'db>],
+    mangled_name: Symbol,
+) -> StructDecl {
+    let variant = type_args_variant(type_args);
+    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name).collect();
+
+    StructDecl {
+        id: decl.id.with_variant(variant),
+        is_pub: false,
+        name: mangled_name,
+        type_params: vec![],
+        fields: decl
+            .fields
+            .iter()
+            .map(|f| FieldDecl {
+                id: f.id.with_variant(variant),
+                is_pub: f.is_pub,
+                name: f.name,
+                ty: substitute_annotation(db, &f.ty, &param_names, type_args),
+            })
+            .collect(),
+    }
+}
+
+fn specialize_enum_decl<'db>(
+    db: &'db dyn salsa::Database,
+    decl: &EnumDecl,
+    type_args: &[Type<'db>],
+    mangled_name: Symbol,
+) -> EnumDecl {
+    let variant = type_args_variant(type_args);
+    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name).collect();
+
+    EnumDecl {
+        id: decl.id.with_variant(variant),
+        is_pub: false,
+        name: mangled_name,
+        type_params: vec![],
+        variants: decl
+            .variants
+            .iter()
+            .map(|v| VariantDecl {
+                id: v.id.with_variant(variant),
+                name: v.name,
+                fields: v
+                    .fields
+                    .iter()
+                    .map(|f| FieldDecl {
+                        id: f.id.with_variant(variant),
+                        is_pub: f.is_pub,
+                        name: f.name,
+                        ty: substitute_annotation(db, &f.ty, &param_names, type_args),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Substitute type parameter names in a TypeAnnotation with concrete types.
+///
+/// If a `TypeAnnotationKind::Named(name)` matches a type parameter name,
+/// it's replaced with a TypeAnnotation for the concrete type.
+fn substitute_annotation<'db>(
+    db: &'db dyn salsa::Database,
+    ann: &TypeAnnotation,
+    param_names: &[Symbol],
+    type_args: &[Type<'db>],
+) -> TypeAnnotation {
+    let kind = match &ann.kind {
+        TypeAnnotationKind::Named(name) => {
+            // Check if this name matches a type parameter
+            if let Some(idx) = param_names.iter().position(|p| p == name) {
+                if let Some(ty) = type_args.get(idx) {
+                    return type_to_annotation(db, *ty, ann.id);
+                }
+            }
+            ann.kind.clone()
+        }
+        TypeAnnotationKind::App { ctor, args } => TypeAnnotationKind::App {
+            ctor: Box::new(substitute_annotation(db, ctor, param_names, type_args)),
+            args: args
+                .iter()
+                .map(|a| substitute_annotation(db, a, param_names, type_args))
+                .collect(),
+        },
+        TypeAnnotationKind::Func {
+            params,
+            result,
+            abilities,
+        } => TypeAnnotationKind::Func {
+            params: params
+                .iter()
+                .map(|p| substitute_annotation(db, p, param_names, type_args))
+                .collect(),
+            result: Box::new(substitute_annotation(db, result, param_names, type_args)),
+            abilities: abilities.clone(),
+        },
+        TypeAnnotationKind::Tuple(elems) => TypeAnnotationKind::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_annotation(db, e, param_names, type_args))
+                .collect(),
+        ),
+        TypeAnnotationKind::Path(_) | TypeAnnotationKind::Infer | TypeAnnotationKind::Error => {
+            ann.kind.clone()
+        }
+    };
+    TypeAnnotation { id: ann.id, kind }
+}
+
+/// Convert a semantic Type to a TypeAnnotation.
+///
+/// Used when generating specialized field types — the concrete Type
+/// from type checking is mapped back to a source-level annotation.
+fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> TypeAnnotation {
+    let kind = match ty.kind(db) {
+        TypeKind::Int => TypeAnnotationKind::Named(Symbol::new("Int")),
+        TypeKind::Nat => TypeAnnotationKind::Named(Symbol::new("Nat")),
+        TypeKind::Float => TypeAnnotationKind::Named(Symbol::new("Float")),
+        TypeKind::Bool => TypeAnnotationKind::Named(Symbol::new("Bool")),
+        TypeKind::Bytes => TypeAnnotationKind::Named(Symbol::new("Bytes")),
+        TypeKind::Rune => TypeAnnotationKind::Named(Symbol::new("Rune")),
+        TypeKind::Nil => TypeAnnotationKind::Named(Symbol::new("Nil")),
+        TypeKind::Never => TypeAnnotationKind::Named(Symbol::new("Never")),
+        TypeKind::Named { name, args } => {
+            if args.is_empty() {
+                TypeAnnotationKind::Named(*name)
+            } else {
+                // Use mangled name for generic types with args
+                let mangled = mangle_name(db, *name, args);
+                TypeAnnotationKind::Named(mangled)
+            }
+        }
+        TypeKind::Func { params, result, .. } => TypeAnnotationKind::Func {
+            params: params
+                .iter()
+                .map(|p| type_to_annotation(db, *p, id))
+                .collect(),
+            result: Box::new(type_to_annotation(db, *result, id)),
+            abilities: vec![],
+        },
+        TypeKind::Tuple(elems) => TypeAnnotationKind::Tuple(
+            elems
+                .iter()
+                .map(|e| type_to_annotation(db, *e, id))
+                .collect(),
+        ),
+        _ => TypeAnnotationKind::Infer,
+    };
+    TypeAnnotation { id, kind }
+}
+
+fn collect_struct_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a StructDecl> {
+    let mut map = HashMap::new();
+    for decl in &module.decls {
+        if let Decl::Struct(s) = decl {
+            map.insert(s.name, s);
+        }
+    }
+    map
+}
+
+fn collect_enum_decls<'a>(module: &'a Module<TypedRef<'_>>) -> HashMap<Symbol, &'a EnumDecl> {
+    let mut map = HashMap::new();
+    for decl in &module.decls {
+        if let Decl::Enum(e) = decl {
+            map.insert(e.name, e);
+        }
+    }
+    map
+}
+
+// ============================================================================
+// Generic function specialization helpers
+// ============================================================================
 
 fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
