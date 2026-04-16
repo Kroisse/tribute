@@ -303,6 +303,13 @@ fn merge_and_lower_to_ir<'db>(
             )
         };
 
+    // Monomorphize generic functions
+    let mono_result =
+        tribute_front::monomorphize::monomorphize_functions(db, merged_module, merged_fn_types);
+    let merged_module = mono_result.module;
+    let merged_fn_types: std::collections::HashMap<_, _> =
+        mono_result.function_types.into_iter().collect();
+
     // AST → TrunkIR (arena)
     let source_uri = source.uri(db).as_str();
     let mut ir = IrContext::new();
