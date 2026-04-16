@@ -320,16 +320,16 @@ pub fn rewrite_type<'db>(
                 args.iter().map(|a| rewrite_type(db, *a, map)).collect();
 
             // Check if this Named type should be mangled
-            if let Some(entries) = map.get(name) {
-                if let Some((_, mangled)) = entries.iter().find(|(ta, _)| *ta == rewritten_args) {
-                    return Type::new(
-                        db,
-                        TypeKind::Named {
-                            name: *mangled,
-                            args: vec![],
-                        },
-                    );
-                }
+            if let Some(entries) = map.get(name)
+                && let Some((_, mangled)) = entries.iter().find(|(ta, _)| *ta == rewritten_args)
+            {
+                return Type::new(
+                    db,
+                    TypeKind::Named {
+                        name: *mangled,
+                        args: vec![],
+                    },
+                );
             }
             // Not in rewrite map — return with rewritten args
             Type::new(

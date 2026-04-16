@@ -204,10 +204,10 @@ fn substitute_annotation<'db>(
     let kind = match &ann.kind {
         TypeAnnotationKind::Named(name) => {
             // Check if this name matches a type parameter
-            if let Some(idx) = param_names.iter().position(|p| p == name) {
-                if let Some(ty) = type_args.get(idx) {
-                    return type_to_annotation(db, *ty, ann.id);
-                }
+            if let Some(idx) = param_names.iter().position(|p| p == name)
+                && let Some(ty) = type_args.get(idx)
+            {
+                return type_to_annotation(db, *ty, ann.id);
             }
             ann.kind.clone()
         }
