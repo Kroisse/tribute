@@ -259,7 +259,7 @@ pub fn build_type_rewrite_map<'db>(
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by(|a, b| a.1.cmp(&b.1));
+        entries.sort_by_key(|e| e.1);
         map.insert(*name, entries);
     }
     map

@@ -57,7 +57,7 @@ pub fn generate_specializations<'db>(
     }
 
     // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by_key(|e| e.0);
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len());
@@ -97,7 +97,7 @@ pub fn generate_struct_specializations<'db>(
         }
     }
 
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by_key(|e| e.0);
     entries.into_iter().map(|(_, decl)| decl).collect()
 }
 
@@ -125,7 +125,7 @@ pub fn generate_enum_specializations<'db>(
         }
     }
 
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    entries.sort_by_key(|e| e.0);
     entries.into_iter().map(|(_, decl)| decl).collect()
 }
 
