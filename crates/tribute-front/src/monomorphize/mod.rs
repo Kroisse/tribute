@@ -18,10 +18,10 @@ pub struct MonomorphizeResult<'db> {
 /// Run monomorphization on a typed module.
 ///
 /// This is the main entry point that:
-/// 1. Collects all generic function instantiations
+/// 1. Collects all generic function/type instantiations
 /// 2. Generates specialized copies with concrete types
-/// 3. Rewrites call sites to use the specialized versions
-/// 4. Appends specialized functions to the module
+/// 3. Rewrites call sites and type references to use specialized versions
+/// 4. Appends specialized functions/types to the module
 pub fn monomorphize_functions<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
@@ -30,46 +30,73 @@ pub fn monomorphize_functions<'db>(
     let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> =
         function_types.iter().map(|(k, v)| (*k, *v)).collect();
 
-    // Step 1: Collect instantiations
-    let instantiations = collect::collect_instantiations(db, &module, &fn_types_vec);
+    // === Function monomorphization ===
 
-    if instantiations.is_empty() {
-        return MonomorphizeResult {
-            module,
-            function_types: fn_types_vec,
-        };
-    }
+    // Step 1: Collect function instantiations
+    let func_instantiations = collect::collect_instantiations(db, &module, &fn_types_vec);
 
-    // Step 2: Generate specialized functions
-    let (specialized_decls, specialized_fn_types) =
-        specialize::generate_specializations(db, &module, &instantiations, &fn_types_vec);
+    let module = if !func_instantiations.is_empty() {
+        // Step 2: Generate specialized functions
+        let (specialized_decls, specialized_fn_types) =
+            specialize::generate_specializations(db, &module, &func_instantiations, &fn_types_vec);
 
-    // Build rewrite map: (original FuncDefId, type_args) → specialized FuncDefId
-    let rewrite_map = build_rewrite_map(db, &instantiations, &fn_types_vec);
+        // Build rewrite map
+        let rewrite_map = build_rewrite_map(db, &func_instantiations, &fn_types_vec);
 
-    // Step 3: Rewrite call sites in the module
-    let rewritten_module = rewrite::rewrite_module(db, module, &fn_types_vec, &rewrite_map);
+        // Step 3: Rewrite call sites in the module
+        let rewritten_module = rewrite::rewrite_module(db, module, &fn_types_vec, &rewrite_map);
 
-    // Step 4: Rewrite call sites inside specialized function bodies
-    // (e.g., a specialized function calling another generic function)
-    let specialized_decls: Vec<Decl<TypedRef<'db>>> =
-        specialized_decls.into_iter().map(Decl::Function).collect();
-    let rewritten_specialized =
-        rewrite::rewrite_decls(db, specialized_decls, &fn_types_vec, &rewrite_map);
+        // Step 4: Rewrite call sites inside specialized function bodies
+        let specialized_decls: Vec<Decl<TypedRef<'db>>> =
+            specialized_decls.into_iter().map(Decl::Function).collect();
+        let rewritten_specialized =
+            rewrite::rewrite_decls(db, specialized_decls, &fn_types_vec, &rewrite_map);
 
-    // Step 5: Append specialized functions to module
-    let mut decls = rewritten_module.decls;
-    decls.extend(rewritten_specialized);
+        // Step 5: Append specialized functions to module
+        let mut decls = rewritten_module.decls;
+        decls.extend(rewritten_specialized);
 
-    let final_module = Module::new(rewritten_module.id, rewritten_module.name, decls);
+        // Update function types for downstream
+        let mut all_fn_types = fn_types_vec;
+        all_fn_types.extend(specialized_fn_types);
 
-    // Merge function types
-    let mut all_fn_types = fn_types_vec;
-    all_fn_types.extend(specialized_fn_types);
+        // Return intermediate result with updated fn_types
+        let module = Module::new(rewritten_module.id, rewritten_module.name, decls);
+        (module, all_fn_types)
+    } else {
+        (module, fn_types_vec)
+    };
+
+    let (module, fn_types_vec) = module;
+
+    // === Type monomorphization (struct/enum) ===
+
+    let type_instantiations = collect::collect_type_instantiations(db, &module);
+
+    let module = if !type_instantiations.is_empty() {
+        // Generate specialized struct/enum declarations
+        let specialized_structs =
+            specialize::generate_struct_specializations(db, &module, &type_instantiations);
+        let specialized_enums =
+            specialize::generate_enum_specializations(db, &module, &type_instantiations);
+
+        // Build type rewrite map and rewrite Named types throughout the module
+        let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
+        let rewritten_module = rewrite::rewrite_types_in_module(db, module, &type_rewrite_map);
+
+        // Append specialized types to module
+        let mut decls = rewritten_module.decls;
+        decls.extend(specialized_structs.into_iter().map(Decl::Struct));
+        decls.extend(specialized_enums.into_iter().map(Decl::Enum));
+
+        Module::new(rewritten_module.id, rewritten_module.name, decls)
+    } else {
+        module
+    };
 
     MonomorphizeResult {
-        module: final_module,
-        function_types: all_fn_types,
+        module,
+        function_types: fn_types_vec,
     }
 }
 
@@ -96,7 +123,7 @@ fn build_rewrite_map<'db>(
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by(|a, b| a.1.cmp(&b.1));
+        entries.sort_by_key(|e| e.1);
         rewrite_map.insert(*func_id, entries);
     }
 

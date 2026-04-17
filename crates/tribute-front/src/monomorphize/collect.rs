@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use trunk_ir::Symbol;
+
 use crate::ast::{
     Decl, Expr, ExprKind, FuncDefId, Module, ResolvedRef, Stmt, Type, TypeKind, TypeScheme,
     TypedRef,
@@ -253,6 +255,230 @@ impl<'db> InstantiationCollector<'db> {
     }
 }
 
+// ============================================================================
+// Type instantiation collection (for generic struct/enum monomorphization)
+// ============================================================================
+
+/// Collect all generic type instantiations from a typed module.
+///
+/// Walks all types in the AST (recursively through Func, Tuple, Named, etc.)
+/// and records which concrete type argument combinations each generic type
+/// is used with. Only collects types whose names match generic struct/enum
+/// declarations (those with non-empty `type_params`).
+pub fn collect_type_instantiations<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<TypedRef<'db>>,
+) -> HashMap<Symbol, HashSet<Vec<Type<'db>>>> {
+    let generic_types = collect_generic_type_names(module);
+    let mut result: HashMap<Symbol, HashSet<Vec<Type<'db>>>> = HashMap::new();
+
+    let mut visitor = TypeInstantiationVisitor {
+        db,
+        generic_types: &generic_types,
+        instantiations: &mut result,
+    };
+    visitor.visit_module(module);
+    result
+}
+
+/// Collect names of all struct/enum declarations that have type parameters.
+fn collect_generic_type_names(module: &Module<TypedRef<'_>>) -> HashSet<Symbol> {
+    let mut names = HashSet::new();
+    collect_generic_type_names_inner(&module.decls, &mut names);
+    names
+}
+
+fn collect_generic_type_names_inner(decls: &[Decl<TypedRef<'_>>], names: &mut HashSet<Symbol>) {
+    for decl in decls {
+        match decl {
+            Decl::Struct(s) if !s.type_params.is_empty() => {
+                names.insert(s.name);
+            }
+            Decl::Enum(e) if !e.type_params.is_empty() => {
+                names.insert(e.name);
+            }
+            Decl::Module(m) => {
+                if let Some(body) = &m.body {
+                    collect_generic_type_names_inner(body, names);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Recursively walk a Type and collect all `Named { name, args }` where
+/// `args` is non-empty and `name` is a known generic type.
+fn collect_from_type<'db>(
+    db: &'db dyn salsa::Database,
+    ty: Type<'db>,
+    generic_types: &HashSet<Symbol>,
+    result: &mut HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+) {
+    match ty.kind(db) {
+        TypeKind::Named { name, args } => {
+            if !args.is_empty() && generic_types.contains(name) {
+                result.entry(*name).or_default().insert(args.clone());
+            }
+            // Recurse into type arguments (e.g., List(Option(Int)) → collect Option(Int))
+            for arg in args {
+                collect_from_type(db, *arg, generic_types, result);
+            }
+        }
+        TypeKind::Func {
+            params,
+            result: ret,
+            ..
+        } => {
+            for p in params {
+                collect_from_type(db, *p, generic_types, result);
+            }
+            collect_from_type(db, *ret, generic_types, result);
+        }
+        TypeKind::Tuple(elems) => {
+            for e in elems {
+                collect_from_type(db, *e, generic_types, result);
+            }
+        }
+        TypeKind::App { ctor, args } => {
+            collect_from_type(db, *ctor, generic_types, result);
+            for a in args {
+                collect_from_type(db, *a, generic_types, result);
+            }
+        }
+        TypeKind::Continuation {
+            arg, result: ret, ..
+        } => {
+            collect_from_type(db, *arg, generic_types, result);
+            collect_from_type(db, *ret, generic_types, result);
+        }
+        // Primitives and variables: no nested Named types
+        _ => {}
+    }
+}
+
+struct TypeInstantiationVisitor<'a, 'db> {
+    db: &'db dyn salsa::Database,
+    generic_types: &'a HashSet<Symbol>,
+    instantiations: &'a mut HashMap<Symbol, HashSet<Vec<Type<'db>>>>,
+}
+
+impl<'a, 'db> TypeInstantiationVisitor<'a, 'db> {
+    fn collect_type(&mut self, ty: Type<'db>) {
+        collect_from_type(self.db, ty, self.generic_types, self.instantiations);
+    }
+
+    fn visit_typed_ref(&mut self, tr: &TypedRef<'db>) {
+        self.collect_type(tr.ty);
+    }
+
+    fn visit_module(&mut self, module: &Module<TypedRef<'db>>) {
+        for decl in &module.decls {
+            self.visit_decl(decl);
+        }
+    }
+
+    fn visit_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
+        match decl {
+            Decl::Function(func) => self.visit_expr(&func.body),
+            Decl::Module(m) => {
+                if let Some(body) = &m.body {
+                    for d in body {
+                        self.visit_decl(d);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
+        match expr.kind.as_ref() {
+            ExprKind::Var(tr) => self.visit_typed_ref(tr),
+            ExprKind::Call { callee, args } => {
+                self.visit_expr(callee);
+                for arg in args {
+                    self.visit_expr(arg);
+                }
+            }
+            ExprKind::Block { stmts, value } => {
+                for s in stmts {
+                    self.visit_stmt(s);
+                }
+                self.visit_expr(value);
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
+                    self.visit_expr(&arm.body);
+                }
+            }
+            ExprKind::Lambda { body, .. } => self.visit_expr(body),
+            ExprKind::Handle { body, handlers } => {
+                self.visit_expr(body);
+                for h in handlers {
+                    self.visit_expr(&h.body);
+                }
+            }
+            ExprKind::Resume { arg, .. } => self.visit_expr(arg),
+            ExprKind::Cons { ctor, args } => {
+                self.visit_typed_ref(ctor);
+                for a in args {
+                    self.visit_expr(a);
+                }
+            }
+            ExprKind::Record {
+                type_name,
+                fields,
+                spread,
+                ..
+            } => {
+                self.visit_typed_ref(type_name);
+                for (_, e) in fields {
+                    self.visit_expr(e);
+                }
+                if let Some(s) = spread {
+                    self.visit_expr(s);
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                self.visit_expr(lhs);
+                self.visit_expr(rhs);
+            }
+            ExprKind::Tuple(es) | ExprKind::List(es) => {
+                for e in es {
+                    self.visit_expr(e);
+                }
+            }
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.visit_expr(receiver);
+                for a in args {
+                    self.visit_expr(a);
+                }
+            }
+            ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::RuneLit(_)
+            | ExprKind::Nil
+            | ExprKind::Error => {}
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Stmt<TypedRef<'db>>) {
+        match stmt {
+            Stmt::Let { value, .. } => self.visit_expr(value),
+            Stmt::Expr { expr, .. } => self.visit_expr(expr),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ast::{EffectRow, TypeParam, TypeScheme};
@@ -467,6 +693,118 @@ mod tests {
         let scheme = make_scheme(&db, 0, body);
         assert_eq!(extract_type_args(&db, scheme, body), None);
     }
+
+    // ========================================================================
+    // collect_type_instantiations tests
+    // ========================================================================
+
+    #[test]
+    fn test_collect_type_from_named() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+
+        let mut generic_types = HashSet::new();
+        generic_types.insert(trunk_ir::Symbol::new("Option"));
+
+        let mut result = HashMap::new();
+        collect_from_type(&db, option_int, &generic_types, &mut result);
+
+        assert_eq!(result.len(), 1);
+        let option_insts = result.get(&trunk_ir::Symbol::new("Option")).unwrap();
+        assert!(option_insts.contains(&vec![int]));
+    }
+
+    #[test]
+    fn test_collect_type_nested() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let list_option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("List"),
+                args: vec![option_int],
+            },
+        );
+
+        let mut generic_types = HashSet::new();
+        generic_types.insert(trunk_ir::Symbol::new("Option"));
+        generic_types.insert(trunk_ir::Symbol::new("List"));
+
+        let mut result = HashMap::new();
+        collect_from_type(&db, list_option_int, &generic_types, &mut result);
+
+        assert_eq!(result.len(), 2);
+        assert!(result[&trunk_ir::Symbol::new("Option")].contains(&vec![int]));
+        assert!(result[&trunk_ir::Symbol::new("List")].contains(&vec![option_int]));
+    }
+
+    #[test]
+    fn test_collect_type_in_func_params() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let pair_int_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Pair"),
+                args: vec![int, int],
+            },
+        );
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![pair_int_int],
+                result: int,
+                effect: pure_effect(&db),
+            },
+        );
+
+        let mut generic_types = HashSet::new();
+        generic_types.insert(trunk_ir::Symbol::new("Pair"));
+
+        let mut result = HashMap::new();
+        collect_from_type(&db, func_ty, &generic_types, &mut result);
+
+        assert_eq!(result.len(), 1);
+        assert!(result[&trunk_ir::Symbol::new("Pair")].contains(&vec![int, int]));
+    }
+
+    #[test]
+    fn test_collect_type_ignores_non_generic() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        // Named type with args but NOT in generic_types set
+        let unknown = Type::new(
+            &db,
+            TypeKind::Named {
+                name: trunk_ir::Symbol::new("Unknown"),
+                args: vec![int],
+            },
+        );
+
+        let generic_types = HashSet::new(); // empty — nothing is generic
+        let mut result = HashMap::new();
+        collect_from_type(&db, unknown, &generic_types, &mut result);
+
+        assert!(result.is_empty());
+    }
+
+    // ========================================================================
+    // extract_type_args tests (continued)
+    // ========================================================================
 
     #[test]
     fn test_extract_func_type_arg() {
