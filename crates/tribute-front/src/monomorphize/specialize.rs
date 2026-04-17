@@ -266,14 +266,58 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
                 TypeAnnotationKind::Named(mangled)
             }
         }
-        TypeKind::Func { params, result, .. } => TypeAnnotationKind::Func {
-            params: params
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+        } => {
+            // Preserve the effect row as ability annotations. Each Effect
+            // becomes a Named (or App) annotation; a row variable (`rest`) is
+            // represented as `Infer`, matching the "effect polymorphic" encoding
+            // documented on TypeAnnotationKind::Func.
+            let mut abilities: Vec<TypeAnnotation> = effect
+                .effects(db)
                 .iter()
-                .map(|p| type_to_annotation(db, *p, id))
-                .collect(),
-            result: Box::new(type_to_annotation(db, *result, id)),
-            abilities: vec![],
-        },
+                .map(|eff| {
+                    let name = eff.ability_id.name(db);
+                    if eff.args.is_empty() {
+                        TypeAnnotation {
+                            id,
+                            kind: TypeAnnotationKind::Named(name),
+                        }
+                    } else {
+                        TypeAnnotation {
+                            id,
+                            kind: TypeAnnotationKind::App {
+                                ctor: Box::new(TypeAnnotation {
+                                    id,
+                                    kind: TypeAnnotationKind::Named(name),
+                                }),
+                                args: eff
+                                    .args
+                                    .iter()
+                                    .map(|a| type_to_annotation(db, *a, id))
+                                    .collect(),
+                            },
+                        }
+                    }
+                })
+                .collect();
+            if effect.rest(db).is_some() {
+                abilities.push(TypeAnnotation {
+                    id,
+                    kind: TypeAnnotationKind::Infer,
+                });
+            }
+            TypeAnnotationKind::Func {
+                params: params
+                    .iter()
+                    .map(|p| type_to_annotation(db, *p, id))
+                    .collect(),
+                result: Box::new(type_to_annotation(db, *result, id)),
+                abilities,
+            }
+        }
         TypeKind::Tuple(elems) => TypeAnnotationKind::Tuple(
             elems
                 .iter()
@@ -943,6 +987,95 @@ mod tests {
                 assert_eq!(name.to_string(), "Option$Int");
             }
             _ => panic!("expected Named with mangled name"),
+        }
+    }
+
+    /// Regression: effect row must be preserved when converting Func types
+    /// back to annotations (previously the `abilities` field was hardcoded
+    /// to `vec![]`, silently turning effectful functions into pure ones).
+    #[test]
+    fn test_type_to_annotation_func_preserves_abilities() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let console_id = crate::ast::AbilityId::new(&db, Symbol::new("std::console::Console"));
+        let state_id = crate::ast::AbilityId::new(&db, Symbol::new("std::state::State"));
+        let effect = EffectRow::new(
+            &db,
+            vec![
+                crate::ast::Effect {
+                    ability_id: console_id,
+                    args: vec![],
+                },
+                crate::ast::Effect {
+                    ability_id: state_id,
+                    args: vec![int],
+                },
+            ],
+            None,
+        );
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+            },
+        );
+        let ann = type_to_annotation(&db, func_ty, node_id(1));
+        match &ann.kind {
+            TypeAnnotationKind::Func { abilities, .. } => {
+                assert_eq!(abilities.len(), 2);
+                match &abilities[0].kind {
+                    TypeAnnotationKind::Named(name) => {
+                        assert_eq!(name.to_string(), "Console");
+                    }
+                    other => panic!("expected Named(Console), got {:?}", other),
+                }
+                match &abilities[1].kind {
+                    TypeAnnotationKind::App { ctor, args } => {
+                        match &ctor.kind {
+                            TypeAnnotationKind::Named(name) => {
+                                assert_eq!(name.to_string(), "State");
+                            }
+                            other => panic!("expected Named(State) ctor, got {:?}", other),
+                        }
+                        assert_eq!(args.len(), 1);
+                        match &args[0].kind {
+                            TypeAnnotationKind::Named(name) => {
+                                assert_eq!(name.to_string(), "Int");
+                            }
+                            other => panic!("expected Named(Int) arg, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected App(State, [Int]), got {:?}", other),
+                }
+            }
+            other => panic!("expected Func annotation, got {:?}", other),
+        }
+    }
+
+    /// Regression: a row variable on the effect row should map to `Infer`
+    /// (effect-polymorphic), not be silently dropped.
+    #[test]
+    fn test_type_to_annotation_func_preserves_rest_var() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let effect = EffectRow::new(&db, vec![], Some(crate::ast::EffectVar { id: 0 }));
+        let func_ty = Type::new(
+            &db,
+            TypeKind::Func {
+                params: vec![int],
+                result: int,
+                effect,
+            },
+        );
+        let ann = type_to_annotation(&db, func_ty, node_id(1));
+        match &ann.kind {
+            TypeAnnotationKind::Func { abilities, .. } => {
+                assert_eq!(abilities.len(), 1);
+                assert!(matches!(abilities[0].kind, TypeAnnotationKind::Infer));
+            }
+            other => panic!("expected Func annotation, got {:?}", other),
         }
     }
 

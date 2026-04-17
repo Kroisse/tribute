@@ -316,13 +316,11 @@ pub fn rewrite_type<'db>(
 ) -> Type<'db> {
     match ty.kind(db) {
         TypeKind::Named { name, args } if !args.is_empty() => {
-            // First recurse into args (for nested generics like List(Option(Int)))
-            let rewritten_args: Vec<Type<'db>> =
-                args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-
-            // Check if this Named type should be mangled
+            // The rewrite map is keyed on the original (un-rewritten) args as
+            // collected from the module, so look up using `args` directly —
+            // not the recursively rewritten ones.
             if let Some(entries) = map.get(name)
-                && let Some((_, mangled)) = entries.iter().find(|(ta, _)| *ta == rewritten_args)
+                && let Some((_, mangled)) = entries.iter().find(|(ta, _)| ta == args)
             {
                 return Type::new(
                     db,
@@ -332,7 +330,11 @@ pub fn rewrite_type<'db>(
                     },
                 );
             }
-            // Not in rewrite map — return with rewritten args
+            // Not in rewrite map — recurse into args (for nested generics like
+            // List(Option(Int)) where the outer ctor is non-generic but inner
+            // args still need rewriting).
+            let rewritten_args: Vec<Type<'db>> =
+                args.iter().map(|a| rewrite_type(db, *a, map)).collect();
             Type::new(
                 db,
                 TypeKind::Named {
@@ -462,8 +464,8 @@ fn find_mangled_for_ctor<'db>(
     match result_ty.kind(db) {
         TypeKind::Named { name, args } if !args.is_empty() => {
             let entries = map.get(name)?;
-            let rewritten_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            let (_, mangled) = entries.iter().find(|(ta, _)| *ta == rewritten_args)?;
+            // Match against the original args stored in the map.
+            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
             Some(*mangled)
         }
         _ => None,
@@ -479,8 +481,8 @@ fn find_mangled_for_typedef<'db>(
     match ty.kind(db) {
         TypeKind::Named { name, args } if !args.is_empty() => {
             let entries = map.get(name)?;
-            let rewritten_args: Vec<_> = args.iter().map(|a| rewrite_type(db, *a, map)).collect();
-            let (_, mangled) = entries.iter().find(|(ta, _)| *ta == rewritten_args)?;
+            // Match against the original args stored in the map.
+            let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
             Some(*mangled)
         }
         _ => None,
@@ -861,5 +863,49 @@ mod tests {
         let result = rewrite_type(&db, unknown, &map);
         // Should be unchanged
         assert_eq!(result, unknown);
+    }
+
+    /// Regression: outer generic with nested generic args must still be
+    /// mangled. The map is keyed on original args, so recursing before lookup
+    /// would cause a miss.
+    #[test]
+    fn test_rewrite_type_outer_generic_with_nested_generic_args() {
+        let db = TestDb::default();
+        let int = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let option_int = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Option"),
+                args: vec![int],
+            },
+        );
+        let pair_option_int_bool = Type::new(
+            &db,
+            TypeKind::Named {
+                name: Symbol::new("Pair"),
+                args: vec![option_int, bool_ty],
+            },
+        );
+        let map = make_type_rewrite_map(
+            &db,
+            vec![
+                (Symbol::new("Option"), vec![int], Symbol::new("Option$Int")),
+                (
+                    Symbol::new("Pair"),
+                    vec![option_int, bool_ty],
+                    Symbol::new("Pair$Option$0$Int$1$Bool"),
+                ),
+            ],
+        );
+
+        let result = rewrite_type(&db, pair_option_int_bool, &map);
+        match result.kind(&db) {
+            TypeKind::Named { name, args } => {
+                assert_eq!(name.to_string(), "Pair$Option$0$Int$1$Bool");
+                assert!(args.is_empty());
+            }
+            other => panic!("expected mangled Named, got {:?}", other),
+        }
     }
 }
