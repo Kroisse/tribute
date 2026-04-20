@@ -675,7 +675,10 @@ mod mechanics {
 
         let call_op = find_call_in(&ctx, caller);
         let err = inline_single_call(&mut ctx, call_op, helper).unwrap_err();
-        matches!(err, InlineError::ArityMismatch { .. });
+        assert!(
+            matches!(err, InlineError::ArityMismatch { .. }),
+            "expected ArityMismatch, got {err:?}"
+        );
     }
 
     // -----------------------------------------------------------------
