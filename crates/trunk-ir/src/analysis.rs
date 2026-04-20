@@ -117,7 +117,6 @@ impl AnalysisManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn test_ctx() -> (IrContext, OpRef) {
         let mut ctx = IrContext::new();
@@ -126,10 +125,6 @@ mod tests {
         (ctx, op)
     }
 
-    // A dummy analysis that records how many times `compute` was invoked.
-    // Used to verify caching semantics.
-    static COMPUTE_COUNT: AtomicUsize = AtomicUsize::new(0);
-
     #[derive(Debug)]
     struct DummyAnalysis {
         target: OpRef,
@@ -137,7 +132,6 @@ mod tests {
 
     impl Analysis for DummyAnalysis {
         fn compute(_ctx: &IrContext, target: OpRef) -> Self {
-            COMPUTE_COUNT.fetch_add(1, Ordering::SeqCst);
             Self { target }
         }
     }
@@ -152,17 +146,17 @@ mod tests {
     }
 
     #[test]
-    fn get_computes_once_then_caches() {
+    fn get_returns_same_arc_on_cache_hit() {
         let (ctx, op) = test_ctx();
         let mut am = AnalysisManager::new();
 
-        COMPUTE_COUNT.store(0, Ordering::SeqCst);
         let a1 = am.get::<DummyAnalysis>(&ctx, op);
         let a2 = am.get::<DummyAnalysis>(&ctx, op);
 
-        assert_eq!(COMPUTE_COUNT.load(Ordering::SeqCst), 1);
-        assert_eq!(a1.target, a2.target);
+        // Cache hit: both calls return the very same `Arc`, proving
+        // `compute` was not re-invoked on the second `get`.
         assert!(Arc::ptr_eq(&a1, &a2));
+        assert_eq!(a1.target, a2.target);
         assert_eq!(am.len(), 1);
     }
 
@@ -171,12 +165,14 @@ mod tests {
         let (ctx, op) = test_ctx();
         let mut am = AnalysisManager::new();
 
-        COMPUTE_COUNT.store(0, Ordering::SeqCst);
-        let _a1 = am.get::<DummyAnalysis>(&ctx, op);
+        let a1 = am.get::<DummyAnalysis>(&ctx, op);
         am.invalidate::<DummyAnalysis>(op);
-        let _a2 = am.get::<DummyAnalysis>(&ctx, op);
+        let a2 = am.get::<DummyAnalysis>(&ctx, op);
 
-        assert_eq!(COMPUTE_COUNT.load(Ordering::SeqCst), 2);
+        // After invalidation the cached entry is dropped, so the next
+        // `get` rebuilds the analysis — a distinct `Arc` results.
+        assert!(!Arc::ptr_eq(&a1, &a2));
+        assert_eq!(a1.target, a2.target);
     }
 
     #[test]

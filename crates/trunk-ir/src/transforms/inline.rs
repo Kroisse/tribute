@@ -287,8 +287,9 @@ pub fn inline_functions_with_config(
 }
 
 /// Run one pass of function inlining, consuming [`CallGraph`] from the
-/// provided [`AnalysisManager`](crate::analysis::AnalysisManager) and
-/// invalidating it on exit.
+/// provided [`AnalysisManager`](crate::analysis::AnalysisManager). The
+/// cached graph is invalidated only if at least one call site was
+/// actually rewritten; a no-op run leaves it intact for the next pass.
 ///
 /// Use this entry point when another pass in the same pipeline step also
 /// wants the call graph, so the analysis is built once and shared.
