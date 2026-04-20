@@ -1,30 +1,26 @@
 //! Function inlining pass for TrunkIR.
 //!
-//! Replaces `func.call` and `func.tail_call` ops with a cloned copy of the
-//! callee's body, splicing it into the caller's CFG.
+//! Replaces `func.call` and `func.tail_call` ops whose callee has a single
+//! top-level block by splicing the callee body directly into the caller:
 //!
-//! # Strategy
+//! - Regular call: clone pre-return ops into the caller block before the
+//!   call site, RAUW call results with the mapped return values, detach
+//!   the call op.
+//! - Tail call: same clone, then emit a `func.return` with the mapped
+//!   return values in place of the tail call.
 //!
-//! For regular `func.call` sites, split-and-splice is used uniformly even
-//! for single-block callees — the continuation block's degeneracy can be
-//! collapsed later by canonicalization. See
-//! `transforms::scf_to_cf::replace_yield_with_br` for the same pattern
-//! applied to SCF lowering.
-//!
-//! For `func.tail_call`, no split is required: the tail call is itself
-//! a terminator and "callee return = caller return", so cloned `func.return`
-//! ops remain valid in the caller's function body.
+//! This pass does **not** depend on the `cf` dialect. Structured control
+//! flow inside a callee (via `scf.if`, `scf.match`, etc.) lives inside op
+//! regions, so the callee's *top-level* block remains singular even for
+//! complex bodies. Multi-block callees — which typically only exist after
+//! `scf_to_cf` has already lowered them — fall out of scope for v1 and
+//! return `InlineError::MultiBlockCallee`.
 
-use std::collections::BTreeMap;
-
-use crate::context::{BlockArgData, IrContext};
-use crate::dialect::{cf, core, func};
+use crate::context::IrContext;
+use crate::dialect::func;
 use crate::ir_mapping::IrMapping;
 use crate::ops::DialectOp;
-use crate::ops::DialectType;
-use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use crate::rewrite::helpers::{inline_region_blocks, split_block};
-use crate::types::Location;
+use crate::refs::{OpRef, RegionRef, ValueRef};
 
 // =========================================================================
 // Errors
@@ -37,6 +33,12 @@ pub enum InlineError {
     CalleeHasNoBody,
     /// The callee body region is empty (no entry block).
     CalleeHasEmptyBody,
+    /// The callee body has more than one top-level block. The v1 inliner
+    /// only handles single-block callees to stay independent of the `cf`
+    /// dialect; multi-block inlining is a follow-up.
+    MultiBlockCallee,
+    /// The callee body's terminator is not `func.return`.
+    CalleeHasNoReturn,
     /// The call-site operand count does not match the callee's parameter count.
     ArityMismatch {
         callee_params: usize,
@@ -56,33 +58,15 @@ pub enum InlineError {
 
 /// Inline a single call site. Handles both `func.call` and `func.tail_call`.
 ///
-/// Steps common to both:
-/// 1. Look up callee body, entry block, and parameters.
-/// 2. Validate operand/return arity.
-/// 3. Clone the callee body into a detached region, mapping callee params
-///    to call-site operand values.
-///
-/// Regular call steps:
-/// 4. Split caller block at the call op → continuation block. Add block
-///    args for call results; RAUW results to those args.
-/// 5. Splice cloned body before the continuation block.
-/// 6. Append `cf.br cloned_entry` to the caller block as its new terminator.
-/// 7. Rewrite each cloned `func.return %v` to `cf.br %v → continuation`.
-/// 8. Erase the original call op (detached from continuation block).
-///
-/// Tail call steps:
-/// 4'. Splice cloned body at the end of the caller's parent region
-///     (no continuation block is needed).
-/// 5'. Append `cf.br cloned_entry` to the caller block, replacing the
-///     tail-call terminator.
-/// 6'. Erase the original tail-call op. Cloned `func.return` ops remain
-///     as-is — they now return from the *caller*.
+/// Requires the callee's body region to contain exactly one top-level block
+/// terminated by a `func.return`. Structured control flow inside the callee
+/// (`scf.if`, `scf.match`, etc.) is preserved as-is because it lives inside
+/// nested op regions, not top-level blocks.
 pub fn inline_single_call(
     ctx: &mut IrContext,
     call_op: OpRef,
     callee_func_op: OpRef,
 ) -> Result<(), InlineError> {
-    // --- Shared validation and cloning ---
     let is_tail = func::TailCall::matches(ctx, call_op);
     let is_regular = func::Call::matches(ctx, call_op);
     if !is_tail && !is_regular {
@@ -96,28 +80,24 @@ pub fn inline_single_call(
         .op(call_op)
         .parent_block
         .ok_or(InlineError::CallOpDetached)?;
-    let parent_region = ctx
-        .block(caller_block)
-        .parent_region
-        .expect("caller block must belong to a region");
 
     let call_loc = ctx.op(call_op).location;
 
-    // Callee body region & entry block
+    // Callee body & entry block (must be single-block).
     let callee_body = ctx
         .op(callee_func_op)
         .regions
         .first()
         .copied()
         .ok_or(InlineError::CalleeHasNoBody)?;
-    let callee_entry = ctx
-        .region(callee_body)
-        .blocks
+    let callee_blocks: Vec<_> = ctx.region(callee_body).blocks.iter().copied().collect();
+    if callee_blocks.len() > 1 {
+        return Err(InlineError::MultiBlockCallee);
+    }
+    let callee_entry = *callee_blocks
         .first()
-        .copied()
         .ok_or(InlineError::CalleeHasEmptyBody)?;
 
-    // Callee params (entry block args) & call operands
     let callee_params: Vec<_> = ctx.block_args(callee_entry).to_vec();
     let call_operands: Vec<_> = ctx.op_operands(call_op).to_vec();
     if callee_params.len() != call_operands.len() {
@@ -127,180 +107,55 @@ pub fn inline_single_call(
         });
     }
 
-    // Deep-clone the callee body region. `clone_region` creates fresh entry
-    // block args and maps old callee params → new cloned args. We pass the
-    // call operands as `cf.br` block args, matching the new entry args.
-    let mut mapping = IrMapping::new();
-    let cloned_region = ctx.clone_region(callee_body, &mut mapping);
-    let cloned_entry = mapping
-        .lookup_block(callee_entry)
-        .expect("clone_region must register entry block mapping");
-
-    if is_tail {
-        inline_tail_call(
-            ctx,
-            call_op,
-            caller_block,
-            parent_region,
-            cloned_region,
-            cloned_entry,
-            &call_operands,
-            call_loc,
-        )
-    } else {
-        inline_regular_call(
-            ctx,
-            call_op,
-            caller_block,
-            parent_region,
-            cloned_region,
-            cloned_entry,
-            &call_operands,
-            call_loc,
-        )
+    // Split the callee block's ops into body (all ops except the terminator)
+    // and the `func.return` terminator itself.
+    let callee_ops: Vec<OpRef> = ctx.block(callee_entry).ops.iter().copied().collect();
+    let (ret_op, body_ops) = callee_ops
+        .split_last()
+        .ok_or(InlineError::CalleeHasEmptyBody)?;
+    if !func::Return::matches(ctx, *ret_op) {
+        return Err(InlineError::CalleeHasNoReturn);
     }
-}
 
-// =========================================================================
-// Regular call path
-// =========================================================================
+    // Mapping: callee params → call-site operands. External references in the
+    // cloned body pass through via `lookup_value_or_default`.
+    let mut mapping = IrMapping::new();
+    for (param, arg) in callee_params.iter().zip(call_operands.iter()) {
+        mapping.map_value(*param, *arg);
+    }
 
-#[allow(clippy::too_many_arguments)]
-fn inline_regular_call(
-    ctx: &mut IrContext,
-    call_op: OpRef,
-    caller_block: BlockRef,
-    parent_region: RegionRef,
-    cloned_region: RegionRef,
-    cloned_entry: BlockRef,
-    call_operands: &[ValueRef],
-    loc: Location,
-) -> Result<(), InlineError> {
-    // Snapshot result values & types before mutations. Skip nil-typed
-    // results: they are "void" in the backend type system and pass-through
-    // block args for them confuse cranelift lowering (same convention as
-    // `scf_to_cf`).
-    let call_results_and_types: Vec<_> = ctx
-        .op_results(call_op)
+    // Clone each body op (in order) into the caller block before `call_op`.
+    // `clone_op` registers old-result → new-result in `mapping`, so later
+    // ops see the remapped SSA values.
+    for &op in body_ops {
+        let new_op = ctx.clone_op(op, &mut mapping);
+        ctx.insert_op_before(caller_block, call_op, new_op);
+    }
+
+    // Map the callee's return operands through the value mapping. These are
+    // what the call site's result values should effectively become.
+    let ret_values: Vec<ValueRef> = ctx
+        .op_operands(*ret_op)
         .iter()
-        .copied()
-        .zip(ctx.op_result_types(call_op).iter().copied())
-        .filter(|(_, ty)| !core::Nil::matches(ctx, *ty))
+        .map(|v| mapping.lookup_value_or_default(*v))
         .collect();
 
-    // 1. Split the caller block so call_op + everything after moves to
-    //    `continuation_block`.
-    let continuation_block = split_block(ctx, caller_block, call_op);
-
-    // 2. Add block args on the continuation block for non-nil call results,
-    //    then RAUW call results → continuation args.
-    for (result, ty) in &call_results_and_types {
-        let new_arg = ctx.add_block_arg(
-            continuation_block,
-            BlockArgData {
-                ty: *ty,
-                attrs: BTreeMap::new(),
-            },
-        );
-        ctx.replace_all_uses(*result, new_arg);
+    if is_tail {
+        // Replace the tail-call terminator with an equivalent `func.return`.
+        let new_ret = func::r#return(ctx, call_loc, ret_values);
+        ctx.insert_op_before(caller_block, call_op, new_ret.op_ref());
+        ctx.detach_op(call_op);
+    } else {
+        // Regular call: RAUW each call result with its mapped return value,
+        // then detach the original call op.
+        let call_results: Vec<_> = ctx.op_results(call_op).to_vec();
+        for (call_result, ret_val) in call_results.iter().zip(ret_values.iter()) {
+            ctx.replace_all_uses(*call_result, *ret_val);
+        }
+        ctx.detach_op(call_op);
     }
 
-    // 3. Splice cloned body before the continuation block.
-    inline_region_blocks(ctx, cloned_region, parent_region, Some(continuation_block));
-
-    // 4. Append `cf.br cloned_entry(...call_operands)` to the caller block.
-    //    The call operands become the cloned entry block's args.
-    let br_op = cf::br(ctx, loc, call_operands.iter().copied(), cloned_entry);
-    ctx.push_op(caller_block, br_op.op_ref());
-
-    // 5. Rewrite each cloned `func.return %v` → `cf.br %v → continuation`.
-    replace_returns_with_branches(ctx, cloned_entry, continuation_block, loc);
-
-    // 6. Detach the original call op. Nil-typed results we filtered earlier
-    //    may still be referenced by downstream ops; `detach_op` (vs.
-    //    `erase_op`) matches the `scf_to_cf` lowering convention and keeps
-    //    those dangling SSA values live in the arena without breaking them.
-    ctx.detach_op(call_op);
-
     Ok(())
-}
-
-// =========================================================================
-// Tail call path
-// =========================================================================
-
-#[allow(clippy::too_many_arguments)]
-fn inline_tail_call(
-    ctx: &mut IrContext,
-    call_op: OpRef,
-    caller_block: BlockRef,
-    parent_region: RegionRef,
-    cloned_region: RegionRef,
-    cloned_entry: BlockRef,
-    call_operands: &[ValueRef],
-    loc: Location,
-) -> Result<(), InlineError> {
-    // 1. Splice cloned body at end of the caller's parent region. CFG
-    //    correctness depends on `cf.br`, not on block order in the region.
-    inline_region_blocks(ctx, cloned_region, parent_region, None);
-
-    // 2. Replace the tail-call terminator with `cf.br cloned_entry(...ops)`.
-    //    `detach_op` rather than `erase_op` keeps arena invariants stable
-    //    even if a nil-typed tail-call variant is ever introduced.
-    ctx.detach_op(call_op);
-    let br_op = cf::br(ctx, loc, call_operands.iter().copied(), cloned_entry);
-    ctx.push_op(caller_block, br_op.op_ref());
-
-    // 3. Cloned `func.return` ops stay as-is: they now return from the caller.
-
-    Ok(())
-}
-
-// =========================================================================
-// Helpers
-// =========================================================================
-
-/// Walk the block graph starting from `entry_block` (all blocks reachable
-/// within the same parent region) and replace each `func.return %v...` with
-/// `cf.br %v... → target`.
-fn replace_returns_with_branches(
-    ctx: &mut IrContext,
-    entry_block: BlockRef,
-    target: BlockRef,
-    loc: Location,
-) {
-    // Walk all blocks reachable from `entry_block`; these are exactly the
-    // just-inlined blocks (the cloned body is self-contained).
-    let target_arg_count = ctx.block_args(target).len();
-    let mut visited: std::collections::HashSet<BlockRef> = std::collections::HashSet::new();
-    let mut stack = vec![entry_block];
-    while let Some(b) = stack.pop() {
-        if !visited.insert(b) {
-            continue;
-        }
-        let ops: Vec<OpRef> = ctx.block(b).ops.to_vec();
-        for op in ops {
-            if func::Return::matches(ctx, op) {
-                // If the target has fewer args than the return supplies
-                // (e.g., nil return filtered out), take only the first N.
-                let values: Vec<_> = ctx
-                    .op_operands(op)
-                    .iter()
-                    .copied()
-                    .take(target_arg_count)
-                    .collect();
-                let br = cf::br(ctx, loc, values, target);
-                ctx.remove_op_from_block(b, op);
-                ctx.push_op(b, br.op_ref());
-                // Don't chase successors of a return op — there are none.
-            } else {
-                let successors = ctx.op(op).successors.clone();
-                for succ in &successors {
-                    stack.push(*succ);
-                }
-            }
-        }
-    }
 }
 
 // =========================================================================
@@ -493,9 +348,11 @@ fn collect_candidates(ctx: &IrContext, graph: &CallGraph) -> Vec<(Symbol, OpRef,
 #[cfg(test)]
 mod mechanics {
     use super::*;
+    use crate::dialect::cf;
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
+    use std::collections::BTreeMap;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
@@ -747,16 +604,9 @@ mod mechanics {
         let _module = build_simple_module(&mut ctx, loc, vec![helper, caller]);
 
         let call_op = find_call_in(&ctx, caller);
-        inline_single_call(&mut ctx, call_op, helper).expect("inline should succeed");
-
-        let body = ctx.op(caller).regions[0];
-        // After inlining, there should be multiple blocks in caller's body.
-        assert!(
-            ctx.region(body).blocks.len() > 1,
-            "multi-block callee should leave caller with multiple blocks"
-        );
-        let (has_call, _) = scan_body(&ctx, body);
-        assert!(!has_call);
+        // v1 rejects multi-block callees to stay independent of the cf dialect.
+        let err = inline_single_call(&mut ctx, call_op, helper).unwrap_err();
+        assert_eq!(err, InlineError::MultiBlockCallee);
     }
 
     #[test]
@@ -870,6 +720,7 @@ mod pass {
     use crate::location::Span;
     use crate::*;
     use smallvec::smallvec;
+    use std::collections::BTreeMap;
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();

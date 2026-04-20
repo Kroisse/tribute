@@ -506,6 +506,11 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 /// Run the WASM target pipeline: lowering + cleanup.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
+
+    // General function inlining. The pass is single-block-only and cf-free,
+    // so its output stays within dialects WASM lowering already handles.
+    trunk_ir::transforms::inline::inline_functions(ctx, m);
+
     run_cleanup_passes(ctx, m);
     Ok(())
 }
@@ -514,16 +519,13 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
 
-    tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
-
-    // General function inlining runs AFTER evidence_to_native. That pass
-    // correlates Marker struct_new / evidence_lookup producer ops with
-    // their consumer calls via a per-block HashMap; inline's split-and-
-    // splice can move producer and consumer into different blocks, which
-    // would break the correlation and leave dead producers with live uses.
-    // Running inline afterwards avoids that because the rewrites have
-    // already collapsed those producer ops into opaque extern calls.
+    // General function inlining. Single-block-only (no `cf` dialect
+    // dependency), so it preserves the caller's block structure. That
+    // keeps `evidence_to_native`'s per-block producer/consumer correlation
+    // assumptions intact, and lets the same pass work on both backend paths.
     trunk_ir::transforms::inline::inline_functions(ctx, m);
+
+    tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
