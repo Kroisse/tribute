@@ -21,7 +21,11 @@ impl PluralExt for usize {
     }
 }
 
-/// Joins items from an iterator with a separator, returning a [`Display`](fmt::Display) value.
+/// Joins items from an iterator with a separator, returning a
+/// [`Display`](fmt::Display) value (lazy).
+///
+/// Thin wrapper over [`itertools::Itertools::format`]. Display the result at
+/// most once — the underlying iterator is consumed on first use.
 ///
 /// # Examples
 ///
@@ -38,36 +42,10 @@ impl PluralExt for usize {
 pub fn joined<'a, I>(sep: &'a str, iter: I) -> impl fmt::Display + 'a
 where
     I: IntoIterator + 'a,
-    I::IntoIter: Clone,
     I::Item: fmt::Display,
 {
-    struct Joined<'a, I> {
-        sep: &'a str,
-        iter: I,
-    }
-
-    impl<I> fmt::Display for Joined<'_, I>
-    where
-        I: Iterator + Clone,
-        I::Item: fmt::Display,
-    {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let mut first = true;
-            for item in self.iter.clone() {
-                if !first {
-                    f.write_str(self.sep)?;
-                }
-                first = false;
-                write!(f, "{item}")?;
-            }
-            Ok(())
-        }
-    }
-
-    Joined {
-        sep,
-        iter: iter.into_iter(),
-    }
+    use itertools::Itertools;
+    iter.into_iter().format(sep)
 }
 
 /// Like [`joined`], but uses a custom formatting closure for each item.

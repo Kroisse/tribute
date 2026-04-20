@@ -13,6 +13,7 @@ salsa = ["dep:salsa"]
 [dependencies]
 cranelift-entity.workspace = true
 inventory.workspace = true
+itertools.workspace = true
 lasso.workspace = true
 parking_lot.workspace = true
 paste.workspace = true

@@ -181,19 +181,14 @@ impl Builder {
     ) -> Option<Symbol> {
         let sym_name = self.extract_symbol_attr(ctx, op, &self.syms.sym_name)?;
         if module_path.is_empty() {
-            Some(sym_name)
-        } else {
-            let mut path = String::new();
-            for (i, seg) in module_path.iter().enumerate() {
-                if i > 0 {
-                    path.push_str("::");
-                }
-                seg.with_str(|s| path.push_str(s));
-            }
-            path.push_str("::");
-            sym_name.with_str(|s| path.push_str(s));
-            Some(Symbol::from_dynamic(&path))
+            return Some(sym_name);
         }
+        use itertools::Itertools;
+        let qualified = module_path
+            .iter()
+            .chain(std::iter::once(&sym_name))
+            .join("::");
+        Some(Symbol::from_dynamic(&qualified))
     }
 
     fn extend_module_path(

@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+itertools.workspace = true
 salsa.workspace = true
 serde.workspace = true
 target-lexicon.workspace = true
