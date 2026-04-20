@@ -495,7 +495,8 @@ fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conversio
     Ok(())
 }
 
-/// Run DCE + resolve_casts (shared cleanup after all lowering).
+/// Run inlining + DCE + resolve_casts (shared cleanup after all lowering).
+///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
     let tc = generic_type_converter(ctx);
@@ -505,6 +506,11 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 /// Run the WASM target pipeline: lowering + cleanup.
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
+
+    // General function inlining. The pass is single-block-only and cf-free,
+    // so its output stays within dialects WASM lowering already handles.
+    trunk_ir::transforms::inline::inline_functions(ctx, m);
+
     run_cleanup_passes(ctx, m);
     Ok(())
 }
@@ -512,6 +518,12 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
+
+    // General function inlining. Single-block-only (no `cf` dialect
+    // dependency), so it preserves the caller's block structure. That
+    // keeps `evidence_to_native`'s per-block producer/consumer correlation
+    // assumptions intact, and lets the same pass work on both backend paths.
+    trunk_ir::transforms::inline::inline_functions(ctx, m);
 
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
