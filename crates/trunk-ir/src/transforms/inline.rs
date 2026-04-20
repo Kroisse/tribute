@@ -18,11 +18,12 @@
 use std::collections::BTreeMap;
 
 use crate::context::{BlockArgData, IrContext};
-use crate::dialect::{cf, func};
+use crate::dialect::{cf, core, func};
 use crate::ir_mapping::IrMapping;
 use crate::ops::DialectOp;
+use crate::ops::DialectType;
 use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
-use crate::rewrite::helpers::{erase_op, inline_region_blocks, split_block};
+use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::types::Location;
 
 // =========================================================================
@@ -175,17 +176,25 @@ fn inline_regular_call(
     call_operands: &[ValueRef],
     loc: Location,
 ) -> Result<(), InlineError> {
-    // Snapshot result values & types before mutations.
-    let call_results: Vec<_> = ctx.op_results(call_op).to_vec();
-    let call_result_types: Vec<_> = ctx.op_result_types(call_op).to_vec();
+    // Snapshot result values & types before mutations. Skip nil-typed
+    // results: they are "void" in the backend type system and pass-through
+    // block args for them confuse cranelift lowering (same convention as
+    // `scf_to_cf`).
+    let call_results_and_types: Vec<_> = ctx
+        .op_results(call_op)
+        .iter()
+        .copied()
+        .zip(ctx.op_result_types(call_op).iter().copied())
+        .filter(|(_, ty)| !core::Nil::matches(ctx, *ty))
+        .collect();
 
     // 1. Split the caller block so call_op + everything after moves to
     //    `continuation_block`.
     let continuation_block = split_block(ctx, caller_block, call_op);
 
-    // 2. Add block args on the continuation block matching the call's
-    //    result types, then RAUW call results → continuation args.
-    for (result, ty) in call_results.iter().zip(call_result_types.iter()) {
+    // 2. Add block args on the continuation block for non-nil call results,
+    //    then RAUW call results → continuation args.
+    for (result, ty) in &call_results_and_types {
         let new_arg = ctx.add_block_arg(
             continuation_block,
             BlockArgData {
@@ -207,8 +216,11 @@ fn inline_regular_call(
     // 5. Rewrite each cloned `func.return %v` → `cf.br %v → continuation`.
     replace_returns_with_branches(ctx, cloned_entry, continuation_block, loc);
 
-    // 6. Erase the original call op. After RAUW its results have no uses.
-    erase_op(ctx, call_op);
+    // 6. Detach the original call op. Nil-typed results we filtered earlier
+    //    may still be referenced by downstream ops; `detach_op` (vs.
+    //    `erase_op`) matches the `scf_to_cf` lowering convention and keeps
+    //    those dangling SSA values live in the arena without breaking them.
+    ctx.detach_op(call_op);
 
     Ok(())
 }
@@ -233,7 +245,9 @@ fn inline_tail_call(
     inline_region_blocks(ctx, cloned_region, parent_region, None);
 
     // 2. Replace the tail-call terminator with `cf.br cloned_entry(...ops)`.
-    erase_op(ctx, call_op);
+    //    `detach_op` rather than `erase_op` keeps arena invariants stable
+    //    even if a nil-typed tail-call variant is ever introduced.
+    ctx.detach_op(call_op);
     let br_op = cf::br(ctx, loc, call_operands.iter().copied(), cloned_entry);
     ctx.push_op(caller_block, br_op.op_ref());
 
@@ -255,13 +269,9 @@ fn replace_returns_with_branches(
     target: BlockRef,
     loc: Location,
 ) {
-    // Walk all blocks in the region that became the cloned body. Since
-    // `inline_region_blocks` moved those blocks into `parent_region`, we'd
-    // like to limit rewrites to the just-inlined blocks.
-    //
-    // Trick: collect all blocks reachable from `entry_block` via successor
-    // edges. Since the cloned body is self-contained, this hits exactly the
-    // inlined blocks without touching pre-existing ones.
+    // Walk all blocks reachable from `entry_block`; these are exactly the
+    // just-inlined blocks (the cloned body is self-contained).
+    let target_arg_count = ctx.block_args(target).len();
     let mut visited: std::collections::HashSet<BlockRef> = std::collections::HashSet::new();
     let mut stack = vec![entry_block];
     while let Some(b) = stack.pop() {
@@ -271,7 +281,14 @@ fn replace_returns_with_branches(
         let ops: Vec<OpRef> = ctx.block(b).ops.to_vec();
         for op in ops {
             if func::Return::matches(ctx, op) {
-                let values: Vec<_> = ctx.op_operands(op).to_vec();
+                // If the target has fewer args than the return supplies
+                // (e.g., nil return filtered out), take only the first N.
+                let values: Vec<_> = ctx
+                    .op_operands(op)
+                    .iter()
+                    .copied()
+                    .take(target_arg_count)
+                    .collect();
                 let br = cf::br(ctx, loc, values, target);
                 ctx.remove_op_from_block(b, op);
                 ctx.push_op(b, br.op_ref());
@@ -284,6 +301,189 @@ fn replace_returns_with_branches(
             }
         }
     }
+}
+
+// =========================================================================
+// Policy
+// =========================================================================
+
+use super::call_graph::{CallGraph, build_call_graph, recursive_functions};
+use crate::rewrite::Module;
+use crate::symbol::Symbol;
+use std::collections::HashSet;
+
+/// Knobs for the inlining pass.
+#[derive(Debug, Clone)]
+pub struct InlineConfig {
+    /// Inline callees whose body has at most this many ops (summed across
+    /// all blocks and nested regions).
+    pub size_threshold: usize,
+    /// If true, always inline callees with exactly one static call site
+    /// (provided they do not escape via `func.constant`).
+    pub always_inline_single_call_site: bool,
+    /// If true, inline even when the callee is referenced by `func.constant`
+    /// somewhere. Defaults to false (conservative).
+    pub inline_across_func_constant: bool,
+}
+
+impl Default for InlineConfig {
+    fn default() -> Self {
+        Self {
+            size_threshold: 16,
+            always_inline_single_call_site: true,
+            inline_across_func_constant: false,
+        }
+    }
+}
+
+/// Count all ops in a `func.func`'s body (recursively through nested regions).
+fn op_count(ctx: &IrContext, func_op: OpRef) -> usize {
+    let regions: Vec<RegionRef> = ctx.op(func_op).regions.iter().copied().collect();
+    regions.iter().map(|&r| region_op_count(ctx, r)).sum()
+}
+
+fn region_op_count(ctx: &IrContext, region: RegionRef) -> usize {
+    let blocks: Vec<_> = ctx.region(region).blocks.iter().copied().collect();
+    let mut total = 0usize;
+    for block in blocks {
+        let ops: Vec<_> = ctx.block(block).ops.iter().copied().collect();
+        for op in ops {
+            total += 1;
+            let nested: Vec<_> = ctx.op(op).regions.iter().copied().collect();
+            for r in nested {
+                total += region_op_count(ctx, r);
+            }
+        }
+    }
+    total
+}
+
+/// Decide whether `callee` should be inlined based on the graph and config.
+fn should_inline(
+    graph: &CallGraph,
+    config: &InlineConfig,
+    recursive: &HashSet<Symbol>,
+    ctx: &IrContext,
+    callee: Symbol,
+) -> bool {
+    // Must have a body in this module.
+    let Some(&callee_op) = graph.func_ops.get(&callee) else {
+        return false;
+    };
+    if ctx.op(callee_op).regions.is_empty() {
+        return false;
+    }
+    // Skip extern/ABI functions: they are externally callable and the body
+    // may be empty or have calling-convention constraints.
+    if ctx
+        .op(callee_op)
+        .attributes
+        .contains_key(&Symbol::new("abi"))
+    {
+        return false;
+    }
+    // Skip recursive functions to avoid unbounded instantiation.
+    if recursive.contains(&callee) {
+        return false;
+    }
+    let escapes = graph.has_constant_ref.contains(&callee);
+
+    // Single-call-site rule (only when the callee doesn't escape).
+    if config.always_inline_single_call_site
+        && !escapes
+        && graph.call_site_count.get(&callee).copied().unwrap_or(0) == 1
+    {
+        return true;
+    }
+
+    // Size threshold.
+    if !escapes || config.inline_across_func_constant {
+        return op_count(ctx, callee_op) <= config.size_threshold;
+    }
+
+    false
+}
+
+// =========================================================================
+// Pass entry + worklist
+// =========================================================================
+
+/// Summary of an inlining run.
+#[derive(Debug, Default)]
+pub struct InlineResult {
+    pub inlined_count: usize,
+    /// Per-site: (caller, callee) qualified names.
+    pub inlined_sites: Vec<(Symbol, Symbol)>,
+}
+
+/// Run one pass of function inlining over `module` using default config.
+pub fn inline_functions(ctx: &mut IrContext, module: Module) -> InlineResult {
+    inline_functions_with_config(ctx, module, InlineConfig::default())
+}
+
+/// Run one pass of function inlining with custom config.
+pub fn inline_functions_with_config(
+    ctx: &mut IrContext,
+    module: Module,
+    config: InlineConfig,
+) -> InlineResult {
+    let graph = build_call_graph(ctx, module);
+    let recursive = recursive_functions(&graph);
+
+    // Snapshot all call sites first to avoid invalidation during mutation.
+    let candidates = collect_candidates(ctx, &graph);
+
+    let mut result = InlineResult::default();
+    for (caller, call_op, callee) in candidates {
+        if !should_inline(&graph, &config, &recursive, ctx, callee) {
+            continue;
+        }
+        let Some(&callee_op) = graph.func_ops.get(&callee) else {
+            continue;
+        };
+        match inline_single_call(ctx, call_op, callee_op) {
+            Ok(()) => {
+                result.inlined_count += 1;
+                result.inlined_sites.push((caller, callee));
+            }
+            Err(_) => {
+                // Silently skip; policy said yes but primitive rejected
+                // (e.g. callee has no body). Keep pass resilient.
+            }
+        }
+    }
+    result
+}
+
+/// Walk every `func.func` in the module and collect `(caller, call_op, callee)`
+/// for each `func.call` and `func.tail_call` site.
+fn collect_candidates(ctx: &IrContext, graph: &CallGraph) -> Vec<(Symbol, OpRef, Symbol)> {
+    use crate::walk::{WalkAction, walk_region};
+    use std::ops::ControlFlow;
+    let mut out = Vec::new();
+    let func_sym = Symbol::new("func");
+    let call_sym = Symbol::new("call");
+    let tail_call_sym = Symbol::new("tail_call");
+    let callee_attr = Symbol::new("callee");
+
+    for (&caller, &func_op) in &graph.func_ops {
+        let regions: Vec<RegionRef> = ctx.op(func_op).regions.iter().copied().collect();
+        for region in regions {
+            let _ = walk_region::<()>(ctx, region, &mut |op| {
+                let d = ctx.op(op).dialect;
+                let n = ctx.op(op).name;
+                if d == func_sym
+                    && (n == call_sym || n == tail_call_sym)
+                    && let Some(crate::types::Attribute::Symbol(s)) =
+                        ctx.op(op).attributes.get(&callee_attr)
+                {
+                    out.push((caller, op, *s));
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
+    }
+    out
 }
 
 // =========================================================================
@@ -661,5 +861,289 @@ mod mechanics {
             ControlFlow::Continue(WalkAction::Advance)
         });
         found
+    }
+}
+
+#[cfg(test)]
+mod pass {
+    use super::*;
+    use crate::location::Span;
+    use crate::*;
+    use smallvec::smallvec;
+
+    fn test_ctx() -> (IrContext, Location) {
+        let mut ctx = IrContext::new();
+        let path = ctx.paths.intern("test.trb".to_owned());
+        let loc = Location::new(path, Span::new(0, 0));
+        (ctx, loc)
+    }
+
+    fn i32_type(ctx: &mut IrContext) -> TypeRef {
+        ctx.types
+            .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build())
+    }
+
+    fn build_func<F>(
+        ctx: &mut IrContext,
+        loc: Location,
+        name: &str,
+        param_tys: &[TypeRef],
+        ret_ty: TypeRef,
+        body_builder: F,
+    ) -> OpRef
+    where
+        F: FnOnce(&mut IrContext, BlockRef, &[ValueRef]),
+    {
+        let fn_ty = {
+            let mut params = vec![ret_ty];
+            params.extend_from_slice(param_tys);
+            ctx.types.intern(
+                TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                    .params(params)
+                    .build(),
+            )
+        };
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: param_tys
+                .iter()
+                .map(|&ty| BlockArgData {
+                    ty,
+                    attrs: BTreeMap::new(),
+                })
+                .collect(),
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let args: Vec<_> = ctx.block_args(entry).to_vec();
+        body_builder(ctx, entry, &args);
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+    }
+
+    fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
+        let block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        for op in ops {
+            ctx.push_op(block, op);
+        }
+        let region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![block],
+            parent_op: None,
+        });
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .region(region)
+                .build(ctx);
+        let module_op = ctx.create_op(module_data);
+        Module::new(ctx, module_op).unwrap()
+    }
+
+    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: &str) -> usize {
+        use crate::walk::{WalkAction, walk_region};
+        use std::ops::ControlFlow;
+        let target = Symbol::from_dynamic(callee);
+        let mut count = 0;
+        let body = ctx.op(func_op).regions[0];
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if func::Call::matches(ctx, op)
+                && let Some(crate::types::Attribute::Symbol(s)) =
+                    ctx.op(op).attributes.get(&Symbol::new("callee"))
+                && *s == target
+            {
+                count += 1;
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        count
+    }
+
+    #[test]
+    fn inlines_small_single_call_site_helper() {
+        // helper() -> i32 { return 42 }   — 2 ops (const, return) → small
+        // main() -> i32 { return helper() }
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
+            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            ctx.push_op(entry, c.op_ref());
+            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("helper"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let module = build_module(&mut ctx, loc, vec![helper, main]);
+
+        let result = inline_functions(&mut ctx, module);
+        assert_eq!(result.inlined_count, 1);
+        assert_eq!(count_calls_to(&ctx, main, "helper"), 0);
+    }
+
+    #[test]
+    fn skips_recursive_function() {
+        // f() { return f() }  — self-recursion → must not inline
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let f = build_func(&mut ctx, loc, "f", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("f"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let module = build_module(&mut ctx, loc, vec![f]);
+
+        let result = inline_functions(&mut ctx, module);
+        assert_eq!(result.inlined_count, 0);
+        assert_eq!(count_calls_to(&ctx, f, "f"), 1);
+    }
+
+    #[test]
+    fn skips_when_escapes_via_func_constant() {
+        // helper() { ... }
+        // other() { %c = func.constant @helper; ... }  — helper escapes
+        // main() { helper() }  — would be single call site, but escapes
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
+            let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(42));
+            ctx.push_op(entry, c.op_ref());
+            let ret = func::r#return(ctx, loc, [c.result(ctx)]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let fn_ty_helper = ctx.op(helper).attributes.get(&Symbol::new("type")).cloned();
+        let helper_fn_ty = match fn_ty_helper {
+            Some(Attribute::Type(t)) => t,
+            _ => panic!("expected type attr"),
+        };
+
+        let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
+            let c = func::constant(ctx, loc, helper_fn_ty, Symbol::new("helper"));
+            ctx.push_op(entry, c.op_ref());
+            let z = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
+            ctx.push_op(entry, z.op_ref());
+            let ret = func::r#return(ctx, loc, [z.result(ctx)]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+
+        let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("helper"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let module = build_module(&mut ctx, loc, vec![helper, other, main]);
+
+        // Helper size is 2 ops (≤16) so size-threshold path would still accept
+        // under default config. But inline_across_func_constant=false → skip.
+        let result = inline_functions(&mut ctx, module);
+        assert_eq!(result.inlined_count, 0);
+        assert_eq!(count_calls_to(&ctx, main, "helper"), 1);
+    }
+
+    #[test]
+    fn respects_size_threshold() {
+        // helper is built with 20 ops; threshold=16 should skip it.
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let helper = build_func(&mut ctx, loc, "helper", &[], i32_ty, |ctx, entry, _args| {
+            // Chain 18 arith.const ops + 1 dummy + 1 return = 20 ops
+            let mut last = None;
+            for i in 0..19 {
+                let c = crate::dialect::arith::r#const(ctx, loc, i32_ty, Attribute::Int(i as i128));
+                ctx.push_op(entry, c.op_ref());
+                last = Some(c.result(ctx));
+            }
+            let ret = func::r#return(ctx, loc, [last.unwrap()]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        // Two call sites so single-call-site rule doesn't trigger.
+        let a = build_func(&mut ctx, loc, "a", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("helper"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let b = build_func(&mut ctx, loc, "b", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("helper"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let module = build_module(&mut ctx, loc, vec![helper, a, b]);
+
+        let result = inline_functions(&mut ctx, module);
+        assert_eq!(result.inlined_count, 0);
+    }
+
+    #[test]
+    fn skips_abi_function() {
+        // helper has abi attr — externally callable, skip even if small.
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = i32_type(&mut ctx);
+
+        let entry = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: smallvec![],
+            parent_region: None,
+        });
+        let c = crate::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c_result = c.result(&ctx);
+        ctx.push_op(entry, c.op_ref());
+        let ret = func::r#return(&mut ctx, loc, [c_result]);
+        ctx.push_op(entry, ret.op_ref());
+        let body = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![entry],
+            parent_op: None,
+        });
+
+        let fn_ty = ctx.types.intern(
+            TypeDataBuilder::new(Symbol::new("core"), Symbol::new("func"))
+                .params(vec![i32_ty])
+                .build(),
+        );
+        let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
+            .attr("type", Attribute::Type(fn_ty))
+            .attr("abi", Attribute::String("C".to_owned()))
+            .region(body)
+            .build(&mut ctx);
+        let helper = ctx.create_op(helper_data);
+
+        let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
+            let call = func::call(ctx, loc, std::iter::empty(), i32_ty, Symbol::new("helper"));
+            let r = call.result(ctx);
+            ctx.push_op(entry, call.op_ref());
+            let ret = func::r#return(ctx, loc, [r]);
+            ctx.push_op(entry, ret.op_ref());
+        });
+        let module = build_module(&mut ctx, loc, vec![helper, main]);
+
+        let result = inline_functions(&mut ctx, module);
+        assert_eq!(result.inlined_count, 0);
     }
 }

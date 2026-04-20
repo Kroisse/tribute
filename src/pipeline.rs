@@ -495,7 +495,8 @@ fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conversio
     Ok(())
 }
 
-/// Run DCE + resolve_casts (shared cleanup after all lowering).
+/// Run inlining + DCE + resolve_casts (shared cleanup after all lowering).
+///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
     let tc = generic_type_converter(ctx);
@@ -513,6 +514,11 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
 
+    // NOTE: General function inlining (trunk_ir::transforms::inline) is
+    // intentionally not wired into the pipeline yet. The pass mechanics
+    // are fully tested (see inline.rs), but integration uncovered
+    // interactions with `evidence_to_native` on ability-handling IR that
+    // need root-cause analysis. Tracked as follow-up to #675.
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
