@@ -9,6 +9,18 @@
 //! Design inspired by MLIR's `AnalysisManager`. See issue #679 for context
 //! and the follow-up roadmap (#680 hybrid inliner, #676 canonicalize).
 //!
+//! # Single-context invariant
+//!
+//! [`OpRef`] values are indices into a specific [`IrContext`]; the same
+//! numeric `OpRef` in a different context refers to an unrelated
+//! operation. An [`AnalysisManager`] must therefore be used with **one**
+//! context for its lifetime — sharing one manager across contexts would
+//! silently return cached analyses for unrelated ops. In debug builds,
+//! [`AnalysisManager::get`] records the
+//! [`IrContextId`](crate::IrContextId) of the first context it sees
+//! and `debug_assert!`s that subsequent calls present the same one.
+//! Release builds compile the check out entirely.
+//!
 //! # Usage
 //!
 //! ```ignore
@@ -33,6 +45,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::context::IrContext;
+#[cfg(debug_assertions)]
+use crate::context::IrContextId;
 use crate::refs::OpRef;
 
 /// An analysis computable from an IR context plus a target operation
@@ -48,9 +62,15 @@ pub trait Analysis: Any + Send + Sync {
 }
 
 /// Lazy, cached storage for analyses keyed by `(TypeId, OpRef)`.
+///
+/// See the [module docs](self) for the single-context invariant.
 #[derive(Default)]
 pub struct AnalysisManager {
     cache: HashMap<(TypeId, OpRef), Arc<dyn Any + Send + Sync>>,
+    /// [`IrContextId`] of the first context seen in [`Self::get`]. Only
+    /// consulted for a `debug_assert!`; release builds omit the field.
+    #[cfg(debug_assertions)]
+    bound_ctx_id: Option<IrContextId>,
 }
 
 impl AnalysisManager {
@@ -61,9 +81,14 @@ impl AnalysisManager {
 
     /// Compute (or return cached) analysis `A` for `target`.
     ///
+    /// The first call captures `ctx.id()`; in debug builds every
+    /// subsequent call asserts the same id. See the [module
+    /// docs](self) for why.
+    ///
     /// Returns an `Arc` so callers may hold the result across IR
     /// mutations without keeping the manager borrowed.
     pub fn get<A: Analysis>(&mut self, ctx: &IrContext, target: OpRef) -> Arc<A> {
+        self.bind_or_check_ctx(ctx);
         let key = (TypeId::of::<A>(), target);
         let entry = self
             .cache
@@ -72,6 +97,26 @@ impl AnalysisManager {
         Arc::clone(entry)
             .downcast::<A>()
             .expect("analysis cache type mismatch")
+    }
+
+    /// Debug-only: bind this manager to `ctx`'s id on first use and
+    /// verify subsequent uses carry the same id.
+    #[inline]
+    fn bind_or_check_ctx(&mut self, ctx: &IrContext) {
+        #[cfg(debug_assertions)]
+        {
+            match self.bound_ctx_id {
+                None => self.bound_ctx_id = Some(ctx.id()),
+                Some(seen) => debug_assert_eq!(
+                    seen,
+                    ctx.id(),
+                    "AnalysisManager used with a different IrContext than \
+                     the one it was first bound to; OpRefs are context-local, \
+                     so this would return cached analyses for unrelated ops."
+                ),
+            }
+        }
+        let _ = ctx;
     }
 
     /// Return the cached analysis `A` for `target` without computing it.
@@ -173,6 +218,34 @@ mod tests {
         // `get` rebuilds the analysis — a distinct `Arc` results.
         assert!(!Arc::ptr_eq(&a1, &a2));
         assert_eq!(a1.target, a2.target);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "AnalysisManager used with a different IrContext")]
+    fn debug_assert_fires_on_context_mix() {
+        let (ctx_a, op_a) = test_ctx();
+        let (ctx_b, _op_b) = test_ctx();
+        let mut am = AnalysisManager::new();
+
+        let _ = am.get::<DummyAnalysis>(&ctx_a, op_a);
+        // Second call with a different context must trip the guard.
+        let _ = am.get::<DummyAnalysis>(&ctx_b, op_a);
+    }
+
+    #[test]
+    fn context_id_survives_move() {
+        // Ensures the identity check keys off `IrContext::id()`, which
+        // travels with the struct, rather than the address (which
+        // changes on move).
+        let (ctx, op) = test_ctx();
+        let mut am = AnalysisManager::new();
+        let _ = am.get::<DummyAnalysis>(&ctx, op);
+
+        let ctx = ctx; // explicit rebind to make the move obvious
+        // Must not panic: same logical context, even if the address
+        // differs from the first call.
+        let _ = am.get::<DummyAnalysis>(&ctx, op);
     }
 
     #[test]

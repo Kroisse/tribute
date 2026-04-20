@@ -85,7 +85,19 @@ pub struct RegionData {
 ///
 /// Owns all IR entities and provides methods for creating, querying,
 /// and mutating them. Use-chains are automatically maintained.
+/// Opaque identifier uniquely tagging an [`IrContext`] instance.
+///
+/// Produced at context construction from a process-global monotonic
+/// counter. Stable for the context's lifetime regardless of moves,
+/// and distinct across different contexts. Used to verify that data
+/// holding context-local indices (e.g. [`OpRef`](crate::refs::OpRef))
+/// is not fed an unrelated context.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct IrContextId(u64);
+
 pub struct IrContext {
+    id: IrContextId,
+
     ops: PrimaryMap<OpRef, OperationData>,
     values: PrimaryMap<ValueRef, ValueData>,
     blocks: PrimaryMap<BlockRef, BlockData>,
@@ -121,7 +133,10 @@ pub struct IrContext {
 impl IrContext {
     /// Create a new empty IR context.
     pub fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         Self {
+            id: IrContextId(NEXT_ID.fetch_add(1, Ordering::Relaxed)),
             ops: PrimaryMap::new(),
             values: PrimaryMap::new(),
             blocks: PrimaryMap::new(),
@@ -138,6 +153,11 @@ impl IrContext {
             type_alias_by_type: HashMap::new(),
             diagnostics: RefCell::new(Vec::new()),
         }
+    }
+
+    /// Stable identifier for this context instance. See [`IrContextId`].
+    pub fn id(&self) -> IrContextId {
+        self.id
     }
 
     // ========================================================================
