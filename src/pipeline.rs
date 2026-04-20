@@ -514,12 +514,16 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), ConversionError> {
     run_lowering_pipeline(ctx, m)?;
 
-    // NOTE: General function inlining (trunk_ir::transforms::inline) is
-    // intentionally not wired into the pipeline yet. The pass mechanics
-    // are fully tested (see inline.rs), but integration uncovered
-    // interactions with `evidence_to_native` on ability-handling IR that
-    // need root-cause analysis. Tracked as follow-up to #675.
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
+
+    // General function inlining runs AFTER evidence_to_native. That pass
+    // correlates Marker struct_new / evidence_lookup producer ops with
+    // their consumer calls via a per-block HashMap; inline's split-and-
+    // splice can move producer and consumer into different blocks, which
+    // would break the correlation and leave dead producers with live uses.
+    // Running inline afterwards avoids that because the rewrites have
+    // already collapsed those producer ops into opaque extern calls.
+    trunk_ir::transforms::inline::inline_functions(ctx, m);
     if cfg!(debug_assertions) {
         let result = trunk_ir::validation::validate_value_integrity(ctx, m);
         if !result.is_ok() {
