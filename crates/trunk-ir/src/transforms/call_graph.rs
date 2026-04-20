@@ -197,7 +197,7 @@ impl Builder {
         op: OpRef,
         current_path: &[Symbol],
     ) -> Vec<Symbol> {
-        let nested_name = self.extract_symbol_attr(ctx, op, &self.syms.name_attr);
+        let nested_name = self.extract_symbol_attr(ctx, op, &self.syms.sym_name);
         if let Some(n) = nested_name {
             let mut p = current_path.to_vec();
             p.push(n);
@@ -281,7 +281,6 @@ struct Syms {
     sym_name: Symbol,
     callee: Symbol,
     func_ref: Symbol,
-    name_attr: Symbol,
     dialect_func: Symbol,
     dialect_core: Symbol,
 }
@@ -297,7 +296,6 @@ impl Syms {
             sym_name: Symbol::new("sym_name"),
             callee: Symbol::new("callee"),
             func_ref: Symbol::new("func_ref"),
-            name_attr: Symbol::new("name"),
             dialect_func: Symbol::new("func"),
             dialect_core: Symbol::new("core"),
         }
@@ -406,6 +404,11 @@ mod tests {
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
+        let module_op = build_module_op(ctx, loc, "test", ops);
+        Module::new(ctx, module_op).unwrap()
+    }
+
+    fn build_module_op(ctx: &mut IrContext, loc: Location, name: &str, ops: Vec<OpRef>) -> OpRef {
         let block = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -422,11 +425,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
                 .region(region)
                 .build(ctx);
-        let module_op = ctx.create_op(module_data);
-        Module::new(ctx, module_op).unwrap()
+        ctx.create_op(module_data)
     }
 
     #[test]
@@ -520,6 +522,29 @@ mod tests {
         let g = build_call_graph(&ctx, module);
         let rec = recursive_functions(&g);
         assert!(rec.is_empty());
+    }
+
+    #[test]
+    fn nested_module_qualifies_func_names() {
+        let (mut ctx, loc) = test_ctx();
+        // Outer module contains a nested `core.module` named "inner"
+        // with a single `func.func` named "foo". The call graph should
+        // record the function as `inner::foo`, not just `foo`.
+        let foo = simple_func(&mut ctx, loc, "foo");
+        let inner = build_module_op(&mut ctx, loc, "inner", vec![foo]);
+        let top = simple_func(&mut ctx, loc, "top");
+        let module = build_module(&mut ctx, loc, vec![inner, top]);
+
+        let g = build_call_graph(&ctx, module);
+        assert!(
+            g.func_ops.contains_key(&Symbol::from_dynamic("inner::foo")),
+            "expected qualified symbol `inner::foo`, got: {:?}",
+            g.func_ops.keys().collect::<Vec<_>>()
+        );
+        // Unqualified symbol should not leak through.
+        assert!(!g.func_ops.contains_key(&Symbol::new("foo")));
+        // Top-level function stays unqualified.
+        assert!(g.func_ops.contains_key(&Symbol::new("top")));
     }
 
     #[test]
