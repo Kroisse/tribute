@@ -162,7 +162,7 @@ pub fn inline_single_call(
 // Policy
 // =========================================================================
 
-use super::call_graph::{CallGraph, build_call_graph, recursive_functions};
+use super::call_graph::{CallGraph, recursive_functions};
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use std::collections::HashSet;
@@ -282,7 +282,23 @@ pub fn inline_functions_with_config(
     module: Module,
     config: InlineConfig,
 ) -> InlineResult {
-    let graph = build_call_graph(ctx, module);
+    let mut am = crate::analysis::AnalysisManager::new();
+    inline_functions_with_am(ctx, module, config, &mut am)
+}
+
+/// Run one pass of function inlining, consuming [`CallGraph`] from the
+/// provided [`AnalysisManager`](crate::analysis::AnalysisManager) and
+/// invalidating it on exit.
+///
+/// Use this entry point when another pass in the same pipeline step also
+/// wants the call graph, so the analysis is built once and shared.
+pub fn inline_functions_with_am(
+    ctx: &mut IrContext,
+    module: Module,
+    config: InlineConfig,
+    am: &mut crate::analysis::AnalysisManager,
+) -> InlineResult {
+    let graph = am.get::<CallGraph>(ctx, module.op());
     let recursive = recursive_functions(&graph);
 
     // Snapshot all call sites first to avoid invalidation during mutation.
@@ -306,6 +322,11 @@ pub fn inline_functions_with_config(
                 // (e.g. callee has no body). Keep pass resilient.
             }
         }
+    }
+
+    // Inlining rewrote call-site IR; the cached graph is stale.
+    if result.inlined_count > 0 {
+        am.invalidate::<CallGraph>(module.op());
     }
     result
 }
@@ -999,5 +1020,71 @@ mod pass {
 
         let result = inline_functions(&mut ctx, module);
         assert_eq!(result.inlined_count, 0);
+    }
+
+    #[test]
+    fn inline_with_am_invalidates_callgraph_after_mutation() {
+        use crate::analysis::AnalysisManager;
+        use crate::transforms::call_graph::CallGraph;
+
+        // Small helper + one call site: inliner should fire and invalidate
+        // the cached CallGraph.
+        let input = r#"core.module @test {
+  func.func @helper() -> core.i32 {
+    %0 = arith.const {value = 42} : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = func.call {callee = @helper} : core.i32
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let mut am = AnalysisManager::new();
+        // Seed the cache by pulling the graph once.
+        let pre = am.get::<CallGraph>(&ctx, module.op());
+        assert_eq!(pre.call_site_count.get(&Symbol::new("helper")), Some(&1));
+
+        let result = inline_functions_with_am(&mut ctx, module, InlineConfig::default(), &mut am);
+        assert_eq!(result.inlined_count, 1);
+
+        // Cached entry must have been dropped after inlining.
+        assert!(am.get_cached::<CallGraph>(module.op()).is_none());
+
+        // Freshly recomputed graph should reflect the rewritten IR: the
+        // call site is gone.
+        let post = am.get::<CallGraph>(&ctx, module.op());
+        assert_eq!(post.call_site_count.get(&Symbol::new("helper")), None);
+    }
+
+    #[test]
+    fn inline_with_am_leaves_cache_intact_when_no_rewrite() {
+        use crate::analysis::AnalysisManager;
+        use crate::transforms::call_graph::CallGraph;
+
+        // Recursive helper — policy rejects it, so nothing is inlined and
+        // the cached graph should still be valid.
+        let input = r#"core.module @test {
+  func.func @helper() -> core.i32 {
+    %0 = func.call {callee = @helper} : core.i32
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let mut am = AnalysisManager::new();
+        let before = am.get::<CallGraph>(&ctx, module.op());
+
+        let result = inline_functions_with_am(&mut ctx, module, InlineConfig::default(), &mut am);
+        assert_eq!(result.inlined_count, 0);
+
+        // No rewrite happened → cache preserved, same Arc.
+        let after = am
+            .get_cached::<CallGraph>(module.op())
+            .expect("cache should survive a no-op pass run");
+        assert!(std::sync::Arc::ptr_eq(&before, &after));
     }
 }

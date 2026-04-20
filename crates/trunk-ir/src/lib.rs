@@ -35,6 +35,7 @@ pub mod dialect;
 pub mod ir_mapping;
 
 // === IR infrastructure ===
+pub mod analysis;
 pub mod printer;
 pub mod rewrite;
 pub mod transforms;

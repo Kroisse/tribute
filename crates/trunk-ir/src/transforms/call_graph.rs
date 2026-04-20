@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
+use crate::analysis::Analysis;
 use crate::context::IrContext;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
@@ -47,6 +48,16 @@ pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
         builder.analyze_region(ctx, body, &[]);
     }
     builder.into_call_graph()
+}
+
+/// `CallGraph` as an [`Analysis`]: expects `target` to be a `core.module` op
+/// and delegates to [`build_call_graph`].
+impl Analysis for CallGraph {
+    fn compute(ctx: &IrContext, target: OpRef) -> Self {
+        let module =
+            Module::new(ctx, target).expect("CallGraph analysis target must be a `core.module` op");
+        build_call_graph(ctx, module)
+    }
 }
 
 /// Compute the SCC id for every function in the call graph using Tarjan's algorithm.
@@ -545,6 +556,41 @@ mod tests {
         assert!(!g.func_ops.contains_key(&Symbol::new("foo")));
         // Top-level function stays unqualified.
         assert!(g.func_ops.contains_key(&Symbol::new("top")));
+    }
+
+    #[test]
+    fn call_graph_as_analysis_matches_direct_build() {
+        use crate::analysis::AnalysisManager;
+
+        let input = r#"core.module @test {
+  func.func @leaf() -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = func.call {callee = @leaf} : core.i32
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let direct = build_call_graph(&ctx, module);
+
+        let mut am = AnalysisManager::new();
+        let cached = am.get::<CallGraph>(&ctx, module.op());
+
+        assert_eq!(direct.func_ops.len(), cached.func_ops.len());
+        assert_eq!(direct.edges.len(), cached.edges.len());
+        for (caller, callees) in &direct.edges {
+            assert_eq!(Some(callees), cached.edges.get(caller));
+        }
+        assert!(cached.func_ops.contains_key(&Symbol::new("leaf")));
+        assert!(cached.edges.contains_key(&Symbol::new("main")));
+
+        // Second call should hit the cache.
+        let cached2 = am.get::<CallGraph>(&ctx, module.op());
+        assert!(std::sync::Arc::ptr_eq(&cached, &cached2));
     }
 
     #[test]
