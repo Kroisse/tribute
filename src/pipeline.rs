@@ -509,7 +509,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conver
 
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
-    trunk_ir::transforms::inline::inline_functions(ctx, m);
+    trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
+        trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
+    });
 
     run_cleanup_passes(ctx, m);
     Ok(())
@@ -523,7 +525,9 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conv
     // dependency), so it preserves the caller's block structure. That
     // keeps `evidence_to_native`'s per-block producer/consumer correlation
     // assumptions intact, and lets the same pass work on both backend paths.
-    trunk_ir::transforms::inline::inline_functions(ctx, m);
+    trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
+        trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
+    });
 
     tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     if cfg!(debug_assertions) {
