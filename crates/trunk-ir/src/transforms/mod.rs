@@ -17,7 +17,7 @@ pub use global_dce::{
     eliminate_dead_functions_with_config,
 };
 pub use inline::{
-    InlineConfig, InlineError, InlineResult, inline_functions, inline_functions_with_am,
-    inline_functions_with_config, inline_single_call,
+    InlineConfig, InlineError, InlineResult, inline_functions, inline_functions_with_config,
+    inline_single_call,
 };
 pub use scf_to_cf::lower_scf_to_cf;

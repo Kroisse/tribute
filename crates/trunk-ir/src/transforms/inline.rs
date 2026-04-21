@@ -271,29 +271,25 @@ pub struct InlineResult {
     pub inlined_sites: Vec<(Symbol, Symbol)>,
 }
 
-/// Run one pass of function inlining over `module` using default config.
-pub fn inline_functions(ctx: &mut IrContext, module: Module) -> InlineResult {
-    inline_functions_with_config(ctx, module, InlineConfig::default())
-}
-
-/// Run one pass of function inlining with custom config.
-pub fn inline_functions_with_config(
+/// Run one pass of function inlining over `module` using default
+/// config. `am` is consumed for [`CallGraph`] access and invalidated
+/// iff at least one call site was rewritten.
+///
+/// Construct `am` at the pipeline level so that other passes in the
+/// same phase (e.g. a future canonicalize) can share the cached call
+/// graph. See [`crate::analysis`] module docs for the orchestration
+/// convention.
+pub fn inline_functions(
     ctx: &mut IrContext,
     module: Module,
-    config: InlineConfig,
+    am: &mut crate::analysis::AnalysisManager,
 ) -> InlineResult {
-    let mut am = crate::analysis::AnalysisManager::new();
-    inline_functions_with_am(ctx, module, config, &mut am)
+    inline_functions_with_config(ctx, module, InlineConfig::default(), am)
 }
 
-/// Run one pass of function inlining, consuming [`CallGraph`] from the
-/// provided [`AnalysisManager`](crate::analysis::AnalysisManager). The
-/// cached graph is invalidated only if at least one call site was
-/// actually rewritten; a no-op run leaves it intact for the next pass.
-///
-/// Use this entry point when another pass in the same pipeline step also
-/// wants the call graph, so the analysis is built once and shared.
-pub fn inline_functions_with_am(
+/// Run one pass of function inlining with custom config. See
+/// [`inline_functions`] for the `am` injection convention.
+pub fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
@@ -866,7 +862,8 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let result = inline_functions(&mut ctx, module);
+        let mut am = crate::analysis::AnalysisManager::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
         assert_eq!(count_calls_to(&ctx, main, "helper"), 0);
     }
@@ -886,7 +883,8 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![f]);
 
-        let result = inline_functions(&mut ctx, module);
+        let mut am = crate::analysis::AnalysisManager::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
         assert_eq!(count_calls_to(&ctx, f, "f"), 1);
     }
@@ -931,7 +929,8 @@ mod pass {
 
         // Helper size is 2 ops (≤16) so size-threshold path would still accept
         // under default config. But inline_across_func_constant=false → skip.
-        let result = inline_functions(&mut ctx, module);
+        let mut am = crate::analysis::AnalysisManager::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
         assert_eq!(count_calls_to(&ctx, main, "helper"), 1);
     }
@@ -970,7 +969,8 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, a, b]);
 
-        let result = inline_functions(&mut ctx, module);
+        let mut am = crate::analysis::AnalysisManager::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
     }
 
@@ -1019,7 +1019,8 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let result = inline_functions(&mut ctx, module);
+        let mut am = crate::analysis::AnalysisManager::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
     }
 
@@ -1048,7 +1049,7 @@ mod pass {
         let pre = am.get::<CallGraph>(&ctx, module.op());
         assert_eq!(pre.call_site_count.get(&Symbol::new("helper")), Some(&1));
 
-        let result = inline_functions_with_am(&mut ctx, module, InlineConfig::default(), &mut am);
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
 
         // Cached entry must have been dropped after inlining.
@@ -1079,7 +1080,7 @@ mod pass {
         let mut am = AnalysisManager::new();
         let before = am.get::<CallGraph>(&ctx, module.op());
 
-        let result = inline_functions_with_am(&mut ctx, module, InlineConfig::default(), &mut am);
+        let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
 
         // No rewrite happened → cache preserved, same Arc.
