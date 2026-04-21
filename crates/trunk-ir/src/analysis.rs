@@ -1,55 +1,57 @@
 //! Analysis framework for TrunkIR passes.
 //!
-//! [`AnalysisManager`] provides lazy, cached analyses with explicit
+//! [`AnalysisCache`] provides lazy, cached analyses with explicit
 //! invalidation semantics. Types implementing the [`Analysis`] trait are
 //! computed on demand and cached keyed by `(TypeId, OpRef)`; passes that
-//! mutate the IR are expected to call [`AnalysisManager::invalidate`] to
+//! mutate the IR are expected to call [`AnalysisCache::invalidate`] to
 //! keep downstream consumers correct.
 //!
 //! Design inspired by MLIR's `AnalysisManager`. See issue #679 for
 //! context and the follow-up roadmap (#680 hybrid inliner, #676
 //! canonicalize).
 //!
-//! # Ownership: injected from the orchestrator
+//! # Scope: pipeline-phase, injected into passes
 //!
-//! An [`AnalysisManager`] is constructed by the **pipeline orchestrator**
-//! next to the [`IrContext`] it intends to analyze, then **injected**
-//! into each pass that needs it. Concretely:
+//! An [`AnalysisCache`] is owned by the **pipeline orchestrator** for
+//! the duration of one pipeline phase and **injected** into each pass
+//! that needs it. The cache is short-lived — dropped when the phase
+//! returns — so cached [`OpRef`] keys never outlive the [`IrContext`]
+//! they refer to, and the "one cache = one context" invariant holds by
+//! construction rather than by a runtime guard.
+//!
+//! The [`AnalysisCache::scope`] helper bundles this pattern:
 //!
 //! ```ignore
 //! fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
-//!     let mut am = AnalysisManager::new();
-//!     inline_functions(ctx, m, InlineConfig::default(), &mut am);
-//!     // canonicalize(ctx, m, &mut am); — future pass sharing `am`
+//!     AnalysisCache::scope(ctx, |ctx, analyses| {
+//!         inline_functions(ctx, m, InlineConfig::default(), analyses);
+//!         // canonicalize(ctx, m, analyses); — future pass sharing `analyses`
+//!     });
 //! }
 //! ```
 //!
-//! The manager is short-lived (one pipeline phase), dropped together
-//! with its cache when the orchestrator returns. Because passes never
-//! construct their own `AnalysisManager`, the "one manager = one
-//! context" invariant holds by orchestration convention rather than by
-//! a runtime guard — [`OpRef`] values cached in the manager are only
-//! meaningful for the context they were computed against, and mixing
-//! would silently corrupt results.
+//! [`AnalysisCache::new`] is also available for tests or ad-hoc use,
+//! but orchestration code should prefer `scope` to make the phase
+//! boundary explicit.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use trunk_ir::analysis::AnalysisManager;
+//! use trunk_ir::analysis::AnalysisCache;
 //! use trunk_ir::transforms::CallGraph;
 //!
-//! let mut am = AnalysisManager::new();
-//! let graph = am.get::<CallGraph>(ctx, module.op());
+//! let mut analyses = AnalysisCache::new();
+//! let graph = analyses.get::<CallGraph>(ctx, module.op());
 //! // `graph: Arc<CallGraph>` — safe to hold while `ctx` is mutated.
 //! do_some_mutation(ctx);
-//! am.invalidate::<CallGraph>(module.op());
+//! analyses.invalidate::<CallGraph>(module.op());
 //! ```
 //!
 //! # Thread-safety
 //!
-//! `AnalysisManager` is not shared across threads; analyses are stored
-//! as `Arc<dyn Any + Send + Sync>` for future flexibility, but the
-//! manager itself is single-threaded.
+//! `AnalysisCache` is not shared across threads; analyses are stored as
+//! `Arc<dyn Any + Send + Sync>` for future flexibility, but the cache
+//! itself is single-threaded.
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
@@ -70,25 +72,48 @@ pub trait Analysis: Any + Send + Sync {
         Self: Sized;
 }
 
-/// Lazy, cached storage for analyses keyed by `(TypeId, OpRef)`.
+/// Lazy, typed cache of analyses keyed by `(TypeId, OpRef)`.
 ///
-/// See the [module docs](self) for the injection-based ownership
+/// See the [module docs](self) for the pipeline-scoped ownership
 /// model and the single-context invariant.
 #[derive(Default)]
-pub struct AnalysisManager {
+pub struct AnalysisCache {
     cache: HashMap<(TypeId, OpRef), Arc<dyn Any + Send + Sync>>,
 }
 
-impl AnalysisManager {
-    /// Create an empty analysis manager.
+impl AnalysisCache {
+    /// Create an empty cache. Prefer [`Self::scope`] in pipeline code.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Run `f` with a fresh cache scoped to this pipeline phase.
+    ///
+    /// The cache is constructed alongside `ctx`, passed into `f`, and
+    /// dropped when `f` returns. This encodes the "one cache per
+    /// pipeline phase, bound to one `IrContext`" convention at the
+    /// call site so passes in the same phase can share cached
+    /// analyses without the orchestrator having to juggle lifetimes by
+    /// hand.
+    ///
+    /// ```ignore
+    /// AnalysisCache::scope(ctx, |ctx, analyses| {
+    ///     inline_functions(ctx, m, InlineConfig::default(), analyses);
+    ///     // more passes sharing `analyses`…
+    /// });
+    /// ```
+    pub fn scope<R>(
+        ctx: &mut IrContext,
+        f: impl FnOnce(&mut IrContext, &mut AnalysisCache) -> R,
+    ) -> R {
+        let mut analyses = AnalysisCache::new();
+        f(ctx, &mut analyses)
     }
 
     /// Compute (or return cached) analysis `A` for `target`.
     ///
     /// Returns an `Arc` so callers may hold the result across IR
-    /// mutations without keeping the manager borrowed.
+    /// mutations without keeping the cache borrowed.
     pub fn get<A: Analysis>(&mut self, ctx: &IrContext, target: OpRef) -> Arc<A> {
         let key = (TypeId::of::<A>(), target);
         let entry = self
@@ -174,26 +199,26 @@ mod tests {
     #[test]
     fn get_returns_same_arc_on_cache_hit() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
+        let mut analyses = AnalysisCache::new();
 
-        let a1 = am.get::<DummyAnalysis>(&ctx, op);
-        let a2 = am.get::<DummyAnalysis>(&ctx, op);
+        let a1 = analyses.get::<DummyAnalysis>(&ctx, op);
+        let a2 = analyses.get::<DummyAnalysis>(&ctx, op);
 
         // Cache hit: both calls return the very same `Arc`, proving
         // `compute` was not re-invoked on the second `get`.
         assert!(Arc::ptr_eq(&a1, &a2));
         assert_eq!(a1.target, a2.target);
-        assert_eq!(am.len(), 1);
+        assert_eq!(analyses.len(), 1);
     }
 
     #[test]
     fn invalidate_forces_recompute() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
+        let mut analyses = AnalysisCache::new();
 
-        let a1 = am.get::<DummyAnalysis>(&ctx, op);
-        am.invalidate::<DummyAnalysis>(op);
-        let a2 = am.get::<DummyAnalysis>(&ctx, op);
+        let a1 = analyses.get::<DummyAnalysis>(&ctx, op);
+        analyses.invalidate::<DummyAnalysis>(op);
+        let a2 = analyses.get::<DummyAnalysis>(&ctx, op);
 
         // After invalidation the cached entry is dropped, so the next
         // `get` rebuilds the analysis — a distinct `Arc` results.
@@ -204,50 +229,60 @@ mod tests {
     #[test]
     fn get_cached_returns_none_before_compute() {
         let (_ctx, op) = test_ctx();
-        let am = AnalysisManager::new();
-        assert!(am.get_cached::<DummyAnalysis>(op).is_none());
+        let analyses = AnalysisCache::new();
+        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
     }
 
     #[test]
     fn get_cached_returns_some_after_compute() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
-        let _ = am.get::<DummyAnalysis>(&ctx, op);
-        assert!(am.get_cached::<DummyAnalysis>(op).is_some());
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op);
+        assert!(analyses.get_cached::<DummyAnalysis>(op).is_some());
     }
 
     #[test]
     fn invalidate_all_clears_all_analyses_for_target() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
-        let _ = am.get::<DummyAnalysis>(&ctx, op);
-        let _ = am.get::<OtherAnalysis>(&ctx, op);
-        assert_eq!(am.len(), 2);
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op);
+        let _ = analyses.get::<OtherAnalysis>(&ctx, op);
+        assert_eq!(analyses.len(), 2);
 
-        am.invalidate_all(op);
-        assert!(am.is_empty());
+        analyses.invalidate_all(op);
+        assert!(analyses.is_empty());
     }
 
     #[test]
     fn different_analyses_cached_independently() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
-        let _ = am.get::<DummyAnalysis>(&ctx, op);
-        let _ = am.get::<OtherAnalysis>(&ctx, op);
-        assert_eq!(am.len(), 2);
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op);
+        let _ = analyses.get::<OtherAnalysis>(&ctx, op);
+        assert_eq!(analyses.len(), 2);
 
-        am.invalidate::<DummyAnalysis>(op);
-        assert!(am.get_cached::<DummyAnalysis>(op).is_none());
-        assert!(am.get_cached::<OtherAnalysis>(op).is_some());
+        analyses.invalidate::<DummyAnalysis>(op);
+        assert!(analyses.get_cached::<DummyAnalysis>(op).is_none());
+        assert!(analyses.get_cached::<OtherAnalysis>(op).is_some());
     }
 
     #[test]
     fn clear_drops_every_entry() {
         let (ctx, op) = test_ctx();
-        let mut am = AnalysisManager::new();
-        let _ = am.get::<DummyAnalysis>(&ctx, op);
-        let _ = am.get::<OtherAnalysis>(&ctx, op);
-        am.clear();
-        assert!(am.is_empty());
+        let mut analyses = AnalysisCache::new();
+        let _ = analyses.get::<DummyAnalysis>(&ctx, op);
+        let _ = analyses.get::<OtherAnalysis>(&ctx, op);
+        analyses.clear();
+        assert!(analyses.is_empty());
+    }
+
+    #[test]
+    fn scope_provides_ctx_and_cache_together() {
+        let (mut ctx, op) = test_ctx();
+        let len = AnalysisCache::scope(&mut ctx, |_ctx, analyses| {
+            let _ = analyses.get::<DummyAnalysis>(_ctx, op);
+            analyses.len()
+        });
+        assert_eq!(len, 1);
     }
 }

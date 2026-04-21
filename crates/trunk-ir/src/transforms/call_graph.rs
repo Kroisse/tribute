@@ -560,7 +560,7 @@ mod tests {
 
     #[test]
     fn call_graph_as_analysis_matches_direct_build() {
-        use crate::analysis::AnalysisManager;
+        use crate::analysis::AnalysisCache;
 
         let input = r#"core.module @test {
   func.func @leaf() -> core.i32 {
@@ -577,7 +577,7 @@ mod tests {
 
         let direct = build_call_graph(&ctx, module);
 
-        let mut am = AnalysisManager::new();
+        let mut am = AnalysisCache::new();
         let cached = am.get::<CallGraph>(&ctx, module.op());
 
         assert_eq!(direct.func_ops.len(), cached.func_ops.len());

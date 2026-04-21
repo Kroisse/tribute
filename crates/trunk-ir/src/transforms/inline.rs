@@ -282,7 +282,7 @@ pub struct InlineResult {
 pub fn inline_functions(
     ctx: &mut IrContext,
     module: Module,
-    am: &mut crate::analysis::AnalysisManager,
+    am: &mut crate::analysis::AnalysisCache,
 ) -> InlineResult {
     inline_functions_with_config(ctx, module, InlineConfig::default(), am)
 }
@@ -293,7 +293,7 @@ pub fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
-    am: &mut crate::analysis::AnalysisManager,
+    am: &mut crate::analysis::AnalysisCache,
 ) -> InlineResult {
     let graph = am.get::<CallGraph>(ctx, module.op());
     let recursive = recursive_functions(&graph);
@@ -862,7 +862,7 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let mut am = crate::analysis::AnalysisManager::new();
+        let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
         assert_eq!(count_calls_to(&ctx, main, "helper"), 0);
@@ -883,7 +883,7 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![f]);
 
-        let mut am = crate::analysis::AnalysisManager::new();
+        let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
         assert_eq!(count_calls_to(&ctx, f, "f"), 1);
@@ -929,7 +929,7 @@ mod pass {
 
         // Helper size is 2 ops (≤16) so size-threshold path would still accept
         // under default config. But inline_across_func_constant=false → skip.
-        let mut am = crate::analysis::AnalysisManager::new();
+        let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
         assert_eq!(count_calls_to(&ctx, main, "helper"), 1);
@@ -969,7 +969,7 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, a, b]);
 
-        let mut am = crate::analysis::AnalysisManager::new();
+        let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
     }
@@ -1019,14 +1019,14 @@ mod pass {
         });
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let mut am = crate::analysis::AnalysisManager::new();
+        let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
     }
 
     #[test]
     fn inline_with_am_invalidates_callgraph_after_mutation() {
-        use crate::analysis::AnalysisManager;
+        use crate::analysis::AnalysisCache;
         use crate::transforms::call_graph::CallGraph;
 
         // Small helper + one call site: inliner should fire and invalidate
@@ -1044,7 +1044,7 @@ mod pass {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let mut am = AnalysisManager::new();
+        let mut am = AnalysisCache::new();
         // Seed the cache by pulling the graph once.
         let pre = am.get::<CallGraph>(&ctx, module.op());
         assert_eq!(pre.call_site_count.get(&Symbol::new("helper")), Some(&1));
@@ -1063,7 +1063,7 @@ mod pass {
 
     #[test]
     fn inline_with_am_leaves_cache_intact_when_no_rewrite() {
-        use crate::analysis::AnalysisManager;
+        use crate::analysis::AnalysisCache;
         use crate::transforms::call_graph::CallGraph;
 
         // Recursive helper — policy rejects it, so nothing is inlined and
@@ -1077,7 +1077,7 @@ mod pass {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let mut am = AnalysisManager::new();
+        let mut am = AnalysisCache::new();
         let before = am.get::<CallGraph>(&ctx, module.op());
 
         let result = inline_functions(&mut ctx, module, &mut am);
