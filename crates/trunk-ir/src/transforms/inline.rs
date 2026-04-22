@@ -190,9 +190,7 @@ use super::call_graph::{CallGraph, recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
 use crate::types::Attribute;
-use std::cell::RefCell;
 use std::collections::HashSet;
-use std::rc::Rc;
 use std::sync::Arc;
 
 /// Knobs for the inlining pass.
@@ -295,8 +293,6 @@ fn should_inline(
 #[derive(Debug, Default)]
 pub struct InlineResult {
     pub inlined_count: usize,
-    /// Per-site: (caller, callee) qualified names.
-    pub inlined_sites: Vec<(Symbol, Symbol)>,
 }
 
 /// Run one pass of function inlining over `module` using default
@@ -335,7 +331,7 @@ pub fn inline_functions_with_config(
 ) -> InlineResult {
     const OUTER_MAX_ITERATIONS: usize = 10;
 
-    let inlined_sites: Rc<RefCell<Vec<(Symbol, Symbol)>>> = Rc::new(RefCell::new(Vec::new()));
+    let mut inlined_count = 0usize;
 
     for _ in 0..OUTER_MAX_ITERATIONS {
         let graph = am.get::<CallGraph>(ctx, module.op());
@@ -345,7 +341,6 @@ pub fn inline_functions_with_config(
             graph: Arc::clone(&graph),
             recursive,
             config: config.clone(),
-            inlined_sites: Rc::clone(&inlined_sites),
         };
 
         let applicator = PatternApplicator::new(TypeConverter::new())
@@ -355,17 +350,13 @@ pub fn inline_functions_with_config(
         if result.total_changes == 0 {
             break;
         }
+        inlined_count += result.total_changes;
         // Rewrites happened this iteration — drop the cached graph so the
         // next `am.get::<CallGraph>` rebuilds against the current IR.
         am.invalidate::<CallGraph>(module.op());
     }
 
-    let sites = inlined_sites.borrow().clone();
-    let inlined_count = sites.len();
-    InlineResult {
-        inlined_count,
-        inlined_sites: sites,
-    }
+    InlineResult { inlined_count }
 }
 
 // =========================================================================
@@ -394,41 +385,16 @@ pub struct InlineCallSite {
     graph: Arc<CallGraph>,
     recursive: HashSet<Symbol>,
     config: InlineConfig,
-    inlined_sites: Rc<RefCell<Vec<(Symbol, Symbol)>>>,
 }
 
 impl InlineCallSite {
-    /// Build a pattern against `graph` + `recursive` using `config`. The
-    /// caller receives an opaque handle so they can read inlined sites
-    /// after the applicator finishes.
-    pub fn new(
-        graph: Arc<CallGraph>,
-        recursive: HashSet<Symbol>,
-        config: InlineConfig,
-    ) -> (Self, InlinedSitesHandle) {
-        let inlined_sites = Rc::new(RefCell::new(Vec::new()));
-        let handle = InlinedSitesHandle(Rc::clone(&inlined_sites));
-        (
-            Self {
-                graph,
-                recursive,
-                config,
-                inlined_sites,
-            },
-            handle,
-        )
-    }
-}
-
-/// Opaque handle returned by [`InlineCallSite::new`] giving read access to
-/// the `(caller, callee)` pairs inlined by the pattern after the
-/// applicator finishes.
-pub struct InlinedSitesHandle(Rc<RefCell<Vec<(Symbol, Symbol)>>>);
-
-impl InlinedSitesHandle {
-    /// Snapshot the sites accumulated so far.
-    pub fn sites(&self) -> Vec<(Symbol, Symbol)> {
-        self.0.borrow().clone()
+    /// Build a pattern against `graph` + `recursive` using `config`.
+    pub fn new(graph: Arc<CallGraph>, recursive: HashSet<Symbol>, config: InlineConfig) -> Self {
+        Self {
+            graph,
+            recursive,
+            config,
+        }
     }
 }
 
@@ -474,34 +440,11 @@ impl RewritePattern for InlineCallSite {
         } else {
             rewriter.erase_op(ret_values);
         }
-
-        let caller = enclosing_func_name(ctx, &self.graph, op).unwrap_or(callee);
-        self.inlined_sites.borrow_mut().push((caller, callee));
         true
     }
 
     fn name(&self) -> &'static str {
         "InlineCallSite"
-    }
-}
-
-/// Walk up from `op` through enclosing block/region/op chains until the
-/// nearest `func.func` is reached, then reverse-lookup its qualified name
-/// in `graph.func_ops`. Returns `None` if no enclosing `func.func` exists
-/// or its op is not recorded in the graph.
-fn enclosing_func_name(ctx: &IrContext, graph: &CallGraph, op: OpRef) -> Option<Symbol> {
-    let mut cursor = op;
-    loop {
-        let parent_block = ctx.op(cursor).parent_block?;
-        let parent_region = ctx.block(parent_block).parent_region?;
-        let parent_op = ctx.region(parent_region).parent_op?;
-        if func::Func::matches(ctx, parent_op) {
-            return graph
-                .func_ops
-                .iter()
-                .find_map(|(name, &op_ref)| (op_ref == parent_op).then_some(*name));
-        }
-        cursor = parent_op;
     }
 }
 
@@ -1384,12 +1327,12 @@ mod pass {
         let graph = am.get::<CallGraph>(&ctx, module.op());
         let recursive = recursive_functions(&graph);
 
-        let (inline_pattern, handle) =
+        let inline_pattern =
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
 
-        let fold_counter = Rc::new(Cell::new(0usize));
+        let fold_counter = std::rc::Rc::new(Cell::new(0usize));
         let fold_pattern = AddZeroFold {
-            counter: Rc::clone(&fold_counter),
+            counter: std::rc::Rc::clone(&fold_counter),
         };
 
         {
@@ -1399,19 +1342,16 @@ mod pass {
             applicator.apply_partial(&mut ctx, module);
         }
 
-        // Both patterns fired during the run.
-        assert_eq!(
-            handle.sites().len(),
-            1,
-            "expected inliner to fire on the single call site"
-        );
+        // Fold must have fired at least once on the inlined `arith.add`.
         assert!(
             fold_counter.get() > 0,
             "expected add-zero fold to fire at least once"
         );
 
         // End state: `main` has no calls and no `arith.add` — just the
-        // const + return left.
+        // const + return left. This is the composition property: the
+        // inliner exposed the `arith.add %5, %0` inside `main`, and the
+        // fold pattern erased it in the same applicator sweep.
         let main_op = graph
             .func_ops
             .get(&Symbol::new("main"))
@@ -1449,7 +1389,7 @@ mod pass {
     /// `arith.const {value = 0}`, and erases the add while mapping its
     /// result back to `%x`.
     struct AddZeroFold {
-        counter: Rc<std::cell::Cell<usize>>,
+        counter: std::rc::Rc<std::cell::Cell<usize>>,
     }
 
     impl RewritePattern for AddZeroFold {
