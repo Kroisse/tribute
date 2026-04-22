@@ -373,7 +373,7 @@ pub fn inline_functions_with_config(
 /// to stale `call_site_count`: once an earlier rewrite duplicates a
 /// previously-single-site callee across several newly-exposed call
 /// sites, the heuristic would otherwise take the single-site fast path
-/// N times over, spliicing a potentially large callee body into every
+/// N times over, splicing a potentially large callee body into every
 /// caller.
 ///
 /// [`inline_functions_with_config`] handles this by rebuilding the
@@ -1198,7 +1198,7 @@ mod pass {
         //
         // The expected end state preserves the pre-refactor policy:
         // `large` is inlined into `wrapper` (1 extra copy), but neither
-        // `a` nor `b` is splic ed; both keep `call @large`.
+        // `a` nor `b` is spliced; both keep `call @large`.
         let mut input = String::from(
             "core.module @test {\n\
   func.func @a() -> core.i32 {\n\
