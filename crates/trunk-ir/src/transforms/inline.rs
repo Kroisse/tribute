@@ -72,6 +72,49 @@ pub fn inline_single_call(
     if !is_tail && !is_regular {
         return Err(InlineError::NotACall);
     }
+
+    let call_loc = ctx.op(call_op).location;
+    let ret_values = splice_callee_body_before(ctx, call_op, callee_func_op)?;
+
+    if is_tail {
+        // Replace the tail-call terminator with an equivalent `func.return`.
+        let caller_block = ctx
+            .op(call_op)
+            .parent_block
+            .ok_or(InlineError::CallOpDetached)?;
+        let new_ret = func::r#return(ctx, call_loc, ret_values);
+        ctx.insert_op_before(caller_block, call_op, new_ret.op_ref());
+        ctx.detach_op(call_op);
+    } else {
+        // Regular call: RAUW each call result with its mapped return value,
+        // then detach the original call op.
+        let call_results: Vec<_> = ctx.op_results(call_op).to_vec();
+        for (call_result, ret_val) in call_results.iter().zip(ret_values.iter()) {
+            ctx.replace_all_uses(*call_result, *ret_val);
+        }
+        ctx.detach_op(call_op);
+    }
+
+    Ok(())
+}
+
+/// Clone the callee's body (all ops before its `func.return`) into the caller
+/// block immediately before `call_op`, threading `call_op`'s operands through
+/// the callee's entry-block parameters. Returns the mapped return values that
+/// `call_op`'s results should be replaced with; the caller decides how to
+/// consume them (RAUW + detach for a regular call, new `func.return` for a
+/// tail call).
+///
+/// This is the pure splicing primitive used by both [`inline_single_call`]
+/// and the pattern-based inliner. It does *not* mutate `call_op` itself.
+fn splice_callee_body_before(
+    ctx: &mut IrContext,
+    call_op: OpRef,
+    callee_func_op: OpRef,
+) -> Result<Vec<ValueRef>, InlineError> {
+    if !func::Call::matches(ctx, call_op) && !func::TailCall::matches(ctx, call_op) {
+        return Err(InlineError::NotACall);
+    }
     if !func::Func::matches(ctx, callee_func_op) {
         return Err(InlineError::NotAFunc);
     }
@@ -80,8 +123,6 @@ pub fn inline_single_call(
         .op(call_op)
         .parent_block
         .ok_or(InlineError::CallOpDetached)?;
-
-    let call_loc = ctx.op(call_op).location;
 
     // Callee body & entry block (must be single-block).
     let callee_body = ctx
@@ -134,28 +175,11 @@ pub fn inline_single_call(
 
     // Map the callee's return operands through the value mapping. These are
     // what the call site's result values should effectively become.
-    let ret_values: Vec<ValueRef> = ctx
+    Ok(ctx
         .op_operands(*ret_op)
         .iter()
         .map(|v| mapping.lookup_value_or_default(*v))
-        .collect();
-
-    if is_tail {
-        // Replace the tail-call terminator with an equivalent `func.return`.
-        let new_ret = func::r#return(ctx, call_loc, ret_values);
-        ctx.insert_op_before(caller_block, call_op, new_ret.op_ref());
-        ctx.detach_op(call_op);
-    } else {
-        // Regular call: RAUW each call result with its mapped return value,
-        // then detach the original call op.
-        let call_results: Vec<_> = ctx.op_results(call_op).to_vec();
-        for (call_result, ret_val) in call_results.iter().zip(ret_values.iter()) {
-            ctx.replace_all_uses(*call_result, *ret_val);
-        }
-        ctx.detach_op(call_op);
-    }
-
-    Ok(())
+        .collect())
 }
 
 // =========================================================================
@@ -163,9 +187,13 @@ pub fn inline_single_call(
 // =========================================================================
 
 use super::call_graph::{CallGraph, recursive_functions};
-use crate::rewrite::Module;
+use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
+use crate::types::Attribute;
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
+use std::sync::Arc;
 
 /// Knobs for the inlining pass.
 #[derive(Debug, Clone)]
@@ -289,6 +317,12 @@ pub fn inline_functions(
 
 /// Run one pass of function inlining with custom config. See
 /// [`inline_functions`] for the `am` injection convention.
+///
+/// Internally drives the [`InlineCallSite`] pattern through a
+/// [`PatternApplicator`] so that each rewrite can expose follow-up
+/// inlining in the same pass run (fixed-point iteration) and so the
+/// pattern composes with other rewrite patterns when registered in the
+/// same applicator.
 pub fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
@@ -298,28 +332,25 @@ pub fn inline_functions_with_config(
     let graph = am.get::<CallGraph>(ctx, module.op());
     let recursive = recursive_functions(&graph);
 
-    // Snapshot all call sites first to avoid invalidation during mutation.
-    let candidates = collect_candidates(ctx, &graph);
+    let inlined_sites = Rc::new(RefCell::new(Vec::<(Symbol, Symbol)>::new()));
+    let pattern = InlineCallSite {
+        graph: Arc::clone(&graph),
+        recursive,
+        config,
+        inlined_sites: Rc::clone(&inlined_sites),
+    };
 
-    let mut result = InlineResult::default();
-    for (caller, call_op, callee) in candidates {
-        if !should_inline(&graph, &config, &recursive, ctx, callee) {
-            continue;
-        }
-        let Some(&callee_op) = graph.func_ops.get(&callee) else {
-            continue;
-        };
-        match inline_single_call(ctx, call_op, callee_op) {
-            Ok(()) => {
-                result.inlined_count += 1;
-                result.inlined_sites.push((caller, callee));
-            }
-            Err(_) => {
-                // Silently skip; policy said yes but primitive rejected
-                // (e.g. callee has no body). Keep pass resilient.
-            }
-        }
+    {
+        let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(pattern);
+        applicator.apply_partial(ctx, module);
     }
+
+    let sites = inlined_sites.borrow().clone();
+    let inlined_count = sites.len();
+    let result = InlineResult {
+        inlined_count,
+        inlined_sites: sites,
+    };
 
     // Inlining rewrote call-site IR; the cached graph is stale.
     if result.inlined_count > 0 {
@@ -328,35 +359,141 @@ pub fn inline_functions_with_config(
     result
 }
 
-/// Walk every `func.func` in the module and collect `(caller, call_op, callee)`
-/// for each `func.call` and `func.tail_call` site.
-fn collect_candidates(ctx: &IrContext, graph: &CallGraph) -> Vec<(Symbol, OpRef, Symbol)> {
-    use crate::walk::{WalkAction, walk_region};
-    use std::ops::ControlFlow;
-    let mut out = Vec::new();
-    let func_sym = Symbol::new("func");
-    let call_sym = Symbol::new("call");
-    let tail_call_sym = Symbol::new("tail_call");
-    let callee_attr = Symbol::new("callee");
+// =========================================================================
+// InlineCallSite pattern
+// =========================================================================
 
-    for (&caller, &func_op) in &graph.func_ops {
-        let regions: Vec<RegionRef> = ctx.op(func_op).regions.iter().copied().collect();
-        for region in regions {
-            let _ = walk_region::<()>(ctx, region, &mut |op| {
-                let d = ctx.op(op).dialect;
-                let n = ctx.op(op).name;
-                if d == func_sym
-                    && (n == call_sym || n == tail_call_sym)
-                    && let Some(crate::types::Attribute::Symbol(s)) =
-                        ctx.op(op).attributes.get(&callee_attr)
-                {
-                    out.push((caller, op, *s));
-                }
-                ControlFlow::Continue(WalkAction::Advance)
-            });
-        }
+/// A per-call-site rewrite pattern that inlines a `func.call` /
+/// `func.tail_call` whose callee satisfies [`InlineConfig`]-driven policy.
+///
+/// Analysis (call graph, recursion set, config) is captured at pattern
+/// construction and reused across fixed-point iterations of the
+/// [`PatternApplicator`]. The captured graph may become stale after a
+/// rewrite: newly exposed calls are still handled correctly under the
+/// current policy because
+///
+/// * `func_ops` and `has_constant_ref` only grow (or stay) during a pass,
+/// * `call_site_count` tracks the *original* number of static sites, which
+///   is a conservative over-approximation once a call is inlined (the
+///   single-call-site rule still fires correctly at the newly exposed
+///   call because it was the only site), and
+/// * recursion membership is unchanged by inlining.
+///
+/// When hotter rebuild-per-iteration semantics are needed, recompute and
+/// re-register the pattern outside the applicator.
+pub struct InlineCallSite {
+    graph: Arc<CallGraph>,
+    recursive: HashSet<Symbol>,
+    config: InlineConfig,
+    inlined_sites: Rc<RefCell<Vec<(Symbol, Symbol)>>>,
+}
+
+impl InlineCallSite {
+    /// Build a pattern against `graph` + `recursive` using `config`. The
+    /// caller receives an opaque handle so they can read inlined sites
+    /// after the applicator finishes.
+    pub fn new(
+        graph: Arc<CallGraph>,
+        recursive: HashSet<Symbol>,
+        config: InlineConfig,
+    ) -> (Self, InlinedSitesHandle) {
+        let inlined_sites = Rc::new(RefCell::new(Vec::new()));
+        let handle = InlinedSitesHandle(Rc::clone(&inlined_sites));
+        (
+            Self {
+                graph,
+                recursive,
+                config,
+                inlined_sites,
+            },
+            handle,
+        )
     }
-    out
+}
+
+/// Opaque handle returned by [`InlineCallSite::new`] giving read access to
+/// the `(caller, callee)` pairs inlined by the pattern after the
+/// applicator finishes.
+pub struct InlinedSitesHandle(Rc<RefCell<Vec<(Symbol, Symbol)>>>);
+
+impl InlinedSitesHandle {
+    /// Snapshot the sites accumulated so far.
+    pub fn sites(&self) -> Vec<(Symbol, Symbol)> {
+        self.0.borrow().clone()
+    }
+}
+
+impl RewritePattern for InlineCallSite {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let is_tail = func::TailCall::matches(ctx, op);
+        let is_regular = func::Call::matches(ctx, op);
+        if !is_tail && !is_regular {
+            return false;
+        }
+
+        let callee = match ctx.op(op).attributes.get(&Symbol::new("callee")) {
+            Some(Attribute::Symbol(s)) => *s,
+            _ => return false,
+        };
+
+        if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee) {
+            return false;
+        }
+
+        let Some(&callee_op) = self.graph.func_ops.get(&callee) else {
+            return false;
+        };
+
+        let call_loc = ctx.op(op).location;
+        let ret_values = match splice_callee_body_before(ctx, op, callee_op) {
+            Ok(v) => v,
+            Err(_) => {
+                // Policy said yes but primitive rejected (e.g. callee has
+                // no body). Keep pass resilient.
+                return false;
+            }
+        };
+
+        if is_tail {
+            let new_ret = func::r#return(ctx, call_loc, ret_values).op_ref();
+            rewriter.replace_op(new_ret);
+        } else {
+            rewriter.erase_op(ret_values);
+        }
+
+        let caller = enclosing_func_name(ctx, &self.graph, op).unwrap_or(callee);
+        self.inlined_sites.borrow_mut().push((caller, callee));
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "InlineCallSite"
+    }
+}
+
+/// Walk up from `op` through enclosing block/region/op chains until the
+/// nearest `func.func` is reached, then reverse-lookup its qualified name
+/// in `graph.func_ops`. Returns `None` if no enclosing `func.func` exists
+/// or its op is not recorded in the graph.
+fn enclosing_func_name(ctx: &IrContext, graph: &CallGraph, op: OpRef) -> Option<Symbol> {
+    let mut cursor = op;
+    loop {
+        let parent_block = ctx.op(cursor).parent_block?;
+        let parent_region = ctx.block(parent_block).parent_region?;
+        let parent_op = ctx.region(parent_region).parent_op?;
+        if func::Func::matches(ctx, parent_op) {
+            return graph
+                .func_ops
+                .iter()
+                .find_map(|(name, &op_ref)| (op_ref == parent_op).then_some(*name));
+        }
+        cursor = parent_op;
+    }
 }
 
 // =========================================================================
@@ -1088,5 +1225,184 @@ mod pass {
             .get_cached::<CallGraph>(module.op())
             .expect("cache should survive a no-op pass run");
         assert!(std::sync::Arc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn reaches_fixed_point_on_chain_of_inlineable_calls() {
+        use crate::analysis::AnalysisCache;
+
+        // inner() -> 1
+        // helper() -> inner()
+        // main() -> helper()
+        //
+        // All three are small, single-call-site, non-recursive. A single
+        // invocation of `inline_functions` should drive the applicator to
+        // a fixed point that eliminates both `func.call` sites in one run.
+        let input = r#"core.module @test {
+  func.func @inner() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    func.return %0
+  }
+  func.func @helper() -> core.i32 {
+    %0 = func.call {callee = @inner} : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = func.call {callee = @helper} : core.i32
+    func.return %0
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let mut am = AnalysisCache::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
+
+        // Two call sites are eliminated in a single pass run.
+        assert_eq!(result.inlined_count, 2);
+
+        // Fresh graph must contain no call edges at all.
+        let post = am.get::<CallGraph>(&ctx, module.op());
+        assert!(post.call_site_count.is_empty());
+    }
+
+    #[test]
+    fn composes_with_another_rewrite_pattern_in_same_applicator() {
+        use crate::analysis::AnalysisCache;
+        use crate::rewrite::{PatternApplicator, TypeConverter};
+        use std::cell::Cell;
+
+        // helper(%arg) -> %arg + 0
+        // main()       -> helper(5)
+        //
+        // Running the inliner pattern alongside a "x + 0 → x" fold pattern
+        // in the same applicator drives both to fixed point: inlining
+        // exposes `arith.add %5, %0` inside `main`, the fold pattern erases
+        // it, and the final result contains a single constant + return.
+        let input = r#"core.module @test {
+  func.func @helper(%arg: core.i32) -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    %1 = arith.add %arg, %0 : core.i32
+    func.return %1
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 5} : core.i32
+    %1 = func.call %0 {callee = @helper} : core.i32
+    func.return %1
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let mut am = AnalysisCache::new();
+        let graph = am.get::<CallGraph>(&ctx, module.op());
+        let recursive = recursive_functions(&graph);
+
+        let (inline_pattern, handle) =
+            InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
+
+        let fold_counter = Rc::new(Cell::new(0usize));
+        let fold_pattern = AddZeroFold {
+            counter: Rc::clone(&fold_counter),
+        };
+
+        {
+            let applicator = PatternApplicator::new(TypeConverter::new())
+                .add_pattern(inline_pattern)
+                .add_pattern(fold_pattern);
+            applicator.apply_partial(&mut ctx, module);
+        }
+
+        // Both patterns fired during the run.
+        assert_eq!(
+            handle.sites().len(),
+            1,
+            "expected inliner to fire on the single call site"
+        );
+        assert!(
+            fold_counter.get() > 0,
+            "expected add-zero fold to fire at least once"
+        );
+
+        // End state: `main` has no calls and no `arith.add` — just the
+        // const + return left.
+        let main_op = graph
+            .func_ops
+            .get(&Symbol::new("main"))
+            .copied()
+            .expect("main must be in the graph");
+        let body = ctx.op(main_op).regions[0];
+        let (has_call, has_add) = scan_main_body(&ctx, body);
+        assert!(!has_call, "main should not contain any calls after run");
+        assert!(
+            !has_add,
+            "main should not contain any arith.add after composition"
+        );
+    }
+
+    fn scan_main_body(ctx: &IrContext, region: crate::refs::RegionRef) -> (bool, bool) {
+        use crate::walk::{WalkAction, walk_region};
+        use std::ops::ControlFlow;
+        let mut has_call = false;
+        let mut has_add = false;
+        let _ = walk_region::<()>(ctx, region, &mut |op| {
+            if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
+                has_call = true;
+            }
+            if ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("add") {
+                has_add = true;
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        (has_call, has_add)
+    }
+
+    /// Tiny "x + 0 → x" folding pattern for the composition test.
+    ///
+    /// Matches `arith.add %x, %y` where `%y` is the result of
+    /// `arith.const {value = 0}`, and erases the add while mapping its
+    /// result back to `%x`.
+    struct AddZeroFold {
+        counter: Rc<std::cell::Cell<usize>>,
+    }
+
+    impl RewritePattern for AddZeroFold {
+        fn match_and_rewrite(
+            &self,
+            ctx: &mut IrContext,
+            op: OpRef,
+            rewriter: &mut PatternRewriter<'_>,
+        ) -> bool {
+            if ctx.op(op).dialect != Symbol::new("arith") || ctx.op(op).name != Symbol::new("add") {
+                return false;
+            }
+            let operands = ctx.op_operands(op).to_vec();
+            if operands.len() != 2 {
+                return false;
+            }
+            let rhs_def = match ctx.value_def(operands[1]) {
+                crate::refs::ValueDef::OpResult(def_op, _) => def_op,
+                _ => return false,
+            };
+            if ctx.op(rhs_def).dialect != Symbol::new("arith")
+                || ctx.op(rhs_def).name != Symbol::new("const")
+            {
+                return false;
+            }
+            let is_zero = matches!(
+                ctx.op(rhs_def).attributes.get(&Symbol::new("value")),
+                Some(Attribute::Int(0))
+            );
+            if !is_zero {
+                return false;
+            }
+            rewriter.erase_op(vec![operands[0]]);
+            self.counter.set(self.counter.get() + 1);
+            true
+        }
+
+        fn name(&self) -> &'static str {
+            "AddZeroFold"
+        }
     }
 }
