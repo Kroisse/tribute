@@ -318,45 +318,54 @@ pub fn inline_functions(
 /// Run one pass of function inlining with custom config. See
 /// [`inline_functions`] for the `am` injection convention.
 ///
-/// Internally drives the [`InlineCallSite`] pattern through a
-/// [`PatternApplicator`] so that each rewrite can expose follow-up
-/// inlining in the same pass run (fixed-point iteration) and so the
-/// pattern composes with other rewrite patterns when registered in the
-/// same applicator.
+/// Drives the [`InlineCallSite`] pattern through a
+/// [`PatternApplicator`] one iteration at a time, **rebuilding the
+/// [`CallGraph`] analysis at each iteration boundary**. This is needed
+/// for the `always_inline_single_call_site` fast path to stay accurate
+/// when earlier rewrites duplicate a previously-single-site callee
+/// across multiple newly-exposed call sites; without the rebuild the
+/// heuristic becomes traversal-order dependent and can aggressively
+/// splice a large callee that no longer has a single site. Approach
+/// matches option (b) in issue #680.
 pub fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
     am: &mut crate::analysis::AnalysisCache,
 ) -> InlineResult {
-    let graph = am.get::<CallGraph>(ctx, module.op());
-    let recursive = recursive_functions(&graph);
+    const OUTER_MAX_ITERATIONS: usize = 10;
 
-    let inlined_sites = Rc::new(RefCell::new(Vec::<(Symbol, Symbol)>::new()));
-    let pattern = InlineCallSite {
-        graph: Arc::clone(&graph),
-        recursive,
-        config,
-        inlined_sites: Rc::clone(&inlined_sites),
-    };
+    let inlined_sites: Rc<RefCell<Vec<(Symbol, Symbol)>>> = Rc::new(RefCell::new(Vec::new()));
 
-    {
-        let applicator = PatternApplicator::new(TypeConverter::new()).add_pattern(pattern);
-        applicator.apply_partial(ctx, module);
+    for _ in 0..OUTER_MAX_ITERATIONS {
+        let graph = am.get::<CallGraph>(ctx, module.op());
+        let recursive = recursive_functions(&graph);
+
+        let pattern = InlineCallSite {
+            graph: Arc::clone(&graph),
+            recursive,
+            config: config.clone(),
+            inlined_sites: Rc::clone(&inlined_sites),
+        };
+
+        let applicator = PatternApplicator::new(TypeConverter::new())
+            .add_pattern(pattern)
+            .with_max_iterations(1);
+        let result = applicator.apply_partial(ctx, module);
+        if result.total_changes == 0 {
+            break;
+        }
+        // Rewrites happened this iteration — drop the cached graph so the
+        // next `am.get::<CallGraph>` rebuilds against the current IR.
+        am.invalidate::<CallGraph>(module.op());
     }
 
     let sites = inlined_sites.borrow().clone();
     let inlined_count = sites.len();
-    let result = InlineResult {
+    InlineResult {
         inlined_count,
         inlined_sites: sites,
-    };
-
-    // Inlining rewrote call-site IR; the cached graph is stale.
-    if result.inlined_count > 0 {
-        am.invalidate::<CallGraph>(module.op());
     }
-    result
 }
 
 // =========================================================================
@@ -366,21 +375,21 @@ pub fn inline_functions_with_config(
 /// A per-call-site rewrite pattern that inlines a `func.call` /
 /// `func.tail_call` whose callee satisfies [`InlineConfig`]-driven policy.
 ///
-/// Analysis (call graph, recursion set, config) is captured at pattern
-/// construction and reused across fixed-point iterations of the
-/// [`PatternApplicator`]. The captured graph may become stale after a
-/// rewrite: newly exposed calls are still handled correctly under the
-/// current policy because
+/// # Graph staleness
 ///
-/// * `func_ops` and `has_constant_ref` only grow (or stay) during a pass,
-/// * `call_site_count` tracks the *original* number of static sites, which
-///   is a conservative over-approximation once a call is inlined (the
-///   single-call-site rule still fires correctly at the newly exposed
-///   call because it was the only site), and
-/// * recursion membership is unchanged by inlining.
+/// The captured [`CallGraph`] must be **accurate for the current IR**.
+/// The `always_inline_single_call_site` rule in particular is sensitive
+/// to stale `call_site_count`: once an earlier rewrite duplicates a
+/// previously-single-site callee across several newly-exposed call
+/// sites, the heuristic would otherwise take the single-site fast path
+/// N times over, spliicing a potentially large callee body into every
+/// caller.
 ///
-/// When hotter rebuild-per-iteration semantics are needed, recompute and
-/// re-register the pattern outside the applicator.
+/// [`inline_functions_with_config`] handles this by rebuilding the
+/// graph between applicator iterations. Other orchestrators that
+/// compose [`InlineCallSite`] with additional patterns should either
+/// do the same (rebuild + re-register) or accept the caveat that the
+/// single-call-site rule may fire on stale counts.
 pub struct InlineCallSite {
     graph: Arc<CallGraph>,
     recursive: HashSet<Symbol>,
@@ -1189,13 +1198,18 @@ mod pass {
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
 
-        // Cached entry must have been dropped after inlining.
-        assert!(am.get_cached::<CallGraph>(module.op()).is_none());
-
-        // Freshly recomputed graph should reflect the rewritten IR: the
-        // call site is gone.
-        let post = am.get::<CallGraph>(&ctx, module.op());
+        // The pass rebuilds the call graph between applicator iterations
+        // to keep the single-call-site heuristic accurate. After the run
+        // the cache therefore holds a **fresh** graph that reflects the
+        // rewritten IR, not the pre-pass one: no call sites remain.
+        let post = am
+            .get_cached::<CallGraph>(module.op())
+            .expect("driver must leave a fresh graph cached after the pass");
         assert_eq!(post.call_site_count.get(&Symbol::new("helper")), None);
+        // And a subsequent explicit `get` must coincide with the cached
+        // Arc (no recomputation).
+        let fetched = am.get::<CallGraph>(&ctx, module.op());
+        assert!(std::sync::Arc::ptr_eq(&post, &fetched));
     }
 
     #[test]
@@ -1225,6 +1239,78 @@ mod pass {
             .get_cached::<CallGraph>(module.op())
             .expect("cache should survive a no-op pass run");
         assert!(std::sync::Arc::ptr_eq(&before, &after));
+    }
+
+    #[test]
+    fn single_call_site_rule_observes_rebuilt_counts_per_iteration() {
+        use crate::analysis::AnalysisCache;
+
+        // Declaration order puts the callers (`a`, `b`) before the chain
+        // (`wrapper`, `large`). In iteration 1 the applicator first
+        // inlines `wrapper` into `a` and `b` via the size threshold,
+        // which duplicates the inner `call @large` into both callers.
+        // Iteration 2 then sees two real call sites to `large`, so the
+        // single-call-site fast path must *not* fire for `large` even
+        // though the iter-1 graph captured `large` at one site.
+        //
+        // The expected end state preserves the pre-refactor policy:
+        // `large` is inlined into `wrapper` (1 extra copy), but neither
+        // `a` nor `b` is splic ed; both keep `call @large`.
+        let mut input = String::from(
+            "core.module @test {\n\
+  func.func @a() -> core.i32 {\n\
+    %0 = func.call {callee = @wrapper} : core.i32\n\
+    func.return %0\n\
+  }\n\
+  func.func @b() -> core.i32 {\n\
+    %0 = func.call {callee = @wrapper} : core.i32\n\
+    func.return %0\n\
+  }\n\
+  func.func @wrapper() -> core.i32 {\n\
+    %0 = func.call {callee = @large} : core.i32\n\
+    func.return %0\n\
+  }\n\
+  func.func @large() -> core.i32 {\n",
+        );
+        // Push `large` above the default size threshold (16) with 18
+        // `arith.const` ops + the `func.return`.
+        for i in 0..18 {
+            input.push_str(&format!(
+                "    %{i} = arith.const {{value = {i}}} : core.i32\n"
+            ));
+        }
+        input.push_str("    func.return %17\n  }\n}");
+
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, &input);
+
+        let mut am = AnalysisCache::new();
+        inline_functions(&mut ctx, module, &mut am);
+
+        // After the pass, `a` and `b` must still contain exactly one
+        // `func.call` (to `@large`) — not a copy of `large`'s body.
+        let post = am.get::<CallGraph>(&ctx, module.op());
+        for name in ["a", "b"] {
+            let f = post
+                .func_ops
+                .get(&Symbol::new(name))
+                .copied()
+                .unwrap_or_else(|| panic!("{name} must be in the graph"));
+            let body = ctx.op(f).regions[0];
+            let mut calls = 0usize;
+            let _ = crate::walk::walk_region::<()>(&ctx, body, &mut |op| {
+                if func::Call::matches(&ctx, op) || func::TailCall::matches(&ctx, op) {
+                    calls += 1;
+                }
+                std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+            });
+            assert_eq!(
+                calls, 1,
+                "{name} must retain exactly one call after the pass; \
+                 the single-call-site rule should not fire on `large` \
+                 in iter 2 against a stale graph"
+            );
+        }
     }
 
     #[test]
