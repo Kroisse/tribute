@@ -323,25 +323,28 @@ pub fn inline_functions(
 /// heuristic becomes traversal-order dependent and can aggressively
 /// splice a large callee that no longer has a single site. Approach
 /// matches option (b) in issue #680.
+///
+/// Loops until the applicator reports zero changes, with no artificial
+/// cap. Termination is guaranteed by policy: [`should_inline`] never
+/// targets recursive or escaping callees, so the subgraph being inlined
+/// is a DAG and every iteration strictly consumes at least one call op
+/// from a finite pool of inlineable call-chain depth. A deeply nested
+/// wrapper chain (e.g. `a → b → c → … → leaf`) can therefore require
+/// as many outer iterations as its depth, which the loop handles
+/// rather than returning a silent partial result.
 pub fn inline_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: InlineConfig,
     am: &mut crate::analysis::AnalysisCache,
 ) -> InlineResult {
-    const OUTER_MAX_ITERATIONS: usize = 10;
-
     let mut inlined_count = 0usize;
 
-    for _ in 0..OUTER_MAX_ITERATIONS {
+    loop {
         let graph = am.get::<CallGraph>(ctx, module.op());
         let recursive = recursive_functions(&graph);
 
-        let pattern = InlineCallSite {
-            graph: Arc::clone(&graph),
-            recursive,
-            config: config.clone(),
-        };
+        let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
 
         let applicator = PatternApplicator::new(TypeConverter::new())
             .add_pattern(pattern)
