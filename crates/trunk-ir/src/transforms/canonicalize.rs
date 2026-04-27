@@ -10,8 +10,8 @@
 //! - `arith.muli %x, 1` / `arith.muli 1, %x` → `%x`
 //! - `arith.muli %x, 0` / `arith.muli 0, %x` → `arith.const 0`
 //! - `arith.addi const(a), const(b)` / `subi` / `muli` → `arith.const`
-//!   (i128 wrapping arithmetic — the bit-width is enforced by the result
-//!   type at codegen, so wrap is the conservative semantic preservation.)
+//!   (signed wrapping at the result type's bit-width — `i32::MAX + 1`
+//!   becomes `i32::MIN`, matching what codegen would produce.)
 //!
 //! Float, div/rem, scf, and `unrealized_conversion_cast` patterns live in
 //! follow-up PRs once each one's semantics are pinned down (NaN/-0.0,
@@ -24,7 +24,7 @@
 
 use crate::context::IrContext;
 use crate::dialect::arith;
-use crate::refs::{OpRef, ValueDef, ValueRef};
+use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
 use crate::types::Attribute;
@@ -175,10 +175,15 @@ impl RewritePattern for SubZeroFold {
 
 /// Constant-fold integer binary ops with two `arith.const` operands.
 ///
-/// Folds `addi`/`subi`/`muli` using i128 wrapping arithmetic. The result
-/// type is preserved; bit-width semantics are enforced at codegen via type
-/// information, so a wrap inside i128 is conservative wrt every concrete
-/// width.
+/// Folds `addi`/`subi`/`muli` at the result type's bit-width. The raw
+/// operation is performed in i128 (wide enough for any width up to i64
+/// without intermediate overflow), then sign-truncated to fit the result
+/// type — so e.g. `arith.addi const(i32::MAX), const(1) : core.i32`
+/// folds to `arith.const i32::MIN`, matching codegen semantics.
+///
+/// Only result types of the form `core.i{N}` for `N` in {1, 8, 16, 32,
+/// 64} are folded. Other widths and exotic integer types fall through
+/// unchanged.
 ///
 /// `divsi` / `divui` / `remsi` / `remui` are intentionally excluded — they
 /// require a division-by-zero guard that is its own design decision.
@@ -218,8 +223,11 @@ impl RewritePattern for IntConstFold {
             [t] => *t,
             _ => return false,
         };
+        let Some(width) = core_int_width(ctx, result_ty) else {
+            return false;
+        };
+        let folded = wrap_signed_to_width(fold(a, b), width);
         let loc = ctx.op(op).location;
-        let folded = fold(a, b);
         let new_const = arith::r#const(ctx, loc, result_ty, Attribute::Int(folded));
         rewriter.replace_op(new_const.op_ref());
         true
@@ -290,6 +298,39 @@ fn const_int_def(ctx: &IrContext, value: ValueRef) -> Option<(OpRef, i128)> {
         Some(Attribute::Int(v)) => Some((producer, *v)),
         _ => None,
     }
+}
+
+/// If `ty` is `core.i{N}` for a recognized signed integer width, return
+/// `N`. Returns `None` for other dialects, parameterized types, or
+/// widths outside the supported set.
+fn core_int_width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+    let data = ctx.types.get(ty);
+    if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
+        return None;
+    }
+    data.name.with_str(|s| match s {
+        "i1" => Some(1),
+        "i8" => Some(8),
+        "i16" => Some(16),
+        "i32" => Some(32),
+        "i64" => Some(64),
+        _ => None,
+    })
+}
+
+/// Truncate `value` to `width` bits, sign-extended back to i128.
+///
+/// `width` must satisfy `1 <= width <= 128`. The implementation uses
+/// arithmetic shift, which sign-extends from the top bit of the kept
+/// portion — matching the two's-complement wrap semantics of every
+/// concrete integer width supported here.
+fn wrap_signed_to_width(value: i128, width: u32) -> i128 {
+    debug_assert!((1..=128).contains(&width));
+    if width == 128 {
+        return value;
+    }
+    let shift = 128 - width;
+    (value << shift) >> shift
 }
 
 // =========================================================================
@@ -532,14 +573,14 @@ mod tests {
     }
 
     #[test]
-    fn int_const_fold_wraps_on_overflow() {
-        // i128::MAX + 1 wraps to i128::MIN — this is the conservative
-        // semantic preservation choice (codegen carries the actual
-        // bit-width). The snapshot pins the wrapped value so that a
-        // regression to e.g. saturating_add would be caught.
+    fn int_const_fold_wraps_at_i32_width() {
+        // i32::MAX + 1 wraps to i32::MIN. The snapshot pins the exact
+        // wrapped value so that a regression in width handling would
+        // be caught (a non-type-aware fold would leave 2147483648 in
+        // an i32-typed const).
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
-    %a = arith.const {value = 170141183460469231731687303715884105727} : core.i32
+    %a = arith.const {value = 2147483647} : core.i32
     %b = arith.const {value = 1} : core.i32
     %r = arith.addi %a, %b : core.i32
     func.return %r
@@ -552,6 +593,74 @@ mod tests {
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
         insta::assert_snapshot!(print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn int_const_fold_wraps_at_i64_width() {
+        // i64::MAX + 1 → i64::MIN. Same shape as the i32 case but at
+        // a different width — guards against the wrap being hard-coded
+        // to one width.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i64 {
+    %a = arith.const {value = 9223372036854775807} : core.i64
+    %b = arith.const {value = 1} : core.i64
+    %r = arith.addi %a, %b : core.i64
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        insta::assert_snapshot!(print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn int_const_fold_skips_unknown_width_type() {
+        // A custom integer type (here `core.i7` — not in the supported
+        // width set) must not be folded, even with two const operands,
+        // because we don't know how to wrap.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i7 {
+    %a = arith.const {value = 1} : core.i7
+    %b = arith.const {value = 2} : core.i7
+    %r = arith.addi %a, %b : core.i7
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+    }
+
+    #[test]
+    fn wrap_signed_to_width_matches_two_complement_semantics() {
+        // Direct unit checks for the helper. These pin the algorithm
+        // independently of `parse_test_module` / pattern dispatch.
+        assert_eq!(
+            wrap_signed_to_width(i32::MAX as i128 + 1, 32),
+            i32::MIN as i128
+        );
+        assert_eq!(
+            wrap_signed_to_width(i32::MIN as i128 - 1, 32),
+            i32::MAX as i128
+        );
+        assert_eq!(
+            wrap_signed_to_width(i64::MAX as i128 + 1, 64),
+            i64::MIN as i128
+        );
+        assert_eq!(wrap_signed_to_width(0, 32), 0);
+        assert_eq!(wrap_signed_to_width(-1, 32), -1);
+        // i1 behaves like a signed 1-bit number: 0 stays 0, 1 wraps to -1.
+        assert_eq!(wrap_signed_to_width(0, 1), 0);
+        assert_eq!(wrap_signed_to_width(1, 1), -1);
+        assert_eq!(wrap_signed_to_width(-1, 1), -1);
+        assert_eq!(wrap_signed_to_width(2, 1), 0);
     }
 
     #[test]
