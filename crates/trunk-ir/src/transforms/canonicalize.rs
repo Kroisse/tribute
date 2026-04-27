@@ -535,8 +535,8 @@ mod tests {
     fn int_const_fold_wraps_on_overflow() {
         // i128::MAX + 1 wraps to i128::MIN — this is the conservative
         // semantic preservation choice (codegen carries the actual
-        // bit-width). The pattern must produce a fresh const without
-        // panicking.
+        // bit-width). The snapshot pins the wrapped value so that a
+        // regression to e.g. saturating_add would be caught.
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
     %a = arith.const {value = 170141183460469231731687303715884105727} : core.i32
@@ -551,6 +551,7 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        insta::assert_snapshot!(print_module(&ctx, module.op()));
     }
 
     #[test]
