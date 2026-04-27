@@ -360,6 +360,30 @@ mod tests {
         count
     }
 
+    /// Walk `module` and return the `Attribute::Int` carried by the
+    /// `arith.const` that the first `func.return` returns. Returns
+    /// `None` if no return is found, or if its operand is not produced
+    /// by a const-int op. Lets value-shaped tests assert the folded
+    /// constant directly without going through textual snapshots.
+    fn return_value_int_const(ctx: &IrContext, module: Module) -> Option<i128> {
+        let func_return_dialect = Symbol::new("func");
+        let return_name = Symbol::new("return");
+        let mut found = None;
+        let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+            if found.is_some() {
+                return ControlFlow::Continue(WalkAction::Advance);
+            }
+            let data = ctx.op(op);
+            if data.dialect == func_return_dialect && data.name == return_name {
+                if let Some(&v) = ctx.op_operands(op).first() {
+                    found = const_int_value(ctx, v);
+                }
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        found
+    }
+
     #[test]
     fn add_zero_fold_rhs_zero() {
         let input = r#"core.module @test {
@@ -574,10 +598,9 @@ mod tests {
 
     #[test]
     fn int_const_fold_wraps_at_i32_width() {
-        // i32::MAX + 1 wraps to i32::MIN. The snapshot pins the exact
-        // wrapped value so that a regression in width handling would
-        // be caught (a non-type-aware fold would leave 2147483648 in
-        // an i32-typed const).
+        // i32::MAX + 1 wraps to i32::MIN. Asserting the folded value
+        // directly catches a non-type-aware regression that would
+        // leave 2147483648 in an i32-typed const.
         let input = r#"core.module @test {
   func.func @f() -> core.i32 {
     %a = arith.const {value = 2147483647} : core.i32
@@ -592,7 +615,7 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        assert_eq!(return_value_int_const(&ctx, module), Some(i32::MIN as i128));
     }
 
     #[test]
@@ -614,7 +637,7 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        insta::assert_snapshot!(print_module(&ctx, module.op()));
+        assert_eq!(return_value_int_const(&ctx, module), Some(i64::MIN as i128));
     }
 
     #[test]
