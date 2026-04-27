@@ -1302,19 +1302,20 @@ mod pass {
     fn composes_with_another_rewrite_pattern_in_same_applicator() {
         use crate::analysis::AnalysisCache;
         use crate::rewrite::{PatternApplicator, TypeConverter};
-        use std::cell::Cell;
+        use crate::transforms::canonicalize::AddZeroFold;
 
         // helper(%arg) -> %arg + 0
         // main()       -> helper(5)
         //
-        // Running the inliner pattern alongside a "x + 0 → x" fold pattern
-        // in the same applicator drives both to fixed point: inlining
-        // exposes `arith.add %5, %0` inside `main`, the fold pattern erases
-        // it, and the final result contains a single constant + return.
+        // Running the inliner pattern alongside the canonicalize
+        // `AddZeroFold` pattern in the same applicator drives both to a
+        // fixed point: inlining exposes `arith.addi %5, %0` inside `main`,
+        // the fold pattern erases it, and the final result contains a
+        // single constant + return.
         let input = r#"core.module @test {
   func.func @helper(%arg: core.i32) -> core.i32 {
     %0 = arith.const {value = 0} : core.i32
-    %1 = arith.add %arg, %0 : core.i32
+    %1 = arith.addi %arg, %0 : core.i32
     func.return %1
   }
   func.func @main() -> core.i32 {
@@ -1333,27 +1334,24 @@ mod pass {
         let inline_pattern =
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
 
-        let fold_counter = std::rc::Rc::new(Cell::new(0usize));
-        let fold_pattern = AddZeroFold {
-            counter: std::rc::Rc::clone(&fold_counter),
-        };
-
-        {
+        let total_changes = {
             let applicator = PatternApplicator::new(TypeConverter::new())
                 .add_pattern(inline_pattern)
-                .add_pattern(fold_pattern);
-            applicator.apply_partial(&mut ctx, module);
-        }
+                .add_pattern(AddZeroFold);
+            applicator.apply_partial(&mut ctx, module).total_changes
+        };
 
-        // Fold must have fired at least once on the inlined `arith.add`.
+        // The applicator must have fired both patterns: the inliner once
+        // (call → spliced body) and the fold at least once on the exposed
+        // `arith.addi`. With one call + one add this floor is two changes.
         assert!(
-            fold_counter.get() > 0,
-            "expected add-zero fold to fire at least once"
+            total_changes >= 2,
+            "expected at least one inline + one fold mutation, got {total_changes}"
         );
 
-        // End state: `main` has no calls and no `arith.add` — just the
+        // End state: `main` has no calls and no `arith.addi` — just the
         // const + return left. This is the composition property: the
-        // inliner exposed the `arith.add %5, %0` inside `main`, and the
+        // inliner exposed the `arith.addi %5, %0` inside `main`, and the
         // fold pattern erased it in the same applicator sweep.
         let main_op = graph
             .func_ops
@@ -1365,7 +1363,7 @@ mod pass {
         assert!(!has_call, "main should not contain any calls after run");
         assert!(
             !has_add,
-            "main should not contain any arith.add after composition"
+            "main should not contain any arith.addi after composition"
         );
     }
 
@@ -1378,60 +1376,12 @@ mod pass {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("add") {
+            if ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("addi")
+            {
                 has_add = true;
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
         (has_call, has_add)
-    }
-
-    /// Tiny "x + 0 → x" folding pattern for the composition test.
-    ///
-    /// Matches `arith.add %x, %y` where `%y` is the result of
-    /// `arith.const {value = 0}`, and erases the add while mapping its
-    /// result back to `%x`.
-    struct AddZeroFold {
-        counter: std::rc::Rc<std::cell::Cell<usize>>,
-    }
-
-    impl RewritePattern for AddZeroFold {
-        fn match_and_rewrite(
-            &self,
-            ctx: &mut IrContext,
-            op: OpRef,
-            rewriter: &mut PatternRewriter<'_>,
-        ) -> bool {
-            if ctx.op(op).dialect != Symbol::new("arith") || ctx.op(op).name != Symbol::new("add") {
-                return false;
-            }
-            let operands = ctx.op_operands(op).to_vec();
-            if operands.len() != 2 {
-                return false;
-            }
-            let rhs_def = match ctx.value_def(operands[1]) {
-                crate::refs::ValueDef::OpResult(def_op, _) => def_op,
-                _ => return false,
-            };
-            if ctx.op(rhs_def).dialect != Symbol::new("arith")
-                || ctx.op(rhs_def).name != Symbol::new("const")
-            {
-                return false;
-            }
-            let is_zero = matches!(
-                ctx.op(rhs_def).attributes.get(&Symbol::new("value")),
-                Some(Attribute::Int(0))
-            );
-            if !is_zero {
-                return false;
-            }
-            rewriter.erase_op(vec![operands[0]]);
-            self.counter.set(self.counter.get() + 1);
-            true
-        }
-
-        fn name(&self) -> &'static str {
-            "AddZeroFold"
-        }
     }
 }

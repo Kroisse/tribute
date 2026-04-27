@@ -5,12 +5,14 @@
 //! value remapping.
 
 pub mod call_graph;
+pub mod canonicalize;
 pub mod dce;
 pub mod global_dce;
 pub mod inline;
 pub mod scf_to_cf;
 
 pub use call_graph::{CallGraph, build_call_graph, recursive_functions, tarjan_scc};
+pub use canonicalize::{CanonicalizeResult, canonicalize};
 pub use dce::{DceConfig, DceResult, eliminate_dead_code, eliminate_dead_code_with_config};
 pub use global_dce::{
     GlobalDceConfig, GlobalDceResult, eliminate_dead_functions,
