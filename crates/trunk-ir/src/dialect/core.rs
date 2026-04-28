@@ -36,17 +36,11 @@ mod core {
 use crate::context::IrContext;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueDef};
-use crate::symbol::Symbol;
-use crate::transforms::canonicalize::{FoldFn, FoldResult};
+use crate::transforms::canonicalize::FoldResult;
 
-/// Folds this dialect contributes to `transforms::canonicalize`.
-pub(crate) fn folds() -> Vec<(Symbol, Symbol, FoldFn)> {
-    vec![(
-        Symbol::new("core"),
-        Symbol::new("unrealized_conversion_cast"),
-        fold_unrealized_conversion_cast as FoldFn,
-    )]
-}
+// Folds this dialect contributes to `transforms::canonicalize`, registered
+// via `inventory`.
+crate::register_canonicalize_fold!(core.unrealized_conversion_cast => fold_unrealized_conversion_cast);
 
 /// `core.unrealized_conversion_cast` folds:
 ///
@@ -101,10 +95,10 @@ mod canonicalize_tests {
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
-    use crate::transforms::canonicalize::FoldDispatchPattern;
+    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
 
     fn run_core_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let dispatcher = FoldDispatchPattern::from_folds(folds());
+        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("core"));
         PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)

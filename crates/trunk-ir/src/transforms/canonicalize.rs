@@ -1,21 +1,27 @@
 //! Canonicalization pass for TrunkIR.
 //!
 //! Greedy fixed-point pass that folds operations into a canonical form.
-//! Each dialect contributes per-op `fold` functions (one fold per op kind)
-//! that return either a value to forward or an attribute that the driver
-//! materializes as `arith.const`. The pass aggregates all dialect folds
-//! into a single dispatch pattern that O(1)-looks up the fold for each
-//! visited op.
+//! Each dialect contributes per-op `fold` functions registered via
+//! [`crate::register_canonicalize_fold!`]; the pass discovers them at
+//! startup time through `inventory` rather than referencing each dialect
+//! by name. As a result this module knows nothing about which dialects
+//! exist — adding a new dialect's folds requires no edit here.
 //!
-//! - `arith::folds()` — `addi`/`subi`/`muli` integer identities and
-//!   constant folding at the result type's bit-width.
-//! - `core::folds()` — `unrealized_conversion_cast` identity (same
-//!   source/target type) and round-trip elimination (`A → B → A`).
+//! The driver dispatches each visited op to its fold (if any) by
+//! `(dialect, op_name)` HashMap lookup. A fold returns either a value
+//! to forward (RAUW the op's result) or an `Attribute` that the driver
+//! materializes as `arith.const` of the op's result type.
 //!
-//! Adding a fold for an existing op = edit one function in that dialect.
-//! Adding a brand-new dialect's folds = a one-line `chain` here. Truly
-//! local rewrites that don't fit the fold shape (e.g. region splice for
-//! `scf.if(const)`) still go through `RewritePattern`; tracked in #690.
+//! Multi-op rewrites that don't fit the fold shape (e.g. region splice
+//! for `scf.if(const)`) register as full [`RewritePattern`]s via
+//! [`crate::register_canonicalize_pattern!`] instead.
+//!
+//! Currently registered (across `arith`, `core`):
+//!
+//! - `arith.addi`/`subi`/`muli` — integer identity (`x+0`, `x-0`,
+//!   `x*0`, `x*1`) and constant folding at the result type's bit-width.
+//! - `core.unrealized_conversion_cast` — identity (same source/target
+//!   type) and round-trip elimination (`A → B → A`).
 //!
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
@@ -23,7 +29,7 @@
 use std::collections::HashMap;
 
 use crate::context::IrContext;
-use crate::dialect::{arith, core as core_dialect};
+use crate::dialect::arith;
 use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
@@ -85,6 +91,12 @@ impl FoldDispatchPattern {
         Self { table }
     }
 
+    /// Build a dispatcher from every fold registered via
+    /// [`crate::register_canonicalize_fold!`] across the workspace.
+    pub fn from_inventory() -> Self {
+        Self::from_folds(folds_from_inventory())
+    }
+
     /// Convenience for tests: build a single-entry dispatcher. Lets a
     /// test compose one specific fold with other patterns in the same
     /// applicator without pulling in every registered fold.
@@ -135,6 +147,110 @@ impl RewritePattern for FoldDispatchPattern {
 }
 
 // =========================================================================
+// Inventory registration
+// =========================================================================
+
+/// One inventory entry registering a per-op fold function. Submitted via
+/// [`crate::register_canonicalize_fold!`] — never constructed directly
+/// from user code.
+pub struct CanonicalizeFold {
+    pub dialect: &'static str,
+    pub op_name: &'static str,
+    pub fold: FoldFn,
+}
+inventory::collect!(CanonicalizeFold);
+
+/// One inventory entry registering a full `RewritePattern` for the
+/// canonicalize pass — used as an escape hatch for rewrites that don't
+/// fit the fold shape (e.g. multi-op region splicing). Submitted via
+/// [`crate::register_canonicalize_pattern!`].
+///
+/// `make` is a `fn` (not a closure) so the entry meets `inventory`'s
+/// `'static + Sync` bound. The function builds a fresh boxed pattern
+/// every time the pass runs; any state should be in the pattern itself,
+/// not captured.
+pub struct CanonicalizePattern {
+    pub make: fn() -> Box<dyn RewritePattern>,
+}
+inventory::collect!(CanonicalizePattern);
+
+/// Iterate every fold registered via inventory, keyed by interned
+/// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].
+fn folds_from_inventory() -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
+    inventory::iter::<CanonicalizeFold>.into_iter().map(|reg| {
+        (
+            Symbol::from_dynamic(reg.dialect),
+            Symbol::from_dynamic(reg.op_name),
+            reg.fold,
+        )
+    })
+}
+
+/// Iterate inventory folds whose dialect matches `dialect`. Used by
+/// per-dialect test helpers to keep their assertions isolated from
+/// other dialects' folds (folds dispatch by op key, so cross-dialect
+/// interference is unlikely, but filtering keeps tests honest as more
+/// dialects add folds).
+#[cfg(test)]
+pub(crate) fn folds_for_dialect(
+    dialect: &'static str,
+) -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
+    inventory::iter::<CanonicalizeFold>
+        .into_iter()
+        .filter(move |reg| reg.dialect == dialect)
+        .map(|reg| {
+            (
+                Symbol::from_dynamic(reg.dialect),
+                Symbol::from_dynamic(reg.op_name),
+                reg.fold,
+            )
+        })
+}
+
+/// Register a per-op fold for the canonicalize pass.
+///
+/// # Example
+/// ```text
+/// register_canonicalize_fold!(arith.addi => fold_addi);
+/// register_canonicalize_fold!(core.unrealized_conversion_cast => fold_uncc);
+/// ```
+///
+/// The dialect and op-name idents are stringified (handling raw
+/// identifiers like `r#const` correctly via `raw_ident_str!`). `$fold`
+/// is a path to a function with signature `fn(&IrContext, OpRef) ->
+/// Option<FoldResult>`.
+#[macro_export]
+macro_rules! register_canonicalize_fold {
+    ($dialect:ident . $op_name:ident => $fold:path) => {
+        ::inventory::submit! {
+            $crate::transforms::canonicalize::CanonicalizeFold {
+                dialect: $crate::raw_ident_str!($dialect),
+                op_name: $crate::raw_ident_str!($op_name),
+                fold: $fold,
+            }
+        }
+    };
+}
+
+/// Register a non-fold `RewritePattern` for the canonicalize pass.
+/// Use when the rewrite needs more than the fold shape allows
+/// (e.g. modifying multiple ops or splicing regions).
+///
+/// # Example
+/// ```text
+/// fn make_if_const_fold() -> Box<dyn RewritePattern> { Box::new(IfConstFold) }
+/// register_canonicalize_pattern!(make_if_const_fold);
+/// ```
+#[macro_export]
+macro_rules! register_canonicalize_pattern {
+    ($make:path) => {
+        ::inventory::submit! {
+            $crate::transforms::canonicalize::CanonicalizePattern { make: $make }
+        }
+    };
+}
+
+// =========================================================================
 // Pass entry
 // =========================================================================
 
@@ -148,10 +264,11 @@ pub struct CanonicalizeResult {
 
 /// Run canonicalization to a fixed point on `module`.
 pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
-    let folds = arith::folds().into_iter().chain(core_dialect::folds());
-    let dispatcher = FoldDispatchPattern::from_folds(folds);
-    let applicator =
-        PatternApplicator::new(TypeConverter::new()).add_pattern_box(Box::new(dispatcher));
+    let mut applicator = PatternApplicator::new(TypeConverter::new())
+        .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()));
+    for entry in inventory::iter::<CanonicalizePattern> {
+        applicator = applicator.add_pattern_box((entry.make)());
+    }
     let result = applicator.apply_partial(ctx, module);
     CanonicalizeResult {
         iterations: result.iterations,
