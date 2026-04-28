@@ -1301,8 +1301,8 @@ mod pass {
     #[test]
     fn composes_with_another_rewrite_pattern_in_same_applicator() {
         use crate::analysis::AnalysisCache;
+        use crate::dialect::arith::AddZeroFold;
         use crate::rewrite::{PatternApplicator, TypeConverter};
-        use crate::transforms::canonicalize::AddZeroFold;
 
         // helper(%arg) -> %arg + 0
         // main()       -> helper(5)
