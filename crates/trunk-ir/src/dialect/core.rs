@@ -25,121 +25,66 @@ mod core {
 }
 
 // =========================================================================
-// Canonicalization patterns
+// Canonicalization folds
 //
 // Owned by this dialect and aggregated by `transforms::canonicalize` via
-// [`canonicalization_patterns`]. Each pattern self-filters on
-// `core.unrealized_conversion_cast` via the typed wrapper.
+// [`folds`]. Folds are looked up by (dialect, op_name) so they don't
+// self-filter — they assume the dispatcher already decided this op is
+// `core.unrealized_conversion_cast`.
 // =========================================================================
 
 use crate::context::IrContext;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueDef};
-use crate::rewrite::{PatternRewriter, RewritePattern};
+use crate::symbol::Symbol;
+use crate::transforms::canonicalize::{FoldFn, FoldResult};
 
-/// Patterns this dialect contributes to `transforms::canonicalize`.
-pub fn canonicalization_patterns() -> Vec<Box<dyn RewritePattern>> {
-    vec![
-        Box::new(UnrealizedCastIdentity),
-        Box::new(UnrealizedCastRoundTrip),
-    ]
+/// Folds this dialect contributes to `transforms::canonicalize`.
+pub(crate) fn folds() -> Vec<(Symbol, Symbol, FoldFn)> {
+    vec![(
+        Symbol::new("core"),
+        Symbol::new("unrealized_conversion_cast"),
+        fold_unrealized_conversion_cast as FoldFn,
+    )]
 }
 
-/// `core.unrealized_conversion_cast %x : T → T` → `%x`.
+/// `core.unrealized_conversion_cast` folds:
 ///
-/// A no-op cast left over from a type conversion that ended up matching the
-/// input type (e.g. after surrounding ops were rewritten). The op carries no
-/// useful work — drop it and forward the operand.
-pub struct UnrealizedCastIdentity;
-
-impl RewritePattern for UnrealizedCastIdentity {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !UnrealizedConversionCast::matches(ctx, op) {
-            return false;
-        }
-        let operands = ctx.op_operands(op);
-        let result_types = ctx.op_result_types(op);
-        if operands.len() != 1 || result_types.len() != 1 {
-            return false;
-        }
-        let input = operands[0];
-        let result_ty = result_types[0];
-        if ctx.value_ty(input) != result_ty {
-            return false;
-        }
-        rewriter.erase_op(vec![input]);
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "UnrealizedCastIdentity"
-    }
-}
-
-/// `cast<A → B>(cast<B → A>(%x))` → `%x`.
+/// - **Identity** (`%x : T → T`): drop the cast and forward `%x`.
+/// - **Round-trip** (`cast<A → B>(cast<B → A>(%x))`): forward the inner
+///   cast's input; the now-dead inner cast falls to DCE.
 ///
-/// A pair of casts that collapse back to the input type — common when one
-/// rewrite materializes `B` and a later rewrite expects `A` again. We forward
-/// the inner cast's input. The inner cast is left in place; if it had no
-/// other users it becomes dead and is collected by DCE.
-///
-/// Safe *specifically* because both ops are `core.unrealized_conversion_cast`
-/// — dialect-conversion placeholders that carry no value-level conversion
-/// semantics. Resolved casts like `arith.trunc` followed by `arith.extend`
-/// would *not* be safe to collapse this way: a narrower intermediate type
-/// loses information that the outer cast cannot recover (e.g.
-/// `i64 → i32 → i64` discards the upper 32 bits). The pattern's self-filter
-/// on `UnrealizedConversionCast` is what restricts the rewrite to the
-/// information-preserving placeholder case; once `resolve_unrealized_casts`
-/// has run the materializer, no `unrealized_conversion_cast` ops remain and
-/// this pattern is a no-op.
-pub struct UnrealizedCastRoundTrip;
+/// Safe *specifically* because both ops are
+/// `core.unrealized_conversion_cast` — dialect-conversion placeholders
+/// that carry no value-level conversion semantics. A resolved cast pair
+/// like `arith.trunc` followed by `arith.extend` is *not* safe to collapse
+/// the same way (narrower intermediate types lose information). Once
+/// `resolve_unrealized_casts` has run, no `unrealized_conversion_cast`
+/// ops remain and this fold is a no-op.
+pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let operands = ctx.op_operands(op);
+    let result_types = ctx.op_result_types(op);
+    if operands.len() != 1 || result_types.len() != 1 {
+        return None;
+    }
+    let input = operands[0];
+    let result_ty = result_types[0];
 
-impl RewritePattern for UnrealizedCastRoundTrip {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !UnrealizedConversionCast::matches(ctx, op) {
-            return false;
-        }
-        let operands = ctx.op_operands(op);
-        let result_types = ctx.op_result_types(op);
-        if operands.len() != 1 || result_types.len() != 1 {
-            return false;
-        }
-        let outer_input = operands[0];
-        let outer_result_ty = result_types[0];
-        let producer = match ctx.value_def(outer_input) {
-            ValueDef::OpResult(p, _) => p,
-            ValueDef::BlockArg(_, _) => return false,
-        };
-        if !UnrealizedConversionCast::matches(ctx, producer) {
-            return false;
-        }
-        let inner_operands = ctx.op_operands(producer);
-        let Some(&inner_input) = inner_operands.first() else {
-            return false;
-        };
-        // Round-trip iff the outer's result type matches the inner cast's
-        // input type, i.e. types form `A → B → A`.
-        if ctx.value_ty(inner_input) != outer_result_ty {
-            return false;
-        }
-        rewriter.erase_op(vec![inner_input]);
-        true
+    // Identity: T → T
+    if ctx.value_ty(input) == result_ty {
+        return Some(FoldResult::Forward(input));
     }
 
-    fn name(&self) -> &'static str {
-        "UnrealizedCastRoundTrip"
+    // Round-trip: A → B → A
+    if let ValueDef::OpResult(producer, _) = ctx.value_def(input)
+        && UnrealizedConversionCast::matches(ctx, producer)
+        && let Some(&inner_input) = ctx.op_operands(producer).first()
+        && ctx.value_ty(inner_input) == result_ty
+    {
+        return Some(FoldResult::Forward(inner_input));
     }
+
+    None
 }
 
 // =========================================================================
@@ -156,12 +101,13 @@ mod canonicalize_tests {
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
+    use crate::transforms::canonicalize::FoldDispatchPattern;
+
     fn run_core_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let applicator = canonicalization_patterns().into_iter().fold(
-            PatternApplicator::new(TypeConverter::new()),
-            PatternApplicator::add_pattern_box,
-        );
-        applicator.apply_partial(ctx, module)
+        let dispatcher = FoldDispatchPattern::from_folds(folds());
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(dispatcher))
+            .apply_partial(ctx, module)
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {

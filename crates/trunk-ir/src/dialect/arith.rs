@@ -89,262 +89,123 @@ mod arith {
 }
 
 // =========================================================================
-// Canonicalization patterns
+// Canonicalization folds
 //
 // Owned by this dialect and aggregated by `transforms::canonicalize` via
-// [`canonicalization_patterns`]. Each pattern self-filters by op name in
-// `match_and_rewrite` (the applicator does no central op-kind dispatch),
-// so adding a new arith pattern only requires touching this file.
+// [`folds`]. Each fold returns a `FoldResult` describing how the
+// pass should rewrite the op (or `None` to leave it alone). The driver
+// dispatches by (dialect, op_name) so folds don't self-filter.
 // =========================================================================
 
 use crate::context::IrContext;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
-use crate::rewrite::{PatternRewriter, RewritePattern};
 use crate::symbol::Symbol;
+use crate::transforms::canonicalize::{FoldFn, FoldResult};
 use crate::types::Attribute;
 
-/// Patterns this dialect contributes to `transforms::canonicalize`.
-pub fn canonicalization_patterns() -> Vec<Box<dyn RewritePattern>> {
+/// Folds this dialect contributes to `transforms::canonicalize`. Returns
+/// `(dialect_symbol, op_name_symbol, fold_fn)` triples — the canonicalize
+/// pass merges these with other dialects' folds into a single dispatcher.
+pub(crate) fn folds() -> Vec<(Symbol, Symbol, FoldFn)> {
+    let arith = Symbol::new("arith");
     vec![
-        Box::new(AddZeroFold),
-        Box::new(SubZeroFold),
-        Box::new(MulOneFold),
-        Box::new(MulZeroFold),
-        Box::new(IntConstFold),
+        (arith, Symbol::new("addi"), fold_addi as FoldFn),
+        (arith, Symbol::new("subi"), fold_subi as FoldFn),
+        (arith, Symbol::new("muli"), fold_muli as FoldFn),
     ]
 }
 
-/// `arith.addi %x, 0` / `arith.addi 0, %x` → `%x`.
-pub struct AddZeroFold;
-
-impl RewritePattern for AddZeroFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !op_is(ctx, op, "arith", "addi") {
-            return false;
-        }
-        let Some((other, _)) = find_const_int_operand(ctx, op, 0) else {
-            return false;
-        };
-        rewriter.erase_op(vec![other]);
-        true
+/// `arith.addi` folds:
+/// - `x + 0` / `0 + x` → `x`
+/// - `const(a) + const(b)` → `const(wrap(a+b))` at the result width
+pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) {
+        return Some(FoldResult::Forward(lhs));
     }
-
-    fn name(&self) -> &'static str {
-        "AddZeroFold"
+    if const_int_value(ctx, lhs) == Some(0) {
+        return Some(FoldResult::Forward(rhs));
     }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a.wrapping_add(b), width),
+    )))
 }
 
-/// `arith.muli %x, 1` / `arith.muli 1, %x` → `%x`.
-pub struct MulOneFold;
-
-impl RewritePattern for MulOneFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !op_is(ctx, op, "arith", "muli") {
-            return false;
-        }
-        let Some((other, _)) = find_const_int_operand(ctx, op, 1) else {
-            return false;
-        };
-        rewriter.erase_op(vec![other]);
-        true
+/// `arith.subi` folds:
+/// - `x - 0` → `x`. (`0 - x` is the `negi` semantic and is left for a
+///   separate fold so the rewrite direction stays unambiguous.)
+/// - `const(a) - const(b)` → `const(wrap(a-b))` at the result width.
+pub(crate) fn fold_subi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) {
+        return Some(FoldResult::Forward(lhs));
     }
-
-    fn name(&self) -> &'static str {
-        "MulOneFold"
-    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a.wrapping_sub(b), width),
+    )))
 }
 
-/// `arith.muli %x, 0` / `arith.muli 0, %x` → `arith.const {value = 0}`.
-pub struct MulZeroFold;
-
-impl RewritePattern for MulZeroFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !op_is(ctx, op, "arith", "muli") {
-            return false;
-        }
-        if find_const_int_operand(ctx, op, 0).is_none() {
-            return false;
-        }
-        let loc = ctx.op(op).location;
-        let result_types = ctx.op_result_types(op).to_vec();
-        let result_ty = match result_types.as_slice() {
-            [t] => *t,
-            _ => return false,
-        };
-        let zero = r#const(ctx, loc, result_ty, Attribute::Int(0));
-        rewriter.replace_op(zero.op_ref());
-        true
+/// `arith.muli` folds:
+/// - `x * 0` / `0 * x` → `const 0` (checked before x*1 to short-circuit).
+/// - `x * 1` / `1 * x` → `x`.
+/// - `const(a) * const(b)` → `const(wrap(a*b))` at the result width.
+pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
+        return Some(FoldResult::ArithConst(Attribute::Int(0)));
     }
-
-    fn name(&self) -> &'static str {
-        "MulZeroFold"
+    if const_int_value(ctx, rhs) == Some(1) {
+        return Some(FoldResult::Forward(lhs));
     }
-}
-
-/// `arith.subi %x, 0` → `%x`.
-///
-/// `arith.subi 0, %x` is the `negi` semantic and is left for a separate
-/// pattern to keep the rewrite direction unambiguous.
-pub struct SubZeroFold;
-
-impl RewritePattern for SubZeroFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !op_is(ctx, op, "arith", "subi") {
-            return false;
-        }
-        let operands = ctx.op_operands(op);
-        if operands.len() != 2 {
-            return false;
-        }
-        let lhs = operands[0];
-        let rhs = operands[1];
-        if const_int_producer(ctx, rhs, 0).is_none() {
-            return false;
-        }
-        rewriter.erase_op(vec![lhs]);
-        true
+    if const_int_value(ctx, lhs) == Some(1) {
+        return Some(FoldResult::Forward(rhs));
     }
-
-    fn name(&self) -> &'static str {
-        "SubZeroFold"
-    }
-}
-
-/// Constant-fold integer binary ops with two `arith.const` operands.
-///
-/// Folds `addi`/`subi`/`muli` at the result type's bit-width. The raw
-/// operation is performed in i128 (wide enough for any width up to i64
-/// without intermediate overflow), then sign-truncated to fit the result
-/// type — so e.g. `arith.addi const(i32::MAX), const(1) : core.i32`
-/// folds to `arith.const i32::MIN`, matching codegen semantics.
-///
-/// Result types must be `core.i{N}` with `1 <= N <= 128`. Other
-/// dialects and exotic integer types fall through unchanged.
-///
-/// `divsi` / `divui` / `remsi` / `remui` are intentionally excluded — they
-/// require a division-by-zero guard that is its own design decision.
-pub struct IntConstFold;
-
-impl RewritePattern for IntConstFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let fold = if op_is(ctx, op, "arith", "addi") {
-            i128::wrapping_add
-        } else if op_is(ctx, op, "arith", "subi") {
-            i128::wrapping_sub
-        } else if op_is(ctx, op, "arith", "muli") {
-            i128::wrapping_mul
-        } else {
-            return false;
-        };
-
-        let operands = ctx.op_operands(op);
-        if operands.len() != 2 {
-            return false;
-        }
-        let lhs = operands[0];
-        let rhs = operands[1];
-        let lhs_val = const_int_value(ctx, lhs);
-        let rhs_val = const_int_value(ctx, rhs);
-        let (Some(a), Some(b)) = (lhs_val, rhs_val) else {
-            return false;
-        };
-
-        let result_types = ctx.op_result_types(op).to_vec();
-        let result_ty = match result_types.as_slice() {
-            [t] => *t,
-            _ => return false,
-        };
-        let Some(width) = core_int_width(ctx, result_ty) else {
-            return false;
-        };
-        let folded = wrap_signed_to_width(fold(a, b), width);
-        let loc = ctx.op(op).location;
-        let new_const = r#const(ctx, loc, result_ty, Attribute::Int(folded));
-        rewriter.replace_op(new_const.op_ref());
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "IntConstFold"
-    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a.wrapping_mul(b), width),
+    )))
 }
 
 // =========================================================================
-// Pattern helpers (private to this module)
+// Fold helpers (private to this module)
 // =========================================================================
 
-fn op_is(ctx: &IrContext, op: OpRef, dialect: &'static str, name: &'static str) -> bool {
-    let data = ctx.op(op);
-    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+/// Extract `(lhs, rhs)` from a binary op. `None` if the op doesn't have
+/// exactly two operands.
+fn two_operands(ctx: &IrContext, op: OpRef) -> Option<(ValueRef, ValueRef)> {
+    match ctx.op_operands(op) {
+        [lhs, rhs] => Some((*lhs, *rhs)),
+        _ => None,
+    }
 }
 
-/// If `op` has exactly two operands and one of them is produced by an
-/// `arith.const {value = Int(target)}`, return `(other_operand, const_op)`.
-/// `other_operand` is the operand *not* matched against the constant.
-fn find_const_int_operand(ctx: &IrContext, op: OpRef, target: i128) -> Option<(ValueRef, OpRef)> {
-    let operands = ctx.op_operands(op);
-    if operands.len() != 2 {
-        return None;
+/// Extract the op's single result type. `None` if the op has zero or
+/// multiple results.
+fn single_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    match ctx.op_result_types(op) {
+        [t] => Some(*t),
+        _ => None,
     }
-    let lhs = operands[0];
-    let rhs = operands[1];
-
-    if let Some(c) = const_int_producer(ctx, rhs, target) {
-        return Some((lhs, c));
-    }
-    if let Some(c) = const_int_producer(ctx, lhs, target) {
-        return Some((rhs, c));
-    }
-    None
-}
-
-fn const_int_producer(ctx: &IrContext, value: ValueRef, target: i128) -> Option<OpRef> {
-    let (producer, v) = const_int_def(ctx, value)?;
-    if v == target { Some(producer) } else { None }
 }
 
 /// If `value` is the result of an `arith.const {value = Int(_)}`, return
 /// its raw integer attribute.
-fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
-    const_int_def(ctx, value).map(|(_, v)| v)
-}
-
-fn const_int_def(ctx: &IrContext, value: ValueRef) -> Option<(OpRef, i128)> {
+pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
     let producer = match ctx.value_def(value) {
         ValueDef::OpResult(op, _) => op,
         ValueDef::BlockArg(_, _) => return None,
     };
-    if !op_is(ctx, producer, "arith", "const") {
+    let producer_data = ctx.op(producer);
+    if producer_data.dialect != Symbol::new("arith") || producer_data.name != Symbol::new("const") {
         return None;
     }
-    let value_sym: Symbol = Symbol::new("value");
-    match ctx.op(producer).attributes.get(&value_sym) {
-        Some(Attribute::Int(v)) => Some((producer, *v)),
+    match producer_data.attributes.get(&Symbol::new("value")) {
+        Some(Attribute::Int(v)) => Some(*v),
         _ => None,
     }
 }
@@ -393,18 +254,20 @@ mod canonicalize_tests {
     use super::*;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
-    use crate::rewrite::{Module, PatternApplicator, TypeConverter};
+    use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
+    use crate::transforms::canonicalize::FoldDispatchPattern;
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
-    /// Run only this dialect's patterns on `module`. Returns the
-    /// applicator's partial-application result for assertions.
-    fn run_arith_patterns(ctx: &mut IrContext, module: Module) -> crate::rewrite::ApplyResult {
-        let applicator = canonicalization_patterns().into_iter().fold(
-            PatternApplicator::new(TypeConverter::new()),
-            PatternApplicator::add_pattern_box,
-        );
-        applicator.apply_partial(ctx, module)
+    /// Run only this dialect's folds on `module` via a single
+    /// [`FoldDispatchPattern`]. Lets the per-fold tests stay isolated
+    /// from other dialects' folds even though the production
+    /// `canonicalize` pass aggregates everyone.
+    fn run_arith_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
+        let dispatcher = FoldDispatchPattern::from_folds(folds());
+        PatternApplicator::new(TypeConverter::new())
+            .add_pattern_box(Box::new(dispatcher))
+            .apply_partial(ctx, module)
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
