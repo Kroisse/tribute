@@ -181,9 +181,8 @@ impl RewritePattern for SubZeroFold {
 /// type — so e.g. `arith.addi const(i32::MAX), const(1) : core.i32`
 /// folds to `arith.const i32::MIN`, matching codegen semantics.
 ///
-/// Only result types of the form `core.i{N}` for `N` in {1, 8, 16, 32,
-/// 64} are folded. Other widths and exotic integer types fall through
-/// unchanged.
+/// Result types must be `core.i{N}` with `1 <= N <= 128`. Other
+/// dialects and exotic integer types fall through unchanged.
 ///
 /// `divsi` / `divui` / `remsi` / `remui` are intentionally excluded — they
 /// require a division-by-zero guard that is its own design decision.
@@ -300,21 +299,23 @@ fn const_int_def(ctx: &IrContext, value: ValueRef) -> Option<(OpRef, i128)> {
     }
 }
 
-/// If `ty` is `core.i{N}` for a recognized signed integer width, return
-/// `N`. Returns `None` for other dialects, parameterized types, or
-/// widths outside the supported set.
+/// If `ty` is `core.i{N}` for some `1 <= N <= 128`, return `N`.
+///
+/// Returns `None` for other dialects, parameterized types, types
+/// carrying attributes, names that don't follow the `i{N}` shape, or
+/// widths outside `[1, 128]` (the upper bound is what
+/// `wrap_signed_to_width` can represent in i128).
 fn core_int_width(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     let data = ctx.types.get(ty);
     if data.dialect != Symbol::new("core") || !data.params.is_empty() || !data.attrs.is_empty() {
         return None;
     }
-    data.name.with_str(|s| match s {
-        "i1" => Some(1),
-        "i8" => Some(8),
-        "i16" => Some(16),
-        "i32" => Some(32),
-        "i64" => Some(64),
-        _ => None,
+    data.name.with_str(|s| {
+        let digits = s.strip_prefix('i')?;
+        // u32::from_str rejects empty input and any sign character, so
+        // `i`, `i+32`, `i-1` all fail here.
+        let width: u32 = digits.parse().ok()?;
+        (1..=128).contains(&width).then_some(width)
     })
 }
 
@@ -642,15 +643,58 @@ mod tests {
     }
 
     #[test]
-    fn int_const_fold_skips_unknown_width_type() {
-        // A custom integer type (here `core.i7` — not in the supported
-        // width set) must not be folded, even with two const operands,
-        // because we don't know how to wrap.
+    fn int_const_fold_accepts_nonstandard_width() {
+        // Any `core.i{N}` with `1 <= N <= 128` is foldable — including
+        // widths the backends don't necessarily support natively. The
+        // pattern's job is semantic preservation at the declared width;
+        // backend support is a separate concern.
         let input = r#"core.module @test {
   func.func @f() -> core.i7 {
-    %a = arith.const {value = 1} : core.i7
-    %b = arith.const {value = 2} : core.i7
+    %a = arith.const {value = 60} : core.i7
+    %b = arith.const {value = 10} : core.i7
     %r = arith.addi %a, %b : core.i7
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        // 60 + 10 = 70, which exceeds i7::MAX (63), wraps to -58.
+        assert_eq!(return_value_int_const(&ctx, module), Some(-58));
+    }
+
+    #[test]
+    fn int_const_fold_skips_widths_above_128() {
+        // `core.i129` exceeds the i128 envelope of `wrap_signed_to_width`.
+        // The fold must bail out rather than silently producing a value
+        // it can't represent.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i129 {
+    %a = arith.const {value = 1} : core.i129
+    %b = arith.const {value = 2} : core.i129
+    %r = arith.addi %a, %b : core.i129
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_skips_non_i_prefixed_type() {
+        // `core.foo` doesn't follow the `i{N}` shape — fold must skip.
+        let input = r#"core.module @test {
+  func.func @f() -> core.foo {
+    %a = arith.const {value = 1} : core.foo
+    %b = arith.const {value = 2} : core.foo
+    %r = arith.addi %a, %b : core.foo
     func.return %r
   }
 }"#;
