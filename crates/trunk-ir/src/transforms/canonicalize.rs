@@ -286,6 +286,17 @@ impl RewritePattern for UnrealizedCastIdentity {
 /// rewrite materializes `B` and a later rewrite expects `A` again. We forward
 /// the inner cast's input. The inner cast is left in place; if it had no
 /// other users it becomes dead and is collected by DCE.
+///
+/// Safe *specifically* because both ops are `core.unrealized_conversion_cast`
+/// — dialect-conversion placeholders that carry no value-level conversion
+/// semantics. Resolved casts like `arith.trunc` followed by `arith.extend`
+/// would *not* be safe to collapse this way: a narrower intermediate type
+/// loses information that the outer cast cannot recover (e.g.
+/// `i64 → i32 → i64` discards the upper 32 bits). The pattern's self-filter
+/// on `UnrealizedConversionCast` is what restricts the rewrite to the
+/// information-preserving placeholder case; once `resolve_unrealized_casts`
+/// has run the materializer, no `unrealized_conversion_cast` ops remain and
+/// this pattern is a no-op.
 pub struct UnrealizedCastRoundTrip;
 
 impl RewritePattern for UnrealizedCastRoundTrip {
