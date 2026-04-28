@@ -374,10 +374,11 @@ mod tests {
                 return ControlFlow::Continue(WalkAction::Advance);
             }
             let data = ctx.op(op);
-            if data.dialect == func_return_dialect && data.name == return_name {
-                if let Some(&v) = ctx.op_operands(op).first() {
-                    found = const_int_value(ctx, v);
-                }
+            if data.dialect == func_return_dialect
+                && data.name == return_name
+                && let Some(&v) = ctx.op_operands(op).first()
+            {
+                found = const_int_value(ctx, v);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
