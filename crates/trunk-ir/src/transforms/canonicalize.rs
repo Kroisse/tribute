@@ -1,27 +1,142 @@
 //! Canonicalization pass for TrunkIR.
 //!
-//! Greedy fixed-point pass that folds operations into a canonical form via
-//! local rewrite patterns. Patterns are owned by the dialect that defines
-//! the ops they operate on, and aggregated here at pass-construction time.
+//! Greedy fixed-point pass that folds operations into a canonical form.
+//! Each dialect contributes per-op `fold` functions (one fold per op kind)
+//! that return either a value to forward or an attribute that the driver
+//! materializes as `arith.const`. The pass aggregates all dialect folds
+//! into a single dispatch pattern that O(1)-looks up the fold for each
+//! visited op.
 //!
-//! - `arith::canonicalization_patterns()` — integer identities (`x+0`,
-//!   `x*1`, `x*0`, `x-0`) and constant folding for `addi`/`subi`/`muli` at
-//!   the result type's bit-width.
-//! - `core::canonicalization_patterns()` — `unrealized_conversion_cast`
-//!   identity (same source/target type) and round-trip elimination
-//!   (`A → B → A`).
+//! - `arith::folds()` — `addi`/`subi`/`muli` integer identities and
+//!   constant folding at the result type's bit-width.
+//! - `core::folds()` — `unrealized_conversion_cast` identity (same
+//!   source/target type) and round-trip elimination (`A → B → A`).
 //!
-//! Adding a new pattern to an existing dialect requires editing only that
-//! dialect's module. Adding a brand-new dialect's patterns is a one-line
-//! `chain` here. Tracked in #690.
+//! Adding a fold for an existing op = edit one function in that dialect.
+//! Adding a brand-new dialect's folds = a one-line `chain` here. Truly
+//! local rewrites that don't fit the fold shape (e.g. region splice for
+//! `scf.if(const)`) still go through `RewritePattern`; tracked in #690.
 //!
-//! Float, div/rem, and `scf` patterns live in follow-up PRs once each
-//! one's semantics are pinned down (NaN/-0.0, division-by-zero, region
-//! splice).
+//! Float and div/rem folds are deferred until each one's edge cases
+//! (NaN/-0.0, division-by-zero) are pinned down.
+
+use std::collections::HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, core as core_dialect};
-use crate::rewrite::{Module, PatternApplicator, TypeConverter};
+use crate::refs::{OpRef, ValueRef};
+use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
+use crate::symbol::Symbol;
+use crate::types::Attribute;
+
+// =========================================================================
+// Fold API
+// =========================================================================
+
+/// Result of trying to fold an operation.
+///
+/// Folds are *strict-progress* rewrites — applying one must remove the op
+/// from the IR. A fold function that produces another op of the same
+/// (dialect, op_name) would loop the canonicalize pass; this is a bug in
+/// the fold, not a property the driver tries to detect.
+#[derive(Debug, Clone)]
+pub enum FoldResult {
+    /// RAUW the op's single result with this existing value.
+    Forward(ValueRef),
+    /// Replace with a freshly-built `arith.const` of the op's result type,
+    /// carrying this attribute. The driver materializes the const op.
+    ///
+    /// Specifically named `ArithConst` (not `Const`) so that future
+    /// const-producing dialects require an explicit new variant — the
+    /// driver currently knows only how to build `arith.const`.
+    ArithConst(Attribute),
+}
+
+/// Per-op fold function. `&IrContext` is read-only; mutation happens in
+/// the driver after the fold returns.
+pub type FoldFn = fn(&IrContext, OpRef) -> Option<FoldResult>;
+
+/// One `RewritePattern` that dispatches to per-op fold functions via
+/// hashmap lookup.
+///
+/// Replaces N individual self-filtering patterns (one per op kind) with
+/// a single O(1) dispatcher: instead of every pattern testing
+/// `op.dialect == "arith" && op.name == "addi"`, the dispatcher does one
+/// `HashMap::get((dialect, name))` and calls the fold directly.
+///
+/// The hashmap is built once at pass-construction time. Duplicate
+/// registrations for the same (dialect, op_name) are caught by
+/// `debug_assert!`.
+pub struct FoldDispatchPattern {
+    table: HashMap<(Symbol, Symbol), FoldFn>,
+}
+
+impl FoldDispatchPattern {
+    /// Build a dispatcher from an iterator of `(dialect, op_name, fold)`
+    /// triples. Panics in debug builds on duplicate keys.
+    pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
+        let mut table = HashMap::new();
+        for (dialect, op_name, fold) in folds {
+            debug_assert!(
+                table.insert((dialect, op_name), fold).is_none(),
+                "duplicate canonicalize fold for {dialect}.{op_name}",
+            );
+        }
+        Self { table }
+    }
+
+    /// Convenience for tests: build a single-entry dispatcher. Lets a
+    /// test compose one specific fold with other patterns in the same
+    /// applicator without pulling in every registered fold.
+    #[cfg(test)]
+    pub(crate) fn single(dialect: &'static str, op_name: &'static str, fold: FoldFn) -> Self {
+        Self::from_folds([(Symbol::new(dialect), Symbol::new(op_name), fold)])
+    }
+}
+
+impl RewritePattern for FoldDispatchPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let key = {
+            let data = ctx.op(op);
+            (data.dialect, data.name)
+        };
+        let Some(fold) = self.table.get(&key).copied() else {
+            return false;
+        };
+        let Some(result) = fold(ctx, op) else {
+            return false;
+        };
+        match result {
+            FoldResult::Forward(v) => {
+                rewriter.erase_op(vec![v]);
+                true
+            }
+            FoldResult::ArithConst(attr) => {
+                let loc = ctx.op(op).location;
+                let result_ty = match ctx.op_result_types(op) {
+                    [t] => *t,
+                    _ => return false,
+                };
+                let new_const = arith::r#const(ctx, loc, result_ty, attr);
+                rewriter.replace_op(new_const.op_ref());
+                true
+            }
+        }
+    }
+
+    fn name(&self) -> &'static str {
+        "FoldDispatch"
+    }
+}
+
+// =========================================================================
+// Pass entry
+// =========================================================================
 
 /// Outcome of one `canonicalize` invocation.
 #[derive(Debug, Clone, Copy)]
@@ -33,13 +148,10 @@ pub struct CanonicalizeResult {
 
 /// Run canonicalization to a fixed point on `module`.
 pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
-    let applicator = arith::canonicalization_patterns()
-        .into_iter()
-        .chain(core_dialect::canonicalization_patterns())
-        .fold(
-            PatternApplicator::new(TypeConverter::new()),
-            PatternApplicator::add_pattern_box,
-        );
+    let folds = arith::folds().into_iter().chain(core_dialect::folds());
+    let dispatcher = FoldDispatchPattern::from_folds(folds);
+    let applicator =
+        PatternApplicator::new(TypeConverter::new()).add_pattern_box(Box::new(dispatcher));
     let result = applicator.apply_partial(ctx, module);
     CanonicalizeResult {
         iterations: result.iterations,
@@ -52,16 +164,15 @@ pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
 // Pass-level tests
 //
 // Tests that exercise the pass *shell* — region walk, fixed-point
-// iteration, and the collaboration between patterns from one or more
-// dialects. Per-pattern positive/negative tests live alongside the
-// patterns themselves in their respective dialect modules.
+// iteration, and the collaboration between folds from one or more
+// dialects. Per-fold positive/negative tests live alongside the fold
+// itself in its dialect module.
 // =========================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::parse_test_module;
-    use crate::symbol::Symbol;
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
@@ -128,8 +239,8 @@ mod tests {
     #[test]
     fn fold_and_identity_collaborate_to_fixpoint() {
         // `((2 + 3) * x) + 0` should collapse to `5 * x` after one
-        // canonicalize call: const fold turns `2 + 3` into `5`, then
-        // AddZeroFold erases `_ + 0`.
+        // canonicalize call: `fold_addi` const-folds `2 + 3` to `5`, then
+        // the same fold (on the outer addi) erases `_ + 0`.
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %a = arith.const {value = 2} : core.i32
