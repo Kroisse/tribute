@@ -1,8 +1,9 @@
 //! Canonicalization pass for TrunkIR.
 //!
 //! Greedy fixed-point pass that folds operations into a canonical form via
-//! local rewrite patterns. The pattern set so far covers integer identities
-//! and constant folding for `addi`/`subi`/`muli`:
+//! local rewrite patterns. The pattern set so far covers integer identities,
+//! constant folding for `addi`/`subi`/`muli`, and `unrealized_conversion_cast`
+//! cleanup:
 //!
 //! - `arith.addi %x, 0` / `arith.addi 0, %x` → `%x`
 //! - `arith.subi %x, 0` → `%x`
@@ -12,10 +13,13 @@
 //! - `arith.addi const(a), const(b)` / `subi` / `muli` → `arith.const`
 //!   (signed wrapping at the result type's bit-width — `i32::MAX + 1`
 //!   becomes `i32::MIN`, matching what codegen would produce.)
+//! - `core.unrealized_conversion_cast %x : T → T` → `%x`
+//!   (`UnrealizedCastIdentity` — same source/target type.)
+//! - `core.unrealized_conversion_cast(core.unrealized_conversion_cast(x : A → B) : B → A)`
+//!   → `x` (`UnrealizedCastRoundTrip` — types collapse back to the input.)
 //!
-//! Float, div/rem, scf, and `unrealized_conversion_cast` patterns live in
-//! follow-up PRs once each one's semantics are pinned down (NaN/-0.0,
-//! division-by-zero, region splice, materialization vs identity).
+//! Float, div/rem, and scf patterns live in follow-up PRs once each one's
+//! semantics are pinned down (NaN/-0.0, division-by-zero, region splice).
 //!
 //! Patterns are language-agnostic: this module sits in `trunk-ir`, not
 //! `tribute-passes`. Each pattern self-filters by dialect/op-name inside
@@ -23,7 +27,8 @@
 //! Per-dialect pattern registries are tracked separately in #690.
 
 use crate::context::IrContext;
-use crate::dialect::arith;
+use crate::dialect::{arith, core as arena_core};
+use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
@@ -44,7 +49,9 @@ pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
         .add_pattern(SubZeroFold)
         .add_pattern(MulOneFold)
         .add_pattern(MulZeroFold)
-        .add_pattern(IntConstFold);
+        .add_pattern(IntConstFold)
+        .add_pattern(UnrealizedCastIdentity)
+        .add_pattern(UnrealizedCastRoundTrip);
     let result = applicator.apply_partial(ctx, module);
     CanonicalizeResult {
         iterations: result.iterations,
@@ -234,6 +241,103 @@ impl RewritePattern for IntConstFold {
 
     fn name(&self) -> &'static str {
         "IntConstFold"
+    }
+}
+
+/// `core.unrealized_conversion_cast %x : T → T` → `%x`.
+///
+/// A no-op cast left over from a type conversion that ended up matching the
+/// input type (e.g. after surrounding ops were rewritten). The op carries no
+/// useful work — drop it and forward the operand.
+pub struct UnrealizedCastIdentity;
+
+impl RewritePattern for UnrealizedCastIdentity {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !arena_core::UnrealizedConversionCast::matches(ctx, op) {
+            return false;
+        }
+        let operands = ctx.op_operands(op);
+        let result_types = ctx.op_result_types(op);
+        if operands.len() != 1 || result_types.len() != 1 {
+            return false;
+        }
+        let input = operands[0];
+        let result_ty = result_types[0];
+        if ctx.value_ty(input) != result_ty {
+            return false;
+        }
+        rewriter.erase_op(vec![input]);
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnrealizedCastIdentity"
+    }
+}
+
+/// `cast<A → B>(cast<B → A>(%x))` → `%x`.
+///
+/// A pair of casts that collapse back to the input type — common when one
+/// rewrite materializes `B` and a later rewrite expects `A` again. We forward
+/// the inner cast's input. The inner cast is left in place; if it had no
+/// other users it becomes dead and is collected by DCE.
+///
+/// Safe *specifically* because both ops are `core.unrealized_conversion_cast`
+/// — dialect-conversion placeholders that carry no value-level conversion
+/// semantics. Resolved casts like `arith.trunc` followed by `arith.extend`
+/// would *not* be safe to collapse this way: a narrower intermediate type
+/// loses information that the outer cast cannot recover (e.g.
+/// `i64 → i32 → i64` discards the upper 32 bits). The pattern's self-filter
+/// on `UnrealizedConversionCast` is what restricts the rewrite to the
+/// information-preserving placeholder case; once `resolve_unrealized_casts`
+/// has run the materializer, no `unrealized_conversion_cast` ops remain and
+/// this pattern is a no-op.
+pub struct UnrealizedCastRoundTrip;
+
+impl RewritePattern for UnrealizedCastRoundTrip {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !arena_core::UnrealizedConversionCast::matches(ctx, op) {
+            return false;
+        }
+        let operands = ctx.op_operands(op);
+        let result_types = ctx.op_result_types(op);
+        if operands.len() != 1 || result_types.len() != 1 {
+            return false;
+        }
+        let outer_input = operands[0];
+        let outer_result_ty = result_types[0];
+        let producer = match ctx.value_def(outer_input) {
+            ValueDef::OpResult(p, _) => p,
+            ValueDef::BlockArg(_, _) => return false,
+        };
+        if !arena_core::UnrealizedConversionCast::matches(ctx, producer) {
+            return false;
+        }
+        let inner_operands = ctx.op_operands(producer);
+        let Some(&inner_input) = inner_operands.first() else {
+            return false;
+        };
+        // Round-trip iff the outer's result type matches the inner cast's
+        // input type, i.e. types form `A → B → A`.
+        if ctx.value_ty(inner_input) != outer_result_ty {
+            return false;
+        }
+        rewriter.erase_op(vec![inner_input]);
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnrealizedCastRoundTrip"
     }
 }
 
@@ -746,6 +850,97 @@ mod tests {
         let result = canonicalize(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
+    }
+
+    #[test]
+    fn unrealized_cast_identity_drops_same_type_cast() {
+        // A cast whose result type matches the operand type carries no
+        // useful work and should fold away to its operand.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %r = core.unrealized_conversion_cast %x : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(
+            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            0
+        );
+        insta::assert_snapshot!(print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn unrealized_cast_identity_does_not_match_when_types_differ() {
+        // i32 → i64 is a real type change; the pattern must leave it for
+        // resolve_unrealized_casts (or a backend's materializer).
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i64 {
+    %r = core.unrealized_conversion_cast %x : core.i64
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(
+            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            1
+        );
+    }
+
+    #[test]
+    fn unrealized_cast_round_trip_collapses_pair() {
+        // `cast<i32→i64>(cast<i64→i32>(%x))` collapses to `%x`.
+        // The outer cast is erased; the inner cast is left in place
+        // (pending DCE) since canonicalize only handles local rewrites.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i64) -> core.i64 {
+    %a = core.unrealized_conversion_cast %x : core.i32
+    %b = core.unrealized_conversion_cast %a : core.i64
+    func.return %b
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        // Inner cast remains (now dead); outer is gone.
+        assert_eq!(
+            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            1
+        );
+        insta::assert_snapshot!(print_module(&ctx, module.op()));
+    }
+
+    #[test]
+    fn unrealized_cast_round_trip_does_not_match_three_step_chain() {
+        // `cast<i64→i32>(cast<i32→i16>(...))` is not a round-trip — the
+        // outer's result type (`i64`) is not the inner's input type
+        // (`i32`). Both casts must remain.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i64 {
+    %a = core.unrealized_conversion_cast %x : core.i16
+    %b = core.unrealized_conversion_cast %a : core.i64
+    func.return %b
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(
+            count_ops(&ctx, module, "core", "unrealized_conversion_cast"),
+            2
+        );
     }
 
     #[test]

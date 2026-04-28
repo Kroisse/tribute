@@ -1,0 +1,10 @@
+---
+source: crates/trunk-ir/src/transforms/canonicalize.rs
+expression: "print_module(&ctx, module.op())"
+---
+core.module @test {
+  func.func @f(%0: core.i64) -> core.i64 {
+      %1 = core.unrealized_conversion_cast %0 : core.i32
+      func.return %0
+  }
+}
