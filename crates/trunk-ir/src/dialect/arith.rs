@@ -98,6 +98,7 @@ mod arith {
 // =========================================================================
 
 use crate::context::IrContext;
+use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::symbol::Symbol;
 use crate::transforms::canonicalize::FoldResult;
@@ -190,17 +191,18 @@ fn single_result_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
 
 /// If `value` is the result of an `arith.const {value = Int(_)}`, return
 /// its raw integer attribute.
+///
+/// Uses the dialect-generated `Const` typed wrapper so the match is
+/// rename-safe and tied to the schema rather than literal `"arith"` /
+/// `"const"` / `"value"` strings.
 pub(crate) fn const_int_value(ctx: &IrContext, value: ValueRef) -> Option<i128> {
     let producer = match ctx.value_def(value) {
         ValueDef::OpResult(op, _) => op,
         ValueDef::BlockArg(_, _) => return None,
     };
-    let producer_data = ctx.op(producer);
-    if producer_data.dialect != Symbol::new("arith") || producer_data.name != Symbol::new("const") {
-        return None;
-    }
-    match producer_data.attributes.get(&Symbol::new("value")) {
-        Some(Attribute::Int(v)) => Some(*v),
+    let const_op = Const::from_op(ctx, producer).ok()?;
+    match const_op.value(ctx) {
+        Attribute::Int(v) => Some(v),
         _ => None,
     }
 }
