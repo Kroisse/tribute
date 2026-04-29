@@ -100,20 +100,15 @@ mod arith {
 use crate::context::IrContext;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::symbol::Symbol;
-use crate::transforms::canonicalize::{FoldFn, FoldResult};
+use crate::transforms::canonicalize::FoldResult;
 use crate::types::Attribute;
 
-/// Folds this dialect contributes to `transforms::canonicalize`. Returns
-/// `(dialect_symbol, op_name_symbol, fold_fn)` triples — the canonicalize
-/// pass merges these with other dialects' folds into a single dispatcher.
-pub(crate) fn folds() -> Vec<(Symbol, Symbol, FoldFn)> {
-    let arith = Symbol::new("arith");
-    vec![
-        (arith, Symbol::new("addi"), fold_addi as FoldFn),
-        (arith, Symbol::new("subi"), fold_subi as FoldFn),
-        (arith, Symbol::new("muli"), fold_muli as FoldFn),
-    ]
-}
+// Folds this dialect contributes to `transforms::canonicalize`, registered
+// via `inventory`. The pass discovers them at startup; no manual aggregation
+// in `canonicalize.rs` is needed.
+crate::register_canonicalize_fold!(arith.addi => fold_addi);
+crate::register_canonicalize_fold!(arith.subi => fold_subi);
+crate::register_canonicalize_fold!(arith.muli => fold_muli);
 
 /// `arith.addi` folds:
 /// - `x + 0` / `0 + x` → `x`
@@ -255,16 +250,16 @@ mod canonicalize_tests {
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
-    use crate::transforms::canonicalize::FoldDispatchPattern;
+    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
     /// Run only this dialect's folds on `module` via a single
-    /// [`FoldDispatchPattern`]. Lets the per-fold tests stay isolated
-    /// from other dialects' folds even though the production
-    /// `canonicalize` pass aggregates everyone.
+    /// [`FoldDispatchPattern`]. Filters the inventory by dialect so
+    /// per-fold tests stay isolated from other dialects' folds even
+    /// though the production `canonicalize` pass aggregates everyone.
     fn run_arith_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
-        let dispatcher = FoldDispatchPattern::from_folds(folds());
+        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("arith"));
         PatternApplicator::new(TypeConverter::new())
             .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)
