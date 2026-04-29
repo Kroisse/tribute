@@ -1,0 +1,11 @@
+---
+source: crates/trunk-ir/src/dialect/scf.rs
+expression: "print_module(&ctx, module.op())"
+---
+core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+      %1 = arith.const {value = 1} : core.i1
+      %2 = arith.addi %0, %0 : core.i32
+      func.return %2
+  }
+}

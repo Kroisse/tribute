@@ -389,4 +389,41 @@ mod tests {
         // muli %s, %x stays — only one operand is const.
         assert_eq!(count_ops(&ctx, module, "arith", "muli"), 1);
     }
+
+    #[test]
+    fn if_const_collaborates_with_arith_folds() {
+        // `scf.if(true) { yield (x + 0) } { yield x }` should collapse to
+        // `func.return %x` in one canonicalize call, exercising both the
+        // pattern-based escape hatch (`IfConstFold` splices the then
+        // region) and the per-op folds (`fold_addi` erases the `_ + 0`).
+        // The dead else region's `arith.muli` is dropped along with the
+        // erased `scf.if` op.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %t = arith.const {value = 1} : core.i1
+    %r = scf.if %t : core.i32 {
+      %z = arith.const {value = 0} : core.i32
+      %a = arith.addi %x, %z : core.i32
+      scf.yield %a
+    } {
+      %two = arith.const {value = 2} : core.i32
+      %m = arith.muli %x, %two : core.i32
+      scf.yield %m
+    }
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.reached_fixpoint);
+        // scf.if is gone; the then-region's body was spliced out.
+        assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
+        // arith.addi was folded away (`x + 0` → `x`).
+        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
+        // The else region's `arith.muli` was orphaned with the erased
+        // `scf.if`; it should not appear in the walked module.
+        assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
+    }
 }
