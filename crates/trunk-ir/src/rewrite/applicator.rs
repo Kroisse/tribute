@@ -93,6 +93,16 @@ impl PatternApplicator {
         self
     }
 
+    /// Add an already-boxed rewrite pattern.
+    ///
+    /// Useful when collecting heterogeneous patterns from multiple sources
+    /// (e.g. per-dialect `canonicalization_patterns()` registries) into a
+    /// single applicator without naming each concrete type at the call site.
+    pub fn add_pattern_box(mut self, pattern: Box<dyn RewritePattern>) -> Self {
+        self.patterns.push(pattern);
+        self
+    }
+
     /// Enable or disable automatic type conversion.
     ///
     /// When enabled, block argument types are converted and

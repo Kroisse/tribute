@@ -1,5 +1,5 @@
 ---
-source: crates/trunk-ir/src/transforms/canonicalize.rs
+source: crates/trunk-ir/src/dialect/core.rs
 expression: "print_module(&ctx, module.op())"
 ---
 core.module @test {

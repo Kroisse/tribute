@@ -1301,17 +1301,19 @@ mod pass {
     #[test]
     fn composes_with_another_rewrite_pattern_in_same_applicator() {
         use crate::analysis::AnalysisCache;
+        use crate::dialect::arith::fold_addi;
         use crate::rewrite::{PatternApplicator, TypeConverter};
-        use crate::transforms::canonicalize::AddZeroFold;
+        use crate::transforms::canonicalize::FoldDispatchPattern;
 
         // helper(%arg) -> %arg + 0
         // main()       -> helper(5)
         //
-        // Running the inliner pattern alongside the canonicalize
-        // `AddZeroFold` pattern in the same applicator drives both to a
-        // fixed point: inlining exposes `arith.addi %5, %0` inside `main`,
-        // the fold pattern erases it, and the final result contains a
-        // single constant + return.
+        // Running the inliner pattern alongside a single-entry
+        // canonicalize fold dispatcher in the same applicator drives
+        // both to a fixed point: inlining exposes `arith.addi %5, %0`
+        // inside `main`, the fold dispatcher rewrites it via
+        // `fold_addi`, and the final result contains a single constant
+        // + return.
         let input = r#"core.module @test {
   func.func @helper(%arg: core.i32) -> core.i32 {
     %0 = arith.const {value = 0} : core.i32
@@ -1335,9 +1337,10 @@ mod pass {
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
 
         let total_changes = {
+            let dispatcher = FoldDispatchPattern::single("arith", "addi", fold_addi);
             let applicator = PatternApplicator::new(TypeConverter::new())
                 .add_pattern(inline_pattern)
-                .add_pattern(AddZeroFold);
+                .add_pattern_box(Box::new(dispatcher));
             applicator.apply_partial(&mut ctx, module).total_changes
         };
 

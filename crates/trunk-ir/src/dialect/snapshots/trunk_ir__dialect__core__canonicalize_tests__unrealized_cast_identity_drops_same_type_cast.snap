@@ -1,0 +1,9 @@
+---
+source: crates/trunk-ir/src/dialect/core.rs
+expression: "print_module(&ctx, module.op())"
+---
+core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+      func.return %0
+  }
+}
