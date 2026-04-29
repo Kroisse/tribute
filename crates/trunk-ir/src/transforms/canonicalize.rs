@@ -71,19 +71,21 @@ pub type FoldFn = fn(&IrContext, OpRef) -> Option<FoldResult>;
 /// `HashMap::get((dialect, name))` and calls the fold directly.
 ///
 /// The hashmap is built once at pass-construction time. Duplicate
-/// registrations for the same (dialect, op_name) are caught by
-/// `debug_assert!`.
+/// registrations for the same (dialect, op_name) panic via `assert!`
+/// in all build profiles — silently overwriting one fold with another
+/// is always a bug.
 pub struct FoldDispatchPattern {
     table: HashMap<(Symbol, Symbol), FoldFn>,
 }
 
 impl FoldDispatchPattern {
     /// Build a dispatcher from an iterator of `(dialect, op_name, fold)`
-    /// triples. Panics in debug builds on duplicate keys.
+    /// triples. Panics on duplicate keys (in release builds too — see
+    /// type-level docs).
     pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
         let mut table = HashMap::new();
         for (dialect, op_name, fold) in folds {
-            debug_assert!(
+            assert!(
                 table.insert((dialect, op_name), fold).is_none(),
                 "duplicate canonicalize fold for {dialect}.{op_name}",
             );
@@ -169,6 +171,15 @@ inventory::collect!(CanonicalizeFold);
 /// `'static + Sync` bound. The function builds a fresh boxed pattern
 /// every time the pass runs; any state should be in the pattern itself,
 /// not captured.
+///
+/// **Determinism warning**: `inventory::iter` order is unspecified
+/// (linker-dependent). With a single registered pattern this is
+/// harmless; the moment a *second* `CanonicalizePattern` is registered,
+/// add explicit ordering (e.g. `priority: i32` + `name: &'static str`
+/// fields and sort by `(priority, name)` in `canonicalize()`) so the
+/// first-match-wins behavior of `PatternApplicator` doesn't drift
+/// across builds. Folds are dispatched by op key in
+/// `FoldDispatchPattern`, so the ordering issue applies only here.
 pub struct CanonicalizePattern {
     pub make: fn() -> Box<dyn RewritePattern>,
 }
