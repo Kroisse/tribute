@@ -432,4 +432,53 @@ mod tests {
         // `scf.if`; it should not appear in the walked module.
         assert_eq!(count_ops(&ctx, module, "arith", "muli"), 0);
     }
+
+    #[test]
+    fn canonicalize_reports_no_changes_on_already_canonical_module() {
+        // A module with nothing to fold must converge in a single
+        // sweep that records zero changes — the result fields the
+        // pipeline now relies on (iterations / total_changes /
+        // reached_fixpoint) must reflect that exactly.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = canonicalize(&mut ctx, module);
+        assert!(result.reached_fixpoint);
+        assert_eq!(result.iterations, 1);
+        assert_eq!(result.total_changes, 0);
+    }
+
+    #[test]
+    fn applicator_reports_non_fixpoint_when_iteration_budget_exhausted() {
+        // `((x + 0) + 0)` collapses fully in one greedy sweep, but
+        // confirming the fixed point still requires a follow-up
+        // iteration with zero changes. Capping the budget at 1
+        // forces the run to terminate as non-fixpoint with at
+        // least one fold applied — the exact case
+        // `run_cleanup_passes` now logs about.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %t = arith.addi %x, %z : core.i32
+    %r = arith.addi %t, %z : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let applicator = PatternApplicator::new(TypeConverter::new())
+            .with_max_iterations(1)
+            .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()));
+        let result = applicator.apply_partial(&mut ctx, module);
+
+        assert!(!result.reached_fixpoint);
+        assert_eq!(result.iterations, 1);
+        assert!(result.total_changes >= 1);
+    }
 }
