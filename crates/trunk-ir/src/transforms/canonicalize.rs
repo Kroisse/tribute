@@ -266,6 +266,12 @@ macro_rules! register_canonicalize_pattern {
 // =========================================================================
 
 /// Outcome of one `canonicalize` invocation.
+///
+/// `#[must_use]` because silently dropping the result hides the case
+/// where the pass exhausted its iteration budget without reaching a
+/// fixed point — a real bug we want callers to acknowledge (log, fail,
+/// or explicitly `let _ = ...` to opt out).
+#[must_use]
 #[derive(Debug, Clone, Copy)]
 pub struct CanonicalizeResult {
     pub iterations: usize,

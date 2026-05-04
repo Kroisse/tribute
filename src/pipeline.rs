@@ -499,7 +499,14 @@ fn run_lowering_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Conversio
 ///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
-    trunk_ir::transforms::canonicalize::canonicalize(ctx, m);
+    let result = trunk_ir::transforms::canonicalize::canonicalize(ctx, m);
+    if !result.reached_fixpoint {
+        tracing::warn!(
+            "canonicalize did not reach a fixed point: {} iterations, {} changes",
+            result.iterations,
+            result.total_changes,
+        );
+    }
     let tc = generic_type_converter(ctx);
     resolve_unrealized_casts(ctx, m, &tc);
 }
