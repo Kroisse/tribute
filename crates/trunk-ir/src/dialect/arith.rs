@@ -114,6 +114,9 @@ crate::register_canonicalize_fold!(arith.divsi => fold_divsi);
 crate::register_canonicalize_fold!(arith.divui => fold_divui);
 crate::register_canonicalize_fold!(arith.remsi => fold_remsi);
 crate::register_canonicalize_fold!(arith.remui => fold_remui);
+crate::register_canonicalize_fold!(arith.and => fold_and);
+crate::register_canonicalize_fold!(arith.or => fold_or);
+crate::register_canonicalize_fold!(arith.xor => fold_xor);
 
 /// `arith.addi` folds:
 /// - `x + 0` / `0 + x` → `x`
@@ -248,6 +251,76 @@ pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let result = a_u.wrapping_rem(b_u);
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(result as i128, width),
+    )))
+}
+
+/// `arith.and` folds:
+/// - `x & 0` / `0 & x` → `const 0` (short-circuit before width-extraction
+///   so the fold still applies even if the result type is non-standard).
+/// - `x & -1` / `-1 & x` → `x`. `-1` is the all-ones bit pattern in any
+///   width, since `Attribute::Int` values are stored sign-extended in
+///   `i128`.
+/// - `const(a) & const(b)` → `const(wrap(a&b))` at the result width.
+pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
+        return Some(FoldResult::ArithConst(Attribute::Int(0)));
+    }
+    if const_int_value(ctx, rhs) == Some(-1) {
+        return Some(FoldResult::Forward(lhs));
+    }
+    if const_int_value(ctx, lhs) == Some(-1) {
+        return Some(FoldResult::Forward(rhs));
+    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a & b, width),
+    )))
+}
+
+/// `arith.or` folds:
+/// - `x | 0` / `0 | x` → `x`.
+/// - `x | -1` / `-1 | x` → `const -1` (all-ones; same value in any
+///   width when interpreted as a sign-extended `i128`).
+/// - `const(a) | const(b)` → `const(wrap(a|b))` at the result width.
+pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) {
+        return Some(FoldResult::Forward(lhs));
+    }
+    if const_int_value(ctx, lhs) == Some(0) {
+        return Some(FoldResult::Forward(rhs));
+    }
+    if const_int_value(ctx, rhs) == Some(-1) || const_int_value(ctx, lhs) == Some(-1) {
+        return Some(FoldResult::ArithConst(Attribute::Int(-1)));
+    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a | b, width),
+    )))
+}
+
+/// `arith.xor` folds:
+/// - `x ^ 0` / `0 ^ x` → `x`.
+/// - `const(a) ^ const(b)` → `const(wrap(a^b))` at the result width.
+///
+/// `x ^ x → 0` would require same-operand detection and is left for a
+/// later pass that handles same-operand peepholes uniformly across
+/// the dialect (see `subi`, which doesn't fold `x - x → 0` either).
+pub(crate) fn fold_xor(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    if const_int_value(ctx, rhs) == Some(0) {
+        return Some(FoldResult::Forward(lhs));
+    }
+    if const_int_value(ctx, lhs) == Some(0) {
+        return Some(FoldResult::Forward(rhs));
+    }
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a ^ b, width),
     )))
 }
 
@@ -939,5 +1012,195 @@ mod canonicalize_tests {
         // Divisor not -1: never overflow.
         assert!(!is_signed_overflow_at_width(i32::MIN as i128, 1, 32));
         assert!(!is_signed_overflow_at_width(0, -1, 32));
+    }
+
+    // ---------- arith.and ----------
+
+    #[test]
+    fn and_zero_fold_replaces_with_const_zero() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %r = arith.and %x, %z : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "and"), 0);
+        assert_eq!(return_value_int_const(&ctx, module), Some(0));
+    }
+
+    #[test]
+    fn and_all_ones_fold_forwards_x() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %m = arith.const {value = -1} : core.i32
+    %r = arith.and %x, %m : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "and"), 0);
+    }
+
+    #[test]
+    fn int_const_fold_and() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 12} : core.i32
+    %b = arith.const {value = 10} : core.i32
+    %r = arith.and %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        // 0b1100 & 0b1010 == 0b1000 == 8.
+        assert_eq!(return_value_int_const(&ctx, module), Some(8));
+    }
+
+    // ---------- arith.or ----------
+
+    #[test]
+    fn or_zero_fold_forwards_x() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %r = arith.or %x, %z : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "or"), 0);
+    }
+
+    #[test]
+    fn or_all_ones_fold_replaces_with_const_neg_one() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %m = arith.const {value = -1} : core.i32
+    %r = arith.or %x, %m : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "or"), 0);
+        assert_eq!(return_value_int_const(&ctx, module), Some(-1));
+    }
+
+    #[test]
+    fn int_const_fold_or() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 12} : core.i32
+    %b = arith.const {value = 10} : core.i32
+    %r = arith.or %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        // 0b1100 | 0b1010 == 0b1110 == 14.
+        assert_eq!(return_value_int_const(&ctx, module), Some(14));
+    }
+
+    // ---------- arith.xor ----------
+
+    #[test]
+    fn xor_zero_fold_forwards_x() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %z = arith.const {value = 0} : core.i32
+    %r = arith.xor %x, %z : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "xor"), 0);
+    }
+
+    #[test]
+    fn int_const_fold_xor() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 12} : core.i32
+    %b = arith.const {value = 10} : core.i32
+    %r = arith.xor %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        // 0b1100 ^ 0b1010 == 0b0110 == 6.
+        assert_eq!(return_value_int_const(&ctx, module), Some(6));
+    }
+
+    #[test]
+    fn int_const_fold_xor_negative_signed() {
+        // -1 ^ 0xFF = -256 at i32 width: -1 is 0xFFFFFFFF (all ones),
+        // 0xFF is 255, XOR is 0xFFFFFF00 which is -256 as i32.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -1} : core.i32
+    %b = arith.const {value = 255} : core.i32
+    %r = arith.xor %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(return_value_int_const(&ctx, module), Some(-256));
+    }
+
+    #[test]
+    fn bitwise_fold_does_not_match_when_operands_are_not_const() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
+    %a = arith.and %x, %y : core.i32
+    %b = arith.or %a, %y : core.i32
+    %r = arith.xor %b, %x : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "and"), 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "or"), 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "xor"), 1);
     }
 }
