@@ -110,6 +110,10 @@ use crate::types::Attribute;
 crate::register_canonicalize_fold!(arith.addi => fold_addi);
 crate::register_canonicalize_fold!(arith.subi => fold_subi);
 crate::register_canonicalize_fold!(arith.muli => fold_muli);
+crate::register_canonicalize_fold!(arith.divsi => fold_divsi);
+crate::register_canonicalize_fold!(arith.divui => fold_divui);
+crate::register_canonicalize_fold!(arith.remsi => fold_remsi);
+crate::register_canonicalize_fold!(arith.remui => fold_remui);
 
 /// `arith.addi` folds:
 /// - `x + 0` / `0 + x` → `x`
@@ -164,6 +168,86 @@ pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
     Some(FoldResult::ArithConst(Attribute::Int(
         wrap_signed_to_width(a.wrapping_mul(b), width),
+    )))
+}
+
+/// `arith.divsi const(a), const(b)` → `arith.const(a/b)` at the result width.
+///
+/// Conservative bailouts that leave the op intact:
+/// - `b == 0`: backend trap (Cranelift `sdiv`, WASM `i32.div_s`) defines
+///   runtime behavior; the fold doesn't synthesize a result.
+/// - `a == INT_MIN && b == -1` at the result width: backend traps on
+///   signed-overflow. Tribute's integer-overflow policy isn't pinned
+///   down (`new-plans/types.md` doesn't specify wrap vs trap), so the
+///   conservative choice is to leave the op alone — that way IR
+///   semantics match whatever the backend does.
+pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    if b == 0 {
+        return None;
+    }
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    if is_signed_overflow_at_width(a, b, width) {
+        return None;
+    }
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a.wrapping_div(b), width),
+    )))
+}
+
+/// `arith.divui const(a), const(b)` → `arith.const(a/b)` at the result
+/// width, interpreting both operands as unsigned `N`-bit values.
+/// Bails when the unsigned divisor is zero.
+pub(crate) fn fold_divui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let mask = width_mask_u128(width);
+    let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
+    if b_u == 0 {
+        return None;
+    }
+    let result = a_u.wrapping_div(b_u);
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(result as i128, width),
+    )))
+}
+
+/// `arith.remsi const(a), const(b)` → `arith.const(a%b)` at the result width.
+///
+/// Mirrors [`fold_divsi`]: bails on `b == 0` and on `INT_MIN % -1` (which
+/// also traps on Cranelift `srem` and WASM `i32.rem_s`).
+pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    if b == 0 {
+        return None;
+    }
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    if is_signed_overflow_at_width(a, b, width) {
+        return None;
+    }
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(a.wrapping_rem(b), width),
+    )))
+}
+
+/// `arith.remui const(a), const(b)` → `arith.const(a%b)` at the result
+/// width, interpreting both operands as unsigned `N`-bit values.
+/// Bails when the unsigned divisor is zero.
+pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let (lhs, rhs) = two_operands(ctx, op)?;
+    let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
+    let width = core_int_width(ctx, single_result_type(ctx, op)?)?;
+    let mask = width_mask_u128(width);
+    let (a_u, b_u) = ((a as u128) & mask, (b as u128) & mask);
+    if b_u == 0 {
+        return None;
+    }
+    let result = a_u.wrapping_rem(b_u);
+    Some(FoldResult::ArithConst(Attribute::Int(
+        wrap_signed_to_width(result as i128, width),
     )))
 }
 
@@ -240,6 +324,35 @@ fn wrap_signed_to_width(value: i128, width: u32) -> i128 {
     }
     let shift = 128 - width;
     (value << shift) >> shift
+}
+
+/// Bottom `N` bits all set, the rest zero — used to truncate an i128 to
+/// its unsigned `N`-bit interpretation in `divui`/`remui` folds.
+fn width_mask_u128(width: u32) -> u128 {
+    debug_assert!((1..=128).contains(&width));
+    if width == 128 {
+        u128::MAX
+    } else {
+        (1u128 << width) - 1
+    }
+}
+
+/// `true` iff `(a, b)` is the signed-overflow corner: `b == -1` and `a`
+/// equals the smallest representable signed value at `width` bits. Both
+/// signed division (`a / b`) and remainder (`a % b`) trap on this case
+/// in Cranelift `sdiv`/`srem` and WASM `i32.div_s`/`i32.rem_s`, so
+/// `divsi`/`remsi` folds bail out to leave the runtime behavior to the
+/// backend.
+fn is_signed_overflow_at_width(a: i128, b: i128, width: u32) -> bool {
+    if b != -1 {
+        return false;
+    }
+    let min_at_width = if width == 128 {
+        i128::MIN
+    } else {
+        -(1i128 << (width - 1))
+    };
+    a == min_at_width
 }
 
 // =========================================================================
@@ -598,5 +711,233 @@ mod canonicalize_tests {
         assert_eq!(wrap_signed_to_width(1, 1), -1);
         assert_eq!(wrap_signed_to_width(-1, 1), -1);
         assert_eq!(wrap_signed_to_width(2, 1), 0);
+    }
+
+    // ---------------------------------------------------------------------
+    // div/rem folds
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn int_const_fold_divsi() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 10} : core.i32
+    %b = arith.const {value = 4} : core.i32
+    %r = arith.divsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 0);
+        // Truncation toward zero: 10 / 4 == 2.
+        assert_eq!(return_value_int_const(&ctx, module), Some(2));
+    }
+
+    #[test]
+    fn int_const_fold_divsi_negative_lhs() {
+        // Rust signed integer division truncates toward zero: -10 / 4 == -2.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -10} : core.i32
+    %b = arith.const {value = 4} : core.i32
+    %r = arith.divsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(return_value_int_const(&ctx, module), Some(-2));
+    }
+
+    #[test]
+    fn int_const_fold_divsi_div_by_zero_left_alone() {
+        // `1 / 0` must NOT fold — backend trap defines runtime behavior.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 1} : core.i32
+    %b = arith.const {value = 0} : core.i32
+    %r = arith.divsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_divsi_int_min_div_neg_one_left_alone() {
+        // i32::MIN / -1 traps on Cranelift `sdiv` and WASM `i32.div_s`;
+        // the fold must leave the op alone so IR semantics match.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -2147483648} : core.i32
+    %b = arith.const {value = -1} : core.i32
+    %r = arith.divsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_divui_treats_operands_as_unsigned() {
+        // i32 stored value -1 == u32 0xFFFFFFFF == 4294967295 unsigned.
+        // 4294967295 / 2 == 2147483647 (== i32::MAX, top bit clear).
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -1} : core.i32
+    %b = arith.const {value = 2} : core.i32
+    %r = arith.divui %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(return_value_int_const(&ctx, module), Some(i32::MAX as i128));
+    }
+
+    #[test]
+    fn int_const_fold_divui_div_by_zero_left_alone() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 5} : core.i32
+    %b = arith.const {value = 0} : core.i32
+    %r = arith.divui %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "divui"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_remsi_negative_lhs() {
+        // Rust signed remainder truncates toward zero: -7 % 2 == -1.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -7} : core.i32
+    %b = arith.const {value = 2} : core.i32
+    %r = arith.remsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(return_value_int_const(&ctx, module), Some(-1));
+    }
+
+    #[test]
+    fn int_const_fold_remsi_rem_by_zero_left_alone() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 5} : core.i32
+    %b = arith.const {value = 0} : core.i32
+    %r = arith.remsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "remsi"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_remsi_int_min_rem_neg_one_left_alone() {
+        // INT_MIN % -1 also traps on Cranelift `srem` / WASM `i32.rem_s`.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -2147483648} : core.i32
+    %b = arith.const {value = -1} : core.i32
+    %r = arith.remsi %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "remsi"), 1);
+    }
+
+    #[test]
+    fn int_const_fold_remui_treats_operands_as_unsigned() {
+        // i32 stored value -1 == u32 4294967295. 4294967295 % 3 == 0.
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = -1} : core.i32
+    %b = arith.const {value = 3} : core.i32
+    %r = arith.remui %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert!(result.total_changes >= 1);
+        assert_eq!(return_value_int_const(&ctx, module), Some(0));
+    }
+
+    #[test]
+    fn int_const_fold_remui_rem_by_zero_left_alone() {
+        let input = r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %a = arith.const {value = 5} : core.i32
+    %b = arith.const {value = 0} : core.i32
+    %r = arith.remui %a, %b : core.i32
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_arith_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "arith", "remui"), 1);
+    }
+
+    #[test]
+    fn is_signed_overflow_at_width_corners() {
+        // i32::MIN / -1 — overflow.
+        assert!(is_signed_overflow_at_width(i32::MIN as i128, -1, 32));
+        // i64::MIN / -1 — overflow.
+        assert!(is_signed_overflow_at_width(i64::MIN as i128, -1, 64));
+        // i128::MIN / -1 — overflow at width 128.
+        assert!(is_signed_overflow_at_width(i128::MIN, -1, 128));
+        // Just above MIN: not overflow.
+        assert!(!is_signed_overflow_at_width(i32::MIN as i128 + 1, -1, 32));
+        // Divisor not -1: never overflow.
+        assert!(!is_signed_overflow_at_width(i32::MIN as i128, 1, 32));
+        assert!(!is_signed_overflow_at_width(0, -1, 32));
     }
 }
