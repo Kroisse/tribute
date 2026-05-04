@@ -4,7 +4,7 @@
 crate::register_pure_op!(mem.data);
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod mem {
     #[attr(bytes: any)]
     fn data() -> result {}

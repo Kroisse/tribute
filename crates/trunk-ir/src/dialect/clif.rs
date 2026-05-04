@@ -1,6 +1,6 @@
 //! Arena-based clif dialect.
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod clif {
     // Module
     #[attr(sym_name: Symbol, r#type: Type)]

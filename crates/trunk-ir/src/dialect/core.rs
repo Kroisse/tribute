@@ -3,7 +3,7 @@
 // === Operation registrations ===
 crate::register_isolated_op!(core.module);
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod core {
     #[attr(sym_name: Symbol)]
     fn module() {

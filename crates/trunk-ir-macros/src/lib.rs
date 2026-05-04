@@ -25,10 +25,10 @@ mod parse;
 /// }
 /// ```
 ///
-/// ## Crate path
-///
-/// - `#[dialect] mod ...` — defaults to `trunk_ir` (for external crates)
-/// - `#[dialect(crate = crate)] mod ...` — for use within `trunk-ir` itself
+/// The macro emits absolute `::trunk_ir::...` paths. In-crate uses rely
+/// on `extern crate self as trunk_ir;` (declared at the trunk-ir crate
+/// root); external crates resolve `trunk_ir` through the normal
+/// dependency.
 ///
 /// ## Generated code
 ///
@@ -56,6 +56,7 @@ fn dialect_impl(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream, String> {
-    let (crate_path, module) = parse::parse_input(attr, item)?;
+    let module = parse::parse_input(attr, item)?;
+    let crate_path = quote::quote!(::trunk_ir);
     Ok(codegen::generate(&crate_path, &module))
 }

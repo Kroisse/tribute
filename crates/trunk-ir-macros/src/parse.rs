@@ -98,46 +98,16 @@ pub enum RegionOrSuccessor {
 // Top-level input parsing
 // ============================================================================
 
-/// Parse attribute macro input: `attr` contains optional `crate = path`,
-/// `item` contains `mod name { ... }`.
+/// Parse attribute macro input: `attr` must be empty, `item` contains
+/// `mod name { ... }`.
 pub fn parse_input(
     attr: proc_macro2::TokenStream,
     item: proc_macro2::TokenStream,
-) -> Result<(proc_macro2::TokenStream, DialectModule), String> {
-    let crate_path = parse_crate_attr(attr)?;
-    let module = parse_module(item)?;
-    Ok((crate_path, module))
-}
-
-/// Parse optional `crate = path` from the attribute arguments.
-fn parse_crate_attr(stream: proc_macro2::TokenStream) -> Result<proc_macro2::TokenStream, String> {
-    let mut iter = stream.to_token_iter();
-
-    if !has_remaining(&iter) {
-        return Ok(quote::quote!(trunk_ir));
+) -> Result<DialectModule, String> {
+    if !attr.is_empty() {
+        return Err("`#[dialect]` does not accept arguments".to_string());
     }
-
-    let kw: Ident =
-        Ident::parser(&mut iter).map_err(|e| format!("expected `crate` keyword: {e}"))?;
-    if kw != "crate" {
-        return Err(format!("expected `crate`, got `{kw}`"));
-    }
-
-    expect_punct(&mut iter, '=')?;
-
-    // Collect the remaining tokens as the crate path
-    let mut path_tokens = proc_macro2::TokenStream::new();
-    while has_remaining(&iter) {
-        let tt: TokenTree =
-            TokenTree::parser(&mut iter).map_err(|e| format!("error parsing crate path: {e}"))?;
-        path_tokens.extend(std::iter::once(tt));
-    }
-
-    if path_tokens.is_empty() {
-        return Err("expected crate path after `=`".into());
-    }
-
-    Ok(path_tokens)
+    parse_module(item)
 }
 
 /// Parse `mod name { ... }` from the item token stream.
@@ -714,13 +684,12 @@ mod tests {
     use quote::quote;
 
     fn parse_test_module(item: proc_macro2::TokenStream) -> Result<DialectModule, String> {
-        let (_, module) = parse_input(quote! {}, item)?;
-        Ok(module)
+        parse_input(quote! {}, item)
     }
 
     #[test]
-    fn test_parse_default_crate_path() {
-        let (path, module) = parse_input(
+    fn test_parse_empty_attr() {
+        let module = parse_input(
             quote! {},
             quote! {
                 mod arith {
@@ -730,38 +699,27 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(path.to_string(), "trunk_ir");
         assert_eq!(module.name, "arith");
     }
 
     #[test]
-    fn test_parse_crate_path_crate() {
-        let (path, _) = parse_input(
+    fn test_parse_rejects_non_empty_attr() {
+        // The macro emits absolute `::trunk_ir::...` paths, so the
+        // legacy `crate = crate` knob has no purpose. Reject any
+        // attribute argument outright.
+        let result = parse_input(
             quote! { crate = crate },
             quote! {
                 mod arith {
                     fn add(lhs: (), rhs: ()) -> result {}
                 }
             },
-        )
-        .unwrap();
+        );
 
-        assert_eq!(path.to_string(), "crate");
-    }
-
-    #[test]
-    fn test_parse_crate_path_custom() {
-        let (path, _) = parse_input(
-            quote! { crate = my_crate::ir },
-            quote! {
-                mod arith {
-                    fn add(lhs: (), rhs: ()) -> result {}
-                }
-            },
-        )
-        .unwrap();
-
-        assert_eq!(path.to_string(), "my_crate :: ir");
+        let Err(err) = result else {
+            panic!("expected error for non-empty attr");
+        };
+        assert!(err.contains("does not accept arguments"), "got: {err}");
     }
 
     #[test]

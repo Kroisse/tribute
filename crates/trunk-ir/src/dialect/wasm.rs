@@ -1,6 +1,6 @@
 //! Arena-based wasm dialect.
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod wasm {
     // Types (abstract heap types)
     struct Anyref;

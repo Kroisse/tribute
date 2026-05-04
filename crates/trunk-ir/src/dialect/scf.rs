@@ -1,6 +1,6 @@
 //! Arena-based scf dialect.
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod scf {
     fn r#if(cond: ()) -> result {
         #[region(then_region)]
