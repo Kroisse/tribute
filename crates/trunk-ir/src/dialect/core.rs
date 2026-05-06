@@ -38,10 +38,6 @@ use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueDef};
 use crate::transforms::canonicalize::FoldResult;
 
-// Folds this dialect contributes to `transforms::canonicalize`, registered
-// via `inventory`.
-crate::register_canonicalize_fold!(core.unrealized_conversion_cast => fold_unrealized_conversion_cast);
-
 /// `core.unrealized_conversion_cast` folds:
 ///
 /// - **Identity** (`%x : T → T`): drop the cast and forward `%x`.
@@ -55,6 +51,7 @@ crate::register_canonicalize_fold!(core.unrealized_conversion_cast => fold_unrea
 /// the same way (narrower intermediate types lose information). Once
 /// `resolve_unrealized_casts` has run, no `unrealized_conversion_cast`
 /// ops remain and this fold is a no-op.
+#[trunk_ir::canonicalize_fold(core.unrealized_conversion_cast)]
 pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let operands = ctx.op_operands(op);
     let result_types = ctx.op_result_types(op);

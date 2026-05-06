@@ -52,8 +52,7 @@ use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{PatternRewriter, RewritePattern};
 
-crate::register_canonicalize_pattern!(make_if_const_fold);
-
+#[trunk_ir::canonicalize_pattern]
 fn make_if_const_fold() -> Box<dyn RewritePattern> {
     Box::new(IfConstFold)
 }

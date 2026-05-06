@@ -1,11 +1,12 @@
 //! Canonicalization pass for TrunkIR.
 //!
 //! Greedy fixed-point pass that folds operations into a canonical form.
-//! Each dialect contributes per-op `fold` functions registered via
-//! [`crate::register_canonicalize_fold!`]; the pass discovers them at
-//! startup time through `inventory` rather than referencing each dialect
-//! by name. As a result this module knows nothing about which dialects
-//! exist — adding a new dialect's folds requires no edit here.
+//! Each dialect contributes per-op `fold` functions registered via the
+//! [`canonicalize_fold`](crate::canonicalize_fold) attribute; the pass
+//! discovers them at startup through `inventory` rather than referencing
+//! each dialect by name. As a result this module knows nothing about
+//! which dialects exist — adding a new dialect's folds requires no edit
+//! here.
 //!
 //! The driver dispatches each visited op to its fold (if any) by
 //! `(dialect, op_name)` HashMap lookup. A fold returns either a value
@@ -13,8 +14,8 @@
 //! materializes as `arith.const` of the op's result type.
 //!
 //! Multi-op rewrites that don't fit the fold shape (e.g. region splice
-//! for `scf.if(const)`) register as full [`RewritePattern`]s via
-//! [`crate::register_canonicalize_pattern!`] instead.
+//! for `scf.if(const)`) register as full [`RewritePattern`]s via the
+//! [`canonicalize_pattern`](crate::canonicalize_pattern) attribute.
 //!
 //! Currently registered (across `arith`, `core`):
 //!
@@ -152,9 +153,9 @@ impl RewritePattern for FoldDispatchPattern {
 // Inventory registration
 // =========================================================================
 
-/// One inventory entry registering a per-op fold function. Submitted via
-/// [`crate::register_canonicalize_fold!`] — never constructed directly
-/// from user code.
+/// One inventory entry registering a per-op fold function. Submitted
+/// via the [`canonicalize_fold`](crate::canonicalize_fold) attribute —
+/// never constructed directly from user code.
 pub struct CanonicalizeFold {
     pub dialect: &'static str,
     pub op_name: &'static str,
@@ -165,7 +166,7 @@ inventory::collect!(CanonicalizeFold);
 /// One inventory entry registering a full `RewritePattern` for the
 /// canonicalize pass — used as an escape hatch for rewrites that don't
 /// fit the fold shape (e.g. multi-op region splicing). Submitted via
-/// [`crate::register_canonicalize_pattern!`].
+/// the [`canonicalize_pattern`](crate::canonicalize_pattern) attribute.
 ///
 /// `make` is a `fn` (not a closure) so the entry meets `inventory`'s
 /// `'static + Sync` bound. The function builds a fresh boxed pattern
@@ -218,48 +219,10 @@ pub(crate) fn folds_for_dialect(
         })
 }
 
-/// Register a per-op fold for the canonicalize pass.
-///
-/// # Example
-/// ```text
-/// register_canonicalize_fold!(arith.addi => fold_addi);
-/// register_canonicalize_fold!(core.unrealized_conversion_cast => fold_uncc);
-/// ```
-///
-/// The dialect and op-name idents are stringified (handling raw
-/// identifiers like `r#const` correctly via `raw_ident_str!`). `$fold`
-/// is a path to a function with signature `fn(&IrContext, OpRef) ->
-/// Option<FoldResult>`.
-#[macro_export]
-macro_rules! register_canonicalize_fold {
-    ($dialect:ident . $op_name:ident => $fold:path) => {
-        ::inventory::submit! {
-            $crate::transforms::canonicalize::CanonicalizeFold {
-                dialect: $crate::raw_ident_str!($dialect),
-                op_name: $crate::raw_ident_str!($op_name),
-                fold: $fold,
-            }
-        }
-    };
-}
-
-/// Register a non-fold `RewritePattern` for the canonicalize pass.
-/// Use when the rewrite needs more than the fold shape allows
-/// (e.g. modifying multiple ops or splicing regions).
-///
-/// # Example
-/// ```text
-/// fn make_if_const_fold() -> Box<dyn RewritePattern> { Box::new(IfConstFold) }
-/// register_canonicalize_pattern!(make_if_const_fold);
-/// ```
-#[macro_export]
-macro_rules! register_canonicalize_pattern {
-    ($make:path) => {
-        ::inventory::submit! {
-            $crate::transforms::canonicalize::CanonicalizePattern { make: $make }
-        }
-    };
-}
+// Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
+// and `#[trunk_ir::canonicalize_pattern]` proc-macro attributes (defined
+// in `trunk-ir-macros`). They emit `inventory::submit!` blocks adjacent
+// to the attributed function — no separate registration call needed.
 
 // =========================================================================
 // Pass entry

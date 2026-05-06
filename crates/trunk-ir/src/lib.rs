@@ -58,6 +58,10 @@ pub use trunk_ir_macros::dialect;
 /// Deprecated alias for [`dialect`].
 pub use trunk_ir_macros::arena_dialect;
 
+// Re-export proc macros for canonicalize-pass registration. Each
+// emits an `inventory::submit!` block alongside the user's function.
+pub use trunk_ir_macros::{canonicalize_fold, canonicalize_pattern};
+
 // Re-export paste for use in macros
 #[doc(hidden)]
 pub use paste;
