@@ -62,6 +62,12 @@ pub use trunk_ir_macros::arena_dialect;
 // emits an `inventory::submit!` block alongside the user's function.
 pub use trunk_ir_macros::{canonicalize_fold, canonicalize_pattern};
 
+// Re-export `inventory` so the proc-macro–generated submit blocks
+// resolve `::trunk_ir::inventory::submit!` without requiring consumer
+// crates to declare a direct `inventory` dependency.
+#[doc(hidden)]
+pub use inventory;
+
 // Re-export paste for use in macros
 #[doc(hidden)]
 pub use paste;
