@@ -186,6 +186,13 @@ fn apply_splice(
     body: Vec<OpRef>,
     results: Vec<ValueRef>,
 ) -> bool {
+    // Precondition: `results` must cover every result slot of the
+    // matched op. Check before any mutation so a buggy fold can't leave
+    // body ops spliced out and the matched op's regions emptied while
+    // the final RAUW fails arity checks deep in `rewriter.erase_op`.
+    if ctx.op_results(op).len() != results.len() {
+        return false;
+    }
     let Some(parent_block) = ctx.op(op).parent_block else {
         return false;
     };

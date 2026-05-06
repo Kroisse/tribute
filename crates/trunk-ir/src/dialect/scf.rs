@@ -42,7 +42,7 @@ mod scf {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::arith::const_int_value;
+use crate::dialect::arith::{const_int_value, core_int_width};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
 use crate::transforms::canonicalize::FoldResult;
@@ -65,6 +65,13 @@ use crate::transforms::canonicalize::FoldResult;
 pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let if_op = If::from_op(ctx, op).ok()?;
     let cond = if_op.cond(ctx);
+    // Guard against malformed IR: only fold when the cond's type is
+    // `core.i1`. Without this, an `arith.const value=2 : core.i32`
+    // wired into the cond slot would be treated as truthy here,
+    // burning the dead branch before the validator gets to reject it.
+    if core_int_width(ctx, ctx.value_ty(cond)) != Some(1) {
+        return None;
+    }
     let cond_value = const_int_value(ctx, cond)?;
     let active_region = if cond_value != 0 {
         if_op.then_region(ctx)
@@ -194,6 +201,30 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = scf.if %cond : core.i32 {
+      scf.yield %x
+    } {
+      scf.yield %x
+    }
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_scf_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
+    }
+
+    #[test]
+    fn if_non_i1_const_cond_is_not_folded() {
+        // Malformed IR: the cond slot is wired to a `core.i32` constant
+        // instead of `core.i1`. The fold must bail and leave the op for
+        // validation rather than picking a branch by truthiness.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %bad = arith.const {value = 2} : core.i32
+    %r = scf.if %bad : core.i32 {
       scf.yield %x
     } {
       scf.yield %x
