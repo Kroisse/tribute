@@ -9,13 +9,17 @@
 //! here.
 //!
 //! The driver dispatches each visited op to its fold (if any) by
-//! `(dialect, op_name)` HashMap lookup. A fold returns either a value
-//! to forward (RAUW the op's result) or an `Attribute` that the driver
-//! materializes as `arith.const` of the op's result type.
+//! `(dialect, op_name)` HashMap lookup. A fold returns one of:
 //!
-//! Multi-op rewrites that don't fit the fold shape (e.g. region splice
-//! for `scf.if(const)`) register as full [`RewritePattern`]s via the
-//! [`canonicalize_pattern`](crate::canonicalize_pattern) attribute.
+//! - [`FoldResult::Forward`] — RAUW the op's result with an existing
+//!   value.
+//! - [`FoldResult::ArithConst`] — replace with a fresh `arith.const`
+//!   of the op's result type.
+//! - [`FoldResult::Splice`] — splice a body of ops into the parent
+//!   block before the matched op and RAUW its results with the
+//!   supplied values; the dispatcher additionally drops anything
+//!   still attached to the matched op's regions (e.g. yields and the
+//!   dead branch in `scf.if(const)`).
 //!
 //! Currently registered (across `arith`, `core`):
 //!
@@ -31,7 +35,7 @@ use std::collections::HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::arith;
-use crate::refs::{OpRef, ValueRef};
+use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
 use crate::types::Attribute;
@@ -57,6 +61,26 @@ pub enum FoldResult {
     /// const-producing dialects require an explicit new variant — the
     /// driver currently knows only how to build `arith.const`.
     ArithConst(Attribute),
+    /// Splice a sequence of body ops into the matched op's parent block
+    /// (in order, immediately before the matched op), then erase the
+    /// matched op while RAUW'ing its results to `results`.
+    ///
+    /// Used by region-bearing ops whose canonicalization is "pick one
+    /// region's body and inline it" — `scf.if(const)` being the seed
+    /// case. The dispatcher additionally drops any ops still attached
+    /// to the matched op's regions (typically the chosen region's
+    /// yield + the dead branch's body); fold authors only have to name
+    /// the ops they want to *keep* (`body`) and the values that should
+    /// take over the matched op's result slots (`results`).
+    Splice {
+        /// Ops to detach from their current parent and insert in the
+        /// matched op's parent block, in order, immediately before the
+        /// matched op.
+        body: Vec<OpRef>,
+        /// Values to RAUW the matched op's results with. Length must
+        /// match the matched op's result count.
+        results: Vec<ValueRef>,
+    },
 }
 
 /// Per-op fold function. `&IrContext` is read-only; mutation happens in
@@ -141,12 +165,53 @@ impl RewritePattern for FoldDispatchPattern {
                 rewriter.replace_op(new_const.op_ref());
                 true
             }
+            FoldResult::Splice { body, results } => apply_splice(ctx, rewriter, op, body, results),
         }
     }
 
     fn name(&self) -> &'static str {
         "FoldDispatch"
     }
+}
+
+/// Apply a [`FoldResult::Splice`]: detach the listed body ops from
+/// their current parents, insert them before `op` in `op`'s parent
+/// block, drop everything still attached to `op`'s regions (typically
+/// terminators and the dead branch), then ask the rewriter to erase
+/// `op` while mapping its results to `results`.
+fn apply_splice(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    op: OpRef,
+    body: Vec<OpRef>,
+    results: Vec<ValueRef>,
+) -> bool {
+    let Some(parent_block) = ctx.op(op).parent_block else {
+        return false;
+    };
+    for body_op in body {
+        ctx.detach_op(body_op);
+        ctx.insert_op_before(parent_block, op, body_op);
+    }
+    // Sweep up anything left in the matched op's regions — chosen
+    // region's terminator (we already kept the body it preceded) plus
+    // the dead branch entirely.
+    let regions: Vec<RegionRef> = ctx.op(op).regions.iter().copied().collect();
+    for region in regions {
+        let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+        for block in blocks {
+            // Reverse so a block-internal op is removed before any op
+            // that depends on its results, satisfying `remove_op`'s
+            // "no remaining uses" precondition.
+            let remaining: Vec<OpRef> = ctx.block(block).ops.to_vec();
+            for orphan in remaining.into_iter().rev() {
+                ctx.detach_op(orphan);
+                ctx.remove_op(orphan);
+            }
+        }
+    }
+    rewriter.erase_op(results);
+    true
 }
 
 // =========================================================================
@@ -162,29 +227,6 @@ pub struct CanonicalizeFold {
     pub fold: FoldFn,
 }
 inventory::collect!(CanonicalizeFold);
-
-/// One inventory entry registering a full `RewritePattern` for the
-/// canonicalize pass — used as an escape hatch for rewrites that don't
-/// fit the fold shape (e.g. multi-op region splicing). Submitted via
-/// the [`canonicalize_pattern`](crate::canonicalize_pattern) attribute.
-///
-/// `make` is a `fn` (not a closure) so the entry meets `inventory`'s
-/// `'static + Sync` bound. The function builds a fresh boxed pattern
-/// every time the pass runs; any state should be in the pattern itself,
-/// not captured.
-///
-/// **Determinism warning**: `inventory::iter` order is unspecified
-/// (linker-dependent). With a single registered pattern this is
-/// harmless; the moment a *second* `CanonicalizePattern` is registered,
-/// add explicit ordering (e.g. `priority: i32` + `name: &'static str`
-/// fields and sort by `(priority, name)` in `canonicalize()`) so the
-/// first-match-wins behavior of `PatternApplicator` doesn't drift
-/// across builds. Folds are dispatched by op key in
-/// `FoldDispatchPattern`, so the ordering issue applies only here.
-pub struct CanonicalizePattern {
-    pub make: fn() -> Box<dyn RewritePattern>,
-}
-inventory::collect!(CanonicalizePattern);
 
 /// Iterate every fold registered via inventory, keyed by interned
 /// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].
@@ -220,9 +262,9 @@ pub(crate) fn folds_for_dialect(
 }
 
 // Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
-// and `#[trunk_ir::canonicalize_pattern]` proc-macro attributes (defined
-// in `trunk-ir-macros`). They emit `inventory::submit!` blocks adjacent
-// to the attributed function — no separate registration call needed.
+// proc-macro attribute (defined in `trunk-ir-macros`). It emits an
+// `inventory::submit!` block adjacent to the attributed function — no
+// separate registration call needed.
 
 // =========================================================================
 // Pass entry
@@ -244,11 +286,8 @@ pub struct CanonicalizeResult {
 
 /// Run canonicalization to a fixed point on `module`.
 pub fn canonicalize(ctx: &mut IrContext, module: Module) -> CanonicalizeResult {
-    let mut applicator = PatternApplicator::new(TypeConverter::new())
+    let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern_box(Box::new(FoldDispatchPattern::from_inventory()));
-    for entry in inventory::iter::<CanonicalizePattern> {
-        applicator = applicator.add_pattern_box((entry.make)());
-    }
     let result = applicator.apply_partial(ctx, module);
     CanonicalizeResult {
         iterations: result.iterations,

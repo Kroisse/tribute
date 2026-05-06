@@ -38,115 +38,61 @@ mod scf {
 }
 
 // =========================================================================
-// Canonicalization patterns
-//
-// `scf.if(arith.const Int(_) : core.i1)` is the first user of the
-// non-fold escape hatch in `transforms::canonicalize`: the rewrite
-// splices the chosen region's body into the parent block — a multi-op
-// mutation that doesn't fit the single-op `FoldResult` shape.
+// Canonicalization folds
 // =========================================================================
 
 use crate::context::IrContext;
 use crate::dialect::arith::const_int_value;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, ValueRef};
-use crate::rewrite::{PatternRewriter, RewritePattern};
-
-#[trunk_ir::canonicalize_pattern]
-fn make_if_const_fold() -> Box<dyn RewritePattern> {
-    Box::new(IfConstFold)
-}
+use crate::transforms::canonicalize::FoldResult;
 
 /// `scf.if(arith.const Int(c) : core.i1)` → splice the chosen region's
 /// body into the parent block.
 ///
 /// When the condition is a compile-time constant, exactly one branch
 /// runs; the other is dead. The chosen region's `scf.yield <values>`
-/// supplies the if op's results, so:
+/// supplies the if op's results, so the fold names the body ops to
+/// keep and the values that should take over the if op's result slots
+/// — the canonicalize dispatcher does the splice + cleanup of the
+/// dead branch and the chosen region's yield via [`FoldResult::Splice`].
 ///
-/// 1. Move every non-terminator op out of the active region's single
-///    block, into the parent block, in original order, immediately
-///    before the `scf.if` op. Captured operands stay valid because the
-///    cloned ops keep referencing the same `ValueRef`s.
-/// 2. RAUW the if op's results with the yield's operands.
-/// 3. Erase the `scf.if`. Its other (dead) region is dropped along
-///    with the orphaned yield from the active region.
-///
-/// Multi-block regions are left alone — they only appear post-`scf_to_cf`,
-/// where this pattern doesn't run anyway. The pattern self-filters on
-/// `scf.if` and bails out on any structural mismatch (yield arity,
-/// non-`i1` const, malformed regions).
-pub struct IfConstFold;
+/// Multi-block regions are left alone — they only appear
+/// post-`scf_to_cf`, where this pass doesn't run anyway. Bails out on
+/// any structural mismatch (yield arity, non-`i1` const, malformed
+/// regions).
+#[trunk_ir::canonicalize_fold(scf.r#if)]
+pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let if_op = If::from_op(ctx, op).ok()?;
+    let cond = if_op.cond(ctx);
+    let cond_value = const_int_value(ctx, cond)?;
+    let active_region = if cond_value != 0 {
+        if_op.then_region(ctx)
+    } else {
+        if_op.else_region(ctx)
+    };
 
-impl RewritePattern for IfConstFold {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !If::matches(ctx, op) {
-            return false;
-        }
-        let if_op = match If::from_op(ctx, op) {
-            Ok(o) => o,
-            Err(_) => return false,
-        };
-        let cond = if_op.cond(ctx);
-
-        let Some(cond_value) = const_int_value(ctx, cond) else {
-            return false;
-        };
-        let active_region = if cond_value != 0 {
-            if_op.then_region(ctx)
-        } else {
-            if_op.else_region(ctx)
-        };
-
-        // Active region must be a single block whose terminator is `scf.yield`.
-        let blocks = ctx.region(active_region).blocks.to_vec();
-        let [active_block] = blocks.as_slice() else {
-            return false;
-        };
-        let active_block = *active_block;
-        let region_ops: Vec<OpRef> = ctx.block(active_block).ops.to_vec();
-        let Some((yield_op, body_ops)) = region_ops.split_last() else {
-            return false;
-        };
-        if !Yield::matches(ctx, *yield_op) {
-            return false;
-        }
-
-        // Yield arity must match the if op's result count.
-        let yield_operands: Vec<ValueRef> = ctx.op_operands(*yield_op).to_vec();
-        let if_result_count = ctx.op_results(op).len();
-        if yield_operands.len() != if_result_count {
-            return false;
-        }
-
-        // Splice body ops out into the parent block, before `op`.
-        let parent_block = match ctx.op(op).parent_block {
-            Some(b) => b,
-            None => return false,
-        };
-        for body_op in body_ops {
-            ctx.detach_op(*body_op);
-            ctx.insert_op_before(parent_block, op, *body_op);
-        }
-
-        // Detach + destroy the yield — its only user was the implicit
-        // edge to the if op's results, which we are about to erase.
-        ctx.detach_op(*yield_op);
-        ctx.remove_op(*yield_op);
-
-        // Erase the if op, mapping its results to the yield's operands.
-        rewriter.erase_op(yield_operands);
-        true
+    // Active region must be a single block whose terminator is `scf.yield`.
+    let blocks = ctx.region(active_region).blocks.to_vec();
+    let [active_block] = blocks.as_slice() else {
+        return None;
+    };
+    let region_ops: Vec<OpRef> = ctx.block(*active_block).ops.to_vec();
+    let (yield_op, body_ops) = region_ops.split_last()?;
+    if !Yield::matches(ctx, *yield_op) {
+        return None;
     }
 
-    fn name(&self) -> &'static str {
-        "IfConstFold"
+    // Yield arity must match the if op's result count.
+    let yield_operands: Vec<ValueRef> = ctx.op_operands(*yield_op).to_vec();
+    if yield_operands.len() != ctx.op_results(op).len() {
+        return None;
     }
+
+    Some(FoldResult::Splice {
+        body: body_ops.to_vec(),
+        results: yield_operands,
+    })
 }
 
 // =========================================================================
@@ -160,15 +106,17 @@ mod canonicalize_tests {
     use crate::printer::print_module;
     use crate::rewrite::{ApplyResult, Module, PatternApplicator, TypeConverter};
     use crate::symbol::Symbol;
+    use crate::transforms::canonicalize::{FoldDispatchPattern, folds_for_dialect};
     use crate::walk::{WalkAction, walk_op};
     use std::ops::ControlFlow;
 
-    /// Run only `IfConstFold` on `module`. Tests stay focused on this
-    /// pattern even though the production `canonicalize` pass aggregates
-    /// every registered fold and pattern.
-    fn run_if_const_fold(ctx: &mut IrContext, module: Module) -> ApplyResult {
+    /// Run only this dialect's folds on `module` via a single
+    /// [`FoldDispatchPattern`] — mirrors `arith.rs::run_arith_patterns`
+    /// to keep per-dialect tests isolated from other dialects' folds.
+    fn run_scf_patterns(ctx: &mut IrContext, module: Module) -> ApplyResult {
+        let dispatcher = FoldDispatchPattern::from_folds(folds_for_dialect("scf"));
         PatternApplicator::new(TypeConverter::new())
-            .add_pattern(IfConstFold)
+            .add_pattern_box(Box::new(dispatcher))
             .apply_partial(ctx, module)
     }
 
@@ -206,7 +154,7 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        let result = run_if_const_fold(&mut ctx, module);
+        let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
         // The then-region's `arith.addi` is now at the parent block.
@@ -233,7 +181,7 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        let result = run_if_const_fold(&mut ctx, module);
+        let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
@@ -256,7 +204,7 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        let result = run_if_const_fold(&mut ctx, module);
+        let result = run_scf_patterns(&mut ctx, module);
         assert_eq!(result.total_changes, 0);
         assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
     }
@@ -280,7 +228,7 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        let result = run_if_const_fold(&mut ctx, module);
+        let result = run_scf_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "scf", "if"), 0);
         // The else region's addi was dropped along with the if op (it
