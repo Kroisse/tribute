@@ -5,6 +5,10 @@
 
 #![recursion_limit = "512"]
 
+// Self-alias so proc-macro–generated `::trunk_ir::...` paths resolve
+// inside this crate the same way they do for downstream consumers.
+extern crate self as trunk_ir;
+
 // === Salsa-independent primitives ===
 pub mod symbol;
 

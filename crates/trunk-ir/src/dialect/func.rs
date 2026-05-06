@@ -4,7 +4,7 @@
 crate::register_pure_op!(func.constant);
 crate::register_isolated_op!(func.func);
 
-#[crate::dialect(crate = crate)]
+#[trunk_ir::dialect]
 mod func {
     #[attr(sym_name: Symbol, r#type: Type)]
     fn func() {
