@@ -30,6 +30,11 @@ use crate::refs::OpRef;
 use crate::walk::{WalkAction, walk_op};
 
 /// A 1st-class transformation that runs on instances of [`Self::Target`].
+///
+/// `run` takes `&mut self` so passes can carry per-instance mutable state
+/// (counters, caches, accumulated stats) across invocations on different
+/// targets. The [`PassManager`] holds each pass exclusively for the
+/// duration of a [`PassManager::run`] call.
 pub trait Pass {
     /// Op type this pass operates on.
     ///
@@ -41,16 +46,16 @@ pub trait Pass {
 
     fn name(&self) -> &'static str;
 
-    fn run(&self, ctx: &mut IrContext, target: Self::Target);
+    fn run(&mut self, ctx: &mut IrContext, target: Self::Target);
 }
 
 /// Object-safe view of [`Pass`] used inside [`PassManager`] storage.
 trait ErasedPass<T: DialectOp> {
-    fn run(&self, ctx: &mut IrContext, target: T);
+    fn run(&mut self, ctx: &mut IrContext, target: T);
 }
 
 impl<P: Pass> ErasedPass<P::Target> for P {
-    fn run(&self, ctx: &mut IrContext, target: P::Target) {
+    fn run(&mut self, ctx: &mut IrContext, target: P::Target) {
         Pass::run(self, ctx, target)
     }
 }
@@ -61,7 +66,7 @@ impl<P: Pass> ErasedPass<P::Target> for P {
 /// manager once per target-typed op. Wraps [`PassManager<T>`] for any
 /// `T: DialectOp + 'static`.
 trait NestedRunner: Any {
-    fn run(&self, ctx: &mut IrContext, parent_op: OpRef);
+    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef);
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
@@ -70,7 +75,7 @@ struct TypedNested<T: DialectOp + 'static> {
 }
 
 impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
-    fn run(&self, ctx: &mut IrContext, parent_op: OpRef) {
+    fn run(&mut self, ctx: &mut IrContext, parent_op: OpRef) {
         // Collect targets fresh on each entry so passes that erase or
         // append ops don't leave stale refs in our worklist.
         let targets = collect_targets::<T>(ctx, parent_op);
@@ -163,16 +168,16 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// Run all registered passes (and recursively nested managers) on
     /// `target`. Pass-level ordering is registration order; nested
     /// managers run after the parent's own passes.
-    pub fn run(&self, ctx: &mut IrContext, target: Root) {
+    pub fn run(&mut self, ctx: &mut IrContext, target: Root) {
         self.run_on_target(ctx, target);
     }
 
-    fn run_on_target(&self, ctx: &mut IrContext, target: Root) {
-        for pass in &self.passes {
+    fn run_on_target(&mut self, ctx: &mut IrContext, target: Root) {
+        for pass in &mut self.passes {
             pass.run(ctx, target);
         }
         let parent_op = target.op_ref();
-        for nested in &self.nested {
+        for nested in &mut self.nested {
             nested.run(ctx, parent_op);
         }
     }
@@ -180,7 +185,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
     use super::*;
@@ -228,10 +233,23 @@ mod tests {
         ctx.push_op(block, func_op);
     }
 
-    #[derive(Default)]
+    /// Counts invocations using a directly-owned `usize` field. The
+    /// shared `Rc<Cell<usize>>` mirror lets the test observe the count
+    /// after the pass is consumed by [`PassManager::add_pass`].
     struct CountingPass<T: DialectOp> {
-        count: Rc<RefCell<usize>>,
+        count: usize,
+        mirror: Rc<Cell<usize>>,
         _marker: std::marker::PhantomData<T>,
+    }
+
+    impl<T: DialectOp> CountingPass<T> {
+        fn new(mirror: Rc<Cell<usize>>) -> Self {
+            Self {
+                count: 0,
+                mirror,
+                _marker: std::marker::PhantomData,
+            }
+        }
     }
 
     impl<T: DialectOp + 'static> Pass for CountingPass<T> {
@@ -239,8 +257,9 @@ mod tests {
         fn name(&self) -> &'static str {
             "counting"
         }
-        fn run(&self, _ctx: &mut IrContext, _target: T) {
-            *self.count.borrow_mut() += 1;
+        fn run(&mut self, _ctx: &mut IrContext, _target: T) {
+            self.count += 1;
+            self.mirror.set(self.count);
         }
     }
 
@@ -249,15 +268,12 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
 
-        let count = Rc::new(RefCell::new(0));
+        let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
-        pm.add_pass(CountingPass::<core::Module> {
-            count: count.clone(),
-            _marker: std::marker::PhantomData,
-        });
+        pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
         pm.run(&mut ctx, module);
 
-        assert_eq!(*count.borrow(), 1);
+        assert_eq!(count.get(), 1);
     }
 
     #[test]
@@ -268,16 +284,13 @@ mod tests {
         append_func(&mut ctx, module, loc, "f2");
         append_func(&mut ctx, module, loc, "f3");
 
-        let count = Rc::new(RefCell::new(0));
+        let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func> {
-                count: count.clone(),
-                _marker: std::marker::PhantomData,
-            });
+            .add_pass(CountingPass::<func::Func>::new(count.clone()));
         pm.run(&mut ctx, module);
 
-        assert_eq!(*count.borrow(), 3);
+        assert_eq!(count.get(), 3);
     }
 
     #[test]
@@ -285,16 +298,13 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
 
-        let count = Rc::new(RefCell::new(0));
+        let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func> {
-                count: count.clone(),
-                _marker: std::marker::PhantomData,
-            });
+            .add_pass(CountingPass::<func::Func>::new(count.clone()));
         pm.run(&mut ctx, module);
 
-        assert_eq!(*count.borrow(), 0);
+        assert_eq!(count.get(), 0);
     }
 
     #[test]
@@ -315,7 +325,7 @@ mod tests {
             fn name(&self) -> &'static str {
                 "recorder"
             }
-            fn run(&self, _ctx: &mut IrContext, _target: T) {
+            fn run(&mut self, _ctx: &mut IrContext, _target: T) {
                 self.order.borrow_mut().push(self.tag);
             }
         }
@@ -351,7 +361,7 @@ mod tests {
             fn name(&self) -> &'static str {
                 "erase-first"
             }
-            fn run(&self, ctx: &mut IrContext, target: core::Module) {
+            fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
                 let region = target.body(ctx);
                 let block = ctx.region(region).blocks[0];
                 let first_op = ctx.block(block).ops[0];
@@ -359,17 +369,35 @@ mod tests {
             }
         }
 
-        let count = Rc::new(RefCell::new(0));
+        let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.add_pass(EraseFirst);
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func> {
-                count: count.clone(),
-                _marker: std::marker::PhantomData,
-            });
+            .add_pass(CountingPass::<func::Func>::new(count.clone()));
         pm.run(&mut ctx, module);
 
         // One func remains after erase; counting pass sees it once.
-        assert_eq!(*count.borrow(), 1);
+        assert_eq!(count.get(), 1);
+    }
+
+    /// `Pass::run` takes `&mut self`, so a pass can accumulate per-instance
+    /// state across multiple invocations within a single `PassManager::run`.
+    #[test]
+    fn pass_accumulates_state_across_invocations() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+        append_func(&mut ctx, module, loc, "f2");
+        append_func(&mut ctx, module, loc, "f3");
+
+        let mirror = Rc::new(Cell::new(0));
+        let mut pm = PassManager::new();
+        pm.nest::<func::Func>()
+            .add_pass(CountingPass::<func::Func>::new(mirror.clone()));
+        pm.run(&mut ctx, module);
+
+        // Mirror reflects the pass's internal counter after 3 calls,
+        // proving `&mut self` mutation is observable across invocations.
+        assert_eq!(mirror.get(), 3);
     }
 }
