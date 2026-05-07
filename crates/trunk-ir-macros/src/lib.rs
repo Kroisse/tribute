@@ -1,10 +1,12 @@
 //! Proc macros for trunk-ir dialect definitions.
 //!
-//! Provides `#[dialect]` attribute macro for defining
-//! dialect operations with type-safe wrappers, accessors, and constructors.
+//! Provides `#[dialect]` for defining dialect operations with type-safe
+//! wrappers/accessors/constructors, plus `#[canonicalize_fold]` for
+//! registering canonicalize-pass folds next to the function definition.
 
 use proc_macro::TokenStream as ProcTokenStream;
 
+mod canonicalize;
 mod codegen;
 mod parse;
 
@@ -59,4 +61,24 @@ fn dialect_impl(
     let module = parse::parse_input(attr, item)?;
     let crate_path = quote::quote!(::trunk_ir);
     Ok(codegen::generate(&crate_path, &module))
+}
+
+/// Register a per-op fold for the canonicalize pass.
+///
+/// ```ignore
+/// #[trunk_ir::canonicalize_fold(arith.addi)]
+/// pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { ... }
+/// ```
+///
+/// The attribute payload is `<dialect_ident>.<op_ident>`. Raw
+/// identifiers (`r#const`, `r#return`) are stripped so the registered
+/// op name matches the printed form. The original function item is
+/// preserved unchanged; the macro only emits an adjacent
+/// `inventory::submit!` block.
+#[proc_macro_attribute]
+pub fn canonicalize_fold(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
+    match canonicalize::gen_fold(attr.into(), item.into()) {
+        Ok(tokens) => tokens.into(),
+        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
+    }
 }
