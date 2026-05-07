@@ -73,10 +73,14 @@ pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
         return None;
     }
     let cond_value = const_int_value(ctx, cond)?;
-    let active_region = if cond_value != 0 {
-        if_op.then_region(ctx)
-    } else {
-        if_op.else_region(ctx)
+    // We've gated on cond's type being `core.i1`; the only valid
+    // payloads are 0 and 1. Reject anything else (e.g.
+    // `arith.const value=2 : core.i1`) so the validator surfaces the
+    // malformed const instead of the fold silently picking a branch.
+    let active_region = match cond_value {
+        0 => if_op.else_region(ctx),
+        1 => if_op.then_region(ctx),
+        _ => return None,
     };
 
     // Active region must be a single block whose terminator is `scf.yield`.
@@ -224,6 +228,30 @@ mod canonicalize_tests {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32) -> core.i32 {
     %bad = arith.const {value = 2} : core.i32
+    %r = scf.if %bad : core.i32 {
+      scf.yield %x
+    } {
+      scf.yield %x
+    }
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+
+        let result = run_scf_patterns(&mut ctx, module);
+        assert_eq!(result.total_changes, 0);
+        assert_eq!(count_ops(&ctx, module, "scf", "if"), 1);
+    }
+
+    #[test]
+    fn if_malformed_i1_payload_is_not_folded() {
+        // Cond is i1-typed but carries a payload outside {0, 1}.
+        // The fold must bail so validation flags the bad const rather
+        // than the rewrite picking the then-branch by truthiness.
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %bad = arith.const {value = 2} : core.i1
     %r = scf.if %bad : core.i32 {
       scf.yield %x
     } {
