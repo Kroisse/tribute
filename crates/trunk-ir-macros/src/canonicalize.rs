@@ -1,7 +1,7 @@
-//! Proc-macro attributes for the canonicalize pass: `#[canonicalize_fold]`
-//! and `#[canonicalize_pattern]`. They submit `inventory` entries the
-//! pass discovers at startup, so the registration sits next to the
-//! function definition rather than in a separate macro_rules! call.
+//! Proc-macro attribute for the canonicalize pass:
+//! `#[canonicalize_fold]`. It submits an `inventory` entry the pass
+//! discovers at startup, so the registration sits next to the function
+//! definition rather than in a separate macro_rules! call.
 
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
@@ -19,24 +19,6 @@ pub fn gen_fold(attr: TokenStream, item: TokenStream) -> Result<TokenStream, Str
                 dialect: #dialect,
                 op_name: #op_name,
                 fold: #fn_ident,
-            }
-        }
-    })
-}
-
-/// Generate the expanded form for `#[canonicalize_pattern]`.
-pub fn gen_pattern(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    if !attr.is_empty() {
-        return Err("`#[canonicalize_pattern]` does not accept arguments".to_string());
-    }
-    let (fn_attrs, fn_ident) = extract_fn_attrs_and_ident(&item)?;
-    Ok(quote! {
-        #item
-
-        #fn_attrs
-        ::trunk_ir::inventory::submit! {
-            ::trunk_ir::transforms::canonicalize::CanonicalizePattern {
-                make: #fn_ident,
             }
         }
     })
@@ -183,27 +165,6 @@ mod tests {
             Ok(_) => panic!("expected parse error"),
         };
         assert!(err.contains("expected `.`"), "got: {err}");
-    }
-
-    #[test]
-    fn pattern_emits_inventory_submit() {
-        let item: TokenStream = quote! {
-            fn make_if_const_fold() -> Box<dyn RewritePattern> { Box::new(IfConstFold) }
-        };
-        let out = gen_pattern(TokenStream::new(), item).unwrap().to_string();
-        assert!(out.contains("CanonicalizePattern"), "got: {out}");
-        assert!(out.contains("make : make_if_const_fold"), "got: {out}");
-    }
-
-    #[test]
-    fn pattern_rejects_attr_args() {
-        let attr: TokenStream = quote! { foo };
-        let item: TokenStream = quote! { fn f() {} };
-        let err = match gen_pattern(attr, item) {
-            Err(e) => e,
-            Ok(_) => panic!("expected error"),
-        };
-        assert!(err.contains("does not accept arguments"), "got: {err}");
     }
 
     #[test]

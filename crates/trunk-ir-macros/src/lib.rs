@@ -1,9 +1,8 @@
 //! Proc macros for trunk-ir dialect definitions.
 //!
 //! Provides `#[dialect]` for defining dialect operations with type-safe
-//! wrappers/accessors/constructors, plus `#[canonicalize_fold]` and
-//! `#[canonicalize_pattern]` for registering canonicalize-pass entries
-//! next to the function definition.
+//! wrappers/accessors/constructors, plus `#[canonicalize_fold]` for
+//! registering canonicalize-pass folds next to the function definition.
 
 use proc_macro::TokenStream as ProcTokenStream;
 
@@ -79,26 +78,6 @@ fn dialect_impl(
 #[proc_macro_attribute]
 pub fn canonicalize_fold(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match canonicalize::gen_fold(attr.into(), item.into()) {
-        Ok(tokens) => tokens.into(),
-        Err(msg) => quote::quote!(compile_error!(#msg);).into(),
-    }
-}
-
-/// Register a full `RewritePattern` for the canonicalize pass — used
-/// when a rewrite needs more than the per-op fold shape allows
-/// (e.g. multi-op region splicing).
-///
-/// ```ignore
-/// #[trunk_ir::canonicalize_pattern]
-/// fn make_if_const_fold() -> Box<dyn RewritePattern> { Box::new(IfConstFold) }
-/// ```
-///
-/// The attribute takes no arguments. The original function item is
-/// preserved unchanged; the macro only emits an adjacent
-/// `inventory::submit!` block.
-#[proc_macro_attribute]
-pub fn canonicalize_pattern(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
-    match canonicalize::gen_pattern(attr.into(), item.into()) {
         Ok(tokens) => tokens.into(),
         Err(msg) => quote::quote!(compile_error!(#msg);).into(),
     }
