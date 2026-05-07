@@ -9,8 +9,10 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -32,6 +34,23 @@ pub fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .add_pattern(pattern)
         .add_pattern(ArithIntrinsicFuncDeclPattern { intrinsic_map });
     applicator.apply_partial(ctx, module);
+}
+
+/// PassManager-friendly wrapper for [`lower_intrinsic_to_arith`].
+pub struct LowerIntrinsicToArith;
+
+impl Pass for LowerIntrinsicToArith {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-intrinsic-to-arith"
+    }
+
+    fn run(&self, ctx: &mut IrContext, target: core::Module) {
+        let module = Module::new(ctx, target.op_ref())
+            .expect("core::Module wrapper guarantees core.module op");
+        lower_intrinsic_to_arith(ctx, module);
+    }
 }
 
 /// What kind of arith operation to emit.
