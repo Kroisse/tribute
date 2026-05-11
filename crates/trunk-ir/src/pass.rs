@@ -285,8 +285,14 @@ mod tests {
         core::module(ctx, loc, Symbol::new("test"), region)
     }
 
-    /// Append a body-less `func.func` op into the given module.
-    fn append_func(ctx: &mut IrContext, module: core::Module, loc: Location, name: &'static str) {
+    /// Append a body-less `func.func` op into the given module. Returns
+    /// the new op ref so tests can assert against it.
+    fn append_func(
+        ctx: &mut IrContext,
+        module: core::Module,
+        loc: Location,
+        name: &'static str,
+    ) -> OpRef {
         let nil_ty = core::nil(ctx).as_type_ref();
         let func_ty = core::func(ctx, nil_ty, []).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
@@ -297,6 +303,35 @@ mod tests {
         let region = module.body(ctx);
         let block = ctx.region(region).blocks[0];
         ctx.push_op(block, func_op);
+        func_op
+    }
+
+    /// Pass that pushes its `tag` onto a shared order log on every run.
+    struct Recorder<T: DialectOp> {
+        tag: &'static str,
+        order: Rc<RefCell<Vec<&'static str>>>,
+        _marker: std::marker::PhantomData<T>,
+    }
+
+    impl<T: DialectOp + 'static> Pass for Recorder<T> {
+        type Target = T;
+        fn name(&self) -> &'static str {
+            "recorder"
+        }
+        fn run(&mut self, _ctx: &mut IrContext, _target: T) {
+            self.order.borrow_mut().push(self.tag);
+        }
+    }
+
+    fn recorder<T: DialectOp + 'static>(
+        tag: &'static str,
+        order: Rc<RefCell<Vec<&'static str>>>,
+    ) -> Recorder<T> {
+        Recorder {
+            tag,
+            order,
+            _marker: std::marker::PhantomData,
+        }
     }
 
     /// Counts invocations using a directly-owned `usize` field. The
@@ -380,33 +415,10 @@ mod tests {
         append_func(&mut ctx, module, loc, "f1");
 
         let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
-
-        struct Recorder<T: DialectOp> {
-            tag: &'static str,
-            order: Rc<RefCell<Vec<&'static str>>>,
-            _marker: std::marker::PhantomData<T>,
-        }
-        impl<T: DialectOp + 'static> Pass for Recorder<T> {
-            type Target = T;
-            fn name(&self) -> &'static str {
-                "recorder"
-            }
-            fn run(&mut self, _ctx: &mut IrContext, _target: T) {
-                self.order.borrow_mut().push(self.tag);
-            }
-        }
-
         let mut pm = PassManager::new();
-        pm.add_pass(Recorder::<core::Module> {
-            tag: "module",
-            order: order.clone(),
-            _marker: std::marker::PhantomData,
-        });
-        pm.nest::<func::Func>().add_pass(Recorder::<func::Func> {
-            tag: "func",
-            order: order.clone(),
-            _marker: std::marker::PhantomData,
-        });
+        pm.add_pass(recorder::<core::Module>("module", order.clone()));
+        pm.nest::<func::Func>()
+            .add_pass(recorder::<func::Func>("func", order.clone()));
         pm.run(&mut ctx, module);
 
         assert_eq!(*order.borrow(), vec!["module", "func"]);
@@ -510,6 +522,110 @@ mod tests {
 
         // 1 module pass + 2 funcs * 1 nested pass = 3 verifier calls.
         assert_eq!(invocations.get(), 3);
+    }
+
+    #[test]
+    fn empty_pass_manager_is_noop() {
+        // Calling `run` on a manager with no passes and no nested
+        // managers must complete without panicking.
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        let mut pm: PassManager = PassManager::new();
+        pm.run(&mut ctx, module);
+    }
+
+    #[test]
+    fn multiple_passes_run_in_registration_order() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut pm = PassManager::new();
+        pm.add_pass(recorder::<core::Module>("a", order.clone()));
+        pm.add_pass(recorder::<core::Module>("b", order.clone()));
+        pm.add_pass(recorder::<core::Module>("c", order.clone()));
+        pm.run(&mut ctx, module);
+
+        assert_eq!(*order.borrow(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn sibling_nested_managers_run_in_registration_order() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+        append_func(&mut ctx, module, loc, "f2");
+
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut pm = PassManager::new();
+        pm.nest::<func::Func>()
+            .add_pass(recorder::<func::Func>("first", order.clone()));
+        pm.nest::<func::Func>()
+            .add_pass(recorder::<func::Func>("second", order.clone()));
+        pm.run(&mut ctx, module);
+
+        // Each nested manager re-walks the module independently, so
+        // labels are grouped by manager rather than interleaved per func.
+        assert_eq!(*order.borrow(), vec!["first", "first", "second", "second"]);
+    }
+
+    #[test]
+    fn nested_verifier_overrides_inherited() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+        append_func(&mut ctx, module, loc, "f2");
+
+        let dummy = Rc::new(Cell::new(0));
+        let root_inv = Rc::new(Cell::new(0));
+        let nested_inv = Rc::new(Cell::new(0));
+        let root_clone = root_inv.clone();
+        let nested_clone = nested_inv.clone();
+
+        let mut pm = PassManager::new();
+        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.nest::<func::Func>()
+            .add_pass(CountingPass::<func::Func>::new(dummy.clone()))
+            .with_verifier(move |_ctx, _op| {
+                nested_clone.set(nested_clone.get() + 1);
+            });
+        pm.with_verifier(move |_ctx, _op| {
+            root_clone.set(root_clone.get() + 1);
+        });
+        pm.run(&mut ctx, module);
+
+        // Root verifier fires only for the module-level pass (1 call),
+        // because the nested manager installs its own and does not
+        // inherit the root's.
+        assert_eq!(root_inv.get(), 1);
+        // Nested verifier fires per func target (2 calls).
+        assert_eq!(nested_inv.get(), 2);
+    }
+
+    #[test]
+    fn verifier_receives_target_op_refs() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        let f1 = append_func(&mut ctx, module, loc, "f1");
+        let f2 = append_func(&mut ctx, module, loc, "f2");
+        let module_op = module.op_ref();
+
+        let dummy = Rc::new(Cell::new(0));
+        let seen: Rc<RefCell<Vec<OpRef>>> = Rc::new(RefCell::new(Vec::new()));
+        let seen_clone = seen.clone();
+
+        let mut pm = PassManager::new();
+        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.nest::<func::Func>()
+            .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
+        pm.with_verifier(move |_ctx, op| {
+            seen_clone.borrow_mut().push(op);
+        });
+        pm.run(&mut ctx, module);
+
+        // Module pass → verifier(module_op), then nested manager walks
+        // for func ops → verifier(f1), verifier(f2).
+        assert_eq!(*seen.borrow(), vec![module_op, f1, f2]);
     }
 
     #[test]
