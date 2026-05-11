@@ -106,6 +106,19 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
     }
 }
 
+/// Returns whether `op` is still safe to dispatch on after a pass ran.
+///
+/// `pre_attached` is the value of `parent_block.is_some()` observed before
+/// the pass ran. If the op was attached before the pass and is no longer
+/// attached, treat it as erased — even though the arena slot stays around
+/// with intact dialect/name fields.
+fn target_still_alive<T: DialectOp>(ctx: &IrContext, op: OpRef, pre_attached: bool) -> bool {
+    if !T::matches(ctx, op) {
+        return false;
+    }
+    !pre_attached || ctx.op(op).parent_block.is_some()
+}
+
 fn collect_targets<T: DialectOp>(ctx: &IrContext, root: OpRef) -> Vec<T> {
     let mut found = Vec::new();
     let _ = walk_op::<()>(ctx, root, &mut |op| {
@@ -234,10 +247,22 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         nested: &mut [Box<dyn NestedRunner>],
         verifier: Option<&VerifierFn>,
     ) {
+        // Capture attachment state at entry so we can detect a pass that
+        // detaches/erases its own target (parent_block went from Some→None).
+        // A top-level root op (e.g. `core.module`) has no parent block by
+        // design, so we only enforce the post-attached invariant when the
+        // target was attached on entry.
+        let pre_attached = ctx.op(target.op_ref()).parent_block.is_some();
         for pass in passes.iter_mut() {
             let span = tracing::debug_span!("pass", name = pass.name());
             let _enter = span.enter();
             pass.run(ctx, target);
+            if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
+                // The pass erased or retagged its own target. Subsequent
+                // passes, the verifier, and nested managers would all see
+                // a stale OpRef, so stop dispatch here.
+                return;
+            }
             if let Some(v) = verifier {
                 v(ctx, target.op_ref());
             }
@@ -456,6 +481,46 @@ mod tests {
 
         // One func remains after erase; counting pass sees it once.
         assert_eq!(count.get(), 1);
+    }
+
+    /// When a pass erases its own target mid-pipeline, the manager must
+    /// stop dispatching on that target — subsequent passes, the verifier,
+    /// and nested managers would otherwise see a stale OpRef.
+    #[test]
+    fn nested_pass_skips_dispatch_when_pass_erases_own_target() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+        append_func(&mut ctx, module, loc, "f2");
+
+        struct EraseSelf;
+        impl Pass for EraseSelf {
+            type Target = func::Func;
+            fn name(&self) -> &'static str {
+                "erase-self"
+            }
+            fn run(&mut self, ctx: &mut IrContext, target: func::Func) {
+                crate::rewrite::erase_op(ctx, target.op_ref());
+            }
+        }
+
+        let after_count = Rc::new(Cell::new(0));
+        let verifier_inv = Rc::new(Cell::new(0));
+        let v_clone = verifier_inv.clone();
+
+        let mut pm = PassManager::new();
+        pm.nest::<func::Func>()
+            .add_pass(EraseSelf)
+            .add_pass(CountingPass::<func::Func>::new(after_count.clone()))
+            .with_verifier(move |_ctx, _op| {
+                v_clone.set(v_clone.get() + 1);
+            });
+        pm.run(&mut ctx, module);
+
+        // EraseSelf runs once per func (f1, f2) and invalidates the target
+        // each time, so the following pass and the verifier must be skipped.
+        assert_eq!(after_count.get(), 0);
+        assert_eq!(verifier_inv.get(), 0);
     }
 
     /// `Pass::run` takes `&mut self`, so a pass can accumulate per-instance
