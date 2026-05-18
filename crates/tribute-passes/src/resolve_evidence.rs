@@ -14,10 +14,10 @@ use std::collections::{HashMap, HashSet};
 use tribute_ir::dialect::ability;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -46,7 +46,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
     let mut has_next_tag = false;
 
     for op in &ops {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, *op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, *op) {
             let name = func_op.sym_name(ctx);
             if name == Symbol::new("__tribute_evidence_lookup") {
                 has_lookup = true;
@@ -75,7 +75,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_lookup(ev: Evidence, ability_id: i32) -> Marker
-        let func_ty = arena_core::func(ctx, marker_ty, [evidence_ty, i32_ty]).as_type_ref();
+        let func_ty = core::func(ctx, marker_ty, [evidence_ty, i32_ty]).as_type_ref();
 
         // Body with unreachable
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
@@ -93,14 +93,14 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             ops: Default::default(),
             parent_region: None,
         });
-        let unreachable_op = arena_func::unreachable(ctx, loc);
+        let unreachable_op = func::unreachable(ctx, loc);
         ctx.push_op(body_block, unreachable_op.op_ref());
         let body = ctx.create_region(trunk_ir::context::RegionData {
             location: loc,
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
         });
-        let func_op = arena_func::func(
+        let func_op = func::func(
             ctx,
             loc,
             Symbol::new("__tribute_evidence_lookup"),
@@ -119,7 +119,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let marker_ty = ability::marker_adt_type_ref(ctx);
 
         // fn __tribute_evidence_extend(ev: Evidence, marker: Marker) -> Evidence
-        let func_ty = arena_core::func(ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
+        let func_ty = core::func(ctx, evidence_ty, [evidence_ty, marker_ty]).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -136,14 +136,14 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             ops: Default::default(),
             parent_region: None,
         });
-        let unreachable_op = arena_func::unreachable(ctx, loc);
+        let unreachable_op = func::unreachable(ctx, loc);
         ctx.push_op(body_block, unreachable_op.op_ref());
         let body = ctx.create_region(trunk_ir::context::RegionData {
             location: loc,
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
         });
-        let func_op = arena_func::func(
+        let func_op = func::func(
             ctx,
             loc,
             Symbol::new("__tribute_evidence_extend"),
@@ -163,7 +163,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
         let i32_ty = i32_type_ref(ctx);
 
         // fn __tribute_next_tag() -> i32
-        let func_ty = arena_core::func(ctx, i32_ty, std::iter::empty()).as_type_ref();
+        let func_ty = core::func(ctx, i32_ty, std::iter::empty()).as_type_ref();
 
         let body_block = ctx.create_block(trunk_ir::context::BlockData {
             location: loc,
@@ -171,14 +171,14 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
             ops: Default::default(),
             parent_region: None,
         });
-        let unreachable_op = arena_func::unreachable(ctx, loc);
+        let unreachable_op = func::unreachable(ctx, loc);
         ctx.push_op(body_block, unreachable_op.op_ref());
         let body = ctx.create_region(trunk_ir::context::RegionData {
             location: loc,
             blocks: trunk_ir::smallvec::smallvec![body_block],
             parent_op: None,
         });
-        let func_op = arena_func::func(ctx, loc, Symbol::new("__tribute_next_tag"), func_ty, body);
+        let func_op = func::func(ctx, loc, Symbol::new("__tribute_next_tag"), func_ty, body);
         // Mark as C ABI extern function
         ctx.op_mut(func_op.op_ref())
             .attributes
@@ -196,7 +196,7 @@ fn ensure_runtime_functions(ctx: &mut IrContext, module: Module) {
 fn collect_functions_with_evidence(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
     let mut fns_with_evidence = HashSet::new();
     for op in module.ops(ctx) {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let func_ty = func_op.r#type(ctx);
             if has_evidence_first_param(ctx, func_ty) {
                 fns_with_evidence.insert(func_op.sym_name(ctx));
@@ -208,7 +208,7 @@ fn collect_functions_with_evidence(ctx: &IrContext, module: Module) -> HashSet<S
 
 /// Check if a `core.func` type has evidence as its first parameter.
 fn has_evidence_first_param(ctx: &IrContext, func_ty: TypeRef) -> bool {
-    let Some(func) = arena_core::Func::from_type_ref(ctx, func_ty) else {
+    let Some(func) = core::Func::from_type_ref(ctx, func_ty) else {
         return false;
     };
     let params = func.params(ctx);
@@ -226,7 +226,7 @@ fn collect_handler_root_functions(
 ) -> HashSet<Symbol> {
     let mut handler_roots = HashSet::new();
     for op in module.ops(ctx) {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let func_name = func_op.sym_name(ctx);
             if fns_with_evidence.contains(&func_name) {
                 continue;
@@ -372,7 +372,7 @@ fn transform_handler_roots(
     // see the updated signature.
     let mut polymorphic_roots: HashSet<Symbol> = HashSet::new();
     for &func_op_ref in &func_ops {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
             continue;
         };
         let func_name = func_op.sym_name(ctx);
@@ -396,7 +396,7 @@ fn transform_handler_roots(
     // Phase 2: Transform all handler root functions.
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
             continue;
         };
         let func_name = func_op.sym_name(ctx);
@@ -421,7 +421,7 @@ fn transform_handler_roots(
         } else {
             // Create empty evidence for non-polymorphic handler roots
             let zero_const = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
-            let empty_evidence = arena_adt::array_new(
+            let empty_evidence = adt::array_new(
                 ctx,
                 loc,
                 vec![ctx.op_result(zero_const.op_ref(), 0)],
@@ -483,7 +483,7 @@ fn update_calls_to_newly_evidenced(
 
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
             continue;
         };
         let func_name = func_op.sym_name(ctx);
@@ -514,7 +514,7 @@ fn update_calls_in_region(
                 update_calls_in_region(ctx, r, newly_evidenced, evidence_ty, i32_ty);
             }
 
-            let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+            let Ok(call_op) = func::Call::from_op(ctx, op) else {
                 continue;
             };
             let callee = call_op.callee(ctx);
@@ -536,7 +536,7 @@ fn update_calls_in_region(
                 enclosing
             } else {
                 let zero = arith::r#const(ctx, loc, i32_ty, Attribute::Int(0));
-                let empty = arena_adt::array_new(
+                let empty = adt::array_new(
                     ctx,
                     loc,
                     vec![ctx.op_result(zero.op_ref(), 0)],
@@ -556,9 +556,9 @@ fn update_calls_in_region(
                 .op_result_types(op)
                 .first()
                 .copied()
-                .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+                .unwrap_or_else(|| core::nil(ctx).as_type_ref());
 
-            let new_call = arena_func::call(ctx, loc, new_args, result_ty, callee);
+            let new_call = func::call(ctx, loc, new_args, result_ty, callee);
 
             if !ctx.op_results(op).is_empty() {
                 let old_result = ctx.op_result(op, 0);
@@ -580,7 +580,7 @@ fn transform_shifts_in_module(
 ) {
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
             continue;
         };
         let func_name = func_op.sym_name(ctx);
@@ -656,14 +656,14 @@ fn transform_shifts_in_block(
                 let i32_ty = i32_type_ref(ctx);
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
                 let marker_ty = ability::marker_adt_type_ref(ctx);
-                let ptr_ty = arena_core::ptr(ctx).as_type_ref();
+                let ptr_ty = core::ptr(ctx).as_type_ref();
 
                 // All evidence extension ops are inserted before handle_dispatch.
                 // The body closure call (which needs extended evidence) is moved
                 // to after the extension, also before handle_dispatch.
 
                 // Generate runtime tag
-                let tag_call = arena_func::call(
+                let tag_call = func::call(
                     ctx,
                     loc,
                     std::iter::empty::<ValueRef>(),
@@ -680,7 +680,7 @@ fn transform_shifts_in_block(
                     let tr_fn_val = operands
                         .get(2)
                         .expect("handle_dispatch must have operand[2] (tr_dispatch_fn)");
-                    let cast = arena_core::unrealized_conversion_cast(ctx, loc, *tr_fn_val, ptr_ty);
+                    let cast = core::unrealized_conversion_cast(ctx, loc, *tr_fn_val, ptr_ty);
                     ctx.insert_op_before(block, op, cast.op_ref());
                     cast.result(ctx)
                 };
@@ -689,8 +689,7 @@ fn transform_shifts_in_block(
                     let handler_val = operands
                         .get(1)
                         .expect("handle_dispatch must have operand[1] (handler closure)");
-                    let cast =
-                        arena_core::unrealized_conversion_cast(ctx, loc, *handler_val, ptr_ty);
+                    let cast = core::unrealized_conversion_cast(ctx, loc, *handler_val, ptr_ty);
                     ctx.insert_op_before(block, op, cast.op_ref());
                     cast.result(ctx)
                 };
@@ -703,7 +702,7 @@ fn transform_shifts_in_block(
                     let ability_id_val = ctx.op_result(ability_id_const.op_ref(), 0);
                     ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
-                    let marker_struct = arena_adt::struct_new(
+                    let marker_struct = adt::struct_new(
                         ctx,
                         loc,
                         vec![
@@ -718,7 +717,7 @@ fn transform_shifts_in_block(
                     let marker_val = ctx.op_result(marker_struct.op_ref(), 0);
                     ctx.insert_op_before(block, op, marker_struct.op_ref());
 
-                    let extend_call = arena_func::call(
+                    let extend_call = func::call(
                         ctx,
                         loc,
                         vec![current_ev, marker_val],
@@ -740,12 +739,12 @@ fn transform_shifts_in_block(
                     let results = ctx.op_results(candidate);
                     if !results.is_empty()
                         && results[0] == yr_operand
-                        && arena_func::CallIndirect::from_op(ctx, candidate).is_ok()
+                        && func::CallIndirect::from_op(ctx, candidate).is_ok()
                     {
                         let operands = ctx.op_operands(candidate).to_vec();
                         // Replace evidence arg (index 1: [table_idx, evidence, ...rest])
                         if operands.len() >= 2 {
-                            let new_call = arena_func::call_indirect(
+                            let new_call = func::call_indirect(
                                 ctx,
                                 loc,
                                 operands[0],
@@ -780,7 +779,7 @@ fn transform_shifts_in_block(
         }
 
         // Handle func.call to effectful functions: update evidence argument.
-        if let Ok(call_op) = arena_func::Call::from_op(ctx, op) {
+        if let Ok(call_op) = func::Call::from_op(ctx, op) {
             let callee = call_op.callee(ctx);
             if fns_with_evidence.contains(&callee) {
                 let current_operands = ctx.op_operands(op).to_vec();
@@ -791,7 +790,7 @@ fn transform_shifts_in_block(
                         .op_result_types(op)
                         .first()
                         .copied()
-                        .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+                        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
 
                     let new_args = if prepend_evidence {
                         // Handler root: evidence_calls couldn't add evidence,
@@ -807,7 +806,7 @@ fn transform_shifts_in_block(
                         args
                     };
 
-                    let new_call = arena_func::call(ctx, loc, new_args, result_ty, callee);
+                    let new_call = func::call(ctx, loc, new_args, result_ty, callee);
 
                     if !ctx.op_results(op).is_empty() {
                         let old_result = ctx.op_result(op, 0);
@@ -823,7 +822,7 @@ fn transform_shifts_in_block(
         }
 
         // Handle func.call_indirect: replace evidence argument (index 1)
-        if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+        if func::CallIndirect::from_op(ctx, op).is_ok() {
             let current_operands = ctx.op_operands(op).to_vec();
             if current_operands.len() >= 2 {
                 let current_ev = current_operands[1];
@@ -833,13 +832,12 @@ fn transform_shifts_in_block(
                         .op_result_types(op)
                         .first()
                         .copied()
-                        .unwrap_or_else(|| arena_core::nil(ctx).as_type_ref());
+                        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
                     let table_idx = current_operands[0];
                     let mut new_args = vec![ev_value];
                     new_args.extend(current_operands[2..].iter().copied());
 
-                    let new_call =
-                        arena_func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
+                    let new_call = func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
 
                     if !ctx.op_results(op).is_empty() {
                         let old_result = ctx.op_result(op, 0);
@@ -871,7 +869,7 @@ fn transform_shifts_in_block(
             ctx.insert_op_before(block, op, ability_id_const.op_ref());
 
             // %marker = func.call @__tribute_evidence_lookup(%ev, %ability_id)
-            let lookup_call = arena_func::call(
+            let lookup_call = func::call(
                 ctx,
                 loc,
                 vec![ev_value, ability_id_val],
@@ -966,13 +964,13 @@ pub(crate) fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
 pub struct ResolveEvidenceDispatch;
 
 impl Pass for ResolveEvidenceDispatch {
-    type Target = arena_core::Module;
+    type Target = core::Module;
 
     fn name(&self) -> &'static str {
         "resolve-evidence-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: arena_core::Module) {
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
         resolve_evidence_dispatch(ctx, target.into());
     }
 }

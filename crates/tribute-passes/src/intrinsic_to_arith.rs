@@ -10,7 +10,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -179,7 +179,7 @@ impl RewritePattern for ArithIntrinsicPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(call_op) = arena_func::Call::from_op(ctx, op) else {
+        let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
         let callee = call_op.callee(ctx);
@@ -230,7 +230,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func_op) = func::Func::from_op(ctx, op) else {
             return false;
         };
 
@@ -288,7 +288,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         ctx.push_op(body_block, result_op);
 
         let result_val = ctx.op_results(result_op)[0];
-        let ret_op = arena_func::r#return(ctx, loc, [result_val]);
+        let ret_op = func::r#return(ctx, loc, [result_val]);
         ctx.push_op(body_block, ret_op.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -301,7 +301,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         let old_body = func_op.body(ctx);
         ctx.detach_region(old_body);
 
-        let new_func = arena_func::func(ctx, loc, sym_name, func_ty, body).op_ref();
+        let new_func = func::func(ctx, loc, sym_name, func_ty, body).op_ref();
         // Do NOT copy the "intrinsic" abi — this is now a real function
         rewriter.replace_op(new_func);
         true
