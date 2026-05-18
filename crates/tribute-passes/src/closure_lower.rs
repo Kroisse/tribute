@@ -616,7 +616,7 @@ fn transform_closure_calls_in_block(
 ///
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
-pub fn lower_closures(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
     // Collect ALL closure calls before pattern application
     let all_closure_calls = collect_all_closure_calls(ctx, module);
 

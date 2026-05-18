@@ -25,7 +25,7 @@ use trunk_ir::types::{Attribute, Location};
 /// `arith.addi`). Intrinsic `func.func` declarations — which originally
 /// contain only `func.unreachable` — are given a real body so they remain
 /// valid when used as first-class values (closures, `func.constant`, etc.).
-pub fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
     let intrinsic_map: HashMap<Symbol, ArithMapping> = pattern.map.clone();
 

@@ -138,7 +138,7 @@ impl RewritePattern for SuspendToYieldPattern {
 ///
 /// Uses `PatternApplicator` to walk all operations and replace eligible
 /// `ability.suspend` ops with `ability.yield`.
-pub fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
+pub(crate) fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(SuspendToYieldPattern);
     applicator.apply_partial(ctx, module);

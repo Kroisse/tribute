@@ -927,7 +927,7 @@ fn transform_shifts_in_region(
 /// Transforms `ability.evidence_lookup` and `ability.handle_dispatch`
 /// into evidence-based dispatch using runtime function calls. This enables
 /// proper handler dispatch at runtime.
-pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
+pub(crate) fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
     // Ensure runtime helpers exist
     ensure_runtime_functions(ctx, module);
 

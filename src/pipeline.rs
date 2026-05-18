@@ -418,8 +418,12 @@ pub fn run_through_evidence_params(
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend(db, source)?;
-    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
-    tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
+    let core_module =
+        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    pm.run(&mut ctx, core_module);
     Some((ctx, m))
 }
 
@@ -432,9 +436,13 @@ pub fn run_through_closure_lower(
     source: SourceCst,
 ) -> Option<(IrContext, Module)> {
     let (mut ctx, m) = compile_frontend(db, source)?;
-    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
-    tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
-    tribute_passes::closure_lower::lower_closures(&mut ctx, m);
+    let core_module =
+        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
+        .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
+        .add_pass(tribute_passes::closure_lower::LowerClosures);
+    pm.run(&mut ctx, core_module);
     Some((ctx, m))
 }
 

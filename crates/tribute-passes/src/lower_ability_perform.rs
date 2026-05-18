@@ -57,7 +57,7 @@ impl CommonTypes {
 }
 
 /// Lower all `ability.perform` and `ability.call` ops in the module.
-pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
     let types = CommonTypes::new(ctx);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerPerformPattern { types })

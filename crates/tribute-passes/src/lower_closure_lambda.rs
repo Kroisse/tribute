@@ -39,7 +39,7 @@ use tribute_ir::dialect::closure as arena_closure;
 use tribute_ir::dialect::tribute_rt;
 
 /// Lower all `closure.lambda` ops in the module to `func.func` + `closure.new`.
-pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
     let module_block = match module.first_block(ctx) {
         Some(b) => b,
         None => return,

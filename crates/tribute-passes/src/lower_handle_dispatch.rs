@@ -21,7 +21,7 @@ use trunk_ir::types::Location;
 use tribute_ir::dialect::ability;
 
 /// Lower all `ability.handle_dispatch` ops in the module.
-pub fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerHandleDispatchPattern);
     applicator.apply_partial(ctx, module);
