@@ -155,9 +155,7 @@ impl Pass for ConvertTailResumptive {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        convert_tail_resumptive(ctx, module);
+        convert_tail_resumptive(ctx, target.into());
     }
 }
 

@@ -74,9 +74,7 @@ impl Pass for LowerClosureLambda {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        lower_closure_lambda(ctx, module);
+        lower_closure_lambda(ctx, target.into());
     }
 }
 

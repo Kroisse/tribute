@@ -84,6 +84,14 @@ impl Module {
     }
 }
 
+impl From<crate::dialect::core::Module> for Module {
+    /// Infallible: `core::Module` already guarantees a `core.module` op,
+    /// so the dialect/name re-validation in [`Module::new`] is redundant.
+    fn from(m: crate::dialect::core::Module) -> Self {
+        Module(crate::ops::DialectOp::op_ref(&m))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

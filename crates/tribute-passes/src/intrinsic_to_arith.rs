@@ -47,9 +47,7 @@ impl Pass for LowerIntrinsicToArith {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        lower_intrinsic_to_arith(ctx, module);
+        lower_intrinsic_to_arith(ctx, target.into());
     }
 }
 

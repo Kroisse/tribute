@@ -644,8 +644,6 @@ impl Pass for LowerClosures {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: arena_core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        lower_closures(ctx, module);
+        lower_closures(ctx, target.into());
     }
 }

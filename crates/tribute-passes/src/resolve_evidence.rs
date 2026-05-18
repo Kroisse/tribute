@@ -973,9 +973,7 @@ impl Pass for ResolveEvidenceDispatch {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: arena_core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        resolve_evidence_dispatch(ctx, module);
+        resolve_evidence_dispatch(ctx, target.into());
     }
 }
 

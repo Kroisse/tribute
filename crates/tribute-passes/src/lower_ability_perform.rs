@@ -76,9 +76,7 @@ impl Pass for LowerAbilityPerform {
     }
 
     fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
-        let module = Module::new(ctx, target.op_ref())
-            .expect("core::Module wrapper guarantees core.module op");
-        lower_ability_perform(ctx, module);
+        lower_ability_perform(ctx, target.into());
     }
 }
 
