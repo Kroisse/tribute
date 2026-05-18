@@ -76,6 +76,9 @@ use tribute_passes::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverit
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::resolve_unrealized_casts;
+use trunk_ir::dialect::core as core_dialect;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::PassManager;
 use trunk_ir::{IrContext, Module};
 /// Error when illegal operations remain after lowering.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,7 +454,15 @@ fn run_shared_pipeline(db: &dyn salsa::Database, source: SourceCst) -> Option<(I
 
     // Middle-end passes
     tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
-    tribute_passes::intrinsic_to_arith::lower_intrinsic_to_arith(&mut ctx, m);
+
+    // Demonstrate PassManager wiring (#268). Other passes still run via
+    // direct calls until they are migrated in follow-up PRs.
+    let core_module =
+        core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    let mut pm = PassManager::new();
+    pm.add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith);
+    pm.run(&mut ctx, core_module);
+
     // Evidence params are now inserted directly during ast_to_ir lowering.
     tribute_passes::closure_lower::lower_closures(&mut ctx, m);
     // CPS effect handling: lower_ability_perform produces ability.evidence_lookup ops
