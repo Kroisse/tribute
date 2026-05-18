@@ -19,6 +19,7 @@ use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -958,6 +959,23 @@ pub fn resolve_evidence_dispatch(ctx: &mut IrContext, module: Module) {
         if !non_root_evidence_fns.is_empty() {
             transform_shifts_in_module(ctx, module, &non_root_evidence_fns);
         }
+    }
+}
+
+/// PassManager-friendly wrapper for [`resolve_evidence_dispatch`].
+pub struct ResolveEvidenceDispatch;
+
+impl Pass for ResolveEvidenceDispatch {
+    type Target = arena_core::Module;
+
+    fn name(&self) -> &'static str {
+        "resolve-evidence-dispatch"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: arena_core::Module) {
+        let module = Module::new(ctx, target.op_ref())
+            .expect("core::Module wrapper guarantees core.module op");
+        resolve_evidence_dispatch(ctx, module);
     }
 }
 

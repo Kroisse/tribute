@@ -26,6 +26,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -62,6 +63,23 @@ pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
         .add_pattern(LowerPerformPattern { types })
         .add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, module);
+}
+
+/// PassManager-friendly wrapper for [`lower_ability_perform`].
+pub struct LowerAbilityPerform;
+
+impl Pass for LowerAbilityPerform {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-ability-perform"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        let module = Module::new(ctx, target.op_ref())
+            .expect("core::Module wrapper guarantees core.module op");
+        lower_ability_perform(ctx, module);
+    }
 }
 
 /// Pattern: `ability.perform` → evidence lookup + handler_dispatch call + return.

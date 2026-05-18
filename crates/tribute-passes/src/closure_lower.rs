@@ -29,6 +29,7 @@ use trunk_ir::dialect::adt as arena_adt;
 use trunk_ir::dialect::core as arena_core;
 use trunk_ir::dialect::func as arena_func;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -630,4 +631,21 @@ pub fn lower_closures(ctx: &mut IrContext, module: Module) {
 
     // Phase 2: Evidence passing for closure calls
     transform_closure_calls_with_evidence(ctx, module, &all_closure_calls);
+}
+
+/// PassManager-friendly wrapper for [`lower_closures`].
+pub struct LowerClosures;
+
+impl Pass for LowerClosures {
+    type Target = arena_core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-closures"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: arena_core::Module) {
+        let module = Module::new(ctx, target.op_ref())
+            .expect("core::Module wrapper guarantees core.module op");
+        lower_closures(ctx, module);
+    }
 }
