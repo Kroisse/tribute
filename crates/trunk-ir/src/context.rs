@@ -345,14 +345,26 @@ impl IrContext {
         self.result_values[op].as_slice(&self.value_pool)
     }
 
-    /// Remove an operation, clearing its use-chain entries.
+    /// Remove an operation and its entire region subtree, clearing all
+    /// operand use-chain entries the subtree contributed.
     ///
     /// Does NOT remove it from its parent block. Use `remove_op_from_block` first.
     ///
+    /// The op's body regions are cleaned up recursively: every descendant op's
+    /// operand use-chain entries are removed, so disposing a region-bearing op
+    /// (e.g. `closure.lambda`, `scf.if`) does not leave stale uses on values
+    /// defined outside the subtree.
+    ///
+    /// Only the op's *own* result values are checked for remaining uses. A
+    /// descendant result that is still consumed from outside the subtree is the
+    /// disposing caller's responsibility to RAUW beforehand; this method does
+    /// not enforce it (doing so would turn pre-existing leaks into hard panics
+    /// on error-recovery paths).
+    ///
     /// # Panics
     ///
-    /// Panics if any result value of the operation still has uses,
-    /// as that would leave dangling references.
+    /// Panics if any result value of `op` itself still has uses, as that would
+    /// leave dangling references.
     pub fn remove_op(&mut self, op: OpRef) {
         // Refuse to remove an op that is still attached to a block
         assert!(
@@ -362,7 +374,7 @@ impl IrContext {
             self.ops[op].parent_block.unwrap(),
         );
 
-        // Check that result values have no remaining uses
+        // Check that the op's own result values have no remaining uses.
         let results: SmallVec<[ValueRef; 4]> =
             self.result_values[op].as_slice(&self.value_pool).into();
         for &val in &results {
@@ -374,6 +386,22 @@ impl IrContext {
             );
         }
 
+        // Clear operand uses for the whole subtree (op + all descendants in its
+        // regions), so a disposed region-bearing op leaves no stale uses on
+        // values defined outside its body. `walk_op` visits `op` first, then
+        // recurses into its regions.
+        let mut subtree: Vec<OpRef> = Vec::new();
+        let _ = crate::walk::walk_op::<()>(self, op, &mut |o| {
+            subtree.push(o);
+            std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+        });
+        for &o in &subtree {
+            self.clear_operand_uses_of(o);
+        }
+    }
+
+    /// Remove every use-chain entry contributed by `op`'s own operands.
+    fn clear_operand_uses_of(&mut self, op: OpRef) {
         let operands: SmallVec<[ValueRef; 8]> =
             self.ops[op].operands.as_slice(&self.value_pool).into();
         for (idx, &val) in operands.iter().enumerate() {
@@ -1728,5 +1756,179 @@ mod tests {
         assert_eq!(mapping.lookup_value(r1), Some(cr1));
         assert_ne!(r0, cr0);
         assert_ne!(r1, cr1);
+    }
+
+    /// Build a detached, region-bearing op whose body uses `external` as an
+    /// operand. Returns the parent op and the inner op consuming `external`.
+    fn detached_region_op_using(
+        ctx: &mut IrContext,
+        loc: Location,
+        i32_ty: TypeRef,
+        external: ValueRef,
+    ) -> (OpRef, OpRef) {
+        let inner_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+            .operand(external)
+            .result(i32_ty)
+            .build(ctx);
+        let inner = ctx.create_op(inner_data);
+
+        let inner_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        ctx.push_op(inner_block, inner);
+        let inner_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![inner_block],
+            parent_op: None,
+        });
+
+        let parent_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .region(inner_region)
+            .build(ctx);
+        let parent = ctx.create_op(parent_data);
+        (parent, inner)
+    }
+
+    #[test]
+    fn remove_op_clears_region_subtree_use_chains() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        // External value defined outside the region-bearing op.
+        let ext_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let ext = ctx.create_op(ext_data);
+        let v_ext = ctx.op_result(ext, 0);
+
+        let (parent, _inner) = detached_region_op_using(&mut ctx, loc, i32_ty, v_ext);
+
+        // Precondition: the inner op uses v_ext exactly once.
+        assert_eq!(ctx.uses(v_ext).len(), 1);
+
+        // Disposing the region-bearing op must clear the inner op's use.
+        ctx.remove_op(parent);
+        assert!(
+            !ctx.has_uses(v_ext),
+            "region subtree use-chain was not cleared"
+        );
+    }
+
+    #[test]
+    fn remove_op_clears_nested_region_use_chains() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let ext_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let ext = ctx.create_op(ext_data);
+        let v_ext = ctx.op_result(ext, 0);
+
+        // Inner region-bearing op uses v_ext (one level deep).
+        let (mid, _inner) = detached_region_op_using(&mut ctx, loc, i32_ty, v_ext);
+
+        // Wrap `mid` one more region level deep.
+        let mid_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        ctx.push_op(mid_block, mid);
+        let mid_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![mid_block],
+            parent_op: None,
+        });
+        let outer_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .region(mid_region)
+            .build(&mut ctx);
+        let outer = ctx.create_op(outer_data);
+
+        assert_eq!(ctx.uses(v_ext).len(), 1);
+
+        ctx.remove_op(outer);
+        assert!(
+            !ctx.has_uses(v_ext),
+            "nested region subtree use-chain was not cleared"
+        );
+    }
+
+    #[test]
+    fn remove_op_only_checks_own_results_not_descendants() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        // Region-bearing op whose inner op produces a result.
+        let inner_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let inner = ctx.create_op(inner_data);
+        let v_inner = ctx.op_result(inner, 0);
+
+        let inner_block = ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        });
+        ctx.push_op(inner_block, inner);
+        let inner_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec![inner_block],
+            parent_op: None,
+        });
+        let parent_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
+            .region(inner_region)
+            .build(&mut ctx);
+        let parent = ctx.create_op(parent_data);
+
+        // An op *outside* the subtree consumes the inner (descendant) result.
+        let outsider_data =
+            OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+                .operand(v_inner)
+                .result(i32_ty)
+                .build(&mut ctx);
+        let outsider = ctx.create_op(outsider_data);
+
+        // Disposing the subtree must NOT panic on a descendant result still used
+        // from outside — that is the caller's RAUW responsibility, not enforced
+        // here (it would turn pre-existing leaks into panics on error paths).
+        ctx.remove_op(parent);
+
+        // The outside use survives (descendant result not RAUW'd by the caller).
+        assert_eq!(ctx.uses(v_inner).len(), 1);
+        assert_eq!(ctx.uses(v_inner)[0].user, outsider);
+    }
+
+    #[test]
+    fn remove_op_regionless_clears_own_operands() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let i32_ty = i32_type(&mut ctx);
+
+        let ext_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("const"))
+            .result(i32_ty)
+            .build(&mut ctx);
+        let ext = ctx.create_op(ext_data);
+        let v_ext = ctx.op_result(ext, 0);
+
+        let user_data = OperationDataBuilder::new(loc, Symbol::new("arith"), Symbol::new("neg"))
+            .operand(v_ext)
+            .result(i32_ty)
+            .build(&mut ctx);
+        let user = ctx.create_op(user_data);
+        assert_eq!(ctx.uses(v_ext).len(), 1);
+
+        // Region-less op: behaves exactly as before — clears its own operand use.
+        ctx.remove_op(user);
+        assert!(!ctx.has_uses(v_ext));
     }
 }
