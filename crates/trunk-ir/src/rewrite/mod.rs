@@ -84,6 +84,14 @@ impl Module {
     }
 }
 
+impl From<crate::dialect::core::Module> for Module {
+    /// Infallible: `core::Module` already guarantees a `core.module` op,
+    /// so the dialect/name re-validation in [`Module::new`] is redundant.
+    fn from(m: crate::dialect::core::Module) -> Self {
+        Module(crate::ops::DialectOp::op_ref(&m))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +155,24 @@ mod tests {
         let module = Module::new(&ctx, op).unwrap();
         assert_eq!(module.body(&ctx), Some(region));
         assert_eq!(module.first_block(&ctx), Some(block));
+    }
+
+    #[test]
+    fn from_core_module_preserves_op_and_matches_new() {
+        use crate::ops::DialectOp;
+
+        let (mut ctx, loc) = test_ctx();
+        let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+            .attr("sym_name", Attribute::Symbol(Symbol::new("m")))
+            .build(&mut ctx);
+        let op = ctx.create_op(op_data);
+
+        let dialect_module =
+            crate::dialect::core::Module::from_op(&ctx, op).expect("should accept core.module");
+        // Conversion is infallible and must yield the same underlying op as
+        // the validating Module::new path.
+        let converted: Module = dialect_module.into();
+        assert_eq!(converted.op(), op);
+        assert_eq!(converted.op(), Module::new(&ctx, op).unwrap().op());
     }
 }

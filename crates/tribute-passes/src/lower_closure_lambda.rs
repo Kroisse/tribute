@@ -29,6 +29,7 @@ use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
@@ -38,7 +39,7 @@ use tribute_ir::dialect::closure as arena_closure;
 use tribute_ir::dialect::tribute_rt;
 
 /// Lower all `closure.lambda` ops in the module to `func.func` + `closure.new`.
-pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
     let module_block = match module.first_block(ctx) {
         Some(b) => b,
         None => return,
@@ -59,6 +60,21 @@ pub fn lower_closure_lambda(ctx: &mut IrContext, module: Module) {
         for lambda_ref in lambdas {
             lower_single_lambda(ctx, module_block, lambda_ref, &mut namer);
         }
+    }
+}
+
+/// PassManager-friendly wrapper for [`lower_closure_lambda`].
+pub struct LowerClosureLambda;
+
+impl Pass for LowerClosureLambda {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-closure-lambda"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        lower_closure_lambda(ctx, target.into());
     }
 }
 

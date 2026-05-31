@@ -11,6 +11,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, scf};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -20,10 +21,25 @@ use trunk_ir::types::Location;
 use tribute_ir::dialect::ability;
 
 /// Lower all `ability.handle_dispatch` ops in the module.
-pub fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_handle_dispatch(ctx: &mut IrContext, module: Module) {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerHandleDispatchPattern);
     applicator.apply_partial(ctx, module);
+}
+
+/// PassManager-friendly wrapper for [`lower_handle_dispatch`].
+pub struct LowerHandleDispatch;
+
+impl Pass for LowerHandleDispatch {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-handle-dispatch"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        lower_handle_dispatch(ctx, target.into());
+    }
 }
 
 /// Pattern: `ability.handle_dispatch` → inline done handler body.

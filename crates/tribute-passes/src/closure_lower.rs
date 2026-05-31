@@ -21,14 +21,15 @@
 
 use std::collections::HashSet;
 
-use tribute_ir::dialect::closure as arena_closure;
+use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt as arena_adt;
-use trunk_ir::dialect::core as arena_core;
-use trunk_ir::dialect::func as arena_func;
+use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -70,16 +71,16 @@ fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
 
     // Direct check for closure.new result
     if let ValueDef::OpResult(op, _) = ctx.value_def(value)
-        && arena_closure::New::from_op(ctx, op).is_ok()
+        && closure::New::from_op(ctx, op).is_ok()
     {
         return true;
     }
 
     // Check type
-    if arena_closure::Closure::matches(ctx, ty) {
+    if closure::Closure::matches(ctx, ty) {
         return true;
     }
-    if arena_core::Func::matches(ctx, ty) {
+    if core::Func::matches(ctx, ty) {
         // core.func in func.call_indirect is always a closure value.
         // Direct function calls use func.call; call_indirect operates on
         // closure values (block args, env captures, etc.).
@@ -96,7 +97,7 @@ fn is_any_closure_value(ctx: &IrContext, value: ValueRef) -> bool {
 fn collect_all_closure_calls(ctx: &IrContext, module: Module) -> HashSet<(usize, usize)> {
     let mut closure_calls = HashSet::new();
     for op in module.ops(ctx) {
-        if let Ok(func_op) = arena_func::Func::from_op(ctx, op) {
+        if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let body = func_op.body(ctx);
             collect_closure_calls_in_region(ctx, body, &mut closure_calls);
         }
@@ -122,7 +123,7 @@ fn collect_closure_calls_in_op(
     closure_calls: &mut HashSet<(usize, usize)>,
 ) {
     // Check if this is a call_indirect with a closure callee
-    if arena_func::CallIndirect::from_op(ctx, op).is_ok() {
+    if func::CallIndirect::from_op(ctx, op).is_ok() {
         let operands = ctx.op_operands(op);
         if let Some(&callee) = operands.first()
             && is_any_closure_value(ctx, callee)
@@ -152,7 +153,7 @@ impl RewritePattern for UpdateFuncSignatureArena {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, op) else {
+        let Ok(func_op) = func::Func::from_op(ctx, op) else {
             return false;
         };
 
@@ -175,9 +176,9 @@ impl RewritePattern for UpdateFuncSignatureArena {
         new_params.push(params[0]); // return type
 
         for &param_ty in &params[1..] {
-            if arena_core::Func::matches(ctx, param_ty) {
+            if core::Func::matches(ctx, param_ty) {
                 // Convert core.func to closure.closure wrapping the func type
-                let closure_ty = arena_closure::closure(ctx, param_ty).as_type_ref();
+                let closure_ty = closure::closure(ctx, param_ty).as_type_ref();
                 new_params.push(closure_ty);
                 needs_update = true;
             } else {
@@ -191,15 +192,14 @@ impl RewritePattern for UpdateFuncSignatureArena {
 
         // Build new func type
         let return_ty = new_params[0];
-        let new_func_ty =
-            arena_core::func(ctx, return_ty, new_params[1..].iter().copied()).as_type_ref();
+        let new_func_ty = core::func(ctx, return_ty, new_params[1..].iter().copied()).as_type_ref();
 
         // Rebuild the function with new type
         let func_name = func_op.sym_name(ctx);
         let body = func_op.body(ctx);
         let loc = ctx.op(op).location;
         ctx.detach_region(body);
-        let new_op = arena_func::func(ctx, loc, func_name, new_func_ty, body).op_ref();
+        let new_op = func::func(ctx, loc, func_name, new_func_ty, body).op_ref();
         rewriter.replace_op(new_op);
         true
     }
@@ -219,7 +219,7 @@ impl RewritePattern for LowerClosureNewArena {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(closure_new) = arena_closure::New::from_op(ctx, op) else {
+        let Ok(closure_new) = closure::New::from_op(ctx, op) else {
             return false;
         };
 
@@ -229,18 +229,17 @@ impl RewritePattern for LowerClosureNewArena {
 
         // Extract function type from closure.closure result type
         let result_ty = ctx.op_result_types(op)[0];
-        let func_ty = arena_closure::Closure::from_type_ref(ctx, result_ty)
+        let func_ty = closure::Closure::from_type_ref(ctx, result_ty)
             .map(|c| c.func_type(ctx))
             .expect("closure.new result type must contain a valid func type (from func.constant)");
 
         // Generate: %funcref = func.constant @func_ref : func_type
-        let constant_op = arena_func::constant(ctx, loc, func_ty, func_ref);
+        let constant_op = func::constant(ctx, loc, func_ty, func_ref);
         let funcref = ctx.op_result(constant_op.op_ref(), 0);
 
         // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
         let struct_ty = closure_struct_type_ref(ctx);
-        let struct_new_op =
-            arena_adt::struct_new(ctx, loc, vec![funcref, env], struct_ty, struct_ty);
+        let struct_new_op = adt::struct_new(ctx, loc, vec![funcref, env], struct_ty, struct_ty);
 
         rewriter.insert_op(constant_op.op_ref());
         rewriter.replace_op(struct_new_op.op_ref());
@@ -262,7 +261,7 @@ impl RewritePattern for LowerClosureCallArena {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_func::CallIndirect::from_op(ctx, op).is_err() {
+        if func::CallIndirect::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -274,12 +273,12 @@ impl RewritePattern for LowerClosureCallArena {
         let callee_ty = ctx.value_ty(callee);
 
         // Determine if callee is a closure
-        let callee_is_closure = if arena_closure::Closure::matches(ctx, callee_ty) {
+        let callee_is_closure = if closure::Closure::matches(ctx, callee_ty) {
             true
         } else if is_closure_struct_type_ref(ctx, callee_ty) {
             // Already lowered closure struct
             true
-        } else if arena_core::Func::matches(ctx, callee_ty) {
+        } else if core::Func::matches(ctx, callee_ty) {
             // core.func in func.call_indirect is always a closure value.
             // Direct function calls use func.call; call_indirect operates on
             // closure values (block args, env captures, etc.).
@@ -287,7 +286,7 @@ impl RewritePattern for LowerClosureCallArena {
         } else {
             // Fallback: check if result of closure.new
             if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
-                arena_closure::New::from_op(ctx, def_op).is_ok()
+                closure::New::from_op(ctx, def_op).is_ok()
             } else {
                 false
             }
@@ -313,17 +312,17 @@ impl RewritePattern for LowerClosureCallArena {
             extract_return_type_from_callee(ctx, callee_ty).unwrap_or(caller_result_ty);
 
         // Generate: %table_idx = closure.func %closure
-        let table_idx_op = arena_closure::func(ctx, loc, callee, i32_ty);
+        let table_idx_op = closure::func(ctx, loc, callee, i32_ty);
         let table_idx = ctx.op_result(table_idx_op.op_ref(), 0);
 
         // Generate: %env = closure.env %closure
-        let env_op = arena_closure::env(ctx, loc, callee, anyref_ty);
+        let env_op = closure::env(ctx, loc, callee, anyref_ty);
         let env = ctx.op_result(env_op.op_ref(), 0);
 
         // Generate: %result = func.call_indirect %table_idx, [%env, %args...]
         let mut new_args = vec![env];
         new_args.extend(args);
-        let new_call = arena_func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
+        let new_call = func::call_indirect(ctx, loc, table_idx, new_args, callee_return_ty);
 
         rewriter.insert_op(table_idx_op.op_ref());
         rewriter.insert_op(env_op.op_ref());
@@ -331,12 +330,8 @@ impl RewritePattern for LowerClosureCallArena {
         // If the closure's return type differs from the caller's expected type,
         // insert a cast so downstream code sees the expected type.
         if callee_return_ty != caller_result_ty {
-            let cast = arena_core::unrealized_conversion_cast(
-                ctx,
-                loc,
-                new_call.result(ctx),
-                caller_result_ty,
-            );
+            let cast =
+                core::unrealized_conversion_cast(ctx, loc, new_call.result(ctx), caller_result_ty);
             rewriter.insert_op(new_call.op_ref());
             rewriter.replace_op(cast.op_ref());
         } else {
@@ -360,7 +355,7 @@ impl RewritePattern for LowerClosureFuncArena {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_closure::Func::from_op(ctx, op).is_err() {
+        if closure::Func::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -371,7 +366,7 @@ impl RewritePattern for LowerClosureFuncArena {
             .intern(TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build());
         let struct_ty = closure_struct_type_ref(ctx);
 
-        let get_op = arena_adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);
+        let get_op = adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);
         rewriter.replace_op(get_op.op_ref());
         true
     }
@@ -391,7 +386,7 @@ impl RewritePattern for LowerClosureEnvArena {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if arena_closure::Env::from_op(ctx, op).is_err() {
+        if closure::Env::from_op(ctx, op).is_err() {
             return false;
         }
 
@@ -400,7 +395,7 @@ impl RewritePattern for LowerClosureEnvArena {
         let result_ty = ctx.op_result_types(op)[0];
         let struct_ty = closure_struct_type_ref(ctx);
 
-        let get_op = arena_adt::struct_get(ctx, loc, closure_value, result_ty, struct_ty, 1);
+        let get_op = adt::struct_get(ctx, loc, closure_value, result_ty, struct_ty, 1);
         rewriter.replace_op(get_op.op_ref());
         true
     }
@@ -447,7 +442,7 @@ fn transform_closure_calls_with_evidence(
 
     let func_ops: Vec<OpRef> = module.ops(ctx);
     for func_op_ref in func_ops {
-        let Ok(func_op) = arena_func::Func::from_op(ctx, func_op_ref) else {
+        let Ok(func_op) = func::Func::from_op(ctx, func_op_ref) else {
             continue;
         };
 
@@ -531,7 +526,7 @@ fn transform_closure_calls_in_block(
         }
 
         // Check if this is a closure call_indirect that needs evidence
-        if arena_func::CallIndirect::from_op(ctx, op).is_err() {
+        if func::CallIndirect::from_op(ctx, op).is_err() {
             continue;
         }
 
@@ -562,7 +557,7 @@ fn transform_closure_calls_in_block(
             // Create null evidence lazily
             if null_ev_value.is_none() {
                 let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-                let null_op = arena_adt::ref_null(ctx, func_location, evidence_ty, evidence_ty);
+                let null_op = adt::ref_null(ctx, func_location, evidence_ty, evidence_ty);
                 let ev = ctx.op_result(null_op.op_ref(), 0);
                 // Insert null evidence at the beginning of the block
                 let first_op_in_block = ctx.block(block).ops.first().copied();
@@ -589,7 +584,7 @@ fn transform_closure_calls_in_block(
         let mut new_args = vec![evidence];
         new_args.extend(rest_args);
 
-        let new_call = arena_func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
+        let new_call = func::call_indirect(ctx, loc, table_idx, new_args, result_ty);
 
         // Replace old result uses with new result
         let old_result = ctx.op_result(op, 0);
@@ -615,7 +610,7 @@ fn transform_closure_calls_in_block(
 ///
 /// Phase 2 (Post-processing):
 /// - Transform ALL closure calls to pass evidence from the enclosing function
-pub fn lower_closures(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_closures(ctx: &mut IrContext, module: Module) {
     // Collect ALL closure calls before pattern application
     let all_closure_calls = collect_all_closure_calls(ctx, module);
 
@@ -630,4 +625,19 @@ pub fn lower_closures(ctx: &mut IrContext, module: Module) {
 
     // Phase 2: Evidence passing for closure calls
     transform_closure_calls_with_evidence(ctx, module, &all_closure_calls);
+}
+
+/// PassManager-friendly wrapper for [`lower_closures`].
+pub struct LowerClosures;
+
+impl Pass for LowerClosures {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-closures"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        lower_closures(ctx, target.into());
+    }
 }

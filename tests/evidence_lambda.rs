@@ -23,7 +23,11 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
     let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
     let (mut ctx, m) =
         tribute::pipeline::compile_frontend(db, source_file).expect("compilation should succeed");
-    tribute_passes::lower_closure_lambda::lower_closure_lambda(&mut ctx, m);
+    let core_module = trunk_ir::dialect::core::Module::from_op(&ctx, m.op())
+        .expect("frontend output must be a core.module");
+    let mut pm = trunk_ir::pass::PassManager::new();
+    pm.add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda);
+    pm.run(&mut ctx, core_module);
     (ctx, m)
 }
 

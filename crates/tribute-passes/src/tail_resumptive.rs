@@ -12,8 +12,10 @@
 //! 3. The result of `ability.resume` flows directly to `scf.yield` (tail position)
 
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::scf as arena_scf;
+use trunk_ir::dialect::core;
+use trunk_ir::dialect::scf;
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, RegionRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -74,7 +76,7 @@ pub fn is_tail_resumptive(ctx: &IrContext, suspend_body: RegionRef) -> Option<Ta
     }
 
     let yield_op = resume_uses[0].user;
-    if !arena_scf::Yield::matches(ctx, yield_op) {
+    if !scf::Yield::matches(ctx, yield_op) {
         return None;
     }
 
@@ -136,10 +138,25 @@ impl RewritePattern for SuspendToYieldPattern {
 ///
 /// Uses `PatternApplicator` to walk all operations and replace eligible
 /// `ability.suspend` ops with `ability.yield`.
-pub fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
+pub(crate) fn convert_tail_resumptive(ctx: &mut IrContext, module: Module) {
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(SuspendToYieldPattern);
     applicator.apply_partial(ctx, module);
+}
+
+/// PassManager-friendly wrapper for [`convert_tail_resumptive`].
+pub struct ConvertTailResumptive;
+
+impl Pass for ConvertTailResumptive {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "convert-tail-resumptive"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        convert_tail_resumptive(ctx, target.into());
+    }
 }
 
 #[cfg(test)]

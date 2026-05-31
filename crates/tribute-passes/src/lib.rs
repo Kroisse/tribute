@@ -26,9 +26,6 @@ pub mod type_converter;
 pub mod wasm;
 
 // Re-exports
-pub use closure_lower::lower_closures;
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-pub use lower_closure_lambda::lower_closure_lambda;
-pub use resolve_evidence::resolve_evidence_dispatch;
 pub use trunk_ir::rewrite::{ApplyResult, PatternApplicator, PatternRewriter, RewritePattern};
 pub use type_converter::generic_type_converter;

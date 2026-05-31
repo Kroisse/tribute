@@ -26,6 +26,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::ops::DialectOp;
+use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -56,12 +57,27 @@ impl CommonTypes {
 }
 
 /// Lower all `ability.perform` and `ability.call` ops in the module.
-pub fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower_ability_perform(ctx: &mut IrContext, module: Module) {
     let types = CommonTypes::new(ctx);
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerPerformPattern { types })
         .add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, module);
+}
+
+/// PassManager-friendly wrapper for [`lower_ability_perform`].
+pub struct LowerAbilityPerform;
+
+impl Pass for LowerAbilityPerform {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "lower-ability-perform"
+    }
+
+    fn run(&mut self, ctx: &mut IrContext, target: core::Module) {
+        lower_ability_perform(ctx, target.into());
+    }
 }
 
 /// Pattern: `ability.perform` → evidence lookup + handler_dispatch call + return.
