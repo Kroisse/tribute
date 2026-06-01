@@ -21,7 +21,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 // ============================================================================
@@ -567,7 +567,7 @@ fn update_calls_in_region(
             }
 
             ctx.insert_op_before(block, op, new_call.op_ref());
-            ctx.remove_op_from_block(block, op);
+            erase_op(ctx, op);
         }
     }
 }
@@ -758,7 +758,7 @@ fn transform_shifts_in_block(
                             ctx.replace_all_uses(old_result, new_result);
                             // Insert new call before handle_dispatch (after evidence extension)
                             ctx.insert_op_before(block, op, new_call.op_ref());
-                            ctx.remove_op_from_block(block, candidate);
+                            erase_op(ctx, candidate);
                         }
                         break;
                     }
@@ -815,7 +815,7 @@ fn transform_shifts_in_block(
                     }
 
                     ctx.insert_op_before(block, op, new_call.op_ref());
-                    ctx.remove_op_from_block(block, op);
+                    erase_op(ctx, op);
                     continue;
                 }
             }
@@ -846,7 +846,7 @@ fn transform_shifts_in_block(
                     }
 
                     ctx.insert_op_before(block, op, new_call.op_ref());
-                    ctx.remove_op_from_block(block, op);
+                    erase_op(ctx, op);
                     continue;
                 }
             }
@@ -882,7 +882,7 @@ fn transform_shifts_in_block(
             // Replace uses of old result with new marker
             let old_result = ctx.op_result(op, 0);
             ctx.replace_all_uses(old_result, new_marker);
-            ctx.remove_op_from_block(block, op);
+            erase_op(ctx, op);
             continue;
         }
 

@@ -29,7 +29,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
 };
 use trunk_ir::types::Attribute;
 
@@ -227,8 +227,13 @@ impl RewritePattern for LowerPerformPattern {
                 };
                 ops[idx + 1..].to_vec()
             };
-            for dead_op in dead_ops {
-                ctx.remove_op_from_block(block, dead_op);
+            // Erase unreachable ops after the perform in reverse order
+            // (consumer before producer) so `erase_op`'s result-use check never
+            // trips on a later dead op still consuming an earlier one. Unlike
+            // the previous detach-only loop, this also clears the dead ops'
+            // operand use-chains (#710).
+            for dead_op in dead_ops.into_iter().rev() {
+                erase_op(ctx, dead_op);
             }
         }
 
