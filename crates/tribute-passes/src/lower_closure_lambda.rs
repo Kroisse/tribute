@@ -31,7 +31,7 @@ use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::Module;
+use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use tribute_ir::dialect::ability as arena_ability;
@@ -213,8 +213,10 @@ fn lower_single_lambda(
     let new_result = closure_new_op.result(ctx);
     ctx.replace_all_uses(old_result, new_result);
 
-    // Remove the original closure.lambda op.
-    ctx.remove_op_from_block(parent_block, lambda_ref);
+    // Erase the original closure.lambda op. `erase_op` clears the operand
+    // use-chains of the lambda and its (now-cloned) body subtree, not just
+    // detaches it — see #710.
+    erase_op(ctx, lambda_ref);
 }
 
 // ============================================================================

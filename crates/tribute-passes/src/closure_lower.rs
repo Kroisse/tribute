@@ -32,7 +32,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::Pass;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter, erase_op,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -591,9 +591,9 @@ fn transform_closure_calls_in_block(
         let new_result = ctx.op_result(new_call.op_ref(), 0);
         ctx.replace_all_uses(old_result, new_result);
 
-        // Insert new call and remove old one
+        // Insert new call and erase old one (clears its operand use-chain, #710)
         ctx.insert_op_before(block, op, new_call.op_ref());
-        ctx.remove_op_from_block(block, op);
+        erase_op(ctx, op);
     }
 }
 
